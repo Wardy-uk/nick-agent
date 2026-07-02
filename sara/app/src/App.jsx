@@ -14,6 +14,7 @@ import './App.css';
 const TABS = [
   { id: 'focus', label: 'Focus', icon: '🎯', Component: Focus },
   { id: 'capture', label: 'Capture', icon: '➕', Component: Capture },
+  { id: 'voice', label: 'Voice', icon: '🎙️', Component: Capture }, // jumps straight into recording
   { id: 'chat', label: 'Chat', icon: '💬', Component: Chat },
   { id: 'prep', label: 'Prep', icon: '📅', Component: MeetingPrep },
   { id: 'brain', label: 'Brain', icon: '🧠', Component: BrainManagement },
@@ -35,7 +36,8 @@ export default function App() {
       </header>
 
       <main className="app__view">
-        <ActiveView />
+        {/* key forces a fresh mount when switching Capture↔Voice so autoRecord re-fires */}
+        <ActiveView key={active} autoRecord={active === 'voice'} />
       </main>
 
       <nav className="app__nav" aria-label="SARA sections">

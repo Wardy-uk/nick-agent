@@ -8,7 +8,7 @@ import './Capture.css';
 // Optional voice dictation via the Web Speech API (append to the text box).
 const RECENT_LIMIT = 5;
 
-export default function Capture() {
+export default function Capture({ autoRecord = false }) {
   const [mode, setMode] = useState('note'); // 'note' | 'todo'
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
@@ -59,9 +59,8 @@ export default function Capture() {
     }
   }
 
-  function toggleVoice() {
-    if (!SpeechRecognition) return;
-    if (listening) { recognitionRef.current?.stop(); return; }
+  function startVoice() {
+    if (!SpeechRecognition || listening) return;
     const rec = new SpeechRecognition();
     rec.lang = 'en-GB';
     rec.interimResults = false;
@@ -74,9 +73,22 @@ export default function Capture() {
     rec.onend = () => setListening(false);
     rec.onerror = () => setListening(false);
     recognitionRef.current = rec;
-    rec.start();
-    setListening(true);
+    try { rec.start(); setListening(true); } catch { /* start() throws if already running — ignore */ }
   }
+
+  function stopVoice() { recognitionRef.current?.stop(); }
+
+  function toggleVoice() {
+    if (!SpeechRecognition) return;
+    if (listening) stopVoice(); else startVoice();
+  }
+
+  // "Talk now" entry point — the Voice nav button mounts Capture with autoRecord,
+  // so dictation starts immediately. The nav tap is the user gesture that unlocks the mic.
+  useEffect(() => {
+    if (autoRecord) startVoice();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <section>
