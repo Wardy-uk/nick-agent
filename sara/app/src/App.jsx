@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { getPin } from './api';
+import { getPin, clearPin } from './api';
 import LockScreen from './components/LockScreen';
 import Capture from './views/Capture';
 import Focus from './views/Focus';
@@ -33,6 +33,13 @@ export default function App() {
       <header className="app__header">
         <span className="app__brand">SARA</span>
         <span className="app__sub">light-touch</span>
+        <button
+          className="app__lock"
+          type="button"
+          onClick={() => { clearPin(); setAuthed(false); }}
+          aria-label="Lock / change PIN"
+          title="Lock / change PIN"
+        >🔒</button>
       </header>
 
       <main className="app__view">

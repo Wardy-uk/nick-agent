@@ -1,18 +1,37 @@
 import { useState } from 'react';
-import { setPin } from '../api';
+import { setPin, clearPin, apiUrl } from '../api';
 import './LockScreen.css';
 
-// PIN gate. The NEURO backend enforces the PIN on every /api call; this just captures
-// it once and stashes it in localStorage (same key the NEURO app uses). No round-trip
-// here — the first real API call (Focus) is what actually validates it.
+// PIN gate. Validates the PIN against the brain BEFORE unlocking, so a wrong PIN
+// can't get stored and silently 401 every screen. Only an explicit 401 rejects —
+// a network/other error still lets you in (the app's own error states take over).
 export default function LockScreen({ onUnlock }) {
   const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
 
-  function submit(e) {
+  async function submit(e) {
     e.preventDefault();
-    if (!value.trim()) return;
-    setPin(value.trim());
-    onUnlock();
+    const pin = value.trim();
+    if (!pin || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(apiUrl('/api/focus'), { headers: { 'X-Neuro-Pin': pin } });
+      if (res.status === 401) {
+        clearPin();
+        setError('Incorrect PIN — try again.');
+        return;
+      }
+      setPin(pin);
+      onUnlock();
+    } catch {
+      // Couldn't reach the brain to validate — store and let the app surface it.
+      setPin(pin);
+      onUnlock();
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -27,9 +46,13 @@ export default function LockScreen({ onUnlock }) {
           autoFocus
           value={value}
           onChange={(e) => setValue(e.target.value)}
+          disabled={busy}
           aria-label="NEURO PIN"
         />
-        <button className="lock__btn" type="submit">Unlock</button>
+        {error && <div className="lock__error">{error}</div>}
+        <button className="lock__btn" type="submit" disabled={busy || !value.trim()}>
+          {busy ? 'Checking…' : 'Unlock'}
+        </button>
       </form>
     </div>
   );

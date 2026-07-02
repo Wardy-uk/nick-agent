@@ -21,6 +21,7 @@
 
 .lock__brand { font-weight: 700; letter-spacing: 0.18em; font-size: 1.5rem; }
 .lock__hint { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.lock__error { color: #ff8a8a; font-size: 0.82rem; margin: 0; }
 
 .lock__input {
   width: 100%;
