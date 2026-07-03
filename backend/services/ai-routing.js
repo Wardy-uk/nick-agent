@@ -271,12 +271,6 @@ async function runStreamingChat(systemPrompt, messages, res, options = {}) {
   const model = TASK_MODELS[taskType] || HEAVY_MODEL;
   const cloudOk = _isCloudAllowed(taskType);
 
-  const _writeFallbackNotice = (msg) => {
-    if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ type: 'text', content: msg })}\n\n`);
-    }
-  };
-
   // Tier 1: Anthropic
   if (cloudOk && anthropicProvider.isConfigured()) {
     try {
@@ -287,12 +281,11 @@ async function runStreamingChat(systemPrompt, messages, res, options = {}) {
       }
     } catch (err) {
       console.warn(`[AIRouting] Anthropic stream failed: ${err.message}`);
-      _writeFallbackNotice('*[Anthropic unavailable, trying next...]*\n\n');
     }
   }
 
   // Tier 2: OpenAI
-  if (cloudOk && openaiProvider.isConfigured()) {
+  if (cloudOk && openaiProvider.isConfigured() && !res.writableEnded) {
     try {
       const result = await openaiProvider.streamChat(systemPrompt, messages, res, options);
       if (result.fullText) {
@@ -301,12 +294,11 @@ async function runStreamingChat(systemPrompt, messages, res, options = {}) {
       }
     } catch (err) {
       console.warn(`[AIRouting] OpenAI stream failed: ${err.message}`);
-      _writeFallbackNotice('*[OpenAI unavailable, trying next...]*\n\n');
     }
   }
 
   // Tier 3: OpenRouter
-  if (_isOpenRouterAllowed(taskType)) {
+  if (_isOpenRouterAllowed(taskType) && !res.writableEnded) {
     try {
       const result = await openrouterProvider.streamChat(systemPrompt, messages, res, options);
       if (result.fullText) {
@@ -315,7 +307,6 @@ async function runStreamingChat(systemPrompt, messages, res, options = {}) {
       }
     } catch (err) {
       console.warn(`[AIRouting] OpenRouter stream failed: ${err.message}`);
-      _writeFallbackNotice('*[Cloud unavailable, using local model...]*\n\n');
     }
   }
 
