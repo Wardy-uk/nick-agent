@@ -171,12 +171,6 @@ export default function Topbar({ status, onMenuToggle, onChatToggle, chatOpen, w
       <div className="topbar-right">
         {children}
         <QuickAdd apiUrl={apiUrl} />
-        {atRisk > 0 && (
-          <div className="topbar-alert">
-            <span className="alert-count">{atRisk}</span>
-            <span className="alert-label">SLA at risk</span>
-          </div>
-        )}
         <button className="topbar-reload-btn" onClick={() => window.location.reload()} aria-label="Reload" title="Reload app">
           ↻
         </button>
