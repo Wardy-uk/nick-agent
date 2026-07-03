@@ -146,7 +146,7 @@ async function buildAndDeliver(opts = {}) {
   };
 
   // Store for Focus view
-  db.setState(BRIEF_KEY, brief);
+  db.setState(BRIEF_KEY, JSON.stringify(brief));
   console.log(`[Briefing] Built in ${Date.now() - t0}ms — doNow:${brief.doNow.length} doNext:${brief.doNext.length}`);
 
   // Push notification
@@ -181,7 +181,9 @@ async function buildAndDeliver(opts = {}) {
  * Return the last stored brief (for GET /api/briefing).
  */
 function getLastBrief() {
-  return db.getState(BRIEF_KEY) || null;
+  const raw = db.getState(BRIEF_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 // ── Alert checks (run every 5 min) ───────────────────────────────────────────
@@ -208,7 +210,7 @@ async function checkEscalationAlerts() {
       ...labelEscalations.map(t => ({ key: t.key, summary: t.summary || t.key })),
     ];
 
-    const seenRaw = db.getState(ALERT_SEEN_KEY) || {};
+    const seenRaw = (() => { try { return JSON.parse(db.getState(ALERT_SEEN_KEY) || '{}'); } catch { return {}; } })();
     const seen = seenRaw.escalations || [];
     const newOnes = allEscalations.filter(t => !seen.includes(t.key));
 
@@ -221,10 +223,10 @@ async function checkEscalationAlerts() {
           { type: 'escalation_alert', key: ticket.key }
         );
       }
-      db.setState(ALERT_SEEN_KEY, {
+      db.setState(ALERT_SEEN_KEY, JSON.stringify({
         ...seenRaw,
         escalations: [...seen, ...newOnes.map(t => t.key)].slice(-200),
-      });
+      }));
     }
   } catch (e) {
     console.warn('[Briefing] Escalation alert check failed:', e.message);
@@ -240,7 +242,7 @@ async function checkTeamsAlerts() {
     const mentions = await teams.getNewMentions(10);
     if (!mentions.length) return;
 
-    const seenRaw = db.getState(ALERT_SEEN_KEY) || {};
+    const seenRaw = (() => { try { return JSON.parse(db.getState(ALERT_SEEN_KEY) || '{}'); } catch { return {}; } })();
     const seen = seenRaw.teamsMentions || [];
     const newOnes = mentions.filter(m => !seen.includes(m.id));
     if (!newOnes.length) return;
@@ -248,15 +250,15 @@ async function checkTeamsAlerts() {
     console.log(`[Briefing] ${newOnes.length} new Teams mention(s) — alerting`);
     for (const m of newOnes) {
       await webpush.sendToAll(
-        `💬 Teams: ${m.from}`,
+        `Teams: ${m.from}`,
         m.preview,
         { type: 'teams_mention', chatId: m.chatId }
       );
     }
-    db.setState(ALERT_SEEN_KEY, {
+    db.setState(ALERT_SEEN_KEY, JSON.stringify({
       ...seenRaw,
       teamsMentions: [...seen, ...newOnes.map(m => m.id)].slice(-200),
-    });
+    }));
   } catch (e) {
     console.warn('[Briefing] Teams alert check failed:', e.message);
   }
@@ -284,7 +286,7 @@ async function checkMeetingAlerts() {
 
     if (!upcoming.length) return;
 
-    const seenRaw = db.getState(ALERT_SEEN_KEY) || {};
+    const seenRaw = (() => { try { return JSON.parse(db.getState(ALERT_SEEN_KEY) || '{}'); } catch { return {}; } })();
     const seen = seenRaw.meetingAlerts || [];
 
     for (const event of upcoming) {
@@ -300,10 +302,10 @@ async function checkMeetingAlerts() {
       seen.push(id);
     }
 
-    db.setState(ALERT_SEEN_KEY, {
+    db.setState(ALERT_SEEN_KEY, JSON.stringify({
       ...seenRaw,
       meetingAlerts: seen.slice(-50),
-    });
+    }));
   } catch (e) {
     console.warn('[Briefing] Meeting alert check failed:', e.message);
   }
