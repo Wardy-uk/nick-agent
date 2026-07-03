@@ -13,13 +13,15 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.js',
       registerType: 'autoUpdate',
       includeAssets: ['icons/apple-touch-icon.png', 'icons/favicon-32.png'],
-      workbox: {
+      injectManifest: {
         globPatterns: ['**/*.{js,css,html,png,svg,woff2}'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api/], // never serve the SPA shell for API calls
-        cleanupOutdatedCaches: true,
+        navigateFallbackDenylist: [/^\/api/],
       },
       manifest: {
         name: 'SARA',
