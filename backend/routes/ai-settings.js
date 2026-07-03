@@ -18,6 +18,7 @@ const aiRouting = require('../services/ai-routing');
 // Settings that can be changed at runtime (stored in agent_state)
 const RUNTIME_SETTINGS = {
   ai_mode: { key: 'ai_mode', env: 'AI_MODE', default: 'ollama-only', options: ['off', 'ollama-only', 'hybrid', 'critical-only'] },
+  anthropic_enabled: { key: 'anthropic_enabled', env: 'ANTHROPIC_ENABLED', default: 'true', type: 'boolean' },
   openrouter_enabled: { key: 'openrouter_enabled', env: 'OPENROUTER_ENABLED', default: 'false', type: 'boolean' },
   openrouter_api_key: { key: 'openrouter_api_key', env: 'OPENROUTER_API_KEY', default: '', type: 'secret' },
   openrouter_model: { key: 'openrouter_model', env: 'OPENROUTER_MODEL', default: 'google/gemini-2.5-flash' },

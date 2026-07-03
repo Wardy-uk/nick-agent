@@ -319,6 +319,24 @@ function AiSettingsSection() {
         {saved === 'sara_mode' && <span className="ai-setting-saved">✓</span>}
       </div>
 
+      {/* Anthropic */}
+      <div className="ai-setting-group">
+        <div className="ai-setting-group-title">Anthropic</div>
+        <div className="ai-setting-row">
+          <div className="ai-setting-label">Enabled</div>
+          <select
+            className="ai-setting-select"
+            value={settings.anthropic_enabled?.value || 'true'}
+            onChange={e => updateSetting('anthropic_enabled', e.target.value)}
+            disabled={saving}
+          >
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+          {saved === 'anthropic_enabled' && <span className="ai-setting-saved">✓</span>}
+        </div>
+      </div>
+
       {/* OpenRouter */}
       <div className="ai-setting-group">
         <div className="ai-setting-group-title">OpenRouter</div>

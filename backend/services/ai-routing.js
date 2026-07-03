@@ -23,6 +23,7 @@ const pi4Worker = require('./pi4-worker-client');
 function _cfg() {
   return {
     aiMode: process.env.AI_MODE || 'ollama-only',
+    anthropicEnabled: process.env.ANTHROPIC_ENABLED !== 'false',
     enabled: process.env.OPENROUTER_ENABLED === 'true',
     dailyCallLimit: parseInt(process.env.OPENROUTER_DAILY_CALL_LIMIT) || 100,
     dailyTokenLimit: parseInt(process.env.OPENROUTER_DAILY_TOKEN_LIMIT) || 100000,
@@ -196,7 +197,7 @@ async function runTask(taskType, payload, options = {}) {
   const cloudOk = !forceLocal && _isCloudAllowed(taskType);
 
   // ── Tier 1: Anthropic ──
-  if (cloudOk && anthropicProvider.isConfigured()) {
+  if (cloudOk && _cfg().anthropicEnabled && anthropicProvider.isConfigured()) {
     try {
       const result = await _runAnthropic(taskType, payload, options);
       if (result.text && result.text.trim().length > 0) {
@@ -272,7 +273,7 @@ async function runStreamingChat(systemPrompt, messages, res, options = {}) {
   const cloudOk = _isCloudAllowed(taskType);
 
   // Tier 1: Anthropic
-  if (cloudOk && anthropicProvider.isConfigured()) {
+  if (cloudOk && _cfg().anthropicEnabled && anthropicProvider.isConfigured()) {
     try {
       const result = await anthropicProvider.streamChat(systemPrompt, messages, res, options);
       if (result.fullText) {
@@ -404,6 +405,7 @@ function getStatus() {
     mode: _cfg().aiMode,
     priority: ['anthropic', 'openai', 'openrouter', 'ollama'],
     anthropic: {
+      enabled: _cfg().anthropicEnabled,
       configured: anthropicProvider.isConfigured(),
       model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
     },
