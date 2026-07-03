@@ -1,15 +1,20 @@
 'use strict';
 
 /**
- * AI Routing Policy — Phase 5: Pi local + OpenRouter cloud split.
+ * AI Routing Policy — Phase 6: 4-tier cloud + local stack.
  *
- * Light tasks (Pi 5 Ollama): focus_enhancement, drilldown_framing, action_suggestion
- * Heavy tasks (OpenRouter):  chat_stream, chat_sync, standup_interactive, eod_interactive
- * Background tasks (Pi 4):   email_triage, import_classification, journal_prompts, transcript_processing
+ * Priority order for all tasks:
+ *   1. Anthropic (Claude API direct)   — ANTHROPIC_API_KEY
+ *   2. OpenAI (ChatGPT)                — OPENAI_API_KEY
+ *   3. OpenRouter (multi-model cloud)  — OPENROUTER_API_KEY
+ *   4. Ollama (local Pi 5)             — always available
  *
- * Priority queue still applies for local Ollama requests.
+ * Background tasks (Pi 4 worker): email_triage, import_classification,
+ *   journal_prompts, transcript_processing — bypass the stack entirely.
  */
 
+const anthropicProvider = require('./providers/anthropic-provider');
+const openaiProvider = require('./providers/openai-provider');
 const ollamaProvider = require('./providers/ollama-provider');
 const openrouterProvider = require('./providers/openrouter-provider');
 const pi4Worker = require('./pi4-worker-client');
@@ -117,11 +122,11 @@ function _resetIfNewDay() {
 }
 function _currentHourKey() { return new Date().getHours().toString(); }
 
-function _isOpenRouterAllowed(taskType) {
+// Is cloud AI allowed at all (mode + budget guard)?
+function _isCloudAllowed(taskType) {
   _resetIfNewDay();
   const c = _cfg();
   if (c.aiMode === 'off' || c.aiMode === 'ollama-only') return false;
-  if (!c.enabled || !openrouterProvider.isConfigured()) return false;
   if (c.aiMode === 'critical-only' && !c.criticalTypes.includes(taskType)) return false;
   if (c.aiMode === 'hybrid' && c.allowedTasks[0] !== 'all' && !c.allowedTasks.includes(taskType)) return false;
   if (_usage.calls >= c.dailyCallLimit) { _usage.lastFallbackReason = 'Daily call limit'; return false; }
@@ -129,6 +134,13 @@ function _isOpenRouterAllowed(taskType) {
   const hk = _currentHourKey();
   if ((_usage.hourlyEscalations.get(hk) || 0) >= c.maxEscalationsPerHour) { _usage.lastFallbackReason = 'Hourly limit'; return false; }
   return true;
+}
+
+// Kept for OpenRouter-specific checks (requires OPENROUTER_ENABLED flag)
+function _isOpenRouterAllowed(taskType) {
+  if (!_isCloudAllowed(taskType)) return false;
+  const c = _cfg();
+  return c.enabled && openrouterProvider.isConfigured();
 }
 
 function _recordOpenRouterUsage(usage) {
@@ -148,20 +160,21 @@ function _recordOpenRouterUsage(usage) {
  * Run an AI task through the routing policy.
  *
  * Routing order:
- *   1. Background tasks → Pi 4 worker (if enabled)
- *   2. Cloud-preferred tasks → OpenRouter (if allowed + under budget), Ollama fallback
- *   3. Light tasks → Local Ollama via priority queue
- *   4. Safe no-op
+ *   1. Background tasks   → Pi 4 worker (bypasses stack)
+ *   2. Anthropic          → if ANTHROPIC_API_KEY set + cloud allowed
+ *   3. OpenAI (ChatGPT)   → if OPENAI_API_KEY set + cloud allowed
+ *   4. OpenRouter         → if OPENROUTER_API_KEY + OPENROUTER_ENABLED + cloud allowed
+ *   5. Ollama             → local Pi 5 fallback (always)
  */
 async function runTask(taskType, payload, options = {}) {
   _resetIfNewDay();
-  const { forceLocal = false, forceCloud = false, confidence = 1.0 } = options;
+  const { forceLocal = false, forceCloud = false } = options;
 
   if (_cfg().aiMode === 'off') {
     return { text: '', provider: 'none', fallback: false, reason: 'AI mode is off' };
   }
 
-  // ── Route background tasks to Pi 4 worker ──
+  // ── Background tasks → Pi 4 worker ──
   if (BACKGROUND_TASKS.has(taskType) && !forceLocal) {
     if (!pi4Worker.isEnabled()) {
       console.log(`[AIRouting] ${taskType}: skipped (Pi 4 worker not enabled)`);
@@ -180,50 +193,67 @@ async function runTask(taskType, payload, options = {}) {
     return { text: '', provider: 'none', fallback: true, reason: 'Pi 4 worker unavailable' };
   }
 
-  // ── Cloud-preferred tasks: try OpenRouter first, fall back to local ──
-  const preferCloud = CLOUD_PREFERRED_TASKS.has(taskType);
+  const cloudOk = !forceLocal && _isCloudAllowed(taskType);
 
-  if ((preferCloud || forceCloud) && !forceLocal && _isOpenRouterAllowed(taskType)) {
+  // ── Tier 1: Anthropic ──
+  if (cloudOk && anthropicProvider.isConfigured()) {
+    try {
+      const result = await _runAnthropic(taskType, payload, options);
+      if (result.text && result.text.trim().length > 0) {
+        _recordOpenRouterUsage(result.usage);
+        console.log(`[AIRouting] ${taskType}: anthropic`);
+        return { text: result.text, provider: 'anthropic', fallback: false };
+      }
+    } catch (err) {
+      console.warn(`[AIRouting] Anthropic failed for ${taskType}: ${err.message}`);
+      _usage.lastFallbackReason = `Anthropic: ${err.message.substring(0, 100)}`;
+    }
+  }
+
+  // ── Tier 2: OpenAI ──
+  if (cloudOk && openaiProvider.isConfigured()) {
+    try {
+      const result = await _runOpenAI(taskType, payload, options);
+      if (result.text && result.text.trim().length > 0) {
+        _recordOpenRouterUsage(result.usage);
+        console.log(`[AIRouting] ${taskType}: openai`);
+        return { text: result.text, provider: 'openai', fallback: false };
+      }
+    } catch (err) {
+      console.warn(`[AIRouting] OpenAI failed for ${taskType}: ${err.message}`);
+      _usage.lastFallbackReason = `OpenAI: ${err.message.substring(0, 100)}`;
+    }
+  }
+
+  // ── Tier 3: OpenRouter ──
+  if (!forceLocal && _isOpenRouterAllowed(taskType)) {
     try {
       const result = await _runOpenRouter(taskType, payload, options);
       if (result.text && result.text.trim().length > 0) {
         _recordOpenRouterUsage(result.usage);
+        console.log(`[AIRouting] ${taskType}: openrouter`);
         return { text: result.text, provider: 'openrouter', fallback: false };
       }
     } catch (err) {
       console.warn(`[AIRouting] OpenRouter failed for ${taskType}: ${err.message}`);
-      _usage.lastFallbackReason = `OpenRouter error: ${err.message.substring(0, 100)}`;
+      _usage.lastFallbackReason = `OpenRouter: ${err.message.substring(0, 100)}`;
     }
   }
 
-  // ── Local Ollama (primary for light tasks, fallback for heavy) ──
-  const model = TASK_MODELS[taskType] || HEAVY_MODEL;
-  const payloadWithModel = { ...payload, model };
-  const priority = _getTaskPriority(taskType);
-
+  // ── Tier 4: Ollama (local, always last resort) ──
   if (!forceCloud) {
+    const model = TASK_MODELS[taskType] || HEAVY_MODEL;
+    const priority = _getTaskPriority(taskType);
     try {
       const text = await _queueOllamaRequest(priority, () =>
-        _runOllama(taskType, payloadWithModel, options)
+        _runOllama(taskType, { ...payload, model }, options)
       );
       if (text && text.trim().length > 0) {
-        return { text, provider: 'ollama', fallback: preferCloud, model };
+        console.log(`[AIRouting] ${taskType}: ollama (${model})`);
+        return { text, provider: 'ollama', fallback: true, model };
       }
     } catch (err) {
       console.warn(`[AIRouting] Ollama failed for ${taskType}: ${err.message}`);
-    }
-  }
-
-  // ── Last resort: try OpenRouter if we haven't yet ──
-  if (!preferCloud && !forceLocal && _isOpenRouterAllowed(taskType)) {
-    try {
-      const result = await _runOpenRouter(taskType, payload, options);
-      if (result.text && result.text.trim().length > 0) {
-        _recordOpenRouterUsage(result.usage);
-        return { text: result.text, provider: 'openrouter', fallback: false };
-      }
-    } catch (err) {
-      console.warn(`[AIRouting] OpenRouter escalation failed for ${taskType}: ${err.message}`);
     }
   }
 
@@ -231,15 +261,51 @@ async function runTask(taskType, payload, options = {}) {
 }
 
 /**
- * Streaming chat — OpenRouter-primary for heavy tasks, Ollama fallback.
+ * Streaming chat — same 4-tier priority as runTask.
+ * Anthropic → OpenAI → OpenRouter → Ollama
  */
 async function runStreamingChat(systemPrompt, messages, res, options = {}) {
   _resetIfNewDay();
   const taskType = options.taskType || 'chat_stream';
   const forceCloud = options.forceCloud || false;
   const model = TASK_MODELS[taskType] || HEAVY_MODEL;
+  const cloudOk = _isCloudAllowed(taskType);
 
-  // Cloud-primary: try OpenRouter FIRST for chat
+  const _writeFallbackNotice = (msg) => {
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ type: 'text', content: msg })}\n\n`);
+    }
+  };
+
+  // Tier 1: Anthropic
+  if (cloudOk && anthropicProvider.isConfigured()) {
+    try {
+      const result = await anthropicProvider.streamChat(systemPrompt, messages, res, options);
+      if (result.fullText) {
+        _recordOpenRouterUsage(result.usage);
+        return { text: result.fullText, provider: 'anthropic', fallback: false };
+      }
+    } catch (err) {
+      console.warn(`[AIRouting] Anthropic stream failed: ${err.message}`);
+      _writeFallbackNotice('*[Anthropic unavailable, trying next...]*\n\n');
+    }
+  }
+
+  // Tier 2: OpenAI
+  if (cloudOk && openaiProvider.isConfigured()) {
+    try {
+      const result = await openaiProvider.streamChat(systemPrompt, messages, res, options);
+      if (result.fullText) {
+        _recordOpenRouterUsage(result.usage);
+        return { text: result.fullText, provider: 'openai', fallback: false };
+      }
+    } catch (err) {
+      console.warn(`[AIRouting] OpenAI stream failed: ${err.message}`);
+      _writeFallbackNotice('*[OpenAI unavailable, trying next...]*\n\n');
+    }
+  }
+
+  // Tier 3: OpenRouter
   if (_isOpenRouterAllowed(taskType)) {
     try {
       const result = await openrouterProvider.streamChat(systemPrompt, messages, res, options);
@@ -249,13 +315,11 @@ async function runStreamingChat(systemPrompt, messages, res, options = {}) {
       }
     } catch (err) {
       console.warn(`[AIRouting] OpenRouter stream failed: ${err.message}`);
-      if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ type: 'text', content: '*[Cloud unavailable, using local model...]*\n\n' })}\n\n`);
-      }
+      _writeFallbackNotice('*[Cloud unavailable, using local model...]*\n\n');
     }
   }
 
-  // Fallback: try Ollama locally
+  // Tier 4: Ollama
   if (!forceCloud) {
     try {
       const text = await ollamaProvider.streamChat(systemPrompt, messages, res, { ...options, model });
@@ -267,14 +331,40 @@ async function runStreamingChat(systemPrompt, messages, res, options = {}) {
     }
   }
 
-  if (!res.writableEnded) {
-    res.write(`data: ${JSON.stringify({ type: 'text', content: '*[AI unavailable — try again later]*\n' })}\n\n`);
-  }
+  _writeFallbackNotice('*[AI unavailable — try again later]*\n');
   return { text: '', provider: 'none', fallback: true };
 }
 
 
 // ── Internal runners ──
+
+async function _runAnthropic(taskType, payload, options) {
+  if (payload.messages) {
+    return anthropicProvider.chat(payload.systemPrompt || '', payload.messages, {
+      maxTokens: payload.maxTokens,
+      timeout: options.timeout,
+    });
+  }
+  return anthropicProvider.generate(payload.prompt || '', {
+    maxTokens: payload.maxTokens,
+    timeout: options.timeout,
+  });
+}
+
+async function _runOpenAI(taskType, payload, options) {
+  if (payload.messages) {
+    return openaiProvider.chat(payload.systemPrompt || '', payload.messages, {
+      temperature: payload.temperature,
+      maxTokens: payload.maxTokens,
+      timeout: options.timeout,
+    });
+  }
+  return openaiProvider.generate(payload.prompt || '', {
+    temperature: payload.temperature,
+    maxTokens: payload.maxTokens,
+    timeout: options.timeout,
+  });
+}
 
 async function _runOllama(taskType, payload, options) {
   if (payload.messages) {
@@ -321,6 +411,15 @@ function getStatus() {
   _resetIfNewDay();
   return {
     mode: _cfg().aiMode,
+    priority: ['anthropic', 'openai', 'openrouter', 'ollama'],
+    anthropic: {
+      configured: anthropicProvider.isConfigured(),
+      model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+    },
+    openai: {
+      configured: openaiProvider.isConfigured(),
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    },
     openrouter: {
       enabled: _cfg().enabled,
       configured: openrouterProvider.isConfigured(),
