@@ -1,62 +1,93 @@
-# HANDOFF — Next build: proactive briefings ("what must Nick do next")
+# HANDOFF — Proactive briefings built; deploy + Monday re-consent needed
 
-## THIS SESSION'S MISSION
-Make SARA **tell Nick what to do next**, proactively — he shouldn't have to go looking. Build regular briefings + alerts into SARA (the live light-touch app at **sara.nickward.co.uk**).
+## WHAT WAS BUILT THIS SESSION
 
-1. **Aggregate ALL the sources** into one "do next" picture: email, **Microsoft Teams**, and every todo source (Jira queue, vault `Master Todo.md`, Microsoft To Do/Tasks, do-next).
-2. **Scheduled briefs** — a **morning brief** + a **midday brief** at minimum (EOD/more optional).
-3. **Alerts when needed** — event-driven pushes for the stuff that can't wait for the next brief.
-4. **Deliver into SARA** — push notification + a glanceable brief surface in the app.
+Full proactive briefing system:
 
-⚠️ Talk the shape through with Nick FIRST (open questions below) before building — especially where the brief surfaces and the Teams scope.
+| File | What it does |
+|------|-------------|
+| `backend/services/briefing.js` | Core: builds brief from all sources, stores in KV, pushes + emails |
+| `backend/services/teams.js` | Teams Graph integration (Chat.Read scope, graceful degradation) |
+| `backend/services/email-sender.js` | Graph Mail.Send (graceful degradation until Monday re-consent) |
+| `backend/routes/briefing.js` | `GET /api/briefing` + `POST /api/briefing/trigger` |
+| `sara/app/src/hooks/usePushSubscription.js` | Push subscription hook, fetches VAPID key at runtime |
+| Modified `backend/services/scheduler.js` | Added 9am + 1pm Mon-Fri brief jobs + every-5min alert checks |
+| Modified `backend/server.js` | Wired `/api/briefing` route |
+| Modified `backend/routes/focus.js` | Injects `last_brief` synthesis text into `sara.briefing` (Focus view picks it up) |
+| Modified `sara/app/src/App.jsx` | Added `usePushSubscription(authed)` |
+| Modified `backend/services/microsoft.js` | Added scope comment for Monday re-consent |
 
-## Big head start — most of this already exists (do NOT rebuild)
-- **`/api/focus`** (`backend/services/decision-engine.js`) ALREADY synthesizes "what matters now" across escalations, at-risk Jira, meetings, overdue todos, nudges, email — tiered + scored + urgency-ranked, with an AI-enhanced SARA block (`ai-provider.js`). The briefing is mostly *schedule this + add the missing sources + deliver it*, not a from-scratch build.
-- **Sources already wired in the brain:**
-  - Email → `microsoft.js` (Graph), `email-triage.js`, `inbox-scanner.js`, `/api/inbox`
-  - Calendar → `microsoft.js`, `calendar-sync.js`, `/api/meeting-prep`
-  - Todos → `todos` routes (MS Tasks sync), vault `Tasks/Master Todo.md`, `do-next.js`, `next-action-engine.js`, `task-scoring.js`
-  - Jira queue + SLA → `jira.js`, jira cache
-  - Nudges + scheduling → `nudge` routes + `scheduler` (node-cron) — morning/midday jobs slot straight in here
-  - Push → `webpush` service + `/api/push` (push/SSE are PIN-exempt in `server.js`)
-  - Daily rollup → `activity.js`
-- **Teams is the likely gap:** email/calendar/tasks come via Graph, but Teams messages/@mentions are probably NOT pulled yet. Adding Teams likely needs new Graph scopes (`Chat.Read`, `ChannelMessage.Read`, `Chat.ReadBasic`) via the existing MSAL device-code flow. **Verify current scopes before assuming.**
+## WHAT NEEDS TO HAPPEN BEFORE IT'S FULLY LIVE
 
-## What's genuinely new to build
-1. **Teams source** — `services/teams.js`: pull recent Teams @mentions/DMs via Graph, triage for "needs Nick." New scopes + re-consent (device code).
-2. **Briefing synthesizer** — `services/briefing.js` + `GET /api/briefing`: assemble a prioritized "do next" brief across all sources (reuse `/api/focus` + email/Teams triage). Short list: Do-next 1/2/3 · Can-wait · Ignore.
-3. **Schedule it** — node-cron jobs (morning ~08:00, midday ~12:30) in the scheduler that build the brief and push it. Context-aware (skip if already actioned — the decision-engine already tracks this).
-4. **Alerts** — event-driven push when urgency trips a threshold (new escalation, SLA imminent, urgent email, Teams @mention, meeting in N min). The decision-engine already scores urgency — hook alerts to its high-urgency signals. Keep alerts RARE + high-signal (Nick's ND: alert noise = ignored app).
-5. **Deliver into `sara/app`** — ⚠️ the new app does NOT yet have web-push wired (legacy `frontend/` had `usePushNotifications.js`; `sara/app` is minimal). Build: push subscription in `sara/app` + a **Brief** surface (new nav area, or fold into Focus which is already "what matters now").
+### 1. Deploy to Pi (can do now)
+```bash
+# On Pi 5: nickw@100.100.28.58
+git pull --ff-only origin main
+pm2 restart neuro-backend --update-env
+```
 
-## Open questions for Nick (decide before building)
-1. **Where does the brief live?** New "Brief" tab, or enhance the existing **Focus** view (already the "what matters now" glance)? Push body + tap-through?
-2. **Teams:** OK to add Teams Graph permissions (re-consent via device code)? Just @mentions/DMs, or channels too?
-3. **Cadence + times:** morning brief at ? · midday at ? · EOD? · weekends on/off?
-4. **Alert thresholds:** what earns an interrupt vs. waits for the next brief?
-5. **AI for synthesis:** a genuinely good synthesized brief wants a capable model — but **cloud AI is currently unfunded** (see below), so synthesis falls back to local Ollama (weaker) or the deterministic path. Funding OpenRouter materially improves brief quality. Flag to Nick.
+### 2. Fund + enable OpenRouter (do when API key available)
+In `/mnt/data/nuero/backend/.env` on Pi, add/change:
+```
+OPENROUTER_API_KEY=<your key from openrouter.ai>
+OPENROUTER_ENABLED=true
+AI_MODE=hybrid
+```
+Then `pm2 restart neuro-backend --update-env`.
 
----
+This powers both brief synthesis AND chat. Without it, briefs use local Ollama (weaker) as fallback — still works, just lower quality.
 
-## CURRENT STATE — SARA lite app is LIVE (background; stable)
-- **Live at https://sara.nickward.co.uk** (Netlify site `sara-nickward`, id `e6fdb633-cfd7-4c05-996a-b6bbdfd01a5b`, team `5ef71a8c88e4b776f2e4ebc2`). Custom domain on Netlify DNS (nsone/NS1). Installable PWA, PIN-gated, verified working end-to-end.
-- **App = `sara/app`** (React 19 + Vite + PWA, per-component CSS). NEW sub-project (npm `--prefix`, NOT root workspaces), sibling to `sara/backend`+`sara/frontend`, wired in `sara/package.json` (`dev:app`/`build:app`). Six nav areas: **Focus · Capture · Voice · Chat · Prep · Brain** (Voice = one-tap into live dictation). Legacy `frontend/` still exists — retire whenever.
-- **Definitions:** NEURO = brain, SARA = interface. Canonical vault note `Projects/NEURO/NEURO & SARA — What They Are.md`.
+### 3. Monday re-consent for Teams + email (device code flow)
+On Pi after deploy:
+```bash
+# Hit the device-code endpoint to get a code
+curl -X POST http://localhost:3001/api/microsoft/device-code \
+  -H "X-Neuro-Pin: <your-pin>"
+```
+Then follow the URL it gives you to re-consent with these new scopes:
+- `Mail.Send` — enables brief emails
+- `Chat.Read` — enables Teams DM + mention alerts
+- `ChannelMessage.Read.All` — enables Teams channel message alerts
 
-## Deploy facts (both tiers)
-- **Frontend → Netlify.** `VITE_API_URL` is committed as **`sara/app/.env.production`** (public URL, not secret) so every build bakes in the brain URL. ⚠️ GOTCHA: the Netlify *build-env var* silently did NOT apply → relative `/api` → Netlify served the SPA not the brain → empty screens with no error. `.env.production` is the fix. **After ANY deploy verify:** `curl <site>/assets/index-*.js | grep pi5.tailecb90f.ts.net` must return a hit.
-  - **Redeploy:** Netlify MCP `deploy-site` (siteId above) → returns an `npx -y @netlify/mcp@latest --site-id ... --proxy-path "<one-use token>"` command → run it **from `sara/app`** (uploads + builds server-side). No Netlify CLI auth in-session; the proxy token carries auth.
-- **Backend → Pi 5.** `nickw@100.100.28.58`, `/mnt/data/nuero`, branch `main`, PM2 `neuro-backend`. Deploy: `git pull --ff-only origin main` then `export PATH=/home/nickw/.nvm/versions/node/v20.20.2/bin:$PATH && pm2 restart neuro-backend --update-env`. ALWAYS check `git status` clean on the Pi first (see mistakes.md).
-- **Brain URL:** `https://pi5.tailecb90f.ts.net` — Pi exposes `:3001` over Tailscale **Funnel = PUBLIC HTTPS**, PIN-gated. `app.use(cors())` already open. Works off-tailnet.
-- **Auth:** PIN in `localStorage['neuro_pin']` → `X-Neuro-Pin` header; vault key → `X-Api-Key` on `/api/vault*`. Lock screen now VALIDATES the PIN against `/api/focus` before unlocking (wrong PIN → "Incorrect PIN"); header **🔒** button clears the PIN to re-enter. One-time PIN per device (no persistent lock).
+In `backend/services/microsoft.js` line 48 `GRAPH_SCOPES`, add them:
+```js
+const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Mail.Send', 'Tasks.Read', 'User.Read', 'Chat.Read', 'ChannelMessage.Read.All'];
+```
+Then deploy again + restart.
 
-## Known / pending (optional, Nick's call)
-- **Cloud AI unfunded** → chat + AI synthesis run local-Ollama-only. `OPENROUTER_API_KEY` is absent; the Pi's `ANTHROPIC_API_KEY` has no credit balance. OpenRouter is the brain's intended cloud path (`ai-routing.js`, default `anthropic/claude-haiku-4.5`). Fund OpenRouter → powers chat AND better brief synthesis. **Directly relevant to this mission.**
-- **Brain is public via Funnel, PIN-gated** (pre-existing Pi config). If unintended → switch `:3001` to tailnet-only Serve (app then needs the device on Tailscale). Noted in the vault note.
-- Handwriting capture = free iPadOS Scribble into the Capture note box (paid ink/OCR path was built then removed — Anthropic/OpenRouter unfunded).
+### 4. Deploy sara/app to Netlify (for push subscription)
+```bash
+# From sara/app dir
+# Get deploy token via Netlify MCP netlify-deploy-services-reader
+# Run the npx deploy command it returns
+```
+Push subscription code is already in App.jsx — just needs the new build deployed.
 
-## Git state
-- `main` @ `edfcb8f` (pushed, Wardy-uk/nuero). All app work is on main.
+### 5. Test manually
+Hit `POST /api/briefing/trigger` to force a brief without waiting for 9am:
+```bash
+curl -X POST https://pi5.tailecb90f.ts.net/api/briefing/trigger \
+  -H "X-Neuro-Pin: <pin>" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"test"}'
+```
+Check: push notification arrives, email attempted (will fail until scope added), `/api/briefing` returns the brief, Focus view shows synthesis text.
 
-## Session Start Ritual (from CLAUDE.md)
-1. Read this handoff. 2. `mistakes.md`. 3. `patterns.md`. Repo `Wardy-uk/nuero`. Pi 5 = `nickw@100.100.28.58`.
+## HOW IT WORKS (brief)
+
+1. **Scheduled**: 9am + 1pm Mon-Fri → `buildAndDeliver()` runs
+2. **Collects**: decision-engine items + email triage + Teams (if scope granted)
+3. **Synthesizes**: OpenRouter (if funded) → Ollama fallback → deterministic text
+4. **Stores**: `db.setState('last_brief', brief)` — Focus view picks this up automatically
+5. **Delivers**: push notification → email (when Mail.Send scope granted)
+6. **Alerts** (every 5min): new escalation (request type OR neuro-escalation label) → push; Teams @mention → push; meeting in 10min → push
+
+## CURRENT STATE
+- All code committed to `main` on Wardy-uk/nuero
+- NOT yet deployed to Pi (deploy is the next step)
+- email-sender + teams.js will gracefully degrade until Monday scopes
+- Brief synthesis will use Ollama until OpenRouter funded
+
+## GIT STATE
+Last commit before this session: `edfcb8f`
+Files changed this session: 8 new/modified files listed above (not yet committed)

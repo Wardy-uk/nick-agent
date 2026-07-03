@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { getPin, clearPin } from './api';
+import { usePushSubscription } from './hooks/usePushSubscription';
 import LockScreen from './components/LockScreen';
 import Capture from './views/Capture';
 import Focus from './views/Focus';
@@ -23,6 +24,7 @@ const TABS = [
 export default function App() {
   const [authed, setAuthed] = useState(() => !!getPin());
   const [active, setActive] = useState('focus');
+  usePushSubscription(authed);
 
   if (!authed) return <LockScreen onUnlock={() => setAuthed(true)} />;
 

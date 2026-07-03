@@ -55,6 +55,7 @@ npm run dev:frontend     # vite
 | Vault | VaultBrowser | obsidian service, vault-cache, vault-hooks, vault-logger, embeddings |
 | Standups | StandupsPanel, StandupEditor | standup routes, transcript-processor |
 | Focus | FocusPanel, DoNextPanel | focus routes, do-next, next-action-engine, task-scoring |
+| Briefings | sara/app Focus view (sara.briefing) | briefing.js (build+deliver), email-sender.js (Graph Mail), teams.js (Graph Chat), routes/briefing.js |
 | People | PeopleBoard, PersonDetail | person-profile, person-timeline, one-to-one-prep, meeting-prep, development-plan |
 | Calendar | CalendarView | microsoft service (Graph API), calendar-sync |
 | Inbox | InboxPanel | email-triage, inbox-scanner |

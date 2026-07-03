@@ -1,0 +1,109 @@
+'use strict';
+
+/**
+ * Email sender — sends briefs via Microsoft Graph Mail.Send.
+ *
+ * Requires Mail.Send scope (add Monday via device code flow).
+ * Gracefully degrades: logs and returns { sent: false } if scope missing.
+ */
+
+const microsoft = require('./microsoft');
+
+const GRAPH = 'https://graph.microsoft.com/v1.0';
+const TO_ADDRESS = 'nickw@nurtur.tech';
+
+async function sendBriefEmail(subject, htmlBody) {
+  let token;
+  try {
+    token = await microsoft.getAccessToken();
+  } catch (e) {
+    console.warn('[EmailSender] Could not get access token:', e.message);
+    return { sent: false, reason: 'auth' };
+  }
+  if (!token) return { sent: false, reason: 'auth' };
+
+  const message = {
+    subject,
+    body: { contentType: 'HTML', content: htmlBody },
+    toRecipients: [{ emailAddress: { address: TO_ADDRESS } }],
+  };
+
+  try {
+    const res = await fetch(`${GRAPH}/me/sendMail`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ message }),
+    });
+
+    if (res.status === 403) {
+      console.log('[EmailSender] Mail.Send scope not yet granted — awaiting Monday re-consent');
+      return { sent: false, reason: 'scope' };
+    }
+    if (res.status === 202 || res.ok) {
+      console.log(`[EmailSender] Brief sent to ${TO_ADDRESS}`);
+      return { sent: true };
+    }
+    const body = await res.text().catch(() => '');
+    console.error(`[EmailSender] sendMail failed ${res.status}:`, body.slice(0, 300));
+    return { sent: false, reason: `http_${res.status}` };
+  } catch (e) {
+    console.error('[EmailSender] sendMail error:', e.message);
+    return { sent: false, reason: 'error', error: e.message };
+  }
+}
+
+/**
+ * Render a brief object into HTML for email.
+ */
+function briefToHtml(brief) {
+  const ts = new Date(brief.ts).toLocaleString('en-GB', {
+    weekday: 'short', hour: '2-digit', minute: '2-digit',
+  });
+
+  const sections = [];
+
+  if (brief.doNow?.length) {
+    const items = brief.doNow.map(i =>
+      `<li><strong>[${i.type}]</strong> ${i.title}${i.reason ? ` <em style="color:#888">— ${i.reason}</em>` : ''}</li>`
+    ).join('');
+    sections.push(`<h3 style="color:#c0392b">Do now</h3><ul>${items}</ul>`);
+  }
+
+  if (brief.doNext?.length) {
+    const items = brief.doNext.map(i =>
+      `<li><strong>[${i.type}]</strong> ${i.title}</li>`
+    ).join('');
+    sections.push(`<h3 style="color:#e67e22">Up next</h3><ul>${items}</ul>`);
+  }
+
+  if (brief.fyi?.length) {
+    const items = brief.fyi.map(i => `<li>${i.title}</li>`).join('');
+    sections.push(`<h3 style="color:#27ae60">FYI</h3><ul>${items}</ul>`);
+  }
+
+  if (brief.synthesis) {
+    sections.push(`<p style="background:#f8f9fa;padding:12px;border-radius:4px;font-style:italic">${brief.synthesis}</p>`);
+  }
+
+  const body = sections.length
+    ? sections.join('')
+    : '<p>Nothing pressing right now.</p>';
+
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:system-ui,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#333">
+  <h2 style="margin:0 0 4px">SARA Brief</h2>
+  <p style="margin:0 0 20px;color:#888;font-size:14px">${ts}</p>
+  ${body}
+  <hr style="margin:24px 0;border:none;border-top:1px solid #eee">
+  <p style="font-size:12px;color:#aaa">Delivered by NEURO · <a href="https://sara.nickward.co.uk">Open SARA</a></p>
+</body>
+</html>`;
+}
+
+module.exports = { sendBriefEmail, briefToHtml };

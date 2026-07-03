@@ -47,6 +47,12 @@ const TENANT_ID = process.env.MS_TENANT_ID || 'db0f7383-5d7f-4a39-9841-02fbcd144
 
 const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Tasks.Read', 'User.Read'];
 
+// Additional scopes to add Monday via device code re-consent:
+//   'Mail.Send'               — enables brief emails
+//   'Chat.Read'               — enables Teams DM + mention alerts
+//   'ChannelMessage.Read.All' — enables Teams channel message alerts
+// To activate: add to GRAPH_SCOPES above, then call /api/microsoft/device-code on the Pi.
+
 let msalClient = null;
 let graphTokenCache = { accessToken: null, expiresOn: 0 };
 

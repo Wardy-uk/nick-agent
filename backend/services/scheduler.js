@@ -392,6 +392,31 @@ function start() {
     }
   });
 
+  // ── Proactive briefings ──────────────────────────────────────────────────
+
+  // 9am Mon-Fri — morning brief
+  cron.schedule('0 9 * * 1-5', async () => {
+    console.log('[Scheduler] 9am — morning brief');
+    try {
+      await require('./briefing').buildAndDeliver({ label: 'morning' });
+    } catch (e) { console.error('[Scheduler] Morning brief failed:', e.message); }
+  });
+
+  // 1pm Mon-Fri — midday brief
+  cron.schedule('0 13 * * 1-5', async () => {
+    console.log('[Scheduler] 1pm — midday brief');
+    try {
+      await require('./briefing').buildAndDeliver({ label: 'midday' });
+    } catch (e) { console.error('[Scheduler] Midday brief failed:', e.message); }
+  });
+
+  // Every 5 min 8am-6pm weekdays — alert checks (escalations, Teams mentions, meetings)
+  cron.schedule('*/5 8-18 * * 1-5', async () => {
+    try {
+      await require('./briefing').runAlertChecks();
+    } catch (e) { console.error('[Scheduler] Alert checks failed:', e.message); }
+  });
+
   console.log('[Scheduler] Started — pre-warm 8:55am, standup 9am, 1-2-1 9:10am, nag 15m, EOD pre-warm 4:55pm, EOD 5pm, weekly review Fri 4:30pm, knowledge reflection Mon 8:10am, import consolidation hourly, import report 18:10, plan milestone 9:05am, Jira 5m, escalations 5m, flagged 5m, email triage 8/12/17, meeting prep 5m, imports 23:30, Plaud MCP 30m, MS Tasks 30m');
 }
 

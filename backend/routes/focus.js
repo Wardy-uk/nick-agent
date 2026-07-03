@@ -98,6 +98,16 @@ router.get('/', async (req, res) => {
 
     console.log(`[Focus] Engine: ${Date.now() - t0}ms`);
 
+    // ── Inject stored brief if recent (< 2h) ──
+    let storedBrief = null;
+    try {
+      const briefing = require('../services/briefing');
+      const lb = briefing.getLastBrief();
+      if (lb && lb.ts && (Date.now() - new Date(lb.ts).getTime()) < 2 * 60 * 60 * 1000) {
+        storedBrief = lb;
+      }
+    } catch (e) { /* briefing service not available */ }
+
     // ── SARA block (always present) ──
     let sara = null;
     if (!showAll && result.items.length > 0) {
@@ -172,7 +182,9 @@ router.get('/', async (req, res) => {
       mode: result.mode,
       tone,
       primaryItem: result.primaryItem || null,
-      sara: sara || null,
+      sara: sara
+        ? { ...sara, briefing: storedBrief?.synthesis || sara.briefing }
+        : storedBrief ? { briefing: storedBrief.synthesis } : null,
       // Phase 6A: next-action data
       nextAction: nextActions.primaryAction,
       secondaryAction: nextActions.secondaryAction,
