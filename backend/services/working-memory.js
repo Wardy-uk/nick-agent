@@ -27,9 +27,7 @@ const _observations = [];
 const MAX_OBSERVATIONS = 50;
 const OBSERVATION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 
-// Previous state snapshots for change detection
-let _prevQueueTotal = null;
-let _prevAtRiskCount = null;
+// Previous state snapshot for change detection
 let _prevEscalationCount = null;
 
 /**
@@ -62,10 +60,6 @@ async function refresh() {
     const day = now.getDay();
     const isWeekend = day === 0 || day === 6;
     const isWorkHours = !isWeekend && hour >= 8 && hour <= 18;
-
-    // Queue summary (fast — SQLite)
-    let queueSummary = null;
-    try { queueSummary = db.getQueueSummary(); } catch {}
 
     // Vault todos (CACHED — only re-parses if files changed)
     let todos = null;
@@ -111,7 +105,7 @@ async function refresh() {
     } catch {}
 
     // ── Detect changes and record observations ──
-    _detectChanges(queueSummary, unseenEscalations, nudges, todayActivity);
+    _detectChanges(unseenEscalations, nudges, todayActivity);
 
     // ── Snooze pattern detection ──
     const snoozeCount = todayActivity.filter(a => a.event_type === 'nudge_snoozed').length;
@@ -124,7 +118,6 @@ async function refresh() {
       refreshedAt: Date.now(),
       dateKey,
       timeContext: { hour, day, isWeekend, isWorkHours },
-      queueSummary,
       todos,
       ninetyDayPlan,
       calendar,
@@ -153,34 +146,7 @@ async function refresh() {
   }
 }
 
-/**
- * Detect changes between refreshes and record observations.
- */
-function _detectChanges(queueSummary, unseenEscalations, nudges, todayActivity) {
-  const now = Date.now();
-
-  // Queue size changed
-  if (queueSummary && _prevQueueTotal !== null) {
-    const diff = queueSummary.total - _prevQueueTotal;
-    if (diff >= 3) {
-      _addObservation('queue_spike', `Queue grew by ${diff} (now ${queueSummary.total})`, { diff, total: queueSummary.total });
-    } else if (diff <= -3) {
-      _addObservation('queue_drop', `Queue shrunk by ${Math.abs(diff)} (now ${queueSummary.total})`, { diff, total: queueSummary.total });
-    }
-  }
-  if (queueSummary) _prevQueueTotal = queueSummary.total;
-
-  // At-risk count changed
-  if (queueSummary && _prevAtRiskCount !== null) {
-    const atRisk = (queueSummary.at_risk_tickets || []).length;
-    if (atRisk > _prevAtRiskCount && atRisk > 0) {
-      _addObservation('sla_worsening', `At-risk tickets increased to ${atRisk}`, { count: atRisk });
-    } else if (atRisk < _prevAtRiskCount && _prevAtRiskCount > 0) {
-      _addObservation('sla_improving', `At-risk tickets dropped to ${atRisk}`, { count: atRisk });
-    }
-  }
-  if (queueSummary) _prevAtRiskCount = (queueSummary.at_risk_tickets || []).length;
-
+function _detectChanges(unseenEscalations, nudges, todayActivity) {
   // New escalations
   if (_prevEscalationCount !== null && unseenEscalations > _prevEscalationCount) {
     _addObservation('new_escalation', `New escalation detected (${unseenEscalations} unseen)`, { count: unseenEscalations });
@@ -284,7 +250,6 @@ function _buildEmpty() {
     refreshedAt: 0,
     dateKey: new Date().toISOString().split('T')[0],
     timeContext: { hour: new Date().getHours(), day: new Date().getDay(), isWeekend: false, isWorkHours: false },
-    queueSummary: null,
     todos: null,
     ninetyDayPlan: null,
     calendar: [],

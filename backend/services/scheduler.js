@@ -357,20 +357,6 @@ function start() {
     });
   }, 30000);
 
-  // Flagged ticket sync — every 5 minutes during work hours
-  cron.schedule('*/5 8-18 * * 1-5', () => {
-    jira.syncFlaggedTickets().catch(e => {
-      console.error('[Scheduler] Flagged ticket sync failed:', e.message);
-    });
-  });
-
-  // Startup flagged ticket sync
-  setTimeout(() => {
-    jira.syncFlaggedTickets().catch(e => {
-      console.error('[Scheduler] Startup flagged sync failed:', e.message);
-    });
-  }, 35000);
-
   // Email triage — run at 8am, 12pm, 5pm weekdays
   cron.schedule('0 8,12,17 * * 1-5', () => {
     require('./email-triage').runTriage().catch(e => {
@@ -417,7 +403,7 @@ function start() {
     } catch (e) { console.error('[Scheduler] Alert checks failed:', e.message); }
   });
 
-  console.log('[Scheduler] Started — pre-warm 8:55am, standup 9am, 1-2-1 9:10am, nag 15m, EOD pre-warm 4:55pm, EOD 5pm, weekly review Fri 4:30pm, knowledge reflection Mon 8:10am, import consolidation hourly, import report 18:10, plan milestone 9:05am, Jira 5m, escalations 5m, flagged 5m, email triage 8/12/17, meeting prep 5m, imports 23:30, Plaud MCP 30m, MS Tasks 30m');
+  console.log('[Scheduler] Started — pre-warm 8:55am, standup 9am, 1-2-1 9:10am, nag 15m, EOD pre-warm 4:55pm, EOD 5pm, weekly review Fri 4:30pm, knowledge reflection Mon 8:10am, import consolidation hourly, import report 18:10, plan milestone 9:05am, escalations 5m, email triage 8/12/17, meeting prep 5m, Plaud MCP 30m, MS Tasks 30m');
 }
 
 module.exports = { start };

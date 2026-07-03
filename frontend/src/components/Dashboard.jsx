@@ -347,7 +347,7 @@ function OrphanAlert({ onNavigate }) {
 
 // ── Main Review Surface ───────────────────────────────────────────────────
 
-export default function Dashboard({ queueData, onNavigate }) {
+export default function Dashboard({ onNavigate }) {
   const today = new Date();
   const dayCount = Math.max(0, Math.floor((today - START_DATE) / (1000 * 60 * 60 * 24)));
   const dateStr = today.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
@@ -361,9 +361,6 @@ export default function Dashboard({ queueData, onNavigate }) {
     .sort((a, b) => new Date(a.start) - new Date(b.start));
 
   const plan = planFetch.data;
-  const atRisk = queueData?.at_risk_count ?? 0;
-  const queueTotal = queueData?.total ?? 0;
-  const p1s = queueData?.open_p1s ?? 0;
   const planPct = plan ? Math.round((plan.totalDone / Math.max(plan.totalTasks, 1)) * 100) : 0;
 
   return (
@@ -376,15 +373,6 @@ export default function Dashboard({ queueData, onNavigate }) {
 
       {/* Stat cards */}
       <div className="dash-stats">
-        <div className={`dash-stat ${atRisk > 0 ? 'stat-danger' : ''}`} onClick={() => onNavigate?.('queue')}>
-          <span className="stat-val">{queueTotal}</span>
-          <span className="stat-lbl">Queue</span>
-          {atRisk > 0 && <span className="stat-sub">{atRisk} at risk</span>}
-        </div>
-        <div className={`dash-stat ${p1s > 0 ? 'stat-warn' : ''}`} onClick={() => onNavigate?.('queue')}>
-          <span className="stat-val">{p1s}</span>
-          <span className="stat-lbl">P1s</span>
-        </div>
         <div className="dash-stat" onClick={() => onNavigate?.('plan')}>
           <span className="stat-val">{plan ? `${planPct}%` : '-'}</span>
           <span className="stat-lbl">90-Day</span>
@@ -456,22 +444,6 @@ export default function Dashboard({ queueData, onNavigate }) {
           {plan.todayTasks?.filter(t => t.status !== 'x').map((t, i) => (
             <div key={`t${i}`} className="dash-task">
               <span className="task-text">{t.text}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Queue peek — at-risk tickets */}
-      {queueData?.at_risk_tickets?.length > 0 && (
-        <div className="review-section">
-          <div className="review-section-header">
-            <span className="review-section-title">At Risk</span>
-            <button className="review-link" onClick={() => onNavigate?.('queue')}>Full queue</button>
-          </div>
-          {queueData.at_risk_tickets.slice(0, 4).map(t => (
-            <div key={t.ticket_key} className="dash-task task-high">
-              <span className="task-key">{t.ticket_key}</span>
-              <span className="task-text">{t.summary}</span>
             </div>
           ))}
         </div>

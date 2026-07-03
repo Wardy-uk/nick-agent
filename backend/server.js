@@ -18,7 +18,6 @@ const db = require('./db/database');
 const scheduler = require('./services/scheduler');
 
 const chatRoutes = require('./routes/chat');
-const queueRoutes = require('./routes/queue');
 const obsidianRoutes = require('./routes/obsidian');
 const standupRoutes = require('./routes/standup');
 const nudgeRoutes = require('./routes/nudges');
@@ -116,7 +115,6 @@ app.get('/api/auth/check', (req, res) => {
 
 // API routes
 app.use('/api/chat', chatRoutes);
-app.use('/api/queue', queueRoutes);
 app.use('/api/obsidian', obsidianRoutes);
 app.use('/api/standup', standupRoutes);
 app.use('/api/nudges', nudgeRoutes);

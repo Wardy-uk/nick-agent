@@ -59,8 +59,8 @@ function _timeOfDayModifier(item, mode) {
       if (item.type === 'email') return -2;
       return 0;
     case 'midday':
-      // Boost execution: tickets, urgent emails
-      if (item.type === 'jira_ticket' || item.type === 'escalation') return +4;
+      // Boost execution: escalations, urgent emails
+      if (item.type === 'escalation') return +4;
       if (item.type === 'email') return +3;
       if (item.type === 'nudge' && item.meta?.type === 'standup') return -3;
       return 0;
@@ -72,7 +72,7 @@ function _timeOfDayModifier(item, mode) {
       return 0;
     case 'weekend':
       // Suppress work urgency
-      if (item.type === 'jira_ticket' || item.type === 'escalation') return -5;
+      if (item.type === 'escalation') return -5;
       if (item.type === 'nudge' && item.meta?.type === 'standup') return -10;
       return 0;
     default:
@@ -142,65 +142,6 @@ function collectEscalations(ctx) {
       actionHint: 'Open Queue → Escalations',
       _unsuppressable: true, // overrides cannot suppress this
     });
-  }
-  return items;
-}
-
-function collectSlaBreaches(ctx) {
-  const items = [];
-  if (!ctx.queueSummary) return items;
-
-  const atRisk = ctx.queueSummary.at_risk_tickets || [];
-
-  if (atRisk.length > 3) {
-    const p1s = atRisk.filter(t => _isP1(t));
-    if (p1s.length > 0) {
-      items.push({
-        type: 'jira_ticket',
-        id: 'jira-p1-summary',
-        title: `${p1s.length} P1 ticket${p1s.length > 1 ? 's' : ''} at risk`,
-        reason: `${p1s.map(t => t.ticket_key).join(', ')} — SLA breaching`,
-        score: 92,
-        urgency: 'critical',
-        source: 'jira',
-        actionHint: 'Check P1s immediately',
-        meta: { keys: p1s.map(t => t.ticket_key), hasP1: true },
-        _unsuppressable: true,
-      });
-    }
-    const nonP1 = atRisk.filter(t => !_isP1(t));
-    if (nonP1.length > 0) {
-      items.push({
-        type: 'jira_ticket',
-        id: 'jira-atrisk-summary',
-        title: `${nonP1.length} ticket${nonP1.length > 1 ? 's' : ''} at SLA risk`,
-        reason: `${nonP1.slice(0, 3).map(t => t.ticket_key).join(', ')}${nonP1.length > 3 ? ` +${nonP1.length - 3} more` : ''}`,
-        score: 82,
-        urgency: 'high',
-        source: 'jira',
-        actionHint: 'Review queue',
-        meta: { count: nonP1.length },
-      });
-    }
-  } else {
-    for (const t of atRisk) {
-      const isP1 = _isP1(t);
-      const slaMin = Math.round(t.sla_remaining_minutes || 0);
-      items.push({
-        type: 'jira_ticket',
-        id: `jira-${t.ticket_key}`,
-        title: `${t.ticket_key}: ${t.summary}`,
-        reason: isP1
-          ? `P1 — ${slaMin} min SLA remaining`
-          : `At risk — ${slaMin} min SLA remaining`,
-        score: isP1 ? 92 : 82,
-        urgency: isP1 ? 'critical' : 'high',
-        source: 'jira',
-        actionHint: 'Check ticket',
-        meta: { key: t.ticket_key, assignee: t.assignee, priority: t.priority, hasP1: isP1 },
-        _unsuppressable: isP1,
-      });
-    }
   }
   return items;
 }
@@ -408,14 +349,9 @@ function _behaviourModifier(item, ctx) {
   let mod = 0;
   const observations = ctx.observations || [];
 
-  if ((item.type === 'jira_ticket' || item.type === 'escalation') &&
+  if (item.type === 'escalation' &&
       observations.some(o => o.type === 'queue_spike')) {
     mod += 5;
-  }
-
-  if (item.type === 'jira_ticket' &&
-      observations.some(o => o.type === 'sla_worsening')) {
-    mod += 4;
   }
 
   if (item.type === 'nudge' && item.meta?.type === 'standup' &&
@@ -445,19 +381,8 @@ function _applyOverrides(items, ctx) {
   const observations = ctx.observations || [];
   const hour = ctx.timeContext?.hour ?? new Date().getHours();
 
-  // Detect crisis mode: queue_spike AND sla_worsening simultaneously
-  const inCrisis = observations.some(o => o.type === 'queue_spike') &&
-                   observations.some(o => o.type === 'sla_worsening');
-
   for (const item of items) {
-    // 1. SLA CRITICAL: P1 at risk → force Tier 1, top 3
-    if (item.type === 'jira_ticket' && item.meta?.hasP1) {
-      item.tier = 1;
-      item.score = Math.max(item.score, 96);
-      item._override = 'sla_critical';
-    }
-
-    // 2. ESCALATION: unseen → always Tier 1, cannot suppress
+    // 1. ESCALATION: unseen → always Tier 1, cannot suppress
     if (item.type === 'escalation') {
       item.tier = 1;
       item.score = Math.max(item.score, 97);
@@ -483,18 +408,6 @@ function _applyOverrides(items, ctx) {
       item._unsuppressable = true;
     }
 
-    // 5. QUEUE CRISIS MODE: promote tickets, demote todos and emails
-    if (inCrisis) {
-      if (item.type === 'jira_ticket' || item.type === 'escalation') {
-        item.score += 10;
-        item.tier = Math.min(item.tier, 1); // promote to at least tier 1
-        item._override = item._override || 'crisis_mode';
-      }
-      if (item.type === 'todo' || item.type === 'email') {
-        item.score -= 15;
-        item.tier = Math.max(item.tier, 2); // demote to at least tier 2
-      }
-    }
   }
 
   // Re-sort after overrides
@@ -635,7 +548,6 @@ async function evaluate(options = {}) {
   // Collect all signals
   const allSignals = [
     ...collectEscalations(ctx),
-    ...collectSlaBreaches(ctx),
     ...collectMeetings(ctx),
     ...collectOverdueTodos(ctx),
     ...collectUrgentEmails(ctx),
@@ -778,11 +690,6 @@ function dismiss(itemId, itemType) {
   if (itemType) {
     _trackDismiss(itemType);
   }
-}
-
-function _isP1(ticket) {
-  const p = (ticket.priority || '').toLowerCase();
-  return p.includes('1') || p.includes('critical') || p.includes('highest');
 }
 
 function _countTiers(items) {

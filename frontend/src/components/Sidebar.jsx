@@ -11,7 +11,6 @@ const PRIMARY_ITEMS = [
 const SECONDARY_ITEMS = [
   { id: 'focus',      label: 'Focus',     icon: '◎' },
   { id: 'dashboard',  label: 'Review',    icon: '⬡' },
-  { id: 'queue',      label: 'Queue',     icon: '>' },
   { id: 'people',     label: 'People',    icon: '>' },
   { id: 'calendar',   label: 'Calendar',  icon: '>' },
   { id: 'meeting-prep', label: 'Meeting Prep', icon: '>' },
@@ -50,7 +49,6 @@ function useTimeHighlight() {
 
 export default function Sidebar({ activeView, onNavigate, open }) {
   const [importsCount, setImportsCount] = useState(0);
-  const [escalationCount, setEscalationCount] = useState(0);
 
   const [moreOpen, setMoreOpen] = useState(() => {
     try { return localStorage.getItem('sidebar_more_open') === 'true'; }
@@ -75,11 +73,6 @@ export default function Sidebar({ activeView, onNavigate, open }) {
       fetch(apiUrl('/api/imports/pending'))
         .then(res => res.json())
         .then(data => setImportsCount(data.count || 0))
-        .catch(() => {});
-
-      fetch(apiUrl('/api/jira/escalations/unseen'))
-        .then(r => r.json())
-        .then(data => setEscalationCount(data.count || 0))
         .catch(() => {});
     }
 
@@ -107,9 +100,7 @@ export default function Sidebar({ activeView, onNavigate, open }) {
         {item.id === 'imports' && importsCount > 0 && (
           <span className="sidebar-badge">{importsCount}</span>
         )}
-        {item.id === 'queue' && escalationCount > 0 && (
-          <span className="sidebar-badge sidebar-badge-red">{escalationCount}</span>
-        )}
+
       </span>
     </button>
   );

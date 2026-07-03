@@ -9,17 +9,6 @@ router.get('/', (req, res) => {
   const weekend = new Date().getDay() === 0 || new Date().getDay() === 6;
   result.weekend = weekend;
 
-  // Queue
-  if (!weekend) {
-    try {
-      result.queue = db.getQueueSummary();
-      result.queue.jira_status = db.getState('jira_status') || 'unknown';
-      result.queue.last_sync = db.getState('jira_last_sync');
-    } catch (e) {
-      result.queue = { error: e.message };
-    }
-  }
-
   // Daily note
   try {
     result.dailyNote = obsidian.readTodayDailyNote();

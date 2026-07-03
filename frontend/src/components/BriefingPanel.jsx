@@ -31,7 +31,6 @@ function formatSlaMinutes(mins) {
 
 export default function BriefingPanel({ onNavigate }) {
   const focusFetch = useCachedFetch('/api/focus', { interval: 30000 });
-  const queueFetch = useCachedFetch('/api/queue', { interval: 30000 });
   const todoFetch = useCachedFetch('/api/todos', { interval: 60000 });
   const qaFetch = useCachedFetch('/api/qa/summary', { interval: 300000 });
 
@@ -41,20 +40,10 @@ export default function BriefingPanel({ onNavigate }) {
   const nextAction = focusFetch.data?.nextAction || null;
   const context = focusFetch.data?.context || {};
 
-  const queueData = queueFetch.data;
-  const queueTotal = queueData?.total ?? '-';
-  const atRisk = queueData?.at_risk_count ?? 0;
-
   const todos = todoFetch.data?.todos || [];
   const overdueTodos = todos.filter(t => !t.done && t.due_date && t.due_date < new Date().toISOString().split('T')[0]).length;
 
   const qaAvg = qaFetch.data?.average != null ? `${Math.round(qaFetch.data.average)}%` : (qaFetch.data?.teamAverage != null ? `${Math.round(qaFetch.data.teamAverage)}%` : '-');
-
-  const slaCompliance = queueData?.sla_compliance != null
-    ? `${Math.round(queueData.sla_compliance)}%`
-    : (queueData?.total > 0 && atRisk >= 0
-      ? `${Math.round(((queueData.total - atRisk) / queueData.total) * 100)}%`
-      : '-');
 
   const [actionLoading, setActionLoading] = useState(null);
 
@@ -69,8 +58,8 @@ export default function BriefingPanel({ onNavigate }) {
 
   const handleCardClick = (item) => {
     const ctx = { fromBriefing: true, focusItem: item };
-    if (item.type === 'jira_ticket' || item.type === 'escalation') {
-      onNavigate?.('queue', { ...ctx, filter: 'at-risk' });
+    if (item.type === 'escalation') {
+      onNavigate?.('briefing');
     } else if (item.type === 'meeting') {
       onNavigate?.('meeting-prep');
     } else if (item.type === 'todo') {
@@ -204,15 +193,6 @@ export default function BriefingPanel({ onNavigate }) {
 
       {/* Quick stats bar */}
       <div className="briefing-stats">
-        <div className={`briefing-stat ${atRisk > 0 ? 'stat-warn' : ''}`} onClick={() => onNavigate?.('queue')}>
-          <span className="briefing-stat-val">{queueTotal}</span>
-          <span className="briefing-stat-lbl">Queue</span>
-          {atRisk > 0 && <span className="briefing-stat-sub">{atRisk} at risk</span>}
-        </div>
-        <div className="briefing-stat" onClick={() => onNavigate?.('queue')}>
-          <span className="briefing-stat-val">{slaCompliance}</span>
-          <span className="briefing-stat-lbl">SLA</span>
-        </div>
         <div className="briefing-stat" onClick={() => onNavigate?.('people')}>
           <span className="briefing-stat-val">{qaAvg}</span>
           <span className="briefing-stat-lbl">QA Avg</span>

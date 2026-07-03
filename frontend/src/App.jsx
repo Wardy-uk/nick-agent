@@ -4,7 +4,6 @@ import Topbar from './components/Topbar';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import PeopleBoard from './components/PeopleBoard';
-import QueueTable from './components/QueueTable';
 import StandupEditor from './components/StandupEditor';
 import NinetyDayPlan from './components/NinetyDayPlan';
 import TodoPanel from './components/TodoPanel';
@@ -210,18 +209,11 @@ function AuthenticatedApp() {
   };
 
   const statusFetch = useCachedFetch('/api/status', { interval: 30000 });
-  const queueFetch = useCachedFetch('/api/queue', { interval: 30000 });
 
   const status = statusFetch.data;
-  const queueData = queueFetch.data;
 
-  // Worst status across core fetches for the indicator
-  const worstStatus = statusFetch.status === 'unavailable' || queueFetch.status === 'unavailable'
-    ? 'unavailable'
-    : statusFetch.status === 'cached' || queueFetch.status === 'cached'
-      ? 'cached'
-      : 'live';
-  const worstCacheAge = Math.max(statusFetch.cacheAge || 0, queueFetch.cacheAge || 0) || null;
+  const worstStatus = statusFetch.status;
+  const worstCacheAge = statusFetch.cacheAge || null;
 
   // Track tab opens
   React.useEffect(() => {
@@ -249,10 +241,9 @@ function AuthenticatedApp() {
     switch (activeView) {
       case 'briefing': return <BriefingPanel onNavigate={handleNavigate} />;
       case 'focus': return <FocusPanel onNavigate={handleNavigate} />;
-      case 'dashboard': return <Dashboard queueData={queueData} onNavigate={handleNavigate} />;
+      case 'dashboard': return <Dashboard onNavigate={handleNavigate} />;
       case 'standup': return <StandupEditor />;
       case 'people': return <PeopleBoard />;
-      case 'queue': return <QueueTable queueData={queueData} onRefresh={queueFetch.refresh} focusContext={navContext} />;
       case 'plan': return <NinetyDayPlan />;
       case 'todos': return <TodoPanel focusContext={navContext} onClearContext={() => setNavContext(null)} />;
       case 'calendar': return <CalendarView />;
@@ -274,7 +265,7 @@ function AuthenticatedApp() {
 
   return (
     <div className="app-layout">
-      <Topbar status={status} queueData={queueData} onMenuToggle={() => setSidebarOpen(o => !o)} onChatToggle={() => setChatOpen(o => !o)} chatOpen={chatOpen} weekend={weekend} onWeekendOverride={() => setWeekendOverride(o => !o)} weekendOverride={weekendOverride}>
+      <Topbar status={status} onMenuToggle={() => setSidebarOpen(o => !o)} onChatToggle={() => setChatOpen(o => !o)} chatOpen={chatOpen} weekend={weekend} onWeekendOverride={() => setWeekendOverride(o => !o)} weekendOverride={weekendOverride}>
         <CacheIndicator status={worstStatus} cacheAge={worstCacheAge} />
       </Topbar>
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}

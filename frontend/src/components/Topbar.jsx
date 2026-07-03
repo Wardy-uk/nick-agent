@@ -98,9 +98,7 @@ function QuickAdd({ apiUrl: apiUrlFn }) {
   );
 }
 
-export default function Topbar({ status, queueData, onMenuToggle, onChatToggle, chatOpen, weekend, onWeekendOverride, weekendOverride, children }) {
-  const jiraStatus = status?.jira?.status || 'unknown';
-  const atRisk = queueData?.at_risk_count || 0;
+export default function Topbar({ status, onMenuToggle, onChatToggle, chatOpen, weekend, onWeekendOverride, weekendOverride, children }) {
   const itIsWeekend = new Date().getDay() === 0 || new Date().getDay() === 6;
 
   // AI provider status
@@ -155,10 +153,6 @@ export default function Topbar({ status, queueData, onMenuToggle, onChatToggle, 
             <span className="topbar-label">{chatProvider}</span>
           </div>
         )}
-        <div className="topbar-indicator">
-          {statusDot(jiraStatus === 'ok')}
-          <span className="topbar-label">Jira {jiraStatus === 'not_configured' ? '(not configured)' : ''}</span>
-        </div>
         <div className="topbar-indicator">
           {statusDot(status?.obsidian?.configured)}
           <span className="topbar-label">Vault</span>

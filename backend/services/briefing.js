@@ -198,17 +198,7 @@ async function checkEscalationAlerts() {
 
     // Fetch current escalations from Jira
     const issues = await jira.fetchEscalationTickets();
-
-    // Also check for neuro-escalation label via flagged tickets
-    const flagged = jira.getFlaggedTickets ? jira.getFlaggedTickets() : [];
-    const labelEscalations = flagged.filter(t =>
-      (t.labels || []).includes('neuro-escalation')
-    );
-
-    const allEscalations = [
-      ...issues.map(i => ({ key: i.key, summary: i.fields?.summary || i.key })),
-      ...labelEscalations.map(t => ({ key: t.key, summary: t.summary || t.key })),
-    ];
+    const allEscalations = issues.map(i => ({ key: i.key, summary: i.fields?.summary || i.key }));
 
     const seenRaw = (() => { try { return JSON.parse(db.getState(ALERT_SEEN_KEY) || '{}'); } catch { return {}; } })();
     const seen = seenRaw.escalations || [];

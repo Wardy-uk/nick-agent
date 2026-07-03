@@ -15,7 +15,6 @@ const DEFAULT_BASE_URL = 'https://nuero.nickward.co.uk';
 const neuroConfig = require('./neuroConfig');
 
 const ENDPOINTS = {
-  queue: '/api/queue',
   focus: '/api/focus',
   todos: '/api/todos',
   context: '/api/context',
