@@ -20,8 +20,6 @@ export default defineConfig({
       includeAssets: ['icons/apple-touch-icon.png', 'icons/favicon-32.png'],
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,png,svg,woff2}'],
-        navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api/],
       },
       manifest: {
         name: 'SARA',
