@@ -168,7 +168,7 @@ export default function App() {
           />
         )}
         {/* key forces a fresh mount when switching Capture↔Voice so autoRecord re-fires */}
-        <ActiveView key={active} autoRecord={active === 'voice'} />
+        <ActiveView key={active} autoRecord={active === 'voice'} onNavigate={setActive} />
       </main>
 
       <nav className="app__nav" aria-label="SARA sections">

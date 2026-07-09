@@ -7,7 +7,7 @@ import './Focus.css';
 // action, then the prioritised items (tiered, scored, with a reason each).
 const URGENCY = ['critical', 'high', 'medium', 'low'];
 
-export default function Focus() {
+export default function Focus({ onNavigate }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [dismissing, setDismissing] = useState({});
 
@@ -33,6 +33,83 @@ export default function Focus() {
       setState((s) => ({ ...s, data: { ...s.data, items: s.data.items.filter((i) => i.id !== item.id) } }));
     } catch { /* leave it in place if dismiss fails */ }
     finally { setDismissing((d) => ({ ...d, [item.id]: false })); }
+  }
+
+  function openUrl(url) {
+    if (!url) return false;
+    try {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function handleNavigateForType(type, meta = {}) {
+    if (type === 'meeting') {
+      onNavigate?.('prep');
+      return true;
+    }
+    if (type === 'imports' || type === 'plaud') {
+      onNavigate?.('brain');
+      return true;
+    }
+    if (type === 'journal') {
+      onNavigate?.('brain');
+      return true;
+    }
+    if (type === 'capture') {
+      onNavigate?.('capture');
+      return true;
+    }
+    if (type === 'chat') {
+      onNavigate?.('chat');
+      return true;
+    }
+    return false;
+  }
+
+  function handleNextAction(action) {
+    if (!action) return;
+    if (openUrl(action.url)) return;
+    if (action.target === 'meeting-prep') {
+      onNavigate?.('prep');
+      return;
+    }
+    if (action.target === 'capture') {
+      onNavigate?.('capture');
+      return;
+    }
+    if (action.target === 'standup' || action.target === 'queue' || action.target === 'inbox' || action.target === 'todos' || action.target === 'imports') {
+      onNavigate?.('chat');
+      return;
+    }
+    onNavigate?.('focus');
+  }
+
+function handleItemClick(item) {
+    if (!item) return;
+    if (openUrl(item.url || item.meta?.url)) return;
+    if (handleNavigateForType(item.type, item.meta)) return;
+    if (item.type === 'nudge' && item.meta?.type === 'standup') {
+      onNavigate?.('chat');
+      return;
+    }
+    if (item.type === 'nudge' && item.meta?.type === 'eod') {
+      onNavigate?.('chat');
+      return;
+    }
+    if (item.type === 'todo' || item.type === 'email' || item.type === 'escalation' || item.type === 'jira_ticket') {
+      onNavigate?.('chat');
+      return;
+    }
+  }
+
+  function onItemKeyDown(event, item) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handleItemClick(item);
+    }
   }
 
   const { loading, error, data } = state;
@@ -61,11 +138,15 @@ export default function Focus() {
           {data.sara?.briefing && <div className="focus__briefing card">{data.sara.briefing}</div>}
 
           {data.nextAction && (
-            <div className={`focus__next card focus__u--${data.nextAction.urgency || 'medium'}`}>
+            <button
+              type="button"
+              className={`focus__next card focus__u--${data.nextAction.urgency || 'medium'} focus__tap`}
+              onClick={() => handleNextAction(data.nextAction)}
+            >
               <div className="focus__next-label">Next</div>
               <div className="focus__next-title">{data.nextAction.label}</div>
               {data.nextAction.reason && <div className="focus__next-reason">{data.nextAction.reason}</div>}
-            </div>
+            </button>
           )}
 
           {(!data.items || data.items.length === 0) && (
@@ -76,7 +157,14 @@ export default function Focus() {
             .slice()
             .sort((a, b) => URGENCY.indexOf(a.urgency) - URGENCY.indexOf(b.urgency) || (b.score || 0) - (a.score || 0))
             .map((item) => (
-              <div className={`card focus__item focus__u--${item.urgency || 'low'}`} key={item.id}>
+              <div
+                className={`card focus__item focus__u--${item.urgency || 'low'} focus__tap`}
+                key={item.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleItemClick(item)}
+                onKeyDown={(event) => onItemKeyDown(event, item)}
+              >
                 <div className="focus__item-main">
                   <div className="focus__item-title">{item.title}</div>
                   {item.reason && <div className="focus__item-reason">{item.reason}</div>}
@@ -89,7 +177,7 @@ export default function Focus() {
                 <button
                   className="focus__dismiss"
                   type="button"
-                  onClick={() => dismiss(item)}
+                  onClick={(event) => { event.stopPropagation(); dismiss(item); }}
                   disabled={dismissing[item.id]}
                   aria-label="Dismiss"
                   title="Dismiss"

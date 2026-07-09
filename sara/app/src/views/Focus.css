@@ -23,6 +23,16 @@
 }
 
 .focus__next { border-left: 3px solid var(--accent); }
+.focus__tap {
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.focus__tap:hover {
+  border-color: rgba(76, 154, 255, 0.38);
+}
 .focus__next-label {
   font-size: 0.7rem;
   text-transform: uppercase;

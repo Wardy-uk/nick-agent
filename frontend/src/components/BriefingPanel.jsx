@@ -59,12 +59,16 @@ export default function BriefingPanel({ onNavigate }) {
   const handleCardClick = (item) => {
     const ctx = { fromBriefing: true, focusItem: item };
     if (item.type === 'escalation') {
-      onNavigate?.('briefing');
+      onNavigate?.('dashboard', { ...ctx, filter: 'escalations' });
+    } else if (item.type === 'jira_ticket') {
+      onNavigate?.('dashboard', { ...ctx, filter: 'at-risk' });
     } else if (item.type === 'meeting') {
       onNavigate?.('meeting-prep');
     } else if (item.type === 'todo') {
       onNavigate?.('todos', { ...ctx, filter: 'overdue' });
     } else if (item.type === 'nudge' && item.meta?.type === 'standup') {
+      onNavigate?.('standup');
+    } else if (item.type === 'nudge' && item.meta?.type === 'eod') {
       onNavigate?.('standup');
     } else if (item.type === 'email') {
       onNavigate?.('inbox', { ...ctx, filter: 'urgent' });
