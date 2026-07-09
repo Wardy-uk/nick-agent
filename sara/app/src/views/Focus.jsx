@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../api';
+import actionSurfaces from '../../../../shared/action-surfaces.cjs';
 import './Focus.css';
 
 // Focus = the single "what matters now" glance. Default view.
 // Renders the brain's /api/focus: an optional SARA briefing, the recommended next
 // action, then the prioritised items (tiered, scored, with a reason each).
 const URGENCY = ['critical', 'high', 'medium', 'low'];
+const { resolveSaraLitePlan } = actionSurfaces;
 
-export default function Focus({ onNavigate }) {
+export default function Focus({ onNavigate, onActionIntent }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [dismissing, setDismissing] = useState({});
 
@@ -45,64 +47,47 @@ export default function Focus({ onNavigate }) {
     }
   }
 
-  function handleNavigateForType(type, meta = {}) {
-    if (type === 'meeting') {
-      onNavigate?.('prep');
-      return true;
+  function presentIntent(intent, fallbackTab = 'focus') {
+    const plan = resolveSaraLitePlan(intent);
+    if (plan.presentation === 'external' && openUrl(intent.url)) return;
+    if (plan.presentation === 'tab' && plan.tab) {
+      onNavigate?.(plan.tab);
+      return;
     }
-    if (type === 'imports' || type === 'plaud') {
-      onNavigate?.('brain');
-      return true;
-    }
-    if (type === 'journal') {
-      onNavigate?.('brain');
-      return true;
-    }
-    if (type === 'capture') {
-      onNavigate?.('capture');
-      return true;
-    }
-    if (type === 'chat') {
-      onNavigate?.('chat');
-      return true;
-    }
-    return false;
+    onActionIntent?.({
+      source: intent.source || 'focus',
+      tab: plan.tab || fallbackTab,
+      type: intent.type || intent.kind || plan.kind,
+      title: intent.title || intent.label || intent.reason || intent.kind || 'SARA action',
+      url: intent.url || null,
+      payload: {
+        ...intent.payload,
+        ...intent,
+        kind: plan.kind,
+      },
+    });
   }
 
   function handleNextAction(action) {
     if (!action) return;
-    if (openUrl(action.url)) return;
-    if (action.target === 'meeting-prep') {
-      onNavigate?.('prep');
-      return;
-    }
-    if (action.target === 'capture') {
-      onNavigate?.('capture');
-      return;
-    }
-    if (action.target === 'standup' || action.target === 'queue' || action.target === 'inbox' || action.target === 'todos' || action.target === 'imports') {
-      onNavigate?.('chat');
-      return;
-    }
-    onNavigate?.('focus');
+    presentIntent({
+      ...action,
+      source: 'focus-next',
+      type: action.kind || action.type,
+      title: action.label,
+    });
   }
 
-function handleItemClick(item) {
+  function handleItemClick(item) {
     if (!item) return;
     if (openUrl(item.url || item.meta?.url)) return;
-    if (handleNavigateForType(item.type, item.meta)) return;
-    if (item.type === 'nudge' && item.meta?.type === 'standup') {
-      onNavigate?.('chat');
-      return;
-    }
-    if (item.type === 'nudge' && item.meta?.type === 'eod') {
-      onNavigate?.('chat');
-      return;
-    }
-    if (item.type === 'todo' || item.type === 'email' || item.type === 'escalation' || item.type === 'jira_ticket') {
-      onNavigate?.('chat');
-      return;
-    }
+    presentIntent({
+      ...item,
+      source: 'focus-item',
+      title: item.title,
+      url: item.url || item.meta?.url || null,
+      payload: { ...item, url: item.url || item.meta?.url || null },
+    });
   }
 
   function onItemKeyDown(event, item) {

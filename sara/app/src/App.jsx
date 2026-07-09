@@ -8,6 +8,7 @@ import Focus from './views/Focus';
 import Chat from './views/Chat';
 import MeetingPrep from './views/MeetingPrep';
 import BrainManagement from './views/BrainManagement';
+import actionSurfaces from '../../../shared/action-surfaces.cjs';
 import './App.css';
 
 // SARA light-touch app shell.
@@ -23,35 +24,7 @@ const TABS = [
 ];
 
 const VALID_TABS = new Set(TABS.map((tab) => tab.id));
-
-function normalisePath(value) {
-  if (!value) return '/';
-  try {
-    const url = new URL(value, window.location.origin);
-    return url.pathname || '/';
-  } catch {
-    return String(value).trim() || '/';
-  }
-}
-
-function resolveNotificationTab({ tab, url, type } = {}) {
-  if (tab && VALID_TABS.has(tab)) return tab;
-
-  const pathname = normalisePath(url).toLowerCase();
-  const kind = String(type || '').trim().toLowerCase();
-
-  if (pathname.startsWith('/meeting') || pathname.startsWith('/calendar')) return 'prep';
-  if (pathname.startsWith('/imports') || pathname.startsWith('/vault') || pathname.startsWith('/insights') || pathname.startsWith('/journal')) return 'brain';
-  if (pathname.startsWith('/capture')) return 'capture';
-  if (pathname.startsWith('/chat')) return 'chat';
-  if (pathname.startsWith('/queue') || pathname.startsWith('/todos') || pathname.startsWith('/standup') || pathname.startsWith('/plan') || pathname.startsWith('/people')) return 'focus';
-
-  if (['brief', 'escalation', 'standup', 'todo', 'eod', 'plan_milestone', '121', 'weekly_review'].includes(kind)) return 'focus';
-  if (['meeting', 'meeting_prep', 'calendar'].includes(kind)) return 'prep';
-  if (['plaud', 'journal', 'vault_hygiene', 'knowledge_reflection', 'sweep_complete'].includes(kind)) return 'brain';
-
-  return 'focus';
-}
+const { resolveSaraLitePlan, resolveSaraLiteTab } = actionSurfaces;
 
 function readLaunchIntent() {
   if (typeof window === 'undefined') return null;
@@ -76,7 +49,7 @@ function readLaunchIntent() {
 
   return {
     source: source || 'notification',
-    tab: resolveNotificationTab({ tab, type: type || raw.type, url: url || raw.url }),
+    tab: VALID_TABS.has(tab) ? tab : resolveSaraLiteTab({ tab, type: type || raw.type, url: url || raw.url, payload: raw }),
     type: type || raw.type || null,
     url: url || raw.url || null,
     title: title || raw.title || null,
@@ -99,14 +72,14 @@ function clearLaunchIntentFromUrl() {
 export default function App() {
   const [authed, setAuthed] = useState(() => !!getPin());
   const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'focus');
-  const [launchNotice, setLaunchNotice] = useState(() => readLaunchIntent());
+  const [actionIntent, setActionIntent] = useState(() => readLaunchIntent());
   usePushSubscription(authed);
 
   useEffect(() => {
     const intent = readLaunchIntent();
     if (!intent) return;
     setActive(intent.tab);
-    setLaunchNotice(intent);
+    setActionIntent(resolveSaraLitePlan(intent).presentation === 'tab' ? null : intent);
     clearLaunchIntentFromUrl();
   }, []);
 
@@ -116,27 +89,22 @@ export default function App() {
     function onMessage(event) {
       const data = event.data || {};
       if (data?.type !== 'sara-notification-open') return;
+      const tab = VALID_TABS.has(data.tab) ? data.tab : resolveSaraLiteTab(data);
       const intent = {
         source: 'notification',
-        tab: resolveNotificationTab(data),
+        tab,
         type: data.notificationType || null,
         url: data.notificationUrl || null,
         title: data.notificationTitle || null,
         payload: data.notificationData || {},
       };
       setActive(intent.tab);
-      setLaunchNotice(intent);
+      setActionIntent(resolveSaraLitePlan(intent).presentation === 'tab' ? null : intent);
     }
 
     navigator.serviceWorker.addEventListener('message', onMessage);
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
   }, []);
-
-  useEffect(() => {
-    if (!launchNotice) return undefined;
-    const id = window.setTimeout(() => setLaunchNotice(null), 5000);
-    return () => window.clearTimeout(id);
-  }, [launchNotice]);
 
   if (!authed) return <LockScreen onUnlock={() => setAuthed(true)} />;
 
@@ -160,15 +128,20 @@ export default function App() {
       </header>
 
       <main className="app__view">
-        {launchNotice && (
+        {actionIntent && (
           <NotificationActionCard
-            intent={launchNotice}
-            onDismiss={() => setLaunchNotice(null)}
+            intent={actionIntent}
+            onDismiss={() => setActionIntent(null)}
             onNavigate={(tab) => setActive(tab)}
           />
         )}
         {/* key forces a fresh mount when switching Capture↔Voice so autoRecord re-fires */}
-        <ActiveView key={active} autoRecord={active === 'voice'} onNavigate={setActive} />
+        <ActiveView
+          key={active}
+          autoRecord={active === 'voice'}
+          onNavigate={setActive}
+          onActionIntent={setActionIntent}
+        />
       </main>
 
       <nav className="app__nav" aria-label="SARA sections">

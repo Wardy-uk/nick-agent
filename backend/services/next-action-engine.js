@@ -20,8 +20,10 @@
  */
 
 const db = require('../db/database');
+const actionSurfaces = require('../../shared/action-surfaces.cjs');
 
 const JIRA_BASE = process.env.JIRA_BASE_URL || '';
+const { decorateSurfaceSupport } = actionSurfaces;
 
 // ── Safe auto-actions: things SARA can do without asking ──
 // These are write-only, append-only, or read-only operations with no side effects.
@@ -188,6 +190,14 @@ function _mapToAction(item) {
   }
 }
 
+function _withSurfaceSupport(action) {
+  if (!action) return action;
+  return {
+    ...action,
+    ...decorateSurfaceSupport(action),
+  };
+}
+
 
 // ── Main: compute next actions ──
 
@@ -225,7 +235,7 @@ function computeNextActions(focusItems, ctx) {
   for (const item of focusItems) {
     const action = _mapToAction(item);
     if (action) {
-      actions.push({ ...action, score: item.score, tier: item.tier, primary: item.primary });
+      actions.push(_withSurfaceSupport({ ...action, score: item.score, tier: item.tier, primary: item.primary }));
     }
   }
 
@@ -240,6 +250,8 @@ function computeNextActions(focusItems, ctx) {
     urgency: a.urgency,
     target: a.target,
     focusItemId: a.focusItemId,
+    kind: a.kind,
+    surfaces: a.surfaces,
   }));
 
   return { primaryAction, secondaryAction, autoExecuted, canWait };

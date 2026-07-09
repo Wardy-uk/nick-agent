@@ -30,6 +30,25 @@ import useCachedFetch from './useCachedFetch';
 import CacheIndicator from './components/CacheIndicator';
 import './App.css';
 
+function readNueroLaunchIntent() {
+  const params = new URLSearchParams(window.location.search);
+  const view = params.get('view');
+  const filter = params.get('filter');
+  if (!view) return { view: 'briefing', context: null };
+  return {
+    view,
+    context: filter ? { filter } : null,
+  };
+}
+
+function syncNueroLaunchIntent(view, context = null) {
+  const next = new URL(window.location.href);
+  next.searchParams.set('view', view);
+  if (context?.filter) next.searchParams.set('filter', context.filter);
+  else next.searchParams.delete('filter');
+  window.history.replaceState({}, '', `${next.pathname}${next.search}${next.hash}`);
+}
+
 function isWeekend() {
   const day = new Date().getDay();
   return day === 0 || day === 6;
@@ -146,11 +165,11 @@ export default function App() {
 
 function AuthenticatedApp() {
   const isMobile = window.innerWidth <= 768;
-  const [activeView, setActiveView] = useState('briefing');
+  const [activeView, setActiveView] = useState(() => readNueroLaunchIntent().view);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [vaultOpenPath, setVaultOpenPath] = useState(null);
-  const [navContext, setNavContext] = useState(null); // context passed from Focus to drill-down views
+  const [navContext, setNavContext] = useState(() => readNueroLaunchIntent().context); // context passed from Focus to drill-down views
   const [weekendOverride, setWeekendOverride] = useState(false);
   const weekend = isWeekend() && !weekendOverride;
   const location = useLocation();
@@ -234,6 +253,7 @@ function AuthenticatedApp() {
     setChatOpen(false); // close aside when navigating away
     setNavContext(context); // pass context to drill-down view (e.g. { filter: 'overdue' })
     setActiveView(view);
+    syncNueroLaunchIntent(view, context);
     setSidebarOpen(false);
   };
 

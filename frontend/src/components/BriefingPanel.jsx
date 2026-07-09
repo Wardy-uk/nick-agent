@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import useCachedFetch from '../useCachedFetch';
 import { apiUrl } from '../api';
 import { speakIfEnabled } from '../voiceUtils';
+import actionSurfaces from '../../../shared/action-surfaces.cjs';
 import './BriefingPanel.css';
 
 const SOURCE_ICONS = {
@@ -13,6 +14,7 @@ const SOURCE_ICONS = {
   imports: 'IMP',
   email: 'MAIL',
 };
+const { resolveNueroNavigation } = actionSurfaces;
 
 function timeAgo(dateStr) {
   if (!dateStr) return '';
@@ -58,23 +60,9 @@ export default function BriefingPanel({ onNavigate }) {
 
   const handleCardClick = (item) => {
     const ctx = { fromBriefing: true, focusItem: item };
-    if (item.type === 'escalation') {
-      onNavigate?.('dashboard', { ...ctx, filter: 'escalations' });
-    } else if (item.type === 'jira_ticket') {
-      onNavigate?.('dashboard', { ...ctx, filter: 'at-risk' });
-    } else if (item.type === 'meeting') {
-      onNavigate?.('meeting-prep');
-    } else if (item.type === 'todo') {
-      onNavigate?.('todos', { ...ctx, filter: 'overdue' });
-    } else if (item.type === 'nudge' && item.meta?.type === 'standup') {
-      onNavigate?.('standup');
-    } else if (item.type === 'nudge' && item.meta?.type === 'eod') {
-      onNavigate?.('standup');
-    } else if (item.type === 'email') {
-      onNavigate?.('inbox', { ...ctx, filter: 'urgent' });
-    } else if (item.type === 'imports') {
-      onNavigate?.('imports');
-    }
+    const destination = resolveNueroNavigation(item);
+    if (!destination) return;
+    onNavigate?.(destination.view, { ...ctx, ...(destination.context || {}) });
   };
 
   const handleAction = async (action) => {

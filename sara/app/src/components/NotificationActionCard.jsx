@@ -1,33 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiFetch, apiUrl } from '../api';
+import actionSurfaces from '../../../../shared/action-surfaces.cjs';
 import './NotificationActionCard.css';
 
-function normalizeKind(intent) {
-  const type = String(intent?.type || intent?.payload?.type || '').toLowerCase();
-  if (['standup'].includes(type)) return 'standup';
-  if (['eod'].includes(type)) return 'eod';
-  if (['journal'].includes(type)) return 'journal';
-  if (['todo'].includes(type)) return 'todo';
-  if (['meeting_alert', 'meeting', 'meeting_prep', 'calendar'].includes(type)) return 'meeting';
-  if (['escalation', 'escalation_alert'].includes(type)) return 'escalation';
-  if (['brief', '121', 'plan_milestone', 'teams_mention', 'weekly_review'].includes(type)) return 'focus';
-  if (['plaud', 'vault_hygiene', 'knowledge_reflection', 'sweep_complete'].includes(type)) return 'brain';
-  return 'unsupported';
-}
-
-function canHandleInSara(kind) {
-  return ['standup', 'eod', 'journal', 'todo', 'meeting', 'brain'].includes(kind);
-}
-
-function resolveNueroUrl(intent) {
-  const target = intent?.url || intent?.payload?.url;
-  if (!target) return null;
-  try {
-    return new URL(target, apiUrl('/')).toString();
-  } catch {
-    return null;
-  }
-}
+const { resolveNueroUrl, resolveSaraLitePlan } = actionSurfaces;
 
 function trimItems(list, limit) {
   return Array.isArray(list) ? list.slice(0, limit) : [];
@@ -38,9 +14,10 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
   const [answers, setAnswers] = useState([]);
   const [saving, setSaving] = useState(false);
   const [doneIds, setDoneIds] = useState({});
-  const kind = useMemo(() => normalizeKind(intent), [intent]);
-  const nueroUrl = useMemo(() => resolveNueroUrl(intent), [intent]);
-  const handledInSara = canHandleInSara(kind);
+  const plan = useMemo(() => resolveSaraLitePlan(intent), [intent]);
+  const kind = plan.kind;
+  const nueroUrl = useMemo(() => resolveNueroUrl(intent, apiUrl('/')), [intent]);
+  const handledInSara = plan.canHandle && plan.presentation !== 'handoff';
 
   useEffect(() => {
     let active = true;
@@ -166,7 +143,7 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
   }
 
   const title = intent?.title || 'SARA nudge';
-  const note = intent?.url ? `${title} • ${intent.url}` : title;
+  const note = nueroUrl ? `${title} • ${nueroUrl}` : title;
   const canSubmit = answers.some((entry) => String(entry || '').trim());
 
   return (

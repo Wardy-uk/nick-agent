@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import useCachedFetch from '../useCachedFetch';
 import { apiUrl } from '../api';
+import actionSurfaces from '../../../shared/action-surfaces.cjs';
 import './FocusPanel.css';
 
 const TYPE_ICONS = {
@@ -18,6 +19,7 @@ const DEFER_MESSAGES = [
   "That\u2019s twice. When are you actually doing this?",
   "You\u2019re avoiding this. What\u2019s blocking you?",
 ];
+const { resolveNueroNavigation } = actionSurfaces;
 
 function getDeferCount(itemId) {
   try {
@@ -121,22 +123,9 @@ export default function FocusPanel({ onNavigate }) {
   const handleNavigate = (item) => {
     if (!item) return;
     const ctx = { fromFocus: true, focusItem: item };
-    if (item.type === 'jira_ticket' || item.type === 'escalation') {
-      onNavigate?.('queue', { ...ctx, filter: 'at-risk' });
-    } else if (item.type === 'meeting') {
-      onNavigate?.('meeting-prep');
-    } else if (item.type === 'todo') {
-      const filter = item.id?.includes('overdue') ? 'overdue' : item.id?.includes('today') ? 'today' : 'all';
-      onNavigate?.('todos', { ...ctx, filter });
-    } else if (item.type === 'nudge' && item.meta?.type === 'standup') {
-      onNavigate?.('standup');
-    } else if (item.type === 'nudge' && item.meta?.type === 'eod') {
-      onNavigate?.('standup');
-    } else if (item.type === 'imports') {
-      onNavigate?.('imports');
-    } else if (item.type === 'email') {
-      onNavigate?.('inbox', { ...ctx, filter: 'urgent' });
-    }
+    const destination = resolveNueroNavigation(item);
+    if (!destination) return;
+    onNavigate?.(destination.view, { ...ctx, ...(destination.context || {}) });
   };
 
   const deferCount = current ? getDeferCount(current.id) : 0;
