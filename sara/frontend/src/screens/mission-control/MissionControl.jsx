@@ -111,6 +111,10 @@ export default function MissionControl() {
   const tlHead = eyesOn ? 'Needs your eyes' : 'Priorities';
   const blHead = eyesOn ? 'Workload' : 'Queue';
   const brHead = eyesOn ? 'Status' : 'Conditions';
+  const topLeftTarget = eyesOn ? SARA_VIEWS.ATWORK : SARA_VIEWS.FOCUS;
+  const topRightTarget = eyesOn ? SARA_VIEWS.ATWORK : SARA_VIEWS.FOCUS;
+  const bottomLeftTarget = eyesOn ? SARA_VIEWS.ATWORK : SARA_VIEWS.QUEUE;
+  const bottomRightTarget = eyesOn ? SARA_VIEWS.ATWORK : SARA_VIEWS.SETTINGS;
 
   return (
     <section className="jv" aria-label="Mission Control" data-mode={eyesOn ? 'eyes-on' : 'standard'}>
@@ -178,7 +182,11 @@ export default function MissionControl() {
       </header>
 
       {/* TOP-LEFT — Priorities / Needs your eyes */}
-      <div className="jv__card jv__card--tl">
+      <button
+        type="button"
+        className="jv__card jv__card--tl jv__card-btn"
+        onClick={() => setCurrentView(topLeftTarget)}
+      >
         <div className="jv__card-h">{tlHead}</div>
         {eyesOn ? (
           !novaOk ? (
@@ -203,10 +211,14 @@ export default function MissionControl() {
         ) : (
           <div className="jv__li"><span className="jv__li-k">Queue calm</span></div>
         )}
-      </div>
+      </button>
 
       {/* TOP-RIGHT — Sitrep */}
-      <div className="jv__card jv__card--tr">
+      <button
+        type="button"
+        className="jv__card jv__card--tr jv__card-btn"
+        onClick={() => setCurrentView(topRightTarget)}
+      >
         <div className="jv__card-h">Sitrep</div>
         <div className="jv__li"><span className="jv__li-k">Location</span><span className="jv__li-v">{locLabel}</span></div>
         {eyesOn ? (
@@ -220,10 +232,14 @@ export default function MissionControl() {
             <div className="jv__li"><span className="jv__li-k">Confidence</span><span className="jv__li-v jv__li-v--g">{confPct != null ? `${confPct}% ${conf.level || ''}` : '—'}</span></div>
           </>
         )}
-      </div>
+      </button>
 
       {/* BOTTOM-LEFT — Queue / Workload */}
-      <div className="jv__card jv__card--bl">
+      <button
+        type="button"
+        className="jv__card jv__card--bl jv__card-btn"
+        onClick={() => setCurrentView(bottomLeftTarget)}
+      >
         <div className="jv__card-h">{blHead}</div>
         {eyesOn ? (
           <>
@@ -238,10 +254,14 @@ export default function MissionControl() {
             <div className="jv__li"><span className="jv__li-k">Team flags</span><span className={`jv__li-v jv__li-v--${needAttention ? 'w' : 'g'}`}>{needAttention ? `${needAttention} need attention` : 'all steady'}</span></div>
           </>
         )}
-      </div>
+      </button>
 
       {/* BOTTOM-RIGHT — Conditions / Status */}
-      <div className="jv__card jv__card--br">
+      <button
+        type="button"
+        className="jv__card jv__card--br jv__card-btn"
+        onClick={() => setCurrentView(bottomRightTarget)}
+      >
         <div className="jv__card-h">{brHead}</div>
         {eyesOn ? (
           !novaOk ? (
@@ -261,7 +281,7 @@ export default function MissionControl() {
         ) : (
           <div className="jv__li"><span className="jv__li-k">Telemetry</span><span className="jv__li-v">standby</span></div>
         )}
-      </div>
+      </button>
 
       {/* footer actions + SARA line */}
       <div className="jv__foot">
