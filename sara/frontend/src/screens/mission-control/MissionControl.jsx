@@ -115,6 +115,17 @@ export default function MissionControl() {
   const topRightTarget = eyesOn ? SARA_VIEWS.ATWORK : SARA_VIEWS.FOCUS;
   const bottomLeftTarget = eyesOn ? SARA_VIEWS.ATWORK : SARA_VIEWS.QUEUE;
   const bottomRightTarget = eyesOn ? SARA_VIEWS.ATWORK : SARA_VIEWS.SETTINGS;
+  const primarySignal = eyesOn
+    ? (novaOk ? (novaEyes?.headline || 'Eyes on the live work surface.') : 'NOVA not connected yet.')
+    : (model.inference?.summary || 'SARA is holding the current picture together.');
+  const focusTitle = eyesOn
+    ? (eyesItems[0]?.title || 'Eyes-on workload')
+    : (matters[0]?.title || upNext?.label || 'Current operating picture');
+  const focusWhy = eyesOn
+    ? (novaOk
+      ? `${nstats.approvalsPending ?? 0} approvals waiting, ${nstats.customersOverdue ?? 0} overdue customers, ${(novaEyes?.items || []).length} live exceptions.`
+      : 'Connect NOVA to surface approvals, overdue customers, and exception signals here.')
+    : (matters[0]?.detail || model.domains?.focus?.current?.reason || 'Context, queue, and telemetry are all feeding this surface.');
 
   return (
     <section className="jv" aria-label="Mission Control" data-mode={eyesOn ? 'eyes-on' : 'standard'}>
@@ -130,7 +141,8 @@ export default function MissionControl() {
             title={item.label}
             aria-label={item.label}
           >
-            {item.icon}
+            <span className="jv__nav-icon" aria-hidden="true">{item.icon}</span>
+            <span className="jv__nav-label">{item.label}</span>
           </button>
         ))}
         {/* Eyes-On toggle — holds the work dashboard on/off regardless of location. */}
@@ -142,7 +154,8 @@ export default function MissionControl() {
           aria-label="Eyes On"
           aria-pressed={eyesOn}
         >
-          ◉
+          <span className="jv__nav-icon" aria-hidden="true">◉</span>
+          <span className="jv__nav-label">Eyes On</span>
         </button>
       </nav>
 
@@ -169,6 +182,13 @@ export default function MissionControl() {
           </div>
         )}
       </div>
+
+      <section className="jv__spotlight" aria-label="Current context">
+        <div className="jv__spotlight-kicker">{eyesOn ? 'Live work context' : 'Context brief'}</div>
+        <h2 className="jv__spotlight-title">{focusTitle}</h2>
+        <p className="jv__spotlight-copy">{focusWhy}</p>
+        <div className="jv__spotlight-line">{primarySignal}</div>
+      </section>
 
       {/* header */}
       <header className="jv__hdr">
