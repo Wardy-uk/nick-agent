@@ -165,7 +165,8 @@ function buildFocus(neuroData) {
     summary: reason || title,
     current: current
       ? {
-          id: current.id || current.key || current.ticket_key || 'focus-current',
+          id: current.focusItemId || current.id || current.key || current.ticket_key || 'focus-current',
+          itemType: current.focusItemType || current.kind || current.type || null,
           title,
           reason,
           timeboxMins:

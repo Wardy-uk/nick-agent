@@ -459,6 +459,8 @@ export function SaraStateProvider({ children }) {
         body: JSON.stringify({
           actionType: 'manual',
           detail: payload.detail || 'Completed focus item',
+          itemId: payload.itemId || null,
+          itemType: payload.itemType || null,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -467,8 +469,18 @@ export function SaraStateProvider({ children }) {
         setActionFeedback(error);
         return { ok: false, error };
       }
+      if (payload.itemId && !body.dismissed) {
+        await fetch('/api/actions/focus/dismiss', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            itemId: payload.itemId,
+            itemType: payload.itemType || null,
+          }),
+        }).catch(() => {});
+      }
       await refreshModel();
-      setActionFeedback('Focus marked done');
+      setActionFeedback('Focus retired');
       return { ok: true };
     }
 

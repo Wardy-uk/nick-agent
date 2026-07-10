@@ -1,160 +1,126 @@
-/* Focus v0 — one thing, timeboxed (WS post-WS2A).
-   Shared App.css theme tokens. Calm, centred, single-subject: the do-next fills the
-   screen so nothing competes with it. Touch-friendly action row at the foot. */
-
-.focus {
-  min-height: 70vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  gap: 18px;
-  padding: 24px 16px;
-  max-width: 640px;
-  margin: 0 auto;
-  padding: 28px 26px;
-  border-radius: 26px;
-  background: rgba(255, 255, 255, 0.68);
-  border: 1px solid rgba(255, 255, 255, 0.82);
-  box-shadow: 0 18px 36px rgba(50, 64, 91, 0.1);
-  backdrop-filter: blur(16px);
+.focus-product {
+  gap: 14px;
+  min-height: calc(100vh - 32px);
+  padding: 6px 0 12px;
 }
 
-/* Message / empty states */
-.focus--message {
+.focus-product--message {
   min-height: 50vh;
+  justify-content: center;
 }
-.focus__waking {
-  color: var(--ink-dim);
-  font-size: 18px;
+
+.focus-product__hero {
+  background:
+    radial-gradient(circle at top right, rgba(76, 213, 196, 0.18), transparent 34%),
+    linear-gradient(135deg, rgba(11, 24, 42, 0.88), rgba(17, 30, 49, 0.92));
+  border-color: rgba(109, 138, 178, 0.22);
+  box-shadow: 0 24px 44px rgba(4, 10, 20, 0.28);
 }
-.focus__offline {
+
+.focus-product__error {
   color: var(--danger);
-  font-size: 16px;
-  max-width: 32ch;
-}
-.focus__none {
-  color: var(--ink-dim);
-  font-size: 20px;
-  max-width: 24ch;
 }
 
-.focus__label {
-  margin: 0;
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  color: var(--accent-ink);
-}
-.focus__title {
-  margin: 0;
-  font-size: 38px;
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--ink);
-}
-.focus__reason {
-  margin: 0;
-  max-width: 36ch;
-  font-size: 18px;
-  line-height: 1.5;
-  color: var(--ink-dim);
+.focus-product__pill--warning {
+  color: var(--warning-ink);
+  background: var(--warning-soft);
 }
 
-.focus__meta {
+.focus-product__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  justify-content: center;
-}
-.focus__timebox {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  padding: 6px 14px;
-  border-radius: 999px;
-}
-.focus__deferred {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--warning-ink);
-  background: var(--warning-soft);
-  padding: 6px 14px;
-  border-radius: 999px;
 }
 
-.focus__nudge {
-  margin: 0;
-  max-width: 34ch;
-  font-size: 16px;
-  font-style: italic;
-  line-height: 1.4;
-  color: var(--warning-ink);
+.focus-product__button {
+  min-width: 132px;
+  border-color: rgba(112, 135, 173, 0.3);
+  background: rgba(10, 22, 38, 0.5);
+  color: #eaf4ff;
 }
 
-.focus__then {
-  margin: 0;
-  font-size: 14px;
-  color: var(--ink-dim);
-}
-
-.focus__feedback {
-  margin: 4px 0 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: rgba(94, 193, 202, 0.12);
-  border: 1px solid rgba(94, 193, 202, 0.28);
-  padding: 10px 14px;
-  border-radius: 999px;
-}
-
-/* Large touch action row */
-.focus__actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-.focus__action {
-  min-height: 56px;
-  min-width: 120px;
-  padding: 12px 28px;
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--ink);
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(214, 223, 239, 0.96);
-  border-radius: 14px;
-  cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease, transform 0.05s ease;
-}
-.focus__action:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.focus__action:active {
-  transform: scale(0.97);
-}
-.focus__action--primary {
+.focus-product__button--primary {
   color: #fff;
-  background: linear-gradient(135deg, #5ec1ca, #4d94b8);
-  border-color: #5eaec1;
+  border-color: rgba(92, 203, 216, 0.5);
+  background: linear-gradient(135deg, #34c9d1, #2a6fa8);
 }
-.focus__action--primary:hover {
-  background: linear-gradient(135deg, #56b8c1, #4887a8);
-  border-color: #4f9ab0;
+
+.focus-product__button--primary:hover {
+  background: linear-gradient(135deg, #2fc0c8, #286696);
+}
+
+.focus-product__feedback {
+  margin: 14px 0 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(94, 193, 202, 0.28);
+  background: rgba(94, 193, 202, 0.12);
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.focus-product .product__section,
+.focus-product .product__banner {
+  background:
+    linear-gradient(180deg, rgba(13, 24, 41, 0.82), rgba(16, 29, 48, 0.88));
+  border-color: rgba(109, 138, 178, 0.22);
+  box-shadow: 0 20px 38px rgba(4, 10, 20, 0.24);
+}
+
+.focus-product .product__eyebrow,
+.focus-product .product__section-title,
+.focus-product__next-time {
+  color: #73d7e4;
+}
+
+.focus-product .product__title,
+.focus-product__next-label {
+  color: #eef5ff;
+}
+
+.focus-product .product__summary,
+.focus-product .product__pill {
+  color: #aac0da;
+}
+
+.focus-product .product__pill {
+  background: rgba(21, 35, 57, 0.72);
+  border-color: rgba(118, 148, 186, 0.22);
+}
+
+.focus-product__next,
+.focus-product__nudge {
+  margin: 0;
+}
+
+.focus-product__next-time {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+}
+
+.focus-product__next-label {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.focus-product__nudge {
+  color: var(--warning-ink);
+  font-size: 15px;
+  line-height: 1.5;
 }
 
 @media (max-width: 620px) {
-  .focus__title {
-    font-size: 30px;
-  }
-  .focus__action {
-    min-width: 96px;
-    padding: 12px 20px;
+  .focus-product__button {
+    min-width: 100%;
   }
 }

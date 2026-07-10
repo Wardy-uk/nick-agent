@@ -18,15 +18,15 @@ export default function FocusView() {
 
   if (status === 'connecting') {
     return (
-      <section className="focus focus--message">
-        <p className="focus__waking">Waking SARA…</p>
+      <section className="product focus-product focus-product--message">
+        <p className="product__summary">Waking SARA…</p>
       </section>
     );
   }
   if (status === 'disconnected' || !model) {
     return (
-      <section className="focus focus--message">
-        <p className="focus__offline">SARA backend unreachable on /api/state{error ? ` — ${error}` : ''}.</p>
+      <section className="product focus-product focus-product--message">
+        <p className="product__summary focus-product__error">SARA backend unreachable on /api/state{error ? ` — ${error}` : ''}.</p>
       </section>
     );
   }
@@ -39,65 +39,80 @@ export default function FocusView() {
 
   if (!goal) {
     return (
-      <section className="focus focus--message" aria-label="Focus">
-        <p className="focus__none">Nothing set — pick the highest-leverage thing and start.</p>
+      <section className="product focus-product focus-product--message" aria-label="Focus">
+        <p className="product__summary">Nothing set — pick the highest-leverage thing and start.</p>
       </section>
     );
   }
 
   return (
-    <section className="focus" aria-label="Focus">
-      <p className="focus__label">Your one thing</p>
-      <h2 className="focus__title">{goal.title}</h2>
-      {goal.reason && <p className="focus__reason">{goal.reason}</p>}
+    <section className="product focus-product" aria-label="Focus">
+      <header className="product__hero focus-product__hero">
+        <p className="product__eyebrow">Focus</p>
+        <h2 className="product__title">{goal.title}</h2>
+        {goal.reason && <p className="product__summary">{goal.reason}</p>}
+        <div className="product__meta">
+          {typeof goal.timeboxMins === 'number' && (
+            <span className="product__pill">{goal.timeboxMins} min timebox</span>
+          )}
+          {goal.deferCount > 0 && (
+            <span className="product__pill focus-product__pill--warning">Deferred x{goal.deferCount}</span>
+          )}
+          <span className="product__pill">One thing only</span>
+        </div>
+      </header>
 
-      <div className="focus__meta">
-        {typeof goal.timeboxMins === 'number' && (
-          <span className="focus__timebox">{goal.timeboxMins} min timebox</span>
-        )}
-        {goal.deferCount > 0 && (
-          <span className="focus__deferred">deferred ×{goal.deferCount}</span>
+      <div className="product__grid">
+        <section className="product__section product__section--span-7">
+          <p className="product__section-title">Commit now</p>
+          <div className="focus-product__actions" aria-label="Focus actions">
+            <button
+              type="button"
+              className="product__button focus-product__button focus-product__button--primary"
+              data-action="start-focus"
+              onClick={() => runQuickAction('start-focus')}
+            >
+              Start
+            </button>
+            <button
+              type="button"
+              className="product__button focus-product__button"
+              data-action="defer"
+              onClick={() => runQuickAction('defer-focus', { itemId: goal.id, itemType: goal.itemType })}
+            >
+              Defer
+            </button>
+            <button
+              type="button"
+              className="product__button focus-product__button"
+              data-action="done"
+              onClick={() => runQuickAction('done-focus', { itemId: goal.id, itemType: goal.itemType, detail: goal.title })}
+            >
+              Done
+            </button>
+          </div>
+          {actionFeedback && <p className="focus-product__feedback">{actionFeedback}</p>}
+        </section>
+
+        <section className="product__section product__section--span-5">
+          <p className="product__section-title">What happens next</p>
+          {then ? (
+            <div className="focus-product__next">
+              <p className="focus-product__next-time">{then.time}</p>
+              <p className="focus-product__next-label">{then.label}</p>
+            </div>
+          ) : (
+            <p className="product__summary">No follow-on item is lined up yet. Clear this one and SARA will refresh the runway.</p>
+          )}
+        </section>
+
+        {nudge && (
+          <section className="product__banner product__section--span-12">
+            <p className="product__section-title">Escalation</p>
+            <p className="focus-product__nudge">{nudge}</p>
+          </section>
         )}
       </div>
-
-      {nudge && <p className="focus__nudge">{nudge}</p>}
-
-      {then && (
-        <p className="focus__then">
-          Then · {then.time} {then.label}
-        </p>
-      )}
-
-      {/* Large touch intents — placeholders in v0 (no handlers), same honesty as
-          Mission Control's Quick Actions. `data-action` is the stable id a later
-          work package wires up. */}
-      <div className="focus__actions" aria-label="Focus actions">
-        <button
-          type="button"
-          className="focus__action focus__action--primary"
-          data-action="start-focus"
-          onClick={() => runQuickAction('start-focus')}
-        >
-          Start
-        </button>
-        <button
-          type="button"
-          className="focus__action"
-          data-action="defer"
-          onClick={() => runQuickAction('defer-focus', { itemId: goal.id })}
-        >
-          Defer
-        </button>
-        <button
-          type="button"
-          className="focus__action"
-          data-action="done"
-          onClick={() => runQuickAction('done-focus', { detail: goal.title })}
-        >
-          Done
-        </button>
-      </div>
-      {actionFeedback && <p className="focus__feedback">{actionFeedback}</p>}
     </section>
   );
 }

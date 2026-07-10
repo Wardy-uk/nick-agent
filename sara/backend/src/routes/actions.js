@@ -91,6 +91,8 @@ router.post('/focus/done', async (req, res) => {
     const result = await postJson('/api/focus/action-done', {
       actionType: req.body?.actionType || 'manual',
       detail,
+      itemId: req.body?.itemId || null,
+      itemType: req.body?.itemType || null,
     });
     if (!result.ok) return res.status(result.status).json({ ok: false, error: result.error });
     return res.json({ ok: true });

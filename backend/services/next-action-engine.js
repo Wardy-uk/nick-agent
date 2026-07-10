@@ -99,6 +99,7 @@ function _mapToAction(item) {
         reason: item.title,
         urgency: 'critical',
         focusItemId: item.id,
+        focusItemType: item.type,
       };
 
     case 'jira_ticket': {
@@ -112,6 +113,7 @@ function _mapToAction(item) {
         reason: item.reason,
         urgency: item.urgency || 'high',
         focusItemId: item.id,
+        focusItemType: item.type,
       };
     }
 
@@ -124,6 +126,7 @@ function _mapToAction(item) {
         reason: item.title,
         urgency: mins <= 5 ? 'critical' : 'high',
         focusItemId: item.id,
+        focusItemType: item.type,
       };
     }
 
@@ -137,6 +140,7 @@ function _mapToAction(item) {
         reason: item.title,
         urgency: item.urgency || 'medium',
         focusItemId: item.id,
+        focusItemType: item.type,
       };
     }
 
@@ -149,6 +153,7 @@ function _mapToAction(item) {
           reason: '2 minutes — get it done',
           urgency: item.urgency || 'medium',
           focusItemId: item.id,
+          focusItemType: item.type,
         };
       }
       if (item.meta?.type === 'eod') {
@@ -159,6 +164,7 @@ function _mapToAction(item) {
           reason: 'End-of-day summary',
           urgency: item.urgency || 'low',
           focusItemId: item.id,
+          focusItemType: item.type,
         };
       }
       return null;
@@ -173,6 +179,7 @@ function _mapToAction(item) {
         reason: item.reason,
         urgency: item.urgency || 'high',
         focusItemId: item.id,
+        focusItemType: item.type,
       };
 
     case 'imports':
@@ -183,6 +190,7 @@ function _mapToAction(item) {
         reason: item.title,
         urgency: 'low',
         focusItemId: item.id,
+        focusItemType: item.type,
       };
 
     default:

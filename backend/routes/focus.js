@@ -224,13 +224,17 @@ router.post('/dismiss', (req, res) => {
 
 // POST /api/focus/action-done — log an outcome after the user completes an action
 router.post('/action-done', (req, res) => {
-  const { actionType, detail } = req.body;
+  const { actionType, detail, itemId, itemType } = req.body;
   if (!detail) return res.status(400).json({ error: 'detail required' });
   nextActionEngine.logOutcome(actionType, detail);
+  if (itemId) {
+    engine.dismiss(itemId, itemType || null);
+  }
   // Invalidate cache so next focus fetch shows updated state
   _responseCache = { fingerprint: null, response: null, at: 0 };
+  _aiCache = { hash: null, data: null, at: 0 };
   workingMemory.invalidate('action completed');
-  res.json({ ok: true });
+  res.json({ ok: true, dismissed: itemId || null });
 });
 
 module.exports = router;
