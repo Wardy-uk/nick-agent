@@ -22,8 +22,8 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,png,svg,woff2}'],
       },
       manifest: {
-        name: 'SARA',
-        short_name: 'SARA',
+        name: 'SARA Mobile',
+        short_name: 'SARA Mobile',
         description: 'SARA mobile — SARA on the go, backed by the NEURO brain',
         start_url: '/',
         scope: '/',
