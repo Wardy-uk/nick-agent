@@ -33,6 +33,8 @@ function deriveCognition(model, focusAssist) {
   const novaItems = nova?.items?.length || 0;
   const overdue = nova?.stats?.customersOverdue || 0;
   const pending = nova?.stats?.approvalsPending || 0;
+  const urgentEmails = model?.presentation?.email?.urgentCount || 0;
+  const replyEmails = model?.presentation?.email?.replyCount || 0;
 
   let mode = 'Focused';
   if (breaching > 0 || overdue > 0) mode = 'Firefighting';
@@ -48,11 +50,13 @@ function deriveCognition(model, focusAssist) {
   const signals = [];
   if (breaching > 0) signals.push({ label: `${breaching} SLA ${breaching === 1 ? 'breach' : 'breaches'}`, risk: 'High' });
   if (pending > 0) signals.push({ label: `${pending} approval${pending === 1 ? '' : 's'} waiting`, risk: 'Medium' });
+  if (urgentEmails > 0 && signals.length < 3) signals.push({ label: `${urgentEmails} urgent email${urgentEmails === 1 ? '' : 's'}`, risk: 'High' });
   if (overdue > 0 && signals.length < 3) signals.push({ label: `${overdue} overdue customer${overdue === 1 ? '' : 's'}`, risk: overdue >= 20 ? 'High' : 'Medium' });
   const slip = model?.domains?.people?.members?.find((m) => m.status === 'slipping');
   if (slip && signals.length < 3) signals.push({ label: `${slip.name} is slipping`, risk: 'Medium' });
   const todos = model?.presentation?.todos?.items?.length || 0;
   if (todos > 0 && signals.length < 3) signals.push({ label: `${todos} commitment${todos === 1 ? '' : 's'} due today`, risk: 'Low' });
+  if (replyEmails > 0 && signals.length < 3) signals.push({ label: `${replyEmails} email${replyEmails === 1 ? '' : 's'} need reply`, risk: 'Low' });
 
   return {
     mode, cognitiveLoad, pressureTrend,

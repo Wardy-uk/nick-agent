@@ -248,7 +248,7 @@ function collectUrgentEmails(ctx) {
     // Use email triage (ACTION category) as primary source — more reliable than inbox scanner
     const emailTriage = require('./email-triage');
     const triage = emailTriage.getTriageByCategory();
-    const actionEmails = triage?.action || [];
+    const actionEmails = triage?.urgent || [];
 
     if (actionEmails.length > 0) {
       const topEmail = actionEmails[0];

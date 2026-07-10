@@ -100,7 +100,8 @@ function mapFocusActionTargetToView(target) {
   if (normalized === 'standup' || normalized === 'meeting-prep') return SARA_VIEWS.STANDUP;
   if (normalized === 'imports' || normalized === 'brain') return SARA_VIEWS.VAULT;
   if (normalized === 'capture') return SARA_VIEWS.CAPTURE;
-  if (normalized === 'chat' || normalized === 'inbox') return SARA_VIEWS.SARA;
+  if (normalized === 'chat') return SARA_VIEWS.SARA;
+  if (normalized === 'inbox') return SARA_VIEWS.QUEUE;
   return SARA_VIEWS.FOCUS;
 }
 
@@ -115,6 +116,7 @@ function buildUrgentSnapshot(model) {
   const focus = model.domains?.focus?.current;
   const queue = model.domains?.queue;
   const eyesOn = model.nova?.eyesOn;
+  const email = model.presentation?.email;
   const urgentItems = [];
 
   if (focus?.id) {
@@ -182,6 +184,17 @@ function buildUrgentSnapshot(model) {
     });
   }
 
+  if ((email?.urgentCount || 0) > 0) {
+    urgentItems.push({
+      key: `email:urgent:${email.urgentCount}`,
+      title: `${email.urgentCount} urgent email${email.urgentCount === 1 ? '' : 's'}`,
+      detail: email.urgent?.[0]?.subject || email.urgent?.[0]?.reason || 'Inbox needs attention.',
+      score: 5 + Math.min(email.urgentCount, 2),
+      viewId: SARA_VIEWS.QUEUE,
+      viewContext: { fromFocus: true, filter: 'urgent' },
+    });
+  }
+
   if (urgentItems.length === 0) return null;
 
   urgentItems.sort((a, b) => b.score - a.score);
@@ -195,7 +208,7 @@ function buildUrgentSnapshot(model) {
 async function maybeNotifyUrgentChange(snapshot, onOpen) {
   if (!snapshot || !isWindowBackgrounded()) return;
 
-  if (snapshot.top.viewId) onOpen(snapshot.top.viewId);
+  if (snapshot.top.viewId) onOpen(snapshot.top.viewId, snapshot.top.viewContext || null);
   window.saraNative?.attention?.(true);
 
   if (!('Notification' in window)) return;
@@ -215,7 +228,7 @@ async function maybeNotifyUrgentChange(snapshot, onOpen) {
       });
       notification.onclick = () => {
         window.focus();
-        if (snapshot.top.viewId) onOpen(snapshot.top.viewId);
+        if (snapshot.top.viewId) onOpen(snapshot.top.viewId, snapshot.top.viewContext || null);
         window.saraNative?.attention?.(true);
       };
     } catch {
@@ -230,6 +243,7 @@ export function SaraStateProvider({ children }) {
   const [error, setError] = useState(null);
   const [now, setNow] = useState(() => new Date());
   const [currentView, setCurrentView] = useState(DEFAULT_VIEW);
+  const [currentViewContext, setCurrentViewContext] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatStatus, setChatStatus] = useState('idle'); // idle | sending | streaming | unavailable | error
   const [chatError, setChatError] = useState(null);
@@ -250,8 +264,16 @@ export function SaraStateProvider({ children }) {
   const openUrgentViewRef = useRef((viewId) => setCurrentView(normalizeViewId(viewId)));
 
   useEffect(() => {
-    openUrgentViewRef.current = (viewId) => setCurrentView(normalizeViewId(viewId));
+    openUrgentViewRef.current = (viewId, viewContext = null) => {
+      setCurrentViewContext(viewContext);
+      setCurrentView(normalizeViewId(viewId));
+    };
   }, []);
+
+  function navigateToView(viewId, viewContext = null) {
+    setCurrentViewContext(viewContext);
+    setCurrentView(normalizeViewId(viewId));
+  }
 
   function applyIncomingModel(data) {
     const nextUrgentSnapshot = buildUrgentSnapshot(data);
@@ -271,6 +293,7 @@ export function SaraStateProvider({ children }) {
         title: nextUrgentSnapshot.top.title,
         detail: nextUrgentSnapshot.top.detail || 'SARA detected a new urgent change.',
         viewId: nextUrgentSnapshot.top.viewId || null,
+        viewContext: nextUrgentSnapshot.top.viewContext || null,
         createdAt: Date.now(),
       });
       void maybeNotifyUrgentChange(nextUrgentSnapshot, openUrgentViewRef.current);
@@ -306,13 +329,13 @@ export function SaraStateProvider({ children }) {
 
   function openFocusAction(action) {
     if (!action) {
-      setCurrentView(normalizeViewId(SARA_VIEWS.FOCUS));
+      navigateToView(SARA_VIEWS.FOCUS);
       setActionFeedback('Focus opened');
       return { ok: true };
     }
 
     const viewId = mapFocusActionTargetToView(action.target);
-    setCurrentView(normalizeViewId(viewId));
+    navigateToView(viewId, action.targetContext || null);
     setActionFeedback(focusActionFeedback(action));
     return { ok: true, viewId, action };
   }
@@ -673,12 +696,12 @@ export function SaraStateProvider({ children }) {
     if (!action) return { ok: false, error: 'action is required' };
 
     if (action === 'capture') {
-      setCurrentView(normalizeViewId('capture'));
+      navigateToView('capture');
       setActionFeedback('Capture ready');
       return { ok: true };
     }
     if (action === 'open-queue') {
-      setCurrentView(normalizeViewId('executive-dashboard'));
+      navigateToView('executive-dashboard', payload?.targetContext || payload || null);
       setActionFeedback('Queue opened');
       return { ok: true };
     }
@@ -686,7 +709,7 @@ export function SaraStateProvider({ children }) {
       return openFocusAction(payload.action || focusAssist.nextAction);
     }
     if (action === 'daily-brief') {
-      setCurrentView(normalizeViewId('standup'));
+      navigateToView('standup');
       setActionFeedback('Standup opened');
       return { ok: true };
     }
@@ -753,7 +776,12 @@ export function SaraStateProvider({ children }) {
     now,
     presentation: model?.presentation || SHARED_PRESENTATION,
     currentView,
-    setCurrentView: (viewId) => setCurrentView(normalizeViewId(viewId)),
+    currentViewContext,
+    navigateToView,
+    setCurrentView: (viewId) => {
+      setCurrentViewContext(null);
+      setCurrentView(normalizeViewId(viewId));
+    },
     chatMessages,
     chatStatus,
     chatError,

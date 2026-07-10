@@ -20,6 +20,7 @@ const ENDPOINTS = {
   context: '/api/context',
   team: '/api/team-health?severity=all',
   capture: '/api/capture/recent',
+  email: '/api/email/triage',
 };
 
 function trimSlash(value) {
@@ -53,6 +54,7 @@ function unavailable(reason, detail) {
       context: null,
       team: null,
       capture: null,
+      email: null,
     },
     errors: {},
   };
@@ -94,6 +96,7 @@ async function refresh() {
     context: null,
     team: null,
     capture: null,
+    email: null,
   };
   const errors = {};
 

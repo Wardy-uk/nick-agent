@@ -51,7 +51,7 @@ const NAV = [
 ];
 
 export default function MissionControl() {
-  const { status, error, model, now, presentation, currentView, setCurrentView, runQuickAction } =
+  const { status, error, model, now, presentation, currentView, setCurrentView, runQuickAction, navigateToView } =
     useSaraState();
   // Eyes-On override: null = follow location (auto), true/false = manual hold.
   const [eyesOverride, setEyesOverride] = useState(null);
@@ -95,6 +95,7 @@ export default function MissionControl() {
   const needAttention = (people.members || []).filter((m) => m.status !== 'solid').length;
 
   const actions = (presentation?.quickActions || []).slice(0, 4);
+  const emailSummary = presentation?.email || { urgentCount: 0, replyCount: 0 };
 
   // --- Eyes-On mode -------------------------------------------------------------
   // Auto-on when SARA places you at work (location context 'work', or an office/work
@@ -241,6 +242,12 @@ export default function MissionControl() {
         ) : (
           <div className="jv__li"><span className="jv__li-k">Queue calm</span></div>
         )}
+        {!eyesOn && emailSummary.replyCount > 0 && (
+          <div className="jv__li">
+            <span className="jv__li-k">Emails needing reply</span>
+            <span className="jv__li-v jv__li-v--w">{emailSummary.replyCount}</span>
+          </div>
+        )}
       </button>
 
       {/* TOP-RIGHT — Sitrep */}
@@ -325,6 +332,15 @@ export default function MissionControl() {
             {a.icon} {a.label}
           </button>
         ))}
+        {emailSummary.replyCount > 0 && (
+          <button
+            type="button"
+            className="jv__act"
+            onClick={() => navigateToView(SARA_VIEWS.QUEUE, { fromFocus: true, filter: 'reply' })}
+          >
+            @ Email replies
+          </button>
+        )}
         <span className="jv__say">
           ▸ SARA: {eyesOn
             ? (novaOk ? novaEyes?.headline : 'NOVA not connected — set NOVA_BASE_URL to surface approvals.')

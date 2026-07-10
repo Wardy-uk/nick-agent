@@ -134,6 +134,44 @@
   color: var(--ed-dim);
 }
 
+.ed__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ed__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ed-dim);
+  font: inherit;
+}
+
+.ed__filter--active {
+  color: var(--ed-ink);
+  border-color: rgba(94, 193, 202, 0.45);
+  background: rgba(94, 193, 202, 0.12);
+}
+
+.ed__filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(15, 26, 39, 0.88);
+  color: var(--ed-ink);
+  font-size: 11px;
+}
+
 .ed__notice {
   display: flex;
   align-items: flex-start;
@@ -264,6 +302,16 @@
 
 .ed__queue-section + .ed__queue-section {
   margin-top: 18px;
+}
+
+.ed__queue-empty {
+  margin-top: 6px;
+  padding: 14px 16px;
+  border: 1px solid rgba(94, 193, 202, 0.14);
+  border-radius: 18px;
+  background: rgba(15, 26, 39, 0.5);
+  color: var(--ed-dim);
+  line-height: 1.5;
 }
 
 .ed__queue-heading {

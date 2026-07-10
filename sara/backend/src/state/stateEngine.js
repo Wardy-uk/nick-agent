@@ -298,9 +298,10 @@ function buildPresentation(neuroData, domains) {
   const todos = neuroData?.todos;
   const context = neuroData?.context;
   const capture = neuroData?.capture;
+  const email = neuroData?.email;
   const team = neuroData?.team;
 
-  if (!queue && !focus && !todos && !context && !capture && !team) return fallback;
+  if (!queue && !focus && !todos && !context && !capture && !team && !email) return fallback;
 
   const whatMattersNow = [];
   for (const ticket of queue?.at_risk_tickets || []) {
@@ -330,6 +331,16 @@ function buildPresentation(neuroData, domains) {
       tone: 'attention',
     });
   }
+  const urgentEmails = email?.urgent || [];
+  if (urgentEmails.length) {
+    const topEmail = urgentEmails[0];
+    whatMattersNow.push({
+      id: `wmn-email-${topEmail.id || 'urgent'}`,
+      title: `${urgentEmails.length} urgent email${urgentEmails.length === 1 ? '' : 's'}`,
+      detail: trimText(topEmail.subject || topEmail.reason || topEmail.from || 'Urgent inbox item.'),
+      tone: 'urgent',
+    });
+  }
 
   const upNext = [];
   if (focus?.secondaryAction) {
@@ -355,6 +366,14 @@ function buildPresentation(neuroData, domains) {
         label: titleFromItem(task),
       });
     }
+  }
+  const replyEmails = email?.reply || [];
+  if (replyEmails.length && upNext.length < 3) {
+    upNext.push({
+      id: 'upnext-email-reply',
+      time: 'Inbox',
+      label: `${replyEmails.length} email${replyEmails.length === 1 ? '' : 's'} need a reply`,
+    });
   }
 
   const standupSections = {
@@ -416,6 +435,25 @@ function buildPresentation(neuroData, domains) {
     upNext: upNext.length ? upNext : fallback.upNext,
     quickActions: fallback.quickActions,
     standup: standupSections,
+    email: {
+      source: email ? neuro.NEURO_SOURCE : 'placeholder',
+      urgentCount: urgentEmails.length,
+      replyCount: replyEmails.length,
+      urgent: urgentEmails.slice(0, 5).map((item, index) => ({
+        id: item.id || `urgent-${index}`,
+        subject: item.subject || 'Urgent email',
+        from: item.from || item.fromEmail || 'Unknown sender',
+        reason: item.reason || '',
+        isRead: Boolean(item.isRead),
+      })),
+      reply: replyEmails.slice(0, 8).map((item, index) => ({
+        id: item.id || `reply-${index}`,
+        subject: item.subject || 'Needs reply',
+        from: item.from || item.fromEmail || 'Unknown sender',
+        reason: item.reason || '',
+        isRead: Boolean(item.isRead),
+      })),
+    },
     todos: {
       source: todoItems.length || todoCandidates.length || todayLane.length ? neuro.NEURO_SOURCE : 'placeholder',
       items: todoItems.length ? todoItems : fallback.todos.items,
