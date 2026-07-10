@@ -63,6 +63,37 @@
   font-weight: 600;
 }
 
+.focus-product__action-brief {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.focus-product__action-title {
+  margin: 0;
+  font-size: 20px;
+  color: #eef5ff;
+}
+
+.focus-product__interrupt {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  background: rgba(224, 114, 106, 0.1);
+  border-color: rgba(224, 114, 106, 0.28);
+}
+
+.focus-product__interrupt-title {
+  margin: 0;
+  font-size: 18px;
+  color: #fff5f3;
+}
+
+.focus-product__interrupt-dismiss {
+  min-width: 110px;
+}
+
 .focus-product .product__section,
 .focus-product .product__banner {
   background:

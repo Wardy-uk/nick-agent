@@ -23,10 +23,11 @@ const FALLBACK = {
   signals: [{ label: '2 SLA breaches', risk: 'High' }, { label: 'Kim waiting on reply', risk: 'Medium' }, { label: '3 commits due today', risk: 'Low' }],
 };
 
-function deriveCognition(model) {
+function deriveCognition(model, focusAssist) {
   const queue = model?.domains?.queue;
   const focus = model?.domains?.focus?.current;
   const nova = model?.nova?.eyesOn;
+  const nextAction = focusAssist?.nextAction;
   const breaching = queue?.breaching || 0;
   const open = queue?.open || 0;
   const novaItems = nova?.items?.length || 0;
@@ -59,7 +60,7 @@ function deriveCognition(model) {
       title: focus?.title || 'Pick the highest-leverage thing and start',
       why: focus?.reason || 'SARA is using fallback focus context.',
       urgency, confidence,
-      nextStep: focus?.reason ? 'Review notes and open points' : 'Name the first concrete step',
+      nextStep: nextAction?.label || (focus?.reason ? 'Review notes and open points' : 'Name the first concrete step'),
     },
     signals: signals.length ? signals : FALLBACK.signals,
   };
@@ -250,8 +251,8 @@ function cognitiveSignature(cog, state, model) {
 }
 
 export default function CognitionEnvironment() {
-  const { model, currentView, setCurrentView, runQuickAction } = useSaraState();
-  const cog = useMemo(() => (model ? deriveCognition(model) : FALLBACK), [model]);
+  const { model, focusAssist, currentView, setCurrentView, runQuickAction } = useSaraState();
+  const cog = useMemo(() => (model ? deriveCognition(model, focusAssist) : FALLBACK), [focusAssist, model]);
 
   const [cogState, setCogState] = useState('withyou');
   const [intervening, setIntervening] = useState(false);
@@ -808,7 +809,7 @@ export default function CognitionEnvironment() {
                 <span className="ce-meter__dots">{[1, 2, 3, 4, 5].map((n) => (<i key={n} className={`ce-dot${n <= cog.focus.urgency ? ' ce-dot--on' : ''}`} />))}</span>
               </div>
               <div className="ce-meter"><span className="ce-meter__key">Confidence</span><b className="ce-meter__val">{cog.focus.confidence}%</b></div>
-              <button type="button" className="ce-next" onClick={() => runQuickAction('start-focus')}>
+              <button type="button" className="ce-next" onClick={() => runQuickAction('start-focus', { action: focusAssist?.nextAction })}>
                 <span className="ce-card__eyebrow ce-card__eyebrow--soft">Next step</span>
                 <span className="ce-next__row"><span>{cog.focus.nextStep}</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14 M13 6l6 6-6 6" /></svg></span>
               </button>
@@ -876,7 +877,7 @@ export default function CognitionEnvironment() {
             <br />It all resolves to one thing — <span className="ce-intervene__accent">this</span>.
           </p>
           <div className="ce-intervene__acts">
-            <button type="button" className="ce-iv-btn ce-iv-btn--primary" onClick={() => { closeIntervention(); runQuickAction('start-focus'); }}>Start now</button>
+            <button type="button" className="ce-iv-btn ce-iv-btn--primary" onClick={() => { closeIntervention(); runQuickAction('start-focus', { action: focusAssist?.nextAction }); }}>Start now</button>
             <button type="button" className="ce-iv-btn" onClick={closeIntervention}>Give me ten</button>
           </div>
         </div>

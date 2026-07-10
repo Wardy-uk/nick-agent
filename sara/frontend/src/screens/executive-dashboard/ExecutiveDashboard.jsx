@@ -35,7 +35,7 @@ function formatSla(mins) {
 }
 
 export default function ExecutiveDashboard() {
-  const { status, error, model, now, presentation } = useSaraState();
+  const { status, error, model, now, presentation, interruptionNotice, dismissInterruptionNotice } = useSaraState();
 
   if (status === 'connecting') {
     return (
@@ -89,6 +89,19 @@ export default function ExecutiveDashboard() {
 
       {/* Engine briefing line — derived by the State Engine, read verbatim */}
       {model.briefing?.line && <p className="ed__briefing">{model.briefing.line}</p>}
+
+      {interruptionNotice?.viewId === 'executive-dashboard' && (
+        <section className="ed__notice" aria-live="assertive">
+          <div>
+            <p className="ed__notice-kicker">SARA brought this forward</p>
+            <p className="ed__notice-title">{interruptionNotice.title}</p>
+            <p className="ed__notice-detail">{interruptionNotice.detail}</p>
+          </div>
+          <button type="button" className="ed__notice-dismiss" onClick={dismissInterruptionNotice}>
+            Dismiss
+          </button>
+        </section>
+      )}
 
       {/* KPI tiles — operational counts straight from shared domains */}
       <section className="ed__kpis" aria-label="Key metrics">

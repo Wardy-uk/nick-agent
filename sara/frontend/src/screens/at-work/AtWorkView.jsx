@@ -33,7 +33,7 @@ function Stat({ label, value, tone }) {
 }
 
 export default function AtWorkView() {
-  const { status, error, model, now } = useSaraState();
+  const { status, error, model, now, interruptionNotice, dismissInterruptionNotice } = useSaraState();
 
   if (status === 'connecting') {
     return (
@@ -68,6 +68,19 @@ export default function AtWorkView() {
           NOVA not connected{nova?.reason ? ` — ${nova.reason}` : ''}. Set <code>NOVA_BASE_URL</code> to
           surface approvals, overdue customers, and exceptions here.
         </p>
+      )}
+
+      {interruptionNotice?.viewId === 'at-work' && (
+        <section className="aw__notice" aria-live="assertive">
+          <div>
+            <p className="aw__notice-kicker">SARA brought this forward</p>
+            <p className="aw__notice-title">{interruptionNotice.title}</p>
+            <p className="aw__notice-detail">{interruptionNotice.detail}</p>
+          </div>
+          <button type="button" className="aw__notice-dismiss" onClick={dismissInterruptionNotice}>
+            Dismiss
+          </button>
+        </section>
       )}
 
       {nova?.available && eyesOn && (

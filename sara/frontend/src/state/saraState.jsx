@@ -93,6 +93,22 @@ function isWindowBackgrounded() {
   return document.visibilityState !== 'visible' || !document.hasFocus();
 }
 
+function mapFocusActionTargetToView(target) {
+  const normalized = String(target || '').trim().toLowerCase();
+  if (normalized === 'queue') return SARA_VIEWS.QUEUE;
+  if (normalized === 'todos') return SARA_VIEWS.TODOS;
+  if (normalized === 'standup' || normalized === 'meeting-prep') return SARA_VIEWS.STANDUP;
+  if (normalized === 'imports' || normalized === 'brain') return SARA_VIEWS.VAULT;
+  if (normalized === 'capture') return SARA_VIEWS.CAPTURE;
+  if (normalized === 'chat' || normalized === 'inbox') return SARA_VIEWS.SARA;
+  return SARA_VIEWS.FOCUS;
+}
+
+function focusActionFeedback(action) {
+  if (!action) return 'Focus opened';
+  return action.label || action.reason || 'Focus action opened';
+}
+
 function buildUrgentSnapshot(model) {
   if (!model) return null;
 
@@ -220,6 +236,15 @@ export function SaraStateProvider({ children }) {
   const [chatBridge, setChatBridge] = useState({ status: 'checking', detail: null, available: false });
   const [neuroAuth, setNeuroAuth] = useState({ status: 'checking', configured: false, source: 'none', detail: null });
   const [actionFeedback, setActionFeedback] = useState(null);
+  const [focusAssist, setFocusAssist] = useState({
+    status: 'checking',
+    error: null,
+    nextAction: null,
+    secondaryAction: null,
+    canWait: [],
+    autoExecuted: [],
+  });
+  const [interruptionNotice, setInterruptionNotice] = useState(null);
   const urgentSnapshotRef = useRef(null);
   const hasHydratedStateRef = useRef(false);
   const openUrgentViewRef = useRef((viewId) => setCurrentView(normalizeViewId(viewId)));
@@ -241,10 +266,55 @@ export function SaraStateProvider({ children }) {
       nextUrgentSnapshot.signature !== previousUrgentSnapshot?.signature &&
       nextUrgentSnapshot.score >= (previousUrgentSnapshot?.score ?? 0)
     ) {
+      setInterruptionNotice({
+        id: nextUrgentSnapshot.top.key,
+        title: nextUrgentSnapshot.top.title,
+        detail: nextUrgentSnapshot.top.detail || 'SARA detected a new urgent change.',
+        viewId: nextUrgentSnapshot.top.viewId || null,
+        createdAt: Date.now(),
+      });
       void maybeNotifyUrgentChange(nextUrgentSnapshot, openUrgentViewRef.current);
     }
 
     hasHydratedStateRef.current = true;
+  }
+
+  function applyFocusAssist(data) {
+    setFocusAssist({
+      status: 'ready',
+      error: null,
+      nextAction: data?.nextAction || null,
+      secondaryAction: data?.secondaryAction || null,
+      canWait: Array.isArray(data?.canWait) ? data.canWait : [],
+      autoExecuted: Array.isArray(data?.autoExecuted) ? data.autoExecuted : [],
+    });
+  }
+
+  async function refreshFocusAssist() {
+    try {
+      const res = await fetch('/api/focus');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      applyFocusAssist(await res.json());
+    } catch (e) {
+      setFocusAssist((current) => ({
+        ...current,
+        status: 'error',
+        error: e.message,
+      }));
+    }
+  }
+
+  function openFocusAction(action) {
+    if (!action) {
+      setCurrentView(normalizeViewId(SARA_VIEWS.FOCUS));
+      setActionFeedback('Focus opened');
+      return { ok: true };
+    }
+
+    const viewId = mapFocusActionTargetToView(action.target);
+    setCurrentView(normalizeViewId(viewId));
+    setActionFeedback(focusActionFeedback(action));
+    return { ok: true, viewId, action };
   }
 
   // Read the one shared state model from the backend (the WS1 runtime path).
@@ -268,6 +338,34 @@ export function SaraStateProvider({ children }) {
 
     loadState();
     const id = setInterval(loadState, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFocus() {
+      try {
+        const res = await fetch('/api/focus');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        applyFocusAssist(data);
+      } catch (e) {
+        if (cancelled) return;
+        setFocusAssist((current) => ({
+          ...current,
+          status: 'error',
+          error: e.message,
+        }));
+      }
+    }
+
+    loadFocus();
+    const id = setInterval(loadFocus, 30000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -541,6 +639,7 @@ export function SaraStateProvider({ children }) {
     } catch {
       // keep current state if refresh fails
     }
+    await refreshFocusAssist();
   }
 
   async function approveTodoCandidate(actionId) {
@@ -584,9 +683,7 @@ export function SaraStateProvider({ children }) {
       return { ok: true };
     }
     if (action === 'start-focus') {
-      setCurrentView(normalizeViewId('focus'));
-      setActionFeedback('Focus opened');
-      return { ok: true };
+      return openFocusAction(payload.action || focusAssist.nextAction);
     }
     if (action === 'daily-brief') {
       setCurrentView(normalizeViewId('standup'));
@@ -662,7 +759,11 @@ export function SaraStateProvider({ children }) {
     chatError,
     chatBridge,
     neuroAuth,
+    focusAssist,
     actionFeedback,
+    interruptionNotice,
+    dismissInterruptionNotice: () => setInterruptionNotice(null),
+    openFocusAction,
     sendChat,
     captureNote,
     captureTodo,
