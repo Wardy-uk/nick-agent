@@ -1,4 +1,4 @@
-# Netlify config for SARA's light-touch app.
+# Netlify config for SARA mobile.
 #
 # This app lives in a subdirectory of the `nuero` monorepo. In the Netlify site
 # settings set the *Base directory* to `sara/app` — Netlify then reads THIS file

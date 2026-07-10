@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "SARA light-touch app surface — quick, on-hand, cross-device (phone/laptop) interface to the NEURO brain. Capture · Focus · Chat · Meeting prep · Brain management.",
+  "description": "SARA mobile — SARA on the go. A lightweight, portable interface to the NEURO brain for capture, focus, chat, meeting prep, and brain management.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

@@ -24,7 +24,7 @@ export default defineConfig({
       manifest: {
         name: 'SARA',
         short_name: 'SARA',
-        description: 'SARA — light-touch interface to the NEURO brain',
+        description: 'SARA mobile — SARA on the go, backed by the NEURO brain',
         start_url: '/',
         scope: '/',
         display: 'standalone',

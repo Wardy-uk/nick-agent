@@ -161,7 +161,7 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
 
       {!state.loading && !state.error && !handledInSara && (
         <div className="notif__body">
-          <p className="notif__lede">This one needs the full NUERO app rather than the light-touch SARA surface.</p>
+          <p className="notif__lede">This one needs the full NUERO desktop companion rather than SARA mobile.</p>
           <div className="notif__actions">
             {nueroUrl && (
               <button type="button" className="notif__btn notif__btn--primary" onClick={openNuero}>

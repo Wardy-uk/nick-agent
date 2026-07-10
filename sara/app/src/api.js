@@ -1,4 +1,4 @@
-// API client for SARA's light-touch app. Talks to the NEURO brain.
+// API client for SARA mobile. Talks to the NEURO brain.
 //   Dev:  API_BASE = '' → calls are relative, Vite proxies /api → NEURO backend.
 //   Prod: API_BASE = VITE_API_URL → the NEURO backend's Tailscale Serve HTTPS URL.
 // Auth matches the NEURO/machine convention: PIN header on every /api call,

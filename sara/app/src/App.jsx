@@ -11,9 +11,9 @@ import BrainManagement from './views/BrainManagement';
 import actionSurfaces from '../../../shared/action-surfaces.cjs';
 import './App.css';
 
-// SARA light-touch app shell.
+// SARA mobile app shell.
 // Five areas, nothing else — see the "NEURO & SARA — What They Are" vault note.
-// The heavy command-centre lives on the kiosk/desktop SARA surfaces, not here.
+// This is SARA on the go; the heavier command-centre lives on the kiosk/desktop SARA surfaces.
 const TABS = [
   { id: 'focus', label: 'Focus', icon: '🎯', Component: Focus },
   { id: 'capture', label: 'Capture', icon: '➕', Component: Capture },
@@ -117,7 +117,7 @@ export default function App() {
     <div className="app">
       <header className="app__header">
         <span className="app__brand">SARA</span>
-        <span className="app__sub">light-touch</span>
+        <span className="app__sub">mobile</span>
         <button
           className="app__lock"
           type="button"
