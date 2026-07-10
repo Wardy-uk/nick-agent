@@ -73,6 +73,7 @@ export default function App() {
   const [authed, setAuthed] = useState(() => !!getPin());
   const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'focus');
   const [actionIntent, setActionIntent] = useState(() => readLaunchIntent());
+  const [refreshing, setRefreshing] = useState(false);
   usePushSubscription(authed);
 
   useEffect(() => {
@@ -106,6 +107,19 @@ export default function App() {
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
   }, []);
 
+  async function refreshApp() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map((registration) => registration.update().catch(() => {})));
+      }
+    } finally {
+      window.location.reload();
+    }
+  }
+
   if (!authed) return <LockScreen onUnlock={() => setAuthed(true)} />;
 
   const ActiveView = useMemo(
@@ -118,6 +132,14 @@ export default function App() {
       <header className="app__header">
         <span className="app__brand">SARA</span>
         <span className="app__sub">mobile</span>
+        <button
+          className="app__refresh"
+          type="button"
+          onClick={refreshApp}
+          aria-label="Refresh SARA mobile"
+          title="Refresh SARA mobile"
+          disabled={refreshing}
+        >{refreshing ? '…' : '↻'}</button>
         <button
           className="app__lock"
           type="button"

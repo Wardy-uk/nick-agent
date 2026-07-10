@@ -39,14 +39,22 @@ body {
 
 .app__brand { font-weight: 700; letter-spacing: 0.12em; }
 .app__sub { color: var(--muted); font-size: 0.75rem; }
+.app__refresh,
 .app__lock {
-  margin-left: auto;
   background: none;
   border: none;
   color: var(--muted);
   font-size: 1rem;
   cursor: pointer;
   padding: 0.2rem 0.3rem;
+}
+.app__refresh {
+  margin-left: auto;
+}
+.app__refresh:disabled,
+.app__lock:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .app__view {
