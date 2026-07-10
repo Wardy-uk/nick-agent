@@ -8,11 +8,13 @@
 .advice {
   flex: 0 0 auto;
   background: var(--surface);
-  border: 1px solid rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
-  border-radius: 14px;
-  box-shadow: 0 8px 22px rgba(50, 64, 91, 0.08);
-  padding: 8px 14px;
+  border-radius: 18px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  padding: 10px 16px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -40,11 +42,11 @@
 }
 
 .advice__eyebrow {
-  font-size: 11px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 1.2px;
+  letter-spacing: 0.28em;
   color: var(--accent-ink);
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .advice__summary {
@@ -60,12 +62,12 @@
   text-transform: capitalize;
   padding: 3px 9px;
   border-radius: 999px;
-  background: rgba(239, 244, 252, 0.92);
+  background: rgba(15, 26, 39, 0.9);
   color: var(--ink-dim);
   white-space: nowrap;
 }
 .advice__confidence--high {
-  background: #e7f5ee;
+  background: rgba(94, 193, 202, 0.12);
   color: var(--success-ink);
 }
 .advice__confidence--moderate {
@@ -73,7 +75,7 @@
   color: var(--warning-ink);
 }
 .advice__confidence--low {
-  background: #fbe9e7;
+  background: rgba(224, 114, 106, 0.12);
   color: var(--danger);
 }
 
@@ -115,7 +117,7 @@
   transition: background 0.12s ease;
 }
 .advice__switch:hover {
-  background: #d6eff1;
+  background: rgba(94, 193, 202, 0.18);
 }
 
 .advice__flag {
@@ -123,7 +125,7 @@
   text-transform: uppercase;
   letter-spacing: 0.8px;
   color: var(--ink-dim);
-  background: rgba(239, 244, 252, 0.92);
+  background: rgba(15, 26, 39, 0.9);
   padding: 3px 8px;
   border-radius: 999px;
 }

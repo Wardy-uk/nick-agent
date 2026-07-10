@@ -14,6 +14,10 @@ export default function ViewSwitcher() {
 
   return (
     <nav className="switcher" aria-label="SARA views">
+      <div className="switcher__brand">
+        <div className="switcher__brand-name">SARA</div>
+        <div className="switcher__brand-sub">Cognition Environment</div>
+      </div>
       {VIEW_REGISTRY.map((view) => {
         const active = view.id === normalizeViewId(currentView);
         return (
@@ -24,11 +28,15 @@ export default function ViewSwitcher() {
             aria-pressed={active}
             onClick={() => setCurrentView(view.id)}
           >
-            {view.label}
+            <span className="switcher__text">
+              <span className="switcher__label">{view.label}</span>
+              <span className="switcher__sub">{view.blurb}</span>
+            </span>
             {view.status === 'planned' && <span className="switcher__soon">soon</span>}
           </button>
         );
       })}
+      <div className="switcher__foot">SARA adapts the surface. You stay in control.</div>
     </nav>
   );
 }

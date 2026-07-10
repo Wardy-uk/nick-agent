@@ -8,12 +8,12 @@ export default function PlannedView({ viewId }) {
   const view = getView(viewId);
   return (
     <section className="planned" aria-label={`${view?.label || 'View'} — planned`}>
-      <p className="planned__tag">Planned view</p>
+      <p className="planned__tag">Cognition Surface</p>
       <h2 className="planned__title">{view?.label || viewId}</h2>
       <p className="planned__blurb">{view?.blurb}</p>
       <p className="planned__note">
-        This view is reserved by SARA's many-views architecture. It reads the same
-        shared state as Mission Control and arrives in a later work package.
+        This surface is reserved inside the same shared SARA environment. It will
+        inherit the same cognition theme when its live view is wired in.
       </p>
     </section>
   );
