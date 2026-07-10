@@ -31,6 +31,7 @@ const express = require('express');
 const healthRoute = require('./src/routes/health');
 const stateRoute = require('./src/routes/state');
 const chatRoute = require('./src/routes/chat');
+const focusRoute = require('./src/routes/focus');
 const actionsRoute = require('./src/routes/actions');
 const neuroAuthRoute = require('./src/routes/neuroAuth');
 const telemetryRoute = require('./src/routes/telemetry');
@@ -54,6 +55,7 @@ app.use(express.json());
 app.use('/api/health', healthRoute);
 app.use('/api/state', stateRoute);
 app.use('/api/chat', chatRoute);
+app.use('/api/focus', focusRoute);
 app.use('/api/actions', actionsRoute);
 app.use('/api/neuro-auth', neuroAuthRoute);
 app.use('/api/telemetry', telemetryRoute);
@@ -80,7 +82,7 @@ if (fs.existsSync(distDir)) {
       `SARA backend (${RUNTIME_LABEL}) is up on port ${PORT}.\n` +
         `Frontend build not found at ${distDir}.\n` +
         `Run the frontend dev server, or build it for production.\n` +
-        `API: GET /api/health , GET /api/state , GET /api/chat , GET /api/neuro-auth , GET /api/telemetry , GET /api/inference\n`
+        `API: GET /api/health , GET /api/state , GET /api/chat , GET /api/focus , GET /api/neuro-auth , GET /api/telemetry , GET /api/inference\n`
     );
   });
 }
