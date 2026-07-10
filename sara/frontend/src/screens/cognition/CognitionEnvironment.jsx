@@ -13,6 +13,10 @@ import './CognitionEnvironment.css';
 const IDLE_MS = 45000;
 const TEXT_DELAY = 1200;
 
+function canArmIntervention() {
+  return document.visibilityState === 'visible' && document.hasFocus();
+}
+
 const FALLBACK = {
   mode: 'Focused', cognitiveLoad: 'Moderate', pressureTrend: 'Building',
   focus: { title: 'Prepare for Willem probation review', why: 'High impact. Time sensitive. Shapes team momentum.', urgency: 4, confidence: 82, nextStep: 'Review notes and open points' },
@@ -265,17 +269,43 @@ export default function CognitionEnvironment() {
 
   useEffect(() => {
     let timer;
-    const arm = () => { clearTimeout(timer); if (!intervening) timer = setTimeout(() => setIntervening(true), IDLE_MS); };
-    const onActivity = () => { if (!intervening) arm(); };
-    window.addEventListener('mousemove', onActivity);
-    window.addEventListener('keydown', onActivity);
-    window.addEventListener('click', onActivity);
+    const clear = () => {
+      clearTimeout(timer);
+      timer = null;
+    };
+    const arm = () => {
+      clear();
+      if (!intervening && canArmIntervention()) {
+        timer = setTimeout(() => {
+          if (canArmIntervention()) setIntervening(true);
+        }, IDLE_MS);
+      }
+    };
+    const onActivity = () => {
+      if (intervening) return;
+      arm();
+    };
+    const onVisibility = () => {
+      if (!canArmIntervention()) {
+        clear();
+        setIntervening(false);
+        setIvTextReady(false);
+        return;
+      }
+      arm();
+    };
+    const events = ['pointerdown', 'touchstart', 'keydown', 'mousemove', 'wheel', 'click', 'focus'];
+    events.forEach((eventName) => window.addEventListener(eventName, onActivity, { passive: true }));
+    window.addEventListener('blur', onVisibility);
+    window.addEventListener('focus', onVisibility);
+    document.addEventListener('visibilitychange', onVisibility);
     arm();
     return () => {
-      clearTimeout(timer);
-      window.removeEventListener('mousemove', onActivity);
-      window.removeEventListener('keydown', onActivity);
-      window.removeEventListener('click', onActivity);
+      clear();
+      events.forEach((eventName) => window.removeEventListener(eventName, onActivity));
+      window.removeEventListener('blur', onVisibility);
+      window.removeEventListener('focus', onVisibility);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [intervening]);
 

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { SHARED_PRESENTATION } from './presentation';
 import { DEFAULT_VIEW, normalizeViewId } from './views';
 
@@ -89,6 +89,113 @@ function parseSseChunk(rest, chunk) {
   return { deltas, rest: nextRest };
 }
 
+function isWindowBackgrounded() {
+  return document.visibilityState !== 'visible' || !document.hasFocus();
+}
+
+function buildUrgentSnapshot(model) {
+  if (!model) return null;
+
+  const focus = model.domains?.focus?.current;
+  const queue = model.domains?.queue;
+  const eyesOn = model.nova?.eyesOn;
+  const urgentItems = [];
+
+  if (focus?.id) {
+    urgentItems.push({
+      key: `focus:${focus.id}`,
+      title: focus.title || 'Current focus needs attention',
+      detail: focus.reason || '',
+      score: focus.deferCount > 0 ? 3 : 2,
+    });
+  }
+
+  if ((queue?.breaching || 0) > 0) {
+    urgentItems.push({
+      key: `queue:breaching:${queue.breaching}`,
+      title: `${queue.breaching} ticket${queue.breaching === 1 ? '' : 's'} breaching SLA`,
+      detail: 'Queue needs a holding reply or re-triage.',
+      score: 4 + Math.min(queue.breaching, 3),
+    });
+  }
+
+  if ((queue?.overdue || 0) > 0) {
+    urgentItems.push({
+      key: `queue:overdue:${queue.overdue}`,
+      title: `${queue.overdue} overdue customer${queue.overdue === 1 ? '' : 's'}`,
+      detail: 'Customers are waiting beyond target.',
+      score: 3 + Math.min(Math.ceil(queue.overdue / 10), 3),
+    });
+  }
+
+  if (Array.isArray(eyesOn?.items)) {
+    eyesOn.items
+      .filter((item) => (item.priority ?? 99) <= 2)
+      .slice(0, 5)
+      .forEach((item) => {
+        urgentItems.push({
+          key: `eyes:${item.id}:${item.priority ?? 'x'}`,
+          title: item.title || 'NOVA needs your eyes',
+          detail: item.detail || item.ticketId || '',
+          score: item.priority === 1 ? 6 : 5,
+        });
+      });
+  }
+
+  if ((eyesOn?.stats?.approvalsPending || 0) > 0) {
+    urgentItems.push({
+      key: `nova:approvals:${eyesOn.stats.approvalsPending}`,
+      title: `${eyesOn.stats.approvalsPending} approval${eyesOn.stats.approvalsPending === 1 ? '' : 's'} waiting`,
+      detail: 'NOVA has approvals queued for you.',
+      score: 3 + Math.min(eyesOn.stats.approvalsPending, 3),
+    });
+  }
+
+  if ((eyesOn?.stats?.customersOverdue || 0) > 0) {
+    urgentItems.push({
+      key: `nova:customers:${eyesOn.stats.customersOverdue}`,
+      title: `${eyesOn.stats.customersOverdue} overdue customer${eyesOn.stats.customersOverdue === 1 ? '' : 's'}`,
+      detail: 'NOVA is tracking overdue customers.',
+      score: 3 + Math.min(Math.ceil(eyesOn.stats.customersOverdue / 10), 3),
+    });
+  }
+
+  if (urgentItems.length === 0) return null;
+
+  urgentItems.sort((a, b) => b.score - a.score);
+  return {
+    signature: urgentItems.map((item) => item.key).join('|'),
+    score: urgentItems[0].score,
+    top: urgentItems[0],
+  };
+}
+
+async function maybeNotifyUrgentChange(snapshot) {
+  if (!snapshot || !isWindowBackgrounded()) return;
+
+  window.saraNative?.attention?.(true);
+
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    try {
+      await Notification.requestPermission();
+    } catch {
+      return;
+    }
+  }
+  if (Notification.permission === 'granted') {
+    try {
+      new Notification('SARA needs your eyes', {
+        body: snapshot.top.detail ? `${snapshot.top.title} — ${snapshot.top.detail}` : snapshot.top.title,
+        tag: `sara-urgent-${snapshot.top.key}`,
+        renotify: true,
+      });
+    } catch {
+      // Notification support varies between shells; attention() still covers desktop.
+    }
+  }
+}
+
 export function SaraStateProvider({ children }) {
   const [status, setStatus] = useState('connecting'); // connecting | connected | disconnected
   const [model, setModel] = useState(null);
@@ -101,6 +208,27 @@ export function SaraStateProvider({ children }) {
   const [chatBridge, setChatBridge] = useState({ status: 'checking', detail: null, available: false });
   const [neuroAuth, setNeuroAuth] = useState({ status: 'checking', configured: false, source: 'none', detail: null });
   const [actionFeedback, setActionFeedback] = useState(null);
+  const urgentSnapshotRef = useRef(null);
+  const hasHydratedStateRef = useRef(false);
+
+  function applyIncomingModel(data) {
+    const nextUrgentSnapshot = buildUrgentSnapshot(data);
+    const previousUrgentSnapshot = urgentSnapshotRef.current;
+
+    setModel(data);
+    urgentSnapshotRef.current = nextUrgentSnapshot;
+
+    if (
+      hasHydratedStateRef.current &&
+      nextUrgentSnapshot &&
+      nextUrgentSnapshot.signature !== previousUrgentSnapshot?.signature &&
+      nextUrgentSnapshot.score >= (previousUrgentSnapshot?.score ?? 0)
+    ) {
+      void maybeNotifyUrgentChange(nextUrgentSnapshot);
+    }
+
+    hasHydratedStateRef.current = true;
+  }
 
   // Read the one shared state model from the backend (the WS1 runtime path).
   useEffect(() => {
@@ -111,7 +239,7 @@ export function SaraStateProvider({ children }) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (cancelled) return;
-        setModel(data);
+        applyIncomingModel(data);
         setStatus('connected');
         setError(null);
       } catch (e) {
@@ -126,6 +254,21 @@ export function SaraStateProvider({ children }) {
     return () => {
       cancelled = true;
       clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    const releaseAttention = () => {
+      if (!isWindowBackgrounded()) {
+        window.saraNative?.attention?.(false);
+      }
+    };
+
+    window.addEventListener('focus', releaseAttention);
+    document.addEventListener('visibilitychange', releaseAttention);
+    return () => {
+      window.removeEventListener('focus', releaseAttention);
+      document.removeEventListener('visibilitychange', releaseAttention);
     };
   }, []);
 
@@ -323,7 +466,7 @@ export function SaraStateProvider({ children }) {
 
     try {
       const state = await fetch('/api/state');
-      if (state.ok) setModel(await state.json());
+      if (state.ok) applyIncomingModel(await state.json());
     } catch {
       // keep the successful capture result even if the follow-up refresh fails
     }
@@ -346,7 +489,7 @@ export function SaraStateProvider({ children }) {
 
     try {
       const state = await fetch('/api/state');
-      if (state.ok) setModel(await state.json());
+      if (state.ok) applyIncomingModel(await state.json());
     } catch {
       // keep the successful capture result even if the follow-up refresh fails
     }
@@ -367,7 +510,7 @@ export function SaraStateProvider({ children }) {
     setNeuroAuth({ status: 'ready', configured: true, source: body.source || 'session', detail: null });
     try {
       const state = await fetch('/api/state');
-      if (state.ok) setModel(await state.json());
+      if (state.ok) applyIncomingModel(await state.json());
     } catch {
       // leave existing model in place if refresh fails
     }
@@ -377,7 +520,7 @@ export function SaraStateProvider({ children }) {
   async function refreshModel() {
     try {
       const state = await fetch('/api/state');
-      if (state.ok) setModel(await state.json());
+      if (state.ok) applyIncomingModel(await state.json());
     } catch {
       // keep current state if refresh fails
     }
