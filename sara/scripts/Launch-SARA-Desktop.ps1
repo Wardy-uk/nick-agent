@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $saraRoot = Split-Path -Parent $scriptDir
 $backendDir = Join-Path $saraRoot 'backend'
+$frontendDir = Join-Path $saraRoot 'frontend'
 $electronDir = Join-Path $saraRoot 'desktop-electron'
 $backendPort = 3005
 $backendUrl = "http://localhost:$backendPort/"
@@ -53,8 +54,27 @@ function Ensure-Dependency {
     -Wait
 }
 
+function Get-LatestWriteTime {
+  param([string]$Path)
+
+  if (-not (Test-Path $Path)) { return [datetime]::MinValue }
+  return (Get-ChildItem $Path -Recurse -File | Measure-Object -Property LastWriteTime -Maximum).Maximum
+}
+
 Ensure-Dependency -WorkingDirectory $backendDir -ProbePath (Join-Path $backendDir 'node_modules\express')
+Ensure-Dependency -WorkingDirectory $frontendDir -ProbePath (Join-Path $frontendDir 'node_modules\vite')
 Ensure-Dependency -WorkingDirectory $electronDir -ProbePath (Join-Path $electronDir 'node_modules\electron')
+
+$frontendDistDir = Join-Path $frontendDir 'dist'
+$frontendSourceTime = Get-LatestWriteTime -Path (Join-Path $frontendDir 'src')
+$frontendBuildTime = Get-LatestWriteTime -Path $frontendDistDir
+if ($frontendBuildTime -lt $frontendSourceTime) {
+  Start-Process -FilePath 'npm.cmd' `
+    -ArgumentList 'run', 'build' `
+    -WorkingDirectory $frontendDir `
+    -WindowStyle Hidden `
+    -Wait
+}
 
 if (-not (Test-LocalPort -Port $backendPort)) {
   Start-Process -FilePath 'node.exe' `

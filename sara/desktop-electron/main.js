@@ -13,7 +13,7 @@ const lockAdapter = require('./lock');
 const SARA_URL = process.env.SARA_URL || 'http://localhost:3005/';
 const FULLSCREEN = process.env.SARA_FULLSCREEN === '1';
 
-function createWindow() {
+async function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -27,6 +27,11 @@ function createWindow() {
     },
   });
   win.removeMenu();
+  const ses = win.webContents.session;
+  await ses.clearCache().catch(() => {});
+  await ses.clearStorageData({
+    storages: ['serviceworkers', 'cachestorage'],
+  }).catch(() => {});
   win.loadURL(SARA_URL);
   return win;
 }
@@ -81,18 +86,19 @@ if (!gotLock) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
+      mainWindow.webContents.reloadIgnoringCache();
     }
   });
 
-  app.whenReady().then(() => {
-    mainWindow = createWindow();
+  app.whenReady().then(async () => {
+    mainWindow = await createWindow();
     // When Windows itself is unlocked (Hello), tell the renderer so SARA's privacy
     // overlay lifts too — the OS already re-authenticated, no second tap needed.
     powerMonitor.on('unlock-screen', () => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('sara:os-unlocked');
     });
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
+    app.on('activate', async () => {
+      if (BrowserWindow.getAllWindows().length === 0) mainWindow = await createWindow();
     });
   });
 
