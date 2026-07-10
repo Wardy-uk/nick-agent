@@ -38,16 +38,16 @@ const TONE_CLASS = { urgent: 'a', attention: 'w', watch: 'g' };
 
 // Left nav rail items (full-bleed JARVIS view owns its own nav).
 const NAV = [
-  { id: SARA_VIEWS.BRIEFING, icon: '⌂', label: 'Home' },
-  { id: SARA_VIEWS.QUEUE, icon: '▤', label: 'Queue' },
-  { id: SARA_VIEWS.TEAM, icon: '👥', label: 'Team' },
-  { id: SARA_VIEWS.FOCUS, icon: '◎', label: 'Focus' },
-  { id: SARA_VIEWS.TODOS, icon: '☑', label: 'Tasks' },
-  { id: SARA_VIEWS.VAULT, icon: '▦', label: 'Vault' },
-  { id: SARA_VIEWS.CAPTURE, icon: '✎', label: 'Capture' },
-  { id: SARA_VIEWS.SARA, icon: '◴', label: 'SARA' },
-  { id: SARA_VIEWS.STANDUP, icon: '◇', label: 'Standup' },
-  { id: SARA_VIEWS.SETTINGS, icon: '⚙', label: 'Settings' },
+  { id: SARA_VIEWS.BRIEFING, icon: '⌂', label: 'Home', sub: 'Opening line and live brief' },
+  { id: SARA_VIEWS.QUEUE, icon: '▤', label: 'Queue', sub: 'Triage what is moving now' },
+  { id: SARA_VIEWS.TEAM, icon: '👥', label: 'Team', sub: 'People and pressure signals' },
+  { id: SARA_VIEWS.FOCUS, icon: '◎', label: 'Focus', sub: 'One thing that matters' },
+  { id: SARA_VIEWS.TODOS, icon: '☑', label: 'Tasks', sub: 'Backlog and today lane' },
+  { id: SARA_VIEWS.VAULT, icon: '▦', label: 'Vault', sub: 'What SARA is surfacing' },
+  { id: SARA_VIEWS.CAPTURE, icon: '✎', label: 'Capture', sub: 'Catch it before it drifts' },
+  { id: SARA_VIEWS.SARA, icon: '◴', label: 'SARA', sub: 'Talk to the assistant' },
+  { id: SARA_VIEWS.STANDUP, icon: '◇', label: 'Standup', sub: 'Morning alignment flow' },
+  { id: SARA_VIEWS.SETTINGS, icon: '⚙', label: 'Settings', sub: 'Runtime and connections' },
 ];
 
 export default function MissionControl() {
@@ -131,7 +131,10 @@ export default function MissionControl() {
     <section className="jv" aria-label="Mission Control" data-mode={eyesOn ? 'eyes-on' : 'standard'}>
       {/* left nav rail (full-bleed view owns its own nav) */}
       <nav className="jv__nav" aria-label="SARA views">
-        <div className="jv__nav-orb" aria-hidden="true" />
+        <div className="jv__brand">
+          <div className="jv__brand-name">SARA</div>
+          <div className="jv__brand-sub">Cognition Environment</div>
+        </div>
         {NAV.map((item) => (
           <button
             key={item.id}
@@ -142,7 +145,10 @@ export default function MissionControl() {
             aria-label={item.label}
           >
             <span className="jv__nav-icon" aria-hidden="true">{item.icon}</span>
-            <span className="jv__nav-label">{item.label}</span>
+            <span className="jv__nav-copy">
+              <span className="jv__nav-label">{item.label}</span>
+              <span className="jv__nav-sub">{item.sub}</span>
+            </span>
           </button>
         ))}
         {/* Eyes-On toggle — holds the work dashboard on/off regardless of location. */}
@@ -155,8 +161,12 @@ export default function MissionControl() {
           aria-pressed={eyesOn}
         >
           <span className="jv__nav-icon" aria-hidden="true">◉</span>
-          <span className="jv__nav-label">Eyes On</span>
+          <span className="jv__nav-copy">
+            <span className="jv__nav-label">Eyes On</span>
+            <span className="jv__nav-sub">Workload that needs your eyes</span>
+          </span>
         </button>
+        <div className="jv__nav-foot">SARA adapts the surface. You stay in control.</div>
       </nav>
 
       {/* rotating reticle rings */}
