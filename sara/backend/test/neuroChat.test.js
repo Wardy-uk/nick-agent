@@ -3,11 +3,12 @@ const assert = require('node:assert/strict');
 
 const neuroChat = require('../src/integrations/neuroChat');
 
-test('availability is honest when NEURO_BASE_URL is missing', () => {
+test('availability uses the default NEURO base URL when only a PIN is supplied', () => {
   const a = neuroChat.getAvailability({ NEURO_PIN: '1234' });
-  assert.equal(a.available, false);
-  assert.equal(a.reason, 'not-configured');
-  assert.match(a.detail, /NEURO_BASE_URL/);
+  assert.equal(a.available, true);
+  assert.equal(a.reason, null);
+  assert.equal(a.detail, null);
+  assert.equal(a.config.baseUrl, 'https://nuero.nickward.co.uk');
 });
 
 test('availability is honest when NEURO_PIN is missing', () => {

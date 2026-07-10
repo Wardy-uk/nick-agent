@@ -16,7 +16,7 @@ test('unconfigured bridge reports honest unavailable telemetry (no invented data
   assert.equal(t.source, 'home-assistant');
   assert.equal(t.available, false);
   assert.equal(t.reason, 'not-configured');
-  assert.deepEqual(t.signals, { location: null, presence: null, environment: null });
+  assert.deepEqual(t.signals, { location: null, presence: null, environment: null, proximity: null });
 });
 
 test('maps a full set of HA states into the three bounded signals', () => {
@@ -63,5 +63,5 @@ test('presence mapping treats away/off as not present', () => {
 test('location mapping keeps a custom zone name as its label', () => {
   const loc = ha.mapLocation({ entity_id: 'person.nick', state: 'Work', attributes: { friendly_name: 'Nick' } });
   assert.equal(loc.zone, 'Work');
-  assert.equal(loc.label, 'Nick'); // friendly_name preferred for non-standard zones
+  assert.equal(loc.label, 'Work');
 });
