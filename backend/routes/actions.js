@@ -13,6 +13,7 @@ const router = express.Router();
 const db = require('../db/database');
 const suggestionEngine = require('../services/suggestion-engine');
 const workingMemory = require('../services/working-memory');
+const actionCandidates = require('../services/action-candidates');
 
 // GET /api/actions — list pending actions + recent history
 router.get('/', (req, res) => {
@@ -40,6 +41,9 @@ router.post('/:id/approve', (req, res) => {
 
     // Log
     suggestionEngine.logActionExecution(action, result);
+    if (result.ok && action.type === 'capture_todo') {
+      actionCandidates.rememberReviewedAction(action, 'executed');
+    }
 
     // Invalidate working memory so focus fingerprint changes
     workingMemory.invalidate('sara action approved');
@@ -65,6 +69,9 @@ router.post('/:id/reject', (req, res) => {
     if (action.status !== 'pending') return res.status(400).json({ error: `Action is ${action.status}, not pending` });
 
     db.updateSaraActionStatus(action.id, 'rejected');
+    if (action.type === 'capture_todo') {
+      actionCandidates.rememberReviewedAction(action, 'rejected');
+    }
 
     // Invalidate working memory so focus fingerprint changes
     workingMemory.invalidate('sara action rejected');

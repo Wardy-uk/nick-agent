@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { extractActionCandidates, shouldSkipPath } = require('./action-candidates');
+const { buildSemanticSignature, extractActionCandidates, shouldSkipPath } = require('./action-candidates');
 
 test('extractActionCandidates finds explicit note actions and auto-promotes clear checkboxes', () => {
   const text = [
@@ -29,4 +29,10 @@ test('shouldSkipPath avoids task files and daily notes to prevent duplicate extr
   assert.equal(shouldSkipPath('Tasks/Master Todo.md'), true);
   assert.equal(shouldSkipPath('Daily/2026-07-10.md'), true);
   assert.equal(shouldSkipPath('Meetings/2026-07-10.md'), false);
+});
+
+test('buildSemanticSignature stays stable across minor wording changes', () => {
+  const a = buildSemanticSignature('Follow up with finance for approval');
+  const b = buildSemanticSignature('Follow-up with finance for approval.');
+  assert.equal(a, b);
 });

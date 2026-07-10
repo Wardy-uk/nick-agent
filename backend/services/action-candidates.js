@@ -47,6 +47,12 @@ const ACTION_VERBS = [
   'write',
   'confirm',
 ];
+const ACTION_STOPWORDS = new Set([
+  'a', 'an', 'and', 'the', 'to', 'for', 'of', 'on', 'in', 'into', 'with', 'from',
+  'this', 'that', 'these', 'those', 'my', 'your', 'our', 'their', 'his', 'her',
+  'is', 'are', 'be', 'been', 'being', 'it', 'as', 'at', 'by', 'or', 'if', 'then',
+  'just', 'still', 'need', 'needs', 'must', 'should', 'could', 'would', 'will'
+]);
 
 function stripFrontmatter(text) {
   return String(text || '').replace(/^---[\s\S]*?---\n*/, '');
@@ -78,8 +84,79 @@ function hashKey(value) {
   return crypto.createHash('sha1').update(String(value || '')).digest('hex').slice(0, 12);
 }
 
+function stemToken(token) {
+  let value = String(token || '').toLowerCase();
+  if (value.length > 5 && value.endsWith('ing')) value = value.slice(0, -3);
+  else if (value.length > 4 && value.endsWith('ed')) value = value.slice(0, -2);
+  else if (value.length > 4 && value.endsWith('es')) value = value.slice(0, -2);
+  else if (value.length > 3 && value.endsWith('s')) value = value.slice(0, -1);
+  return value;
+}
+
+function buildSemanticSignature(text) {
+  const tokens = normalizeText(text)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map(stemToken)
+    .filter((token) => token.length >= 3 && !ACTION_STOPWORDS.has(token));
+  const unique = [...new Set(tokens)].sort();
+  return hashKey(unique.join('|') || normalizeText(text));
+}
+
 function buildFocusItemId(relativePath, text) {
   return `note-action:${relativePath}:${hashKey(normalizeText(text))}`;
+}
+
+function buildReviewStateKey(relativePath) {
+  return `note_action_review:${hashKey(relativePath)}:${relativePath}`;
+}
+
+function readReviewState(relativePath) {
+  const raw = db.getState(buildReviewStateKey(relativePath));
+  if (!raw) return { contentHash: null, reviewedAt: null, handled: {} };
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object'
+      ? { contentHash: parsed.contentHash || null, reviewedAt: parsed.reviewedAt || null, handled: parsed.handled || {} }
+      : { contentHash: null, reviewedAt: null, handled: {} };
+  } catch {
+    return { contentHash: null, reviewedAt: null, handled: {} };
+  }
+}
+
+function writeReviewState(relativePath, state) {
+  db.setState(buildReviewStateKey(relativePath), JSON.stringify({
+    contentHash: state.contentHash || null,
+    reviewedAt: state.reviewedAt || new Date().toISOString(),
+    handled: state.handled || {},
+  }));
+}
+
+function getActionSignature(action) {
+  const payload = action?.payload || {};
+  return payload.semanticSignature || buildSemanticSignature(payload.text || action?.reason || '');
+}
+
+function markHandled(relativePath, semanticSignature, status, details = {}) {
+  if (!relativePath || !semanticSignature) return;
+  const state = readReviewState(relativePath);
+  state.handled[semanticSignature] = {
+    status,
+    at: new Date().toISOString(),
+    ...details,
+  };
+  state.reviewedAt = new Date().toISOString();
+  writeReviewState(relativePath, state);
+}
+
+function rememberReviewedAction(action, status) {
+  const payload = action?.payload || {};
+  const relativePath = payload.sourcePath || null;
+  const semanticSignature = getActionSignature(action);
+  markHandled(relativePath, semanticSignature, status, {
+    actionId: action.id || null,
+    text: payload.text || null,
+  });
 }
 
 function cleanCandidateText(text) {
@@ -173,11 +250,13 @@ function extractActionCandidates(text, relativePath) {
       sourcePath: relativePath,
       sourceLine: index + 1,
       focusItemId: dedupeKey,
+      semanticSignature: buildSemanticSignature(textValue),
       autoPromote: confidence >= AUTO_PROMOTE_CONFIDENCE,
       payload: {
         text: textValue,
         sourcePath: relativePath,
         sourceLine: index + 1,
+        semanticSignature: buildSemanticSignature(textValue),
         extractedFrom: 'vault-note',
         origin: 'note-candidate',
         metadata: todoIntelligence.triageTodo({
@@ -191,6 +270,21 @@ function extractActionCandidates(text, relativePath) {
   }
 
   return candidates;
+}
+
+function todoAlreadyExists(candidate) {
+  try {
+    const obsidian = require('./obsidian');
+    const { active, done } = obsidian.parseVaultTodos();
+    const all = [...active, ...done];
+    return all.some((task) => {
+      const sameSource = (task.meta?.sourcePath || null) === candidate.sourcePath;
+      const sameSignature = buildSemanticSignature(task.text) === candidate.semanticSignature;
+      return sameSignature && (sameSource || task.source?.startsWith('Master'));
+    });
+  } catch {
+    return false;
+  }
 }
 
 function syncNoteActionCandidates(relativePath) {
@@ -210,7 +304,12 @@ function syncNoteActionCandidates(relativePath) {
     return { created: 0, autoPromoted: 0, pending: 0, superseded: 0, candidates: [] };
   }
 
+  const contentHash = hashKey(stripFrontmatter(content));
+  const reviewState = readReviewState(relativePath);
   const candidates = extractActionCandidates(content, relativePath);
+  if (reviewState.contentHash === contentHash && candidates.length === 0) {
+    return { created: 0, autoPromoted: 0, pending: 0, superseded: 0, candidates: [] };
+  }
   const activeIds = new Set(candidates.map((candidate) => candidate.focusItemId));
   const existing = db.getRecentSaraActions(500).filter((action) => {
     if (action.type !== 'capture_todo') return false;
@@ -232,8 +331,25 @@ function syncNoteActionCandidates(relativePath) {
   const suggestionEngine = require('./suggestion-engine');
 
   for (const candidate of candidates) {
-    const alreadyTracked = existing.some((action) => action.focus_item_id === candidate.focusItemId);
+    const alreadyTracked = existing.some((action) => {
+      if (action.focus_item_id === candidate.focusItemId) return true;
+      if ((action.payload?.sourcePath || null) !== candidate.sourcePath) return false;
+      return getActionSignature(action) === candidate.semanticSignature;
+    });
     if (alreadyTracked) continue;
+
+    const handled = reviewState.handled[candidate.semanticSignature];
+    if (handled?.status === 'rejected' || handled?.status === 'executed' || handled?.status === 'ignored') {
+      continue;
+    }
+
+    if (todoAlreadyExists(candidate)) {
+      markHandled(candidate.sourcePath, candidate.semanticSignature, 'executed', {
+        text: candidate.text,
+        reason: 'already-in-master-todo',
+      });
+      continue;
+    }
 
     const actionId = db.createSaraAction(
       candidate.type,
@@ -249,11 +365,20 @@ function syncNoteActionCandidates(relativePath) {
       const result = suggestionEngine.executeAction(action);
       db.updateSaraActionStatus(actionId, result.ok ? 'executed' : 'failed');
       suggestionEngine.logActionExecution(action, result);
-      if (result.ok) autoPromoted += 1;
+      if (result.ok) {
+        autoPromoted += 1;
+        rememberReviewedAction(action, 'executed');
+      }
     } else {
       pending += 1;
     }
   }
+
+  writeReviewState(relativePath, {
+    ...readReviewState(relativePath),
+    contentHash,
+    reviewedAt: new Date().toISOString(),
+  });
 
   return { created, autoPromoted, pending, superseded, candidates };
 }
@@ -261,7 +386,9 @@ function syncNoteActionCandidates(relativePath) {
 module.exports = {
   AUTO_PROMOTE_CONFIDENCE,
   buildFocusItemId,
+  buildSemanticSignature,
   extractActionCandidates,
+  rememberReviewedAction,
   syncNoteActionCandidates,
   shouldSkipPath,
 };
