@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { SHARED_PRESENTATION } from './presentation';
-import { DEFAULT_VIEW, normalizeViewId } from './views';
+import { DEFAULT_VIEW, normalizeViewId, SARA_VIEWS } from './views';
 
 // SARA shared state/context — the single in-app source of truth for every screen
 // (WS2-WP1).
@@ -107,6 +107,7 @@ function buildUrgentSnapshot(model) {
       title: focus.title || 'Current focus needs attention',
       detail: focus.reason || '',
       score: focus.deferCount > 0 ? 3 : 2,
+      viewId: SARA_VIEWS.FOCUS,
     });
   }
 
@@ -116,6 +117,7 @@ function buildUrgentSnapshot(model) {
       title: `${queue.breaching} ticket${queue.breaching === 1 ? '' : 's'} breaching SLA`,
       detail: 'Queue needs a holding reply or re-triage.',
       score: 4 + Math.min(queue.breaching, 3),
+      viewId: SARA_VIEWS.QUEUE,
     });
   }
 
@@ -125,6 +127,7 @@ function buildUrgentSnapshot(model) {
       title: `${queue.overdue} overdue customer${queue.overdue === 1 ? '' : 's'}`,
       detail: 'Customers are waiting beyond target.',
       score: 3 + Math.min(Math.ceil(queue.overdue / 10), 3),
+      viewId: SARA_VIEWS.QUEUE,
     });
   }
 
@@ -138,6 +141,7 @@ function buildUrgentSnapshot(model) {
           title: item.title || 'NOVA needs your eyes',
           detail: item.detail || item.ticketId || '',
           score: item.priority === 1 ? 6 : 5,
+          viewId: SARA_VIEWS.ATWORK,
         });
       });
   }
@@ -148,6 +152,7 @@ function buildUrgentSnapshot(model) {
       title: `${eyesOn.stats.approvalsPending} approval${eyesOn.stats.approvalsPending === 1 ? '' : 's'} waiting`,
       detail: 'NOVA has approvals queued for you.',
       score: 3 + Math.min(eyesOn.stats.approvalsPending, 3),
+      viewId: SARA_VIEWS.ATWORK,
     });
   }
 
@@ -157,6 +162,7 @@ function buildUrgentSnapshot(model) {
       title: `${eyesOn.stats.customersOverdue} overdue customer${eyesOn.stats.customersOverdue === 1 ? '' : 's'}`,
       detail: 'NOVA is tracking overdue customers.',
       score: 3 + Math.min(Math.ceil(eyesOn.stats.customersOverdue / 10), 3),
+      viewId: SARA_VIEWS.ATWORK,
     });
   }
 
@@ -170,9 +176,10 @@ function buildUrgentSnapshot(model) {
   };
 }
 
-async function maybeNotifyUrgentChange(snapshot) {
+async function maybeNotifyUrgentChange(snapshot, onOpen) {
   if (!snapshot || !isWindowBackgrounded()) return;
 
+  if (snapshot.top.viewId) onOpen(snapshot.top.viewId);
   window.saraNative?.attention?.(true);
 
   if (!('Notification' in window)) return;
@@ -185,11 +192,16 @@ async function maybeNotifyUrgentChange(snapshot) {
   }
   if (Notification.permission === 'granted') {
     try {
-      new Notification('SARA needs your eyes', {
+      const notification = new Notification('SARA needs your eyes', {
         body: snapshot.top.detail ? `${snapshot.top.title} — ${snapshot.top.detail}` : snapshot.top.title,
         tag: `sara-urgent-${snapshot.top.key}`,
         renotify: true,
       });
+      notification.onclick = () => {
+        window.focus();
+        if (snapshot.top.viewId) onOpen(snapshot.top.viewId);
+        window.saraNative?.attention?.(true);
+      };
     } catch {
       // Notification support varies between shells; attention() still covers desktop.
     }
@@ -210,6 +222,11 @@ export function SaraStateProvider({ children }) {
   const [actionFeedback, setActionFeedback] = useState(null);
   const urgentSnapshotRef = useRef(null);
   const hasHydratedStateRef = useRef(false);
+  const openUrgentViewRef = useRef((viewId) => setCurrentView(normalizeViewId(viewId)));
+
+  useEffect(() => {
+    openUrgentViewRef.current = (viewId) => setCurrentView(normalizeViewId(viewId));
+  }, []);
 
   function applyIncomingModel(data) {
     const nextUrgentSnapshot = buildUrgentSnapshot(data);
@@ -224,7 +241,7 @@ export function SaraStateProvider({ children }) {
       nextUrgentSnapshot.signature !== previousUrgentSnapshot?.signature &&
       nextUrgentSnapshot.score >= (previousUrgentSnapshot?.score ?? 0)
     ) {
-      void maybeNotifyUrgentChange(nextUrgentSnapshot);
+      void maybeNotifyUrgentChange(nextUrgentSnapshot, openUrgentViewRef.current);
     }
 
     hasHydratedStateRef.current = true;
