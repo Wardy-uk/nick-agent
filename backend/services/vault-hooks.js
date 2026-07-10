@@ -85,7 +85,21 @@ async function _processWrite(relativePath, source) {
     console.warn(`${tag} Entity extraction failed for ${relativePath}:`, e.message);
   }
 
-  // 4. Log vault write activity
+  // 4. Candidate action extraction from notes
+  try {
+    const actionCandidates = require('./action-candidates');
+    const result = actionCandidates.syncNoteActionCandidates(relativePath);
+    if (result.created > 0 || result.superseded > 0) {
+      console.log(
+        `${tag} Synced action candidates for ${relativePath} ` +
+        `(created=${result.created}, auto=${result.autoPromoted}, pending=${result.pending}, superseded=${result.superseded})`
+      );
+    }
+  } catch (e) {
+    console.warn(`${tag} Action candidate sync failed for ${relativePath}:`, e.message);
+  }
+
+  // 5. Log vault write activity
   try {
     const activity = require('./activity');
     activity.trackVaultWrite(source || relativePath);

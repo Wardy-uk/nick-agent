@@ -28,6 +28,71 @@
   line-height: 1.5;
 }
 
+.todo-suggestions {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: rgba(79, 156, 249, 0.06);
+  border: 1px solid rgba(79, 156, 249, 0.18);
+  border-radius: var(--radius-sm);
+}
+
+.todo-suggestions-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.todo-suggestions-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.todo-suggestions-copy,
+.todo-suggestions-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.todo-suggestions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.todo-suggestion-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.todo-suggestion-main {
+  min-width: 0;
+}
+
+.todo-suggestion-text {
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.todo-suggestion-meta,
+.todo-suggestion-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .todo-header {
   display: flex;
   justify-content: space-between;

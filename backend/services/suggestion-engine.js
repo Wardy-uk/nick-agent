@@ -238,6 +238,20 @@ function executeAction(action) {
       };
     }
 
+    case 'capture_todo': {
+      const obsidian = require('./obsidian');
+      obsidian.addTodoToMasterList(payload.text, {
+        priority: payload.priority || 'normal',
+        sourcePath: payload.sourcePath || null,
+        trigger: 'sara-action-capture-todo',
+      });
+      return {
+        ok: true,
+        detail: `Added to Master Todo: ${payload.text}`,
+        navigate: 'todos',
+      };
+    }
+
     default:
       return { ok: false, detail: `Unknown action type: ${action.type}` };
   }

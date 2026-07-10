@@ -193,6 +193,9 @@ test('live NEURO snapshot replaces seeded domains and presentation honestly', ()
         todos: [
           { id: 1, text: 'Prepare standup notes', priority: 'high', due_date: '2026-05-31', source: 'Vault', done: 0 },
         ],
+        suggested: [
+          { id: 99, text: 'Follow up with Adele on outage notes', reason: 'Likely action found in note', confidence: 0.84, sourcePath: 'Meetings/outage.md' },
+        ],
       },
       context: {
         date: '2026-05-31',
@@ -238,5 +241,6 @@ test('live NEURO snapshot replaces seeded domains and presentation honestly', ()
   assert.equal(s.presentation.todos.source, 'neuro');
   assert.match(s.presentation.whatMattersNow[0].title, /Portal login broken/);
   assert.equal(s.presentation.capture.recent[0].title, 'Queue outage notes');
+  assert.equal(s.presentation.todos.candidates[0].title, 'Follow up with Adele on outage notes');
   neuro._setSnapshotForTest(null);
 });

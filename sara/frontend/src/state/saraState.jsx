@@ -383,6 +383,32 @@ export function SaraStateProvider({ children }) {
     }
   }
 
+  async function approveTodoCandidate(actionId) {
+    const res = await fetch(`/api/actions/${actionId}/approve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: body.error || `HTTP ${res.status}` };
+    }
+    await refreshModel();
+    return { ok: true, data: body };
+  }
+
+  async function rejectTodoCandidate(actionId) {
+    const res = await fetch(`/api/actions/${actionId}/reject`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: body.error || `HTTP ${res.status}` };
+    }
+    await refreshModel();
+    return { ok: true, data: body };
+  }
+
   async function runQuickAction(actionId, payload = {}) {
     const action = String(actionId || '').trim();
     if (!action) return { ok: false, error: 'action is required' };
@@ -468,6 +494,8 @@ export function SaraStateProvider({ children }) {
     sendChat,
     captureNote,
     captureTodo,
+    approveTodoCandidate,
+    rejectTodoCandidate,
     setNeuroPin,
     runQuickAction,
   };

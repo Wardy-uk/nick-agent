@@ -288,7 +288,7 @@ function buildPresentation(neuroData, domains) {
         'What needs a direct follow-up from you?',
       ],
     },
-    todos: { source: 'placeholder', items: [] },
+    todos: { source: 'placeholder', items: [], candidates: [] },
     capture: { source: 'placeholder', shortcuts: [], recent: [] },
   };
 
@@ -385,6 +385,13 @@ function buildPresentation(neuroData, domains) {
       filePath: item.filePath || null,
       lineNumber: item.lineNumber ?? null,
     }));
+  const todoCandidates = (todos?.suggested || []).slice(0, 4).map((item) => ({
+    id: item.id,
+    title: item.text,
+    detail: item.reason || 'Suggested from a note',
+    confidence: item.confidence || 0,
+    sourcePath: item.sourcePath || null,
+  }));
 
   const recentCapture = (capture?.items || []).slice(0, 5).map((item, index) => ({
     id: `capture-recent-${index}`,
@@ -401,8 +408,9 @@ function buildPresentation(neuroData, domains) {
     quickActions: fallback.quickActions,
     standup: standupSections,
     todos: {
-      source: todoItems.length ? neuro.NEURO_SOURCE : 'placeholder',
+      source: todoItems.length || todoCandidates.length ? neuro.NEURO_SOURCE : 'placeholder',
       items: todoItems.length ? todoItems : fallback.todos.items,
+      candidates: todoCandidates,
     },
     capture: {
       source: recentCapture.length ? neuro.NEURO_SOURCE : 'placeholder',

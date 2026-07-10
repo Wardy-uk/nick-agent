@@ -96,34 +96,10 @@ router.post('/todo', (req, res) => {
   }
 
   try {
-    const vaultPath = process.env.OBSIDIAN_VAULT_PATH || '';
-    const masterPath = path.join(vaultPath, 'Tasks', 'Master Todo.md');
-
-    if (!fs.existsSync(masterPath)) {
-      return res.status(404).json({ error: 'Master Todo.md not found in Tasks/' });
-    }
-
-    const priorityEmoji = priority === 'high' ? '🔴 ' : priority === 'low' ? '🟢 ' : '';
-    const todoLine = `- [ ] ${priorityEmoji}${text.trim()}`;
-
-    // Append to the ## 📥 Inbox section if it exists, otherwise append to end of file
-    let content = fs.readFileSync(masterPath, 'utf-8');
-    const inboxMatch = content.match(/^## .*📥.*Inbox.*/m);
-
-    if (inboxMatch) {
-      // Find the line after the inbox heading and insert there
-      const insertIdx = content.indexOf('\n', content.indexOf(inboxMatch[0])) + 1;
-      content = content.slice(0, insertIdx) + todoLine + '\n' + content.slice(insertIdx);
-    } else {
-      // No inbox section — append to end
-      content = content.trimEnd() + '\n' + todoLine + '\n';
-    }
-
-    fs.writeFileSync(masterPath, content, 'utf-8');
+    obsidian.addTodoToMasterList(text, { priority, trigger: 'capture-todo' });
     console.log(`[Capture] Todo saved: ${text.trim()}`);
     res.json({ success: true, text: text.trim() });
     try { require('../services/activity').trackCapture('todo'); } catch {}
-    try { require('../services/vault-hooks').onVaultWrite(masterPath, 'capture-todo'); } catch {}
   } catch (e) {
     console.error('[Capture] Todo error:', e);
     res.status(500).json({ error: e.message });

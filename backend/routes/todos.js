@@ -63,7 +63,19 @@ router.get('/', (req, res) => {
       console.error('[Todos] 90-day plan parse error:', e.message);
     }
 
-    res.json({ todos: mapped });
+    const suggested = db.getPendingSaraActions(100)
+      .filter((action) => action.type === 'capture_todo')
+      .map((action) => ({
+        id: action.id,
+        text: action.payload?.text || action.reason || 'Suggested task',
+        reason: action.reason || 'Suggested from a note',
+        confidence: action.confidence || 0,
+        sourcePath: action.payload?.sourcePath || null,
+        sourceLine: action.payload?.sourceLine || null,
+        createdAt: action.created_at || null,
+      }));
+
+    res.json({ todos: mapped, suggested });
   } catch (e) {
     console.error('[Todos] Error parsing vault todos:', e);
     res.status(500).json({ error: 'Failed to parse vault todos' });

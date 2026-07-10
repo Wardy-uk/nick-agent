@@ -842,11 +842,11 @@ function createSaraAction(type, payload, confidence, reason, focusItemId) {
   return row.id;
 }
 
-function getPendingSaraActions() {
+function getPendingSaraActions(limit = 10) {
   const stmt = getDb().prepare(
-    'SELECT * FROM sara_actions WHERE status = ? ORDER BY confidence DESC, created_at DESC LIMIT 10'
+    'SELECT * FROM sara_actions WHERE status = ? ORDER BY confidence DESC, created_at DESC LIMIT ?'
   );
-  stmt.bind(['pending']);
+  stmt.bind(['pending', limit]);
   const rows = [];
   while (stmt.step()) {
     const row = stmt.getAsObject();

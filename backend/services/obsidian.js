@@ -1317,11 +1317,28 @@ function generateWeeklyReview() {
 
 // Add a todo to Master Todo inbox via chat command
 function addTodoFromChat(text) {
+  addTodoToMasterList(text, { trigger: 'todo-from-chat' });
+  console.log(`[Chat] Added todo: ${text.trim()}`);
+  return true;
+}
+
+function toWikiLink(relativePath) {
+  const clean = String(relativePath || '').replace(/\\/g, '/').replace(/\.md$/i, '');
+  if (!clean) return null;
+  const label = clean.split('/').pop() || clean;
+  return `[[${clean}|${label}]]`;
+}
+
+function addTodoToMasterList(text, options = {}) {
   const vaultPath = getVaultPath();
   const masterPath = path.join(vaultPath, 'Tasks', 'Master Todo.md');
   if (!fs.existsSync(masterPath)) throw new Error('Master Todo.md not found');
 
-  const todoLine = `- [ ] ${text.trim()}`;
+  const priorityEmoji = options.priority === 'high' ? '🔴 ' : options.priority === 'low' ? '🟢 ' : '';
+  const sourceLink = options.sourcePath ? toWikiLink(options.sourcePath) : null;
+  const lineSuffix = sourceLink ? `  ${sourceLink}` : '';
+  const todoLine = `- [ ] ${priorityEmoji}${text.trim()}${lineSuffix}`;
+
   let content = fs.readFileSync(masterPath, 'utf-8');
   const inboxMatch = content.match(/^## .*📥.*Inbox.*/m);
 
@@ -1332,9 +1349,8 @@ function addTodoFromChat(text) {
     content = content.trimEnd() + '\n' + todoLine + '\n';
   }
   fs.writeFileSync(masterPath, content, 'utf-8');
-  try { require('./vault-hooks').onVaultWrite(masterPath, 'todo-from-chat'); } catch {}
-  console.log(`[Chat] Added todo: ${text.trim()}`);
-  return true;
+  try { require('./vault-hooks').onVaultWrite(masterPath, options.trigger || 'capture-todo'); } catch {}
+  return { ok: true, text: text.trim(), sourceLink };
 }
 
 // Save a meeting note from chat
@@ -1558,6 +1574,7 @@ module.exports = {
   readPreviousDailyNote,
   searchVault,
   searchVaultSemantic,
+  addTodoToMasterList,
   addTodoFromChat,
   saveMeetingNoteFromChat,
   getMeetingPrepContext,

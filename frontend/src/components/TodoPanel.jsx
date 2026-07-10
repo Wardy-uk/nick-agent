@@ -214,6 +214,43 @@ function buildTodoSaraLine(active, overdue) {
   return `${active.length} open. ${overdue.length} overdue.`;
 }
 
+function SuggestedTodoQueue({ items, actingId, onApprove, onReject }) {
+  if (!items.length) return null;
+
+  return (
+    <section className="todo-suggestions">
+      <div className="todo-suggestions-header">
+        <div>
+          <div className="todo-suggestions-label">Extracted from notes</div>
+          <div className="todo-suggestions-copy">SARA spotted these in the vault. Approve the uncertain ones; the obvious ones are auto-added.</div>
+        </div>
+        <span className="todo-suggestions-count">{items.length} waiting</span>
+      </div>
+      <div className="todo-suggestions-list">
+        {items.map((item) => (
+          <div key={item.id} className="todo-suggestion-card">
+            <div className="todo-suggestion-main">
+              <div className="todo-suggestion-text">{item.text}</div>
+              <div className="todo-suggestion-meta">
+                {item.sourcePath && <span className="todo-source">{item.sourcePath}</span>}
+                <span className="todo-due">Confidence {Math.round((item.confidence || 0) * 100)}%</span>
+              </div>
+            </div>
+            <div className="todo-suggestion-actions">
+              <button className="btn btn-secondary btn-sm" disabled={actingId === item.id} onClick={() => onReject(item.id)}>
+                Dismiss
+              </button>
+              <button className="btn btn-primary btn-sm" disabled={actingId === item.id} onClick={() => onApprove(item.id)}>
+                Add todo
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function TodoPanel({ focusContext, onClearContext }) {
   // Determine initial mode: if arriving from Focus, start in focused shortlist mode
   const fromFocus = focusContext?.fromFocus;
@@ -232,6 +269,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   const [expanded, setExpanded] = useState(null);
   const [showMoscow, setShowMoscow] = useState(false);
   const [moscowRatings, setMoscowRatings] = useState({});
+  const [actingSuggestionId, setActingSuggestionId] = useState(null);
 
   // Load MoSCoW ratings
   useEffect(() => {
@@ -257,11 +295,28 @@ export default function TodoPanel({ focusContext, onClearContext }) {
 
   // ── Full mode data ──
   const fullPath = `/api/todos${showDone ? '?all=true' : ''}`;
-  const fullTransform = useMemo(() => (json) => json.todos || [], []);
-  const { data: todos, refresh: fetchTodos } = useCachedFetch(
+  const { data: fullData, refresh: fetchTodos } = useCachedFetch(
     mode === 'full' ? fullPath : null,
-    { transform: fullTransform }
+    { transform: (json) => json || { todos: [], suggested: [] } }
   );
+
+  const todos = fullData?.todos || [];
+  const suggestedTodos = fullData?.suggested || [];
+
+  const handleSuggestionAction = async (id, verb) => {
+    setActingSuggestionId(id);
+    try {
+      await fetch(apiUrl(`/api/actions/${id}/${verb}`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await fetchTodos();
+    } catch (e) {
+      console.error(`[TodoPanel] Suggestion ${verb} error:`, e);
+    }
+    setActingSuggestionId(null);
+  };
 
   const toggleTodo = async (todo) => {
     if (!todo.filePath || todo.lineNumber == null) return;
@@ -366,18 +421,26 @@ export default function TodoPanel({ focusContext, onClearContext }) {
             {focusFilter === 'overdue' ? 'Nothing overdue. That\'s clean.' : 'Nothing due. Clear.'}
           </div>
         ) : (
-          <div className="todo-list">
-            {items.map(todo => (
-              <TodoItem
-                key={`${todo.source}-${todo.id}`}
-                todo={todo}
-                toggling={toggling}
-                onToggle={toggleTodo}
-                expanded={expanded}
-                onExpand={setExpanded}
-              />
-            ))}
-          </div>
+          <>
+            <SuggestedTodoQueue
+              items={suggestedTodos}
+              actingId={actingSuggestionId}
+              onApprove={(id) => handleSuggestionAction(id, 'approve')}
+              onReject={(id) => handleSuggestionAction(id, 'reject')}
+            />
+            <div className="todo-list">
+              {items.map(todo => (
+                <TodoItem
+                  key={`${todo.source}-${todo.id}`}
+                  todo={todo}
+                  toggling={toggling}
+                  onToggle={toggleTodo}
+                  expanded={expanded}
+                  onExpand={setExpanded}
+                />
+              ))}
+            </div>
+          </>
         )}
 
         {/* Progressive expansion: compact(5) → expanded(10) → all */}
@@ -515,6 +578,13 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           <button className="btn btn-secondary" onClick={fetchTodos}>Refresh</button>
         </div>
       </div>
+
+      <SuggestedTodoQueue
+        items={suggestedTodos}
+        actingId={actingSuggestionId}
+        onApprove={(id) => handleSuggestionAction(id, 'approve')}
+        onReject={(id) => handleSuggestionAction(id, 'reject')}
+      />
 
       <div className="todo-filters">
         {[
