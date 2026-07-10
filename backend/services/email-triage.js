@@ -117,7 +117,18 @@ async function runTriage() {
   try {
     const emails = await microsoft.fetchRecentEmails(24, 40);
     if (!emails || emails.length === 0) {
-      return { ok: true, count: 0, action: 0 };
+      db.setState('email_triage', JSON.stringify([]));
+      db.setState('email_triage_time', String(Date.now()));
+      return {
+        ok: true,
+        count: 0,
+        urgent: 0,
+        reply: 0,
+        action: 0,
+        fyi: 0,
+        delegate: 0,
+        ignore: 0,
+      };
     }
 
     const classified = await classifyEmails(emails);
@@ -144,7 +155,16 @@ async function runTriage() {
     const urgentCount = classified.filter(e => e.lane === 'urgent').length;
     const replyCount = classified.filter(e => e.lane === 'reply').length;
     console.log(`[EmailTriage] Classified ${classified.length} emails, ${urgentCount} urgent, ${replyCount} need reply`);
-    return { ok: true, count: classified.length, urgent: urgentCount, reply: replyCount };
+    return {
+      ok: true,
+      count: classified.length,
+      urgent: urgentCount,
+      reply: replyCount,
+      action: classified.filter(e => e.category === 'ACTION').length,
+      fyi: classified.filter(e => e.category === 'FYI').length,
+      delegate: classified.filter(e => e.category === 'DELEGATE').length,
+      ignore: classified.filter(e => e.category === 'IGNORE').length,
+    };
   } catch (e) {
     console.error('[EmailTriage] Failed:', e.message);
     return { ok: false, error: e.message };
