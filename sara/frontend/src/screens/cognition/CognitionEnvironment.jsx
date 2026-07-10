@@ -83,12 +83,12 @@ function Icon({ name, size = 20 }) {
 }
 
 const NAV = [
-  { id: 'cognition', icon: 'focus', label: 'Focus', sub: 'One thing that matters' },
-  { id: 'context', icon: 'context', label: 'Context', sub: "What's shaping this" },
-  { id: 'calendar', icon: 'calendar', label: 'Calendar', sub: "What's coming" },
-  { id: 'at-work', icon: 'systems', label: 'Systems', sub: 'Everything in sync' },
-  { id: 'vault', icon: 'memory', label: 'Memory', sub: 'What we know' },
-  { id: 'you', icon: 'you', label: 'You', sub: 'Your state' },
+  { id: 'cognition', target: 'cognition', icon: 'focus', label: 'Focus', sub: 'One thing that matters' },
+  { id: 'context', target: 'mission-control', icon: 'context', label: 'Context', sub: "What's shaping this" },
+  { id: 'calendar', target: 'standup', icon: 'calendar', label: 'Calendar', sub: "What's coming" },
+  { id: 'systems', target: 'at-work', icon: 'systems', label: 'Systems', sub: 'Everything in sync' },
+  { id: 'memory', target: 'vault', icon: 'memory', label: 'Memory', sub: 'What we know' },
+  { id: 'you', target: 'settings', icon: 'you', label: 'You', sub: 'Your state' },
 ];
 
 const STATES = [
@@ -737,10 +737,10 @@ export default function CognitionEnvironment() {
             <nav className="ce-nav">
               {NAV.map((item) => (
                 <button
-                  key={item.label}
+                  key={item.id}
                   type="button"
-                  className={`ce-nav__item${currentView === item.id ? ' ce-nav__item--active' : ''}`}
-                  onClick={() => setCurrentView(item.id)}
+                  className={`ce-nav__item${currentView === item.target ? ' ce-nav__item--active' : ''}`}
+                  onClick={() => setCurrentView(item.target)}
                 >
                   <span className="ce-nav__icon"><Icon name={item.icon} /></span>
                   <span className="ce-nav__text">
