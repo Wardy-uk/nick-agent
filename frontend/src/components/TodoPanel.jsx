@@ -251,6 +251,36 @@ function SuggestedTodoQueue({ items, actingId, onApprove, onReject }) {
   );
 }
 
+function MustMoveLane({ items }) {
+  if (!items.length) return null;
+
+  return (
+    <section className="todo-suggestions todo-suggestions-mustmove">
+      <div className="todo-suggestions-header">
+        <div>
+          <div className="todo-suggestions-label">Must move today</div>
+          <div className="todo-suggestions-copy">These are the tasks SARA thinks most directly protect your day, your commitments, or your reputation.</div>
+        </div>
+        <span className="todo-suggestions-count">{items.length} in lane</span>
+      </div>
+      <div className="todo-suggestions-list">
+        {items.map((item) => (
+          <div key={item.id} className="todo-suggestion-card">
+            <div className="todo-suggestion-main">
+              <div className="todo-suggestion-text">{item.text}</div>
+              <div className="todo-suggestion-meta">
+                <span className="todo-source">{item.moscow}</span>
+                {item.context && <span className="todo-source">{item.context}</span>}
+                {item.due_date && <span className="todo-due">{formatDue(item.due_date)}</span>}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function TodoPanel({ focusContext, onClearContext }) {
   // Determine initial mode: if arriving from Focus, start in focused shortlist mode
   const fromFocus = focusContext?.fromFocus;
@@ -302,6 +332,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
 
   const todos = fullData?.todos || [];
   const suggestedTodos = fullData?.suggested || [];
+  const todayLane = fullData?.todayLane || [];
 
   const handleSuggestionAction = async (id, verb) => {
     setActingSuggestionId(id);
@@ -585,6 +616,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         onApprove={(id) => handleSuggestionAction(id, 'approve')}
         onReject={(id) => handleSuggestionAction(id, 'reject')}
       />
+      <MustMoveLane items={todayLane} />
 
       <div className="todo-filters">
         {[

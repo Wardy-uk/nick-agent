@@ -96,7 +96,7 @@ router.post('/todo', (req, res) => {
   }
 
   try {
-    obsidian.addTodoToMasterList(text, { priority, trigger: 'capture-todo' });
+    obsidian.addTodoToMasterList(text, { priority, origin: 'capture', trigger: 'capture-todo' });
     console.log(`[Capture] Todo saved: ${text.trim()}`);
     res.json({ success: true, text: text.trim() });
     try { require('../services/activity').trackCapture('todo'); } catch {}

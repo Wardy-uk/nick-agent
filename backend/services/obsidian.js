@@ -238,6 +238,12 @@ function parseVaultTodos() {
 
   const vaultPath = getVaultPath();
   const allTasks = [];
+  const priorityOrder = { high: 0, normal: 1, low: 2 };
+  const mergePriority = (existing, fallback) => {
+    if (!existing) return fallback || 'normal';
+    if (!fallback) return existing;
+    return (priorityOrder[existing] ?? 1) <= (priorityOrder[fallback] ?? 1) ? existing : fallback;
+  };
 
   // 1. Parse Master Todo
   const masterPath = path.join(vaultPath, 'Tasks', 'Master Todo.md');
@@ -261,7 +267,7 @@ function parseVaultTodos() {
 
       const task = parseTaskLine(line);
       if (task) {
-        task.priority = task.priority || currentPriority;
+        task.priority = mergePriority(task.priority, currentPriority);
         task.source = `Master (${currentSection})`;
         task.filePath = masterPath;
         task.lineNumber = i;
@@ -288,7 +294,7 @@ function parseVaultTodos() {
       const task = parseTaskLine(line);
       if (task) {
         task.source = msSection;
-        task.priority = task.priority || 'normal';
+        task.priority = mergePriority(task.priority, 'normal');
         task.filePath = msPath;
         task.lineNumber = i;
         allTasks.push(task);
@@ -339,9 +345,9 @@ function parseVaultTodos() {
       seenDailyTexts.add(dedupeKey);
 
       task.source = isToday ? `Daily (${dailySection})` : `Daily ${dateStr}`;
-      if (dailySection.includes('Focus Today')) task.priority = task.priority || 'high';
-      else if (dailySection.includes('Follow Ups')) task.priority = task.priority || 'normal';
-      else task.priority = task.priority || 'normal';
+      if (dailySection.includes('Focus Today')) task.priority = mergePriority(task.priority, 'high');
+      else if (dailySection.includes('Follow Ups')) task.priority = mergePriority(task.priority, 'normal');
+      else task.priority = mergePriority(task.priority, 'normal');
       task.filePath = filePath;
       task.lineNumber = i;
       allTasks.push(task);
@@ -353,7 +359,6 @@ function parseVaultTodos() {
   const done = allTasks.filter(t => t.status === 'done');
 
   // Sort active: overdue first, then by priority, then by due date
-  const priorityOrder = { high: 0, normal: 1, low: 2 };
   const today = new Date(new Date().toDateString());
 
   active.sort((a, b) => {
@@ -462,6 +467,8 @@ function parseTaskLine(line) {
 
   const statusChar = match[1];
   let rawText = match[2].trim();
+  const todoIntelligence = require('./todo-intelligence');
+  const meta = todoIntelligence.parseEmbeddedMeta(rawText) || {};
 
   // Map status character
   let status;
@@ -488,6 +495,7 @@ function parseTaskLine(line) {
 
   // Clean up display text
   let text = rawText
+    .replace(/<!--nuero-meta:\{.*?\}-->/g, '')            // Remove embedded task metadata
     .replace(/<!--.*?-->/g, '')                     // Remove HTML comments
     .replace(/\[\[([^|]*?\|)?([^\]]*?)\]\]/g, '$2') // Wiki links: [[path|Name]] → Name
     .replace(/due::\d{4}-\d{2}-\d{2}/g, '')         // Remove due:: tags
@@ -506,7 +514,29 @@ function parseTaskLine(line) {
 
   if (!text) return null;
 
-  return { text, status, priority: null, due_date, ms_id, mustdo, source: null };
+  const triage = todoIntelligence.triageTodo({
+    text,
+    sourcePath: meta.sourcePath || null,
+    dueDate: due_date,
+    mustdo,
+    priority: meta.priority || null,
+    metadata: meta,
+  });
+
+  return {
+    text,
+    status,
+    priority: triage.priority || null,
+    due_date,
+    ms_id,
+    mustdo,
+    source: null,
+    meta,
+    moscow: triage.moscow,
+    context: triage.context,
+    needsToday: triage.needsToday,
+    createdAt: meta.created || null,
+  };
 }
 
 // Vault calendar parser — reads "## Calendar Today" from daily notes
@@ -1334,10 +1364,30 @@ function addTodoToMasterList(text, options = {}) {
   const masterPath = path.join(vaultPath, 'Tasks', 'Master Todo.md');
   if (!fs.existsSync(masterPath)) throw new Error('Master Todo.md not found');
 
-  const priorityEmoji = options.priority === 'high' ? '🔴 ' : options.priority === 'low' ? '🟢 ' : '';
+  const todoIntelligence = require('./todo-intelligence');
+  const triage = todoIntelligence.triageTodo({
+    text,
+    sourcePath: options.sourcePath || null,
+    dueDate: options.dueDate || null,
+    mustdo: Boolean(options.mustdo),
+    priority: options.priority || null,
+    metadata: options.metadata || null,
+  });
+  const effectivePriority = options.priority || triage.priority;
+  const priorityEmoji = effectivePriority === 'high' ? '🔴 ' : effectivePriority === 'low' ? '🟢 ' : '';
   const sourceLink = options.sourcePath ? toWikiLink(options.sourcePath) : null;
   const lineSuffix = sourceLink ? `  ${sourceLink}` : '';
-  const todoLine = `- [ ] ${priorityEmoji}${text.trim()}${lineSuffix}`;
+  const dueSuffix = options.dueDate ? ` 📅 ${options.dueDate}` : '';
+  const mustdoTag = options.mustdo || triage.moscow === 'must' ? ' #mustdo' : '';
+  const metadata = todoIntelligence.serializeEmbeddedMeta({
+    context: triage.context,
+    moscow: triage.moscow,
+    created: todoIntelligence.todayDateString(),
+    origin: options.origin || 'manual',
+    sourcePath: options.sourcePath || null,
+    followThroughDays: triage.followThroughDays,
+  });
+  const todoLine = `- [ ] ${priorityEmoji}${text.trim()}${mustdoTag}${dueSuffix}${lineSuffix}${metadata ? ` ${metadata}` : ''}`;
 
   let content = fs.readFileSync(masterPath, 'utf-8');
   const inboxMatch = content.match(/^## .*📥.*Inbox.*/m);
@@ -1350,7 +1400,7 @@ function addTodoToMasterList(text, options = {}) {
   }
   fs.writeFileSync(masterPath, content, 'utf-8');
   try { require('./vault-hooks').onVaultWrite(masterPath, options.trigger || 'capture-todo'); } catch {}
-  return { ok: true, text: text.trim(), sourceLink };
+  return { ok: true, text: text.trim(), sourceLink, triage };
 }
 
 // Save a meeting note from chat

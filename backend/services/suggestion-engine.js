@@ -241,8 +241,11 @@ function executeAction(action) {
     case 'capture_todo': {
       const obsidian = require('./obsidian');
       obsidian.addTodoToMasterList(payload.text, {
-        priority: payload.priority || 'normal',
+        priority: payload.metadata?.priority || payload.priority || 'normal',
+        mustdo: payload.metadata?.moscow === 'must',
+        metadata: payload.metadata || null,
         sourcePath: payload.sourcePath || null,
+        origin: payload.origin || 'candidate',
         trigger: 'sara-action-capture-todo',
       });
       return {

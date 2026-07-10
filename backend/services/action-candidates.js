@@ -120,6 +120,7 @@ function extractActionCandidates(text, relativePath) {
   const candidates = [];
   const seen = new Set();
   let actionableSection = false;
+  const todoIntelligence = require('./todo-intelligence');
 
   for (let index = 0; index < lines.length; index += 1) {
     const rawLine = lines[index];
@@ -178,6 +179,13 @@ function extractActionCandidates(text, relativePath) {
         sourcePath: relativePath,
         sourceLine: index + 1,
         extractedFrom: 'vault-note',
+        origin: 'note-candidate',
+        metadata: todoIntelligence.triageTodo({
+          text: textValue,
+          sourcePath: relativePath,
+          dueDate: null,
+          mustdo: origin === 'checkbox',
+        }),
       },
     });
   }

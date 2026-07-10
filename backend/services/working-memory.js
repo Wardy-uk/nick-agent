@@ -166,6 +166,20 @@ function _detectChanges(unseenEscalations, nudges, todayActivity) {
   if (isWeekday && hour >= 11 && !standupDone && !_hasRecentObservation('standup_late', 120)) {
     _addObservation('standup_late', `Standup still pending at ${hour}:00`, { hour });
   }
+
+  try {
+    const todoIntelligence = require('./todo-intelligence');
+    const obsidian = require('./obsidian');
+    const { active } = obsidian.parseVaultTodos();
+    const followThrough = todoIntelligence.buildFollowThroughCandidate(active);
+    if (followThrough && !_hasRecentObservation('todo_followthrough', 180)) {
+      _addObservation('todo_followthrough', followThrough.message, {
+        text: followThrough.text,
+        context: followThrough.context,
+        sourcePath: followThrough.sourcePath,
+      });
+    }
+  } catch {}
 }
 
 function _addObservation(type, message, data = {}) {

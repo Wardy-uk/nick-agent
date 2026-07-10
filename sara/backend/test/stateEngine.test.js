@@ -196,6 +196,9 @@ test('live NEURO snapshot replaces seeded domains and presentation honestly', ()
         suggested: [
           { id: 99, text: 'Follow up with Adele on outage notes', reason: 'Likely action found in note', confidence: 0.84, sourcePath: 'Meetings/outage.md' },
         ],
+        todayLane: [
+          { id: 'lane-1', text: 'Reply to customer on breached queue item', why: 'Must move today', moscow: 'must', context: 'queue', due_date: '2026-05-31' },
+        ],
       },
       context: {
         date: '2026-05-31',
@@ -242,5 +245,6 @@ test('live NEURO snapshot replaces seeded domains and presentation honestly', ()
   assert.match(s.presentation.whatMattersNow[0].title, /Portal login broken/);
   assert.equal(s.presentation.capture.recent[0].title, 'Queue outage notes');
   assert.equal(s.presentation.todos.candidates[0].title, 'Follow up with Adele on outage notes');
+  assert.equal(s.presentation.todos.todayLane[0].title, 'Reply to customer on breached queue item');
   neuro._setSnapshotForTest(null);
 });

@@ -48,6 +48,25 @@ export default function TodosView() {
         </ul>
       </section>
 
+      {todos.todayLane?.length > 0 && (
+        <section className="product__section product__section--span-12">
+          <p className="product__section-title">Must move today</p>
+          <ul className="product__list">
+            {todos.todayLane.map((item) => (
+              <li key={item.id} className="product__card">
+                <p className="product__card-title">{item.title}</p>
+                <p className="product__summary">{item.detail}</p>
+                <div className="product__meta">
+                  {item.moscow && <span className="product__pill">{item.moscow}</span>}
+                  {item.context && <span className="product__pill">{item.context}</span>}
+                  {item.dueDate && <span className="product__pill">{item.dueDate.slice(0, 10)}</span>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {todos.candidates?.length > 0 && (
         <section className="product__section product__section--span-12">
           <p className="product__section-title">Extracted from notes</p>

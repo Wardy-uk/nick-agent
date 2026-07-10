@@ -59,6 +59,30 @@ function InlineMustDos() {
   );
 }
 
+function InlineMustMove({ onNavigate }) {
+  const todoFetch = useCachedFetch('/api/todos', { interval: 30000 });
+  const items = todoFetch.data?.todayLane || [];
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="review-section" style={{ border: '1px solid rgba(79, 156, 249, 0.24)', borderLeft: '3px solid var(--accent)' }}>
+      <div className="review-section-header">
+        <span className="review-section-title">
+          Must Move Today <span className="review-badge-warn">{items.length}</span>
+        </span>
+        <button className="review-link" onClick={() => onNavigate?.('todos')}>Open todos</button>
+      </div>
+      {items.map((item) => (
+        <div key={item.id} className={`review-todo ${item.priority === 'high' ? 'review-todo-high' : ''}`}>
+          <span className="review-todo-text">{item.text}</span>
+          <span className="review-todo-due">{item.moscow}{item.context ? ` · ${item.context}` : ''}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function InlineStandup() {
   const [ritualData, setRitualData] = useState(null);
   const [phase, setPhase] = useState('idle'); // idle, running, done
@@ -382,6 +406,7 @@ export default function Dashboard({ onNavigate }) {
 
       {/* Must Do items — always visible */}
       <InlineMustDos />
+      <InlineMustMove onNavigate={onNavigate} />
 
       {/* Morning: Standup */}
       {timeOfDay === 'morning' && <InlineStandup />}

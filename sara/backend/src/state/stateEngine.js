@@ -288,7 +288,7 @@ function buildPresentation(neuroData, domains) {
         'What needs a direct follow-up from you?',
       ],
     },
-    todos: { source: 'placeholder', items: [], candidates: [] },
+    todos: { source: 'placeholder', items: [], candidates: [], todayLane: [] },
     capture: { source: 'placeholder', shortcuts: [], recent: [] },
   };
 
@@ -392,6 +392,14 @@ function buildPresentation(neuroData, domains) {
     confidence: item.confidence || 0,
     sourcePath: item.sourcePath || null,
   }));
+  const todayLane = (todos?.todayLane || []).slice(0, 4).map((item) => ({
+    id: item.id,
+    title: item.text,
+    detail: item.why || 'Must move today',
+    moscow: item.moscow || null,
+    context: item.context || null,
+    dueDate: item.due_date || null,
+  }));
 
   const recentCapture = (capture?.items || []).slice(0, 5).map((item, index) => ({
     id: `capture-recent-${index}`,
@@ -408,9 +416,10 @@ function buildPresentation(neuroData, domains) {
     quickActions: fallback.quickActions,
     standup: standupSections,
     todos: {
-      source: todoItems.length || todoCandidates.length ? neuro.NEURO_SOURCE : 'placeholder',
+      source: todoItems.length || todoCandidates.length || todayLane.length ? neuro.NEURO_SOURCE : 'placeholder',
       items: todoItems.length ? todoItems : fallback.todos.items,
       candidates: todoCandidates,
+      todayLane,
     },
     capture: {
       source: recentCapture.length ? neuro.NEURO_SOURCE : 'placeholder',

@@ -15,12 +15,23 @@ function scoreTask(task, todayStr) {
   let score = 0;
   const source = (task.source || '').toLowerCase();
   const priority = task.priority || 'normal';
+  const moscow = task.moscow || null;
+  const context = task.context || null;
   const dueStr = task.due_date ? task.due_date.split('T')[0] : null;
 
   // ── 1. Priority base (0-25) ──
   if (priority === 'high') score += 25;
   else if (priority === 'normal') score += 12;
   else score += 4;
+
+  // ── 1b. Strategic triage boost ──
+  if (moscow === 'must') score += 20;
+  else if (moscow === 'should') score += 10;
+  else if (moscow === 'could') score += 2;
+
+  if (context === 'queue') score += 8;
+  else if (context === 'meeting-follow-up' || context === 'people') score += 5;
+  else if (context === 'admin') score += 2;
 
   // ── 2. Source quality (0-20) ──
   if (source.includes('90-day plan')) score += 20;
@@ -74,6 +85,8 @@ function scoreTask(task, todayStr) {
   if (!dueStr && priority !== 'high' && !source.includes('90-day plan') && !source.includes('now')) {
     score -= 5;
   }
+
+  if (moscow === 'must' && !dueStr) score += 4;
 
   // ── 5. Plan day proximity ──
   if (task.planDay != null) {

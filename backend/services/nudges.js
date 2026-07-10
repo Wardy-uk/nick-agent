@@ -1,6 +1,7 @@
 const db = require('../db/database');
 const obsidian = require('./obsidian');
 const webpush = require('./webpush');
+const todoIntelligence = require('./todo-intelligence');
 
 // SSE clients listening for nudges
 const clients = new Set();
@@ -252,11 +253,19 @@ function isStandupDone() {
 function hasPendingTodos() {
   try {
     const { active } = obsidian.parseVaultTodos();
-    const today = new Date(new Date().toDateString());
-    const overdue = active.filter(t => t.due_date && new Date(t.due_date) <= today);
-    return overdue.length > 0;
+    const todayLane = todoIntelligence.buildTodayLane(active);
+    return todayLane.length > 0;
   } catch (e) {
     return false;
+  }
+}
+
+function getFollowThroughTodo() {
+  try {
+    const { active } = obsidian.parseVaultTodos();
+    return todoIntelligence.buildFollowThroughCandidate(active);
+  } catch {
+    return null;
   }
 }
 
@@ -331,8 +340,8 @@ function triggerTodoNudge() {
   if (existing) return;
   if (!hasPendingTodos()) return;
 
-  // Pick from tier 1 messages — different each day
-  const msg = getNagMessage('todo', 0);
+  const followThrough = getFollowThroughTodo();
+  const msg = followThrough?.message || getNagMessage('todo', 0);
   db.createNudge('todo', msg, dateKey);
   console.log('[Nudge] Todo nudge created for', dateKey);
   broadcast({ type: 'nudge', nudge_type: 'todo', message: msg, nag_count: 0 });
@@ -394,7 +403,8 @@ function nagCheck() {
     // Escalate
     const newCount = (nudge.nag_count || 0) + 1;
     db.incrementNagCount(nudge.id);
-    const msg = getNagMessage(nudge.type, newCount);
+    const followThrough = nudge.type === 'todo' ? getFollowThroughTodo() : null;
+    const msg = followThrough?.message || getNagMessage(nudge.type, newCount);
     console.log(`[Nudge] Nag #${newCount} for ${nudge.type}: ${msg}`);
     broadcast({ type: 'nudge', nudge_type: nudge.type, message: msg, nag_count: newCount });
     const url = nudge.type === 'standup' ? '/standup' : '/todos';

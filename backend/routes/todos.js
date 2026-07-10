@@ -3,6 +3,7 @@ const router = express.Router();
 const obsidian = require('../services/obsidian');
 const vaultCache = require('../services/vault-cache');
 const { rankTasks } = require('../services/task-scoring');
+const todoIntelligence = require('../services/todo-intelligence');
 
 // GET /api/todos — reads tasks from Obsidian vault + 90-day plan
 router.get('/', (req, res) => {
@@ -24,7 +25,12 @@ router.get('/', (req, res) => {
       mustdo: t.mustdo || false,
       vault_task: true,
       filePath: t.filePath || null,
-      lineNumber: t.lineNumber != null ? t.lineNumber : null
+      lineNumber: t.lineNumber != null ? t.lineNumber : null,
+      meta: t.meta || {},
+      moscow: t.moscow || null,
+      context: t.context || null,
+      needsToday: Boolean(t.needsToday),
+      createdAt: t.createdAt || null,
     }));
 
     // Inject 90-day plan tasks (CACHED)
@@ -63,6 +69,9 @@ router.get('/', (req, res) => {
       console.error('[Todos] 90-day plan parse error:', e.message);
     }
 
+    const enriched = mapped.map((task) => todoIntelligence.decorateTask(task));
+    const todayLane = todoIntelligence.buildTodayLane(rankTasks(enriched.filter((task) => !task.done), new Date().toISOString().split('T')[0]));
+
     const suggested = db.getPendingSaraActions(100)
       .filter((action) => action.type === 'capture_todo')
       .map((action) => ({
@@ -75,7 +84,7 @@ router.get('/', (req, res) => {
         createdAt: action.created_at || null,
       }));
 
-    res.json({ todos: mapped, suggested });
+    res.json({ todos: enriched, suggested, todayLane });
   } catch (e) {
     console.error('[Todos] Error parsing vault todos:', e);
     res.status(500).json({ error: 'Failed to parse vault todos' });
@@ -151,7 +160,7 @@ router.get('/focus', async (req, res) => {
         tasks = tasks.filter(t => !t.done);
       }
 
-      return rankTasks(tasks, todayStr);
+      return rankTasks(tasks.map((task) => todoIntelligence.decorateTask(task, todayStr)), todayStr);
     });
     const totalCount = ranked.length;
 
