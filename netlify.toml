@@ -1,5 +1,6 @@
 [build]
-  base = "frontend"
+  # base is NOT set here — each Netlify site sets its own base dir in the UI.
+  # nuero-app → base: frontend | sara-nickward → base: sara/app
   # rollup has a platform-specific optional-dep bug
   # (https://github.com/npm/cli/issues/4828); we must wipe BOTH the
   # workspace-root node_modules/package-lock and the frontend ones so
