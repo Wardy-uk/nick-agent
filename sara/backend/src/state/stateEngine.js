@@ -113,7 +113,20 @@ function mapQueueTicket(ticket) {
 
 function buildQueue(neuroData) {
   const raw = neuroData?.queue;
-  if (!raw || !Array.isArray(raw.tickets)) return seed.queue();
+  if (!raw || !Array.isArray(raw.tickets)) {
+    if (!neuroData) return seed.queue();
+    return {
+      source: neuro.NEURO_SOURCE,
+      summary: 'Live queue feed is currently unavailable from NEURO.',
+      open: 0,
+      breaching: 0,
+      sections: {
+        act_now: [],
+        today: [],
+        watch: [],
+      },
+    };
+  }
 
   const allTickets = raw.tickets.map(mapQueueTicket);
   const urgentKeys = new Set((raw.at_risk_tickets || []).map((ticket) => ticket.ticket_key || ticket.key || ticket.id));
@@ -437,6 +450,8 @@ function buildPresentation(neuroData, domains) {
     standup: standupSections,
     email: {
       source: email ? neuro.NEURO_SOURCE : 'placeholder',
+      available: email ? email.available !== false : false,
+      detail: email?.detail || null,
       urgentCount: urgentEmails.length,
       replyCount: replyEmails.length,
       urgent: urgentEmails.slice(0, 5).map((item, index) => ({
@@ -652,8 +667,9 @@ function buildNova(snapshot) {
       id: 'overdue-tickets',
       kind: 'overdue',
       priority: overdue >= 20 ? 3 : 2,
-      title: `${overdue} ticket${overdue === 1 ? '' : 's'} past 2h response`,
-      detail: 'Open beyond the SLA response window.',
+      title: `${overdue} customer${overdue === 1 ? '' : 's'} overdue response`,
+      detail: 'Customers are waiting beyond the response target.',
+      count: overdue,
     });
   }
   // A standout long-running ticket is worth its own line.
@@ -662,8 +678,9 @@ function buildNova(snapshot) {
       id: 'worst-oldest',
       kind: 'overdue',
       priority: worstOldestDays >= 60 ? 3 : 1,
-      title: `Oldest open ticket: ${worstOldestDays} days`,
-      detail: 'A long-running ticket that may need a push.',
+      title: `Oldest overdue customer: ${worstOldestDays} days`,
+      detail: 'A long-running customer wait that may need a push.',
+      oldestDays: worstOldestDays,
     });
   }
 

@@ -93,7 +93,7 @@ function Icon({ name, size = 20 }) {
 
 const NAV = [
   { id: 'cognition', target: 'cognition', icon: 'focus', label: 'Focus', sub: 'One thing that matters' },
-  { id: 'context', target: 'mission-control', icon: 'context', label: 'Context', sub: "What's shaping this" },
+  { id: 'context', target: 'context', icon: 'context', label: 'Context', sub: "What's shaping this" },
   { id: 'calendar', target: 'standup', icon: 'calendar', label: 'Calendar', sub: "What's coming" },
   { id: 'systems', target: 'at-work', icon: 'systems', label: 'Systems', sub: 'Everything in sync' },
   { id: 'memory', target: 'vault', icon: 'memory', label: 'Memory', sub: 'What we know' },

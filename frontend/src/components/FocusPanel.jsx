@@ -12,6 +12,7 @@ const TYPE_ICONS = {
   nudge: '~',
   imports: '>',
   email: '\u2709',
+  nova_flag: '!!',
 };
 
 const DEFER_MESSAGES = [
@@ -85,7 +86,12 @@ export default function FocusPanel({ onNavigate }) {
       await fetch(apiUrl('/api/focus/action-done'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ actionType: current.type, detail: current.title }),
+        body: JSON.stringify({
+          actionType: current.type,
+          detail: current.title,
+          itemId: current.id,
+          itemType: current.type,
+        }),
       });
       clearDefer(current.id);
     } catch {}
@@ -120,6 +126,46 @@ export default function FocusPanel({ onNavigate }) {
     }, count >= 3 ? 3000 : 1800);
   }, [current, actionLoading, refresh]);
 
+  const handleSnooze = useCallback(async () => {
+    if (!current || actionLoading) return;
+    setActionLoading(true);
+    setDeferFeedback('Snoozed for 1 hour.');
+
+    try {
+      await fetch(apiUrl('/api/focus/snooze'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId: current.id, itemType: current.type, durationMinutes: 60 }),
+      });
+    } catch {}
+
+    setTimeout(() => {
+      setDeferFeedback(null);
+      setActionLoading(false);
+      refresh();
+    }, 1400);
+  }, [current, actionLoading, refresh]);
+
+  const handleHideToday = useCallback(async () => {
+    if (!current || actionLoading) return;
+    setActionLoading(true);
+    setDeferFeedback('Hidden until tomorrow.');
+
+    try {
+      await fetch(apiUrl('/api/focus/hide-today'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId: current.id, itemType: current.type }),
+      });
+    } catch {}
+
+    setTimeout(() => {
+      setDeferFeedback(null);
+      setActionLoading(false);
+      refresh();
+    }, 1400);
+  }, [current, actionLoading, refresh]);
+
   const handleNavigate = (item) => {
     if (!item) return;
     const ctx = { fromFocus: true, focusItem: item };
@@ -129,6 +175,7 @@ export default function FocusPanel({ onNavigate }) {
   };
 
   const deferCount = current ? getDeferCount(current.id) : 0;
+  const isNovaFlag = current?.type === 'nova_flag';
 
   return (
     <div className="focus-panel">
@@ -198,13 +245,32 @@ export default function FocusPanel({ onNavigate }) {
             >
               Done
             </button>
-            <button
-              className={`focus-btn-defer ${deferCount >= 2 ? 'focus-btn-defer-warn' : ''}`}
-              onClick={handleDefer}
-              disabled={actionLoading}
-            >
-              Defer
-            </button>
+            {isNovaFlag ? (
+              <>
+                <button
+                  className="focus-btn-defer"
+                  onClick={handleSnooze}
+                  disabled={actionLoading}
+                >
+                  Snooze
+                </button>
+                <button
+                  className="focus-btn-hide"
+                  onClick={handleHideToday}
+                  disabled={actionLoading}
+                >
+                  Hide today
+                </button>
+              </>
+            ) : (
+              <button
+                className={`focus-btn-defer ${deferCount >= 2 ? 'focus-btn-defer-warn' : ''}`}
+                onClick={handleDefer}
+                disabled={actionLoading}
+              >
+                Defer
+              </button>
+            )}
             <button
               className="focus-btn-open"
               onClick={() => handleNavigate(current)}

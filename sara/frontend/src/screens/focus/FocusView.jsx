@@ -24,6 +24,7 @@ export default function FocusView() {
     actionFeedback,
     interruptionNotice,
     dismissInterruptionNotice,
+    openInterruptionNotice,
   } = useSaraState();
 
   if (status === 'connecting') {
@@ -82,9 +83,16 @@ export default function FocusView() {
             <p className="focus-product__interrupt-title">{interruptionNotice.title}</p>
             <p className="product__summary">{interruptionNotice.detail}</p>
           </div>
-          <button type="button" className="product__button focus-product__interrupt-dismiss" onClick={dismissInterruptionNotice}>
-            Dismiss
-          </button>
+          <div className="product__actions">
+            {interruptionNotice.viewId && (
+              <button type="button" className="product__button focus-product__button--primary" onClick={openInterruptionNotice}>
+                Review now
+              </button>
+            )}
+            <button type="button" className="product__button focus-product__interrupt-dismiss" onClick={dismissInterruptionNotice}>
+              Dismiss
+            </button>
+          </div>
         </section>
       )}
 

@@ -80,6 +80,26 @@ const BLOCKER_KEYWORDS = [
   'what do you want me to do',
 ];
 
+const REPLY_SIGNAL_KEYWORDS = [
+  'please reply',
+  'please respond',
+  'please confirm',
+  'can you',
+  'could you',
+  'would you',
+  'are you able',
+  'let me know',
+  'what do you think',
+  'do you agree',
+  'can we',
+  'shall we',
+  'when can',
+  'when will',
+  'need your response',
+  'need your view',
+  'waiting on you',
+];
+
 const NOISE_KEYWORDS = [
   'newsletter',
   'unsubscribe',
@@ -95,6 +115,13 @@ const NOISE_KEYWORDS = [
   'donotreply',
   'no-reply',
   'noreply',
+  'market update',
+  'property news',
+  'register free',
+  'view in browser',
+  'last seats',
+  'copilot chat',
+  'introducing ',
 ];
 
 const BATCHABLE_KEYWORDS = [
@@ -117,6 +144,11 @@ function csvEnv(name) {
 
 function includesAny(haystack, needles) {
   return needles.some((needle) => haystack.includes(String(needle).toLowerCase()));
+}
+
+function hasQuestionRequest(subject, preview) {
+  const text = `${String(subject || '')} ${String(preview || '')}`;
+  return /\b(can|could|would|will|should|how|what|when|where|why|who|please)\b[^.?!\n]{0,140}\?/i.test(text);
 }
 
 function isKnownPerson(fromName) {
@@ -203,6 +235,7 @@ function evaluateEmail(email) {
   const keywordUrgent = includesAny(bodyText, URGENT_KEYWORDS);
   const distress = includesAny(bodyText, DISTRESS_KEYWORDS);
   const blocker = includesAny(bodyText, BLOCKER_KEYWORDS);
+  const explicitReplySignal = includesAny(bodyText, REPLY_SIGNAL_KEYWORDS) || hasQuestionRequest(subject, preview);
   const batchable = includesAny(bodyText, BATCHABLE_KEYWORDS);
 
   let score = 0;
@@ -226,6 +259,10 @@ function evaluateEmail(email) {
   if (blocker) {
     reasons.push('needs decision');
     score += 22;
+  }
+  if (explicitReplySignal) {
+    reasons.push('reply requested');
+    score += 16;
   }
   if (email?.importance === 'high') {
     reasons.push('flagged important');
@@ -253,7 +290,7 @@ function evaluateEmail(email) {
     score -= 14;
   }
 
-  const actionable = keywordUrgent || distress || blocker || leadership || directReport || urgentSender || email?.importance === 'high' || email?.isFlagged;
+  const actionable = keywordUrgent || distress || blocker || leadership || directReport || urgentSender || explicitReplySignal || email?.importance === 'high' || email?.isFlagged;
   if (!actionable && score < 14) {
     return {
       lane: 'fyi',
@@ -275,7 +312,7 @@ function evaluateEmail(email) {
     };
   }
 
-  if (directReport && blocker) {
+  if (directReport && (blocker || explicitReplySignal || email?.importance === 'high' || email?.isFlagged)) {
     return {
       lane: 'reply',
       category: 'ACTION',
@@ -285,7 +322,7 @@ function evaluateEmail(email) {
     };
   }
 
-  if (leadership || blocker || email?.isFlagged || (email?.isRead === false && age != null && age >= 4)) {
+  if (leadership || blocker || explicitReplySignal || email?.isFlagged || email?.importance === 'high') {
     return {
       lane: 'reply',
       category: 'ACTION',
@@ -306,11 +343,11 @@ function evaluateEmail(email) {
   }
 
   return {
-    lane: 'reply',
-    category: 'ACTION',
-    urgency: 'medium',
+    lane: 'fyi',
+    category: 'FYI',
+    urgency: 'low',
     forced: false,
-    reasons: reasons.length ? reasons.slice(0, 4) : ['Needs review'],
+    reasons: reasons.length ? reasons.slice(0, 4) : ['Informational'],
   };
 }
 

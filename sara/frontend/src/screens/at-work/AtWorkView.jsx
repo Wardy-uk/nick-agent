@@ -33,7 +33,7 @@ function Stat({ label, value, tone }) {
 }
 
 export default function AtWorkView() {
-  const { status, error, model, now, interruptionNotice, dismissInterruptionNotice } = useSaraState();
+  const { status, error, model, now, interruptionNotice, dismissInterruptionNotice, openInterruptionNotice } = useSaraState();
 
   if (status === 'connecting') {
     return (
@@ -77,9 +77,16 @@ export default function AtWorkView() {
             <p className="aw__notice-title">{interruptionNotice.title}</p>
             <p className="aw__notice-detail">{interruptionNotice.detail}</p>
           </div>
-          <button type="button" className="aw__notice-dismiss" onClick={dismissInterruptionNotice}>
-            Dismiss
-          </button>
+          <div className="product__actions">
+            {interruptionNotice.viewId && (
+              <button type="button" className="aw__notice-dismiss" onClick={openInterruptionNotice}>
+                Review now
+              </button>
+            )}
+            <button type="button" className="aw__notice-dismiss" onClick={dismissInterruptionNotice}>
+              Dismiss
+            </button>
+          </div>
         </section>
       )}
 

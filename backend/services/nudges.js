@@ -38,6 +38,10 @@ function todayKey() {
   return new Date().toISOString().split('T')[0];
 }
 
+function isPastStandupCutoff(now = new Date()) {
+  return now.getHours() >= 12;
+}
+
 // Nudge messages escalate with nag count
 const STANDUP_MESSAGES = [
   // Tier 1 — Breezy opener (time-neutral)
@@ -283,6 +287,10 @@ function triggerStandupNudge() {
     return; // Already done today
   }
 
+  if (isPastStandupCutoff()) {
+    return; // Past midday — no standup reminders for the rest of the day
+  }
+
   // Context-aware checks — defer if conditions aren't right
   try {
     const todayActivity = db.getActivityForDate(dateKey);
@@ -369,6 +377,13 @@ function nagCheck() {
       continue;
     }
 
+    if (nudge.type === 'standup' && isPastStandupCutoff()) {
+      db.completeNudge(nudge.id);
+      broadcast({ type: 'nudge_cleared', nudge_type: 'standup' });
+      console.log('[Nudge] Midday passed without standup — reminders dismissed for the rest of the day');
+      continue;
+    }
+
     // Check if all overdue todos are done
     if (nudge.type === 'todo' && !hasPendingTodos()) {
       db.completeNudge(nudge.id);
@@ -430,7 +445,7 @@ function startupCheck() {
   // Only on weekdays, after 9am, before 5pm
   if (day >= 1 && day <= 5 && hour >= 9 && hour < 17) {
     console.log('[Nudge] Startup check — after 9am on weekday, triggering nudges');
-    triggerStandupNudge();
+    if (!isPastStandupCutoff(now)) triggerStandupNudge();
     triggerTodoNudge();
   }
 }

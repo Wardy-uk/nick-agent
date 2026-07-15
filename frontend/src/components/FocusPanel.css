@@ -313,6 +313,27 @@
   border-color: var(--accent);
 }
 
+.focus-btn-hide {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 12px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.focus-btn-hide:hover:not(:disabled) {
+  border-color: var(--text-muted);
+  color: var(--text-primary);
+}
+.focus-btn-hide:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ── Navigation dots ── */
 .focus-nav {
   display: flex;
@@ -401,6 +422,7 @@
   .focus-btn-defer {
     flex-basis: calc(50% - 4px);
   }
+  .focus-btn-hide,
   .focus-btn-open {
     flex-basis: 100%;
     text-align: center;

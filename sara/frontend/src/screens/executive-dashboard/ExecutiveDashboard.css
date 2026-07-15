@@ -277,6 +277,32 @@
   padding: 18px 20px;
 }
 
+.ed__email-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ed__email-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ed__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(94, 193, 202, 0.24);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ed-ink);
+  text-decoration: none;
+  font: inherit;
+}
+
 .ed__panel-head {
   display: flex;
   flex-direction: column;
@@ -353,6 +379,21 @@
   padding-left: 14px;
 }
 
+.ed__ticket-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+
+.ed__ticket-button--active {
+  transform: translateX(2px);
+}
+
 .ed__ticket::before,
 .ed__matter::before {
   content: '';
@@ -424,6 +465,41 @@
 
 .ed__ticket-take {
   line-height: 1.45;
+}
+
+.ed__detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ed__detail-text,
+.ed__detail-subject {
+  margin: 0;
+  color: #f1f7fb;
+  line-height: 1.6;
+}
+
+.ed__detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ed-dim);
+}
+
+.ed__detail-reply,
+.ed__detail-body {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(15, 26, 39, 0.56);
+  color: var(--ed-ink);
+  font: inherit;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ed__person {

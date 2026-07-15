@@ -11,15 +11,20 @@ export default function StandupView() {
   }
 
   const standup = presentation.standup;
+  const hour = new Date().getHours();
+  const afterCutoff = hour >= 12;
+  const summary = afterCutoff
+    ? 'Standup reminders are closed for today. Pick it up fresh tomorrow morning.'
+    : (model.briefing?.line || 'Morning alignment is ready.');
 
   return (
     <section className="product" aria-label="Standup">
       <header className="product__hero">
         <p className="product__eyebrow">Standup</p>
-        <h2 className="product__title">Morning alignment</h2>
-        <p className="product__summary">{model.briefing?.line}</p>
+        <h2 className="product__title">{afterCutoff ? 'Standup window closed' : 'Morning alignment'}</h2>
+        <p className="product__summary">{summary}</p>
         <div className="product__meta">
-          <span className="product__pill">{standup.source}</span>
+          <span className="product__pill">{afterCutoff ? 'dismissed after 12pm' : standup.source}</span>
         </div>
       </header>
 

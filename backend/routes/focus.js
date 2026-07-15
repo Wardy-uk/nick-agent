@@ -57,6 +57,7 @@ function _buildFingerprint(ctx) {
     (ctx.observations || []).length,
     ctx.snoozeCount || 0,
     ctx.dismissCount || 0,
+    engine.getSuppressionFingerprint(),
     // SARA actions state (changes when action approved/rejected)
     (() => { try { return require('../db/database').getPendingSaraActions().length; } catch { return 0; } })(),
   ];
@@ -220,6 +221,27 @@ router.post('/dismiss', (req, res) => {
   _responseCache = { fingerprint: null, response: null, at: 0 };
   _aiCache = { hash: null, data: null, at: 0 };
   res.json({ ok: true, dismissed: itemId });
+});
+
+// POST /api/focus/snooze
+router.post('/snooze', (req, res) => {
+  const { itemId, itemType, durationMinutes } = req.body;
+  if (!itemId) return res.status(400).json({ error: 'itemId required' });
+  const minutes = Math.max(5, Number(durationMinutes) || 60);
+  engine.snooze(itemId, itemType, minutes * 60 * 1000);
+  _responseCache = { fingerprint: null, response: null, at: 0 };
+  _aiCache = { hash: null, data: null, at: 0 };
+  res.json({ ok: true, snoozed: itemId, untilMinutes: minutes });
+});
+
+// POST /api/focus/hide-today
+router.post('/hide-today', (req, res) => {
+  const { itemId, itemType } = req.body;
+  if (!itemId) return res.status(400).json({ error: 'itemId required' });
+  engine.hideForToday(itemId, itemType);
+  _responseCache = { fingerprint: null, response: null, at: 0 };
+  _aiCache = { hash: null, data: null, at: 0 };
+  res.json({ ok: true, hidden: itemId, until: 'tomorrow' });
 });
 
 // POST /api/focus/action-done — log an outcome after the user completes an action

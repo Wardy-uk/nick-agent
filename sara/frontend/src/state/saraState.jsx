@@ -152,6 +152,7 @@ function buildUrgentSnapshot(model) {
   if (Array.isArray(eyesOn?.items)) {
     eyesOn.items
       .filter((item) => (item.priority ?? 99) <= 2)
+      .filter((item) => item.kind !== 'approval')
       .slice(0, 5)
       .forEach((item) => {
         urgentItems.push({
@@ -162,16 +163,6 @@ function buildUrgentSnapshot(model) {
           viewId: SARA_VIEWS.ATWORK,
         });
       });
-  }
-
-  if ((eyesOn?.stats?.approvalsPending || 0) > 0) {
-    urgentItems.push({
-      key: `nova:approvals:${eyesOn.stats.approvalsPending}`,
-      title: `${eyesOn.stats.approvalsPending} approval${eyesOn.stats.approvalsPending === 1 ? '' : 's'} waiting`,
-      detail: 'NOVA has approvals queued for you.',
-      score: 3 + Math.min(eyesOn.stats.approvalsPending, 3),
-      viewId: SARA_VIEWS.ATWORK,
-    });
   }
 
   if ((eyesOn?.stats?.customersOverdue || 0) > 0) {
@@ -791,6 +782,13 @@ export function SaraStateProvider({ children }) {
     actionFeedback,
     interruptionNotice,
     dismissInterruptionNotice: () => setInterruptionNotice(null),
+    openInterruptionNotice: () => {
+      if (!interruptionNotice?.viewId) return false;
+      navigateToView(interruptionNotice.viewId, interruptionNotice.viewContext || null);
+      setActionFeedback('Review opened');
+      setInterruptionNotice(null);
+      return true;
+    },
     openFocusAction,
     sendChat,
     captureNote,

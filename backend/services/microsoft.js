@@ -55,6 +55,7 @@ const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Tasks.Read', 'User.Read'];
 
 let msalClient = null;
 let graphTokenCache = { accessToken: null, expiresOn: 0 };
+let lastTokenError = null;
 
 function isConfigured() {
   // Always configured — we use the MCP server's public client ID
@@ -113,6 +114,7 @@ async function isAuthenticated() {
 async function getAccessToken() {
   // Return cached token if still valid (5 min buffer)
   if (graphTokenCache.accessToken && Date.now() < graphTokenCache.expiresOn - 5 * 60 * 1000) {
+    lastTokenError = null;
     return graphTokenCache.accessToken;
   }
 
@@ -134,14 +136,24 @@ async function getAccessToken() {
       expiresOn: result.expiresOn.getTime()
     };
 
+    lastTokenError = null;
     console.log('[Microsoft] Graph token acquired silently for', accounts[0].username);
     return result.accessToken;
   } catch (err) {
     // If silent fails, the app registration may lack Graph permissions
     // or the refresh token has expired — need device code flow
+    lastTokenError = err?.message || String(err);
     console.warn('[Microsoft] Silent token acquisition failed:', err.message);
     return null;
   }
+}
+
+function getMailAccessStatus() {
+  return {
+    bridgeConfigured: isBridgeConfigured(),
+    degraded: Boolean(lastTokenError),
+    lastTokenError
+  };
 }
 
 // Fallback: device code flow for Graph permissions (one-time)
@@ -340,6 +352,86 @@ async function fetchRecentEmails(hoursBack = 24, maxResults = 50) {
   return null;
 }
 
+function htmlToText(value) {
+  return String(value || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#39;/gi, '\'')
+    .replace(/&quot;/gi, '"')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+async function fetchEmailById(emailId) {
+  if (!emailId) return null;
+
+  const token = await getAccessToken();
+  if (token) {
+    try {
+      const select = 'id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,importance,flag,bodyPreview,body,hasAttachments,webLink';
+      const msg = await graphFetch(`/me/messages/${encodeURIComponent(emailId)}?$select=${select}`, token);
+      if (msg?.id) {
+        return {
+          id: msg.id,
+          subject: msg.subject || '(No subject)',
+          from: msg.from?.emailAddress?.name || msg.from?.emailAddress?.address || 'Unknown',
+          fromEmail: msg.from?.emailAddress?.address || '',
+          to: (msg.toRecipients || []).map((item) => item.emailAddress?.name || item.emailAddress?.address).filter(Boolean),
+          cc: (msg.ccRecipients || []).map((item) => item.emailAddress?.name || item.emailAddress?.address).filter(Boolean),
+          received: msg.receivedDateTime,
+          isRead: msg.isRead,
+          importance: msg.importance,
+          isFlagged: msg.flag?.flagStatus === 'flagged',
+          preview: msg.bodyPreview || '',
+          body: htmlToText(msg.body?.content || msg.bodyPreview || ''),
+          hasAttachments: msg.hasAttachments,
+          webLink: msg.webLink || null,
+        };
+      }
+    } catch (err) {
+      console.error('[Microsoft] Email detail fetch error:', err.message);
+    }
+  }
+
+  if (isBridgeConfigured()) {
+    try {
+      const bridgeData = await novaBridgeFetch(`/mail/${encodeURIComponent(emailId)}`);
+      if (bridgeData?.id) {
+        return {
+          id: bridgeData.id,
+          subject: bridgeData.subject || '(No subject)',
+          from: bridgeData.from?.emailAddress?.name || bridgeData.from?.emailAddress?.address || 'Unknown',
+          fromEmail: bridgeData.from?.emailAddress?.address || '',
+          to: (bridgeData.toRecipients || []).map((item) => item.emailAddress?.name || item.emailAddress?.address).filter(Boolean),
+          cc: (bridgeData.ccRecipients || []).map((item) => item.emailAddress?.name || item.emailAddress?.address).filter(Boolean),
+          received: bridgeData.receivedDateTime,
+          isRead: bridgeData.isRead,
+          importance: bridgeData.importance,
+          isFlagged: bridgeData.flag?.flagStatus === 'flagged',
+          preview: bridgeData.bodyPreview || '',
+          body: htmlToText(bridgeData.body?.content || bridgeData.bodyPreview || ''),
+          hasAttachments: Boolean(bridgeData.hasAttachments),
+          webLink: bridgeData.webLink || null,
+        };
+      }
+    } catch (e) {
+      console.warn('[Mail] Bridge detail failed:', e.message);
+    }
+  }
+
+  return null;
+}
+
 // Fetch To-Do task lists
 async function fetchTodoLists() {
   // Priority 1 — MSAL/Graph direct
@@ -468,10 +560,12 @@ module.exports = {
   isConfigured,
   isAuthenticated,
   isBridgeConfigured,
+  getMailAccessStatus,
   getAccessToken,
   startDeviceCodeFlow,
   fetchCalendarEvents,
   fetchRecentEmails,
+  fetchEmailById,
   fetchTodoLists,
   fetchTodoTasks,
   fetchPlannerTasks,

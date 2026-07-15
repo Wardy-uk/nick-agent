@@ -9,6 +9,8 @@ import Chat from './views/Chat';
 import MeetingPrep from './views/MeetingPrep';
 import BrainManagement from './views/BrainManagement';
 import actionSurfaces from '../../../shared/action-surfaces.cjs';
+import DeploymentGuard from './components/DeploymentGuard';
+import { readRuntime } from './runtime';
 import './App.css';
 
 // SARA mobile app shell.
@@ -70,6 +72,7 @@ function clearLaunchIntentFromUrl() {
 }
 
 export default function App() {
+  const runtime = readRuntime();
   const [authed, setAuthed] = useState(() => !!getPin());
   const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'focus');
   const [actionIntent, setActionIntent] = useState(() => readLaunchIntent());
@@ -120,6 +123,8 @@ export default function App() {
     }
   }
 
+  if (runtime.deploymentIssue) return <DeploymentGuard />;
+
   if (!authed) return <LockScreen onUnlock={() => setAuthed(true)} />;
 
   const ActiveView = useMemo(
@@ -132,6 +137,7 @@ export default function App() {
       <header className="app__header">
         <span className="app__brand">SARA</span>
         <span className="app__sub">mobile</span>
+        {runtime.buildLabel && <span className="app__build">{runtime.buildLabel}</span>}
         <button
           className="app__refresh"
           type="button"

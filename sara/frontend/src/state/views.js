@@ -18,6 +18,7 @@
 // the registry, the router, and (later) the recommended/selected view in state.
 export const SARA_VIEWS = {
   COGNITION: 'cognition',
+  CONTEXT: 'context',
   BRIEFING: 'mission-control',
   SARA: 'companion',
   STANDUP: 'standup',
@@ -48,6 +49,12 @@ export const VIEW_REGISTRY = [
     id: SARA_VIEWS.COGNITION,
     label: 'Cognition',
     blurb: "SARA's primary surface: ambient state, one active focus, signals — and the seam.",
+    status: 'available',
+  },
+  {
+    id: SARA_VIEWS.CONTEXT,
+    label: 'Context',
+    blurb: "What's shaping this right now.",
     status: 'available',
   },
   {

@@ -70,7 +70,7 @@ Classify these ${emails.slice(0, 20).length} emails:\n\n${emailList}`
       }
   } catch (aiErr) {
     console.error('[EmailTriage] AI classification failed:', aiErr.message);
-    return emails.map(e => ({ ...e, category: 'FYI', reason: '', triaged: false }));
+    classifications = [];
   }
 
   return emails.map((email, i) => {
@@ -79,6 +79,7 @@ Classify these ${emails.slice(0, 20).length} emails:\n\n${emailList}`
     const aiCategory = String(cls?.category || 'FYI').toUpperCase();
     let category = aiCategory;
     if (deterministic.category === 'IGNORE') category = 'IGNORE';
+    else if (deterministic.category === 'FYI' && aiCategory === 'ACTION') category = 'FYI';
     else if (deterministic.category === 'ACTION' && aiCategory === 'IGNORE') category = 'ACTION';
     else if (deterministic.category === 'DELEGATE' && aiCategory !== 'ACTION') category = 'DELEGATE';
     else if (deterministic.forced) category = deterministic.category;

@@ -42,6 +42,17 @@ router.get('/triage', async (_req, res) => {
   }
 });
 
+router.get('/triage/:emailId', async (req, res) => {
+  try {
+    const encodedEmailId = encodeURIComponent(String(req.params.emailId || ''));
+    const result = await requestJson(`/api/email/triage/${encodedEmailId}`);
+    if (!result.ok) return res.status(result.status).json({ ok: false, error: result.error });
+    return res.json(result.payload);
+  } catch (error) {
+    return res.status(502).json({ ok: false, error: error.message });
+  }
+});
+
 router.post('/triage/run', async (_req, res) => {
   try {
     const result = await requestJson('/api/email/triage/run', { method: 'POST', body: {} });

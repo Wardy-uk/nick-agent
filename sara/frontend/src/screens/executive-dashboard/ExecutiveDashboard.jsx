@@ -44,11 +44,14 @@ export default function ExecutiveDashboard() {
     presentation,
     interruptionNotice,
     dismissInterruptionNotice,
+    openInterruptionNotice,
     currentViewContext,
     navigateToView,
   } = useSaraState();
   const [escalations, setEscalations] = useState({ status: 'idle', tickets: [], total: 0, error: null });
   const [emailTriage, setEmailTriage] = useState({ status: 'idle', urgent: [], reply: [], delegate: [], error: null, lastRun: null });
+  const [selectedEmailId, setSelectedEmailId] = useState(null);
+  const [selectedEmail, setSelectedEmail] = useState({ status: 'idle', email: null, error: null });
 
   if (status === 'connecting') {
     return (
@@ -142,6 +145,33 @@ export default function ExecutiveDashboard() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedEmailId) {
+      setSelectedEmail({ status: 'idle', email: null, error: null });
+      return undefined;
+    }
+
+    async function loadEmailDetail() {
+      setSelectedEmail({ status: 'loading', email: null, error: null });
+      try {
+        const res = await fetch(`/api/email/triage/${encodeURIComponent(selectedEmailId)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        setSelectedEmail({ status: 'ready', email: data?.email || null, error: null });
+      } catch (loadError) {
+        if (cancelled) return;
+        setSelectedEmail({ status: 'error', email: null, error: loadError.message });
+      }
+    }
+
+    loadEmailDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEmailId]);
+
   const escalationSummary = useMemo(() => {
     if (!escalationMode) return null;
     if (escalations.status === 'loading') return 'Loading live escalations…';
@@ -154,6 +184,7 @@ export default function ExecutiveDashboard() {
     if (!emailMode) return null;
     if (emailTriage.status === 'loading') return replyMode ? 'Loading reply triage…' : 'Loading urgent email triage…';
     if (emailTriage.status === 'error') return `Could not load email triage — ${emailTriage.error}`;
+    if (emailSummaryModel.available === false) return `Email triage unavailable — ${emailSummaryModel.detail || 'mail access needs reconnecting'}`;
     if (replyMode && emailTriage.reply.length > 0) {
       return `${emailTriage.reply.length} email${emailTriage.reply.length === 1 ? '' : 's'} need a reply.`;
     }
@@ -164,7 +195,14 @@ export default function ExecutiveDashboard() {
       return `${emailTriage.delegate.length} email${emailTriage.delegate.length === 1 ? '' : 's'} could be delegated.`;
     }
     return replyMode ? 'No reply-needed emails are currently queued.' : 'No urgent emails are currently triaged.';
-  }, [emailMode, emailTriage, replyMode]);
+  }, [emailMode, emailTriage, replyMode, emailSummaryModel.available, emailSummaryModel.detail]);
+
+  const queueSections = SECTIONS.map(({ key, label, tone }) => ({
+    key,
+    label,
+    tone,
+    tickets: queue?.sections?.[key] ?? [],
+  })).filter((section) => section.tickets.length > 0);
 
   // KPI tiles — all counts read straight from the engine domains, never computed
   // into screen-owned state.
@@ -174,6 +212,23 @@ export default function ExecutiveDashboard() {
     { id: 'kpi-people', label: 'People to watch', value: attention, tone: attention ? 'attention' : undefined },
     { id: 'kpi-notes', label: 'Notes to surface', value: vault?.picks?.length ?? '—' },
   ];
+
+  async function dismissEmail(emailId) {
+    try {
+      await fetch(`/api/email/triage/dismiss/${encodeURIComponent(emailId)}`, { method: 'POST' });
+      setEmailTriage((current) => ({
+        ...current,
+        urgent: current.urgent.filter((item) => item.id !== emailId),
+        reply: current.reply.filter((item) => item.id !== emailId),
+        delegate: current.delegate.filter((item) => item.id !== emailId),
+      }));
+      if (selectedEmailId === emailId) {
+        setSelectedEmailId(null);
+      }
+    } catch {
+      // Leave the current view alone; the next poll will reconcile if needed.
+    }
+  }
 
   return (
     <section className="ed" aria-label="Queue">
@@ -222,9 +277,16 @@ export default function ExecutiveDashboard() {
             <p className="ed__notice-title">{interruptionNotice.title}</p>
             <p className="ed__notice-detail">{interruptionNotice.detail}</p>
           </div>
-          <button type="button" className="ed__notice-dismiss" onClick={dismissInterruptionNotice}>
-            Dismiss
-          </button>
+          <div className="product__actions">
+            {interruptionNotice.viewId && (
+              <button type="button" className="ed__notice-dismiss" onClick={openInterruptionNotice}>
+                Review now
+              </button>
+            )}
+            <button type="button" className="ed__notice-dismiss" onClick={dismissInterruptionNotice}>
+              Dismiss
+            </button>
+          </div>
         </section>
       )}
 
@@ -285,15 +347,17 @@ export default function ExecutiveDashboard() {
                     <ul className="ed__list">
                       {(replyMode ? emailTriage.reply : emailTriage.urgent).map((email) => (
                         <li key={email.id || email.emailId || email.subject} className={`ed__ticket ed__ticket--${replyMode ? 'attention' : 'urgent'}`}>
-                          <div className="ed__ticket-top">
-                            <span className="ed__ticket-key">EMAIL</span>
-                            <span className="ed__ticket-summary">{email.subject || (replyMode ? 'Needs reply' : 'Urgent email')}</span>
-                            <span className="ed__ticket-sla">{email.isRead ? 'read' : 'unread'}</span>
-                          </div>
-                          <div className="ed__ticket-meta">
-                            <span className="ed__ticket-assignee">{email.from || 'Unknown sender'}</span>
-                            <span className="ed__ticket-take">{email.reason || email.summary || (replyMode ? 'Needs your reply' : 'Needs your attention')}</span>
-                          </div>
+                          <button type="button" className={`ed__ticket-button${selectedEmailId === email.id ? ' ed__ticket-button--active' : ''}`} onClick={() => setSelectedEmailId(email.id)}>
+                            <div className="ed__ticket-top">
+                              <span className="ed__ticket-key">EMAIL</span>
+                              <span className="ed__ticket-summary">{email.subject || (replyMode ? 'Needs reply' : 'Urgent email')}</span>
+                              <span className="ed__ticket-sla">{email.isRead ? 'read' : 'unread'}</span>
+                            </div>
+                            <div className="ed__ticket-meta">
+                              <span className="ed__ticket-assignee">{email.from || 'Unknown sender'}</span>
+                              <span className="ed__ticket-take">{email.reason || email.summary || (replyMode ? 'Needs your reply' : 'Needs your attention')}</span>
+                            </div>
+                          </button>
                         </li>
                       ))}
                     </ul>
@@ -308,15 +372,17 @@ export default function ExecutiveDashboard() {
                     <ul className="ed__list">
                       {emailTriage.delegate.map((email) => (
                         <li key={email.id || email.emailId || email.subject} className="ed__ticket ed__ticket--attention">
-                          <div className="ed__ticket-top">
-                            <span className="ed__ticket-key">EMAIL</span>
-                            <span className="ed__ticket-summary">{email.subject || 'Delegate email'}</span>
-                            <span className="ed__ticket-sla">{email.isRead ? 'read' : 'unread'}</span>
-                          </div>
-                          <div className="ed__ticket-meta">
-                            <span className="ed__ticket-assignee">{email.from || 'Unknown sender'}</span>
-                            <span className="ed__ticket-take">{email.reason || email.summary || 'Could be delegated'}</span>
-                          </div>
+                          <button type="button" className={`ed__ticket-button${selectedEmailId === email.id ? ' ed__ticket-button--active' : ''}`} onClick={() => setSelectedEmailId(email.id)}>
+                            <div className="ed__ticket-top">
+                              <span className="ed__ticket-key">EMAIL</span>
+                              <span className="ed__ticket-summary">{email.subject || 'Delegate email'}</span>
+                              <span className="ed__ticket-sla">{email.isRead ? 'read' : 'unread'}</span>
+                            </div>
+                            <div className="ed__ticket-meta">
+                              <span className="ed__ticket-assignee">{email.from || 'Unknown sender'}</span>
+                              <span className="ed__ticket-take">{email.reason || email.summary || 'Could be delegated'}</span>
+                            </div>
+                          </button>
                         </li>
                       ))}
                     </ul>
@@ -326,10 +392,8 @@ export default function ExecutiveDashboard() {
             ) : (
               <div className="ed__queue-empty">{emailSummary}</div>
             )
-          ) : SECTIONS.map(({ key, label, tone }) => {
-            const tickets = queue?.sections?.[key] ?? [];
-            if (!tickets.length) return null;
-            return (
+          ) : queueSections.length > 0 ? (
+            queueSections.map(({ key, label, tone, tickets }) => (
               <div key={key} className="ed__queue-section">
                 <p className={`ed__queue-heading ed__queue-heading--${tone}`}>
                   {label}
@@ -351,11 +415,64 @@ export default function ExecutiveDashboard() {
                   ))}
                 </ul>
               </div>
-            );
-          })}
+            ))
+          ) : (
+            <div className="ed__queue-empty">{queue?.summary || 'Queue is calm right now.'}</div>
+          )}
         </section>
 
         <div className="ed__side">
+          {emailMode && (
+            <section className="ed__panel" aria-label="Email detail">
+              <div className="ed__panel-head">
+                <p className="ed__section-label">Email detail</p>
+                <p className="ed__panel-summary">
+                  {!selectedEmailId
+                    ? 'Select an email to see the message, a summary, and a suggested reply.'
+                    : selectedEmail.status === 'loading'
+                      ? 'Loading email…'
+                      : selectedEmail.status === 'error'
+                        ? `Could not load email — ${selectedEmail.error}`
+                        : selectedEmail.email?.reason || 'Ready to review.'}
+                </p>
+              </div>
+              {selectedEmail.status === 'ready' && selectedEmail.email ? (
+                <div className="ed__email-detail">
+                  <div className="ed__email-actions">
+                    {selectedEmail.email.webLink && (
+                      <a className="ed__action" href={selectedEmail.email.webLink} target="_blank" rel="noreferrer">
+                        Open in Outlook
+                      </a>
+                    )}
+                    <button type="button" className="ed__action" onClick={() => dismissEmail(selectedEmail.email.id)}>
+                      Dismiss
+                    </button>
+                  </div>
+                  <div className="ed__detail-block">
+                    <p className="ed__queue-heading ed__queue-heading--attention">Summary</p>
+                    <p className="ed__detail-text">{selectedEmail.email.summary}</p>
+                  </div>
+                  <div className="ed__detail-block">
+                    <p className="ed__queue-heading ed__queue-heading--watch">Suggested reply</p>
+                    <pre className="ed__detail-reply">{selectedEmail.email.suggestedReply}</pre>
+                  </div>
+                  <div className="ed__detail-block">
+                    <p className="ed__queue-heading">Original email</p>
+                    <div className="ed__detail-meta">
+                      <span>{selectedEmail.email.from}</span>
+                      {selectedEmail.email.received && <span>{new Date(selectedEmail.email.received).toLocaleString()}</span>}
+                    </div>
+                    <p className="ed__detail-subject">{selectedEmail.email.subject}</p>
+                    <pre className="ed__detail-body">{selectedEmail.email.body || selectedEmail.email.preview}</pre>
+                  </div>
+                </div>
+              ) : (
+                <div className="ed__queue-empty">
+                  {!selectedEmailId ? 'No email selected yet.' : 'Waiting for email detail.'}
+                </div>
+              )}
+            </section>
+          )}
           {/* People roster — full member list from the people domain */}
           <section className="ed__panel" aria-label="People">
             <div className="ed__panel-head">

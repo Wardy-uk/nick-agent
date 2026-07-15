@@ -38,7 +38,8 @@ const TONE_CLASS = { urgent: 'a', attention: 'w', watch: 'g' };
 
 // Left nav rail items (full-bleed JARVIS view owns its own nav).
 const NAV = [
-  { id: SARA_VIEWS.BRIEFING, icon: '⌂', label: 'Home', sub: 'Opening line and live brief' },
+  { id: SARA_VIEWS.COGNITION, icon: '⌂', label: 'Home', sub: 'Cognition surface' },
+  { id: SARA_VIEWS.BRIEFING, icon: '◈', label: 'Briefing', sub: 'Opening line and live brief' },
   { id: SARA_VIEWS.QUEUE, icon: '▤', label: 'Queue', sub: 'Triage what is moving now' },
   { id: SARA_VIEWS.TEAM, icon: '👥', label: 'Team', sub: 'People and pressure signals' },
   { id: SARA_VIEWS.FOCUS, icon: '◎', label: 'Focus', sub: 'One thing that matters' },
@@ -227,7 +228,7 @@ export default function MissionControl() {
           ) : (
             eyesItems.map((it) => (
               <div className="jv__li" key={it.id}>
-                <span className="jv__li-k">{it.title}</span>
+                <span className="jv__li-k">{eyesLabel(it)}</span>
                 <span className={`jv__li-v jv__li-v--${toneForP(it.priority)}`}>{eyesValue(it)}</span>
               </div>
             ))
@@ -374,6 +375,13 @@ function fmtAgeShort(m) {
 }
 function eyesValue(it) {
   if (it.kind === 'approval') return it.ageMins != null ? fmtAgeShort(it.ageMins) : 'review';
-  if (it.kind === 'overdue') return 'overdue';
+  if (it.kind === 'overdue' && typeof it.count === 'number') return String(it.count);
+  if (it.kind === 'overdue' && typeof it.oldestDays === 'number') return `${it.oldestDays}d`;
+  if (it.kind === 'overdue') return 'NOVA';
   return 'today';
+}
+function eyesLabel(it) {
+  if (it.kind === 'overdue' && typeof it.count === 'number') return 'NOVA overdue customers';
+  if (it.kind === 'overdue' && typeof it.oldestDays === 'number') return 'Oldest customer wait';
+  return it.title;
 }

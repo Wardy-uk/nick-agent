@@ -24,6 +24,8 @@ const FOCUS_MAX = 7;
 // ── Item suppression (per-ID, 30 min window) ──
 const _suppressed = new Map();
 const SUPPRESS_WINDOW_MS = 30 * 60 * 1000;
+const NOVA_SNOOZE_MS = 60 * 60 * 1000;
+const SUPPRESSION_STATE_KEY = 'focus_item_suppressions';
 
 // ── Category suppression (entire types hidden temporarily) ──
 // { [type]: { until: timestamp, reason: string } }
@@ -32,6 +34,7 @@ const _categorySuppression = new Map();
 // ── Dismiss tracking: per-type with timestamps ──
 // { [type]: [timestamp, timestamp, ...] }
 const _typeDismissHistory = new Map();
+let _suppressionStateLoaded = false;
 
 // ── Confidence gap ──
 const CONFIDENCE_GAP = 15;
@@ -141,6 +144,37 @@ function collectEscalations(ctx) {
       source: 'jira',
       actionHint: 'Open Queue → Escalations',
       _unsuppressable: true, // overrides cannot suppress this
+    });
+  }
+  return items;
+}
+
+// NOVA flagged tickets ("Nick, look at this"). NOVA's risk scorer already did
+// the hard judgement of what's concerning; here we just surface the worst few
+// into Focus so they land top of the pile. Capped at 3 so they never flood.
+function collectNovaFlags(ctx) {
+  const items = [];
+  if (ctx.timeContext?.isWeekend) return items;
+  let flags = [];
+  try { flags = db.getActiveNovaFlags(); } catch { return items; }
+
+  for (const f of flags.slice(0, 3)) {
+    const risk = Number(f.risk_score) || 0;
+    const isLegal = f.category === 'legal';
+    // Map risk (typically 60–100) onto a Focus score that clears Tier 1 when severe.
+    const score = Math.max(55, Math.min(97, risk));
+    items.push({
+      type: 'nova_flag',
+      id: `nova-${f.ticket_key}`,
+      title: `${f.ticket_key} — ${f.why || 'flagged for review'}`,
+      reason: isLegal ? 'NOVA: legal/formal — needs your eyes' : 'NOVA flagged this for your attention',
+      score,
+      urgency: risk >= 80 || isLegal ? 'critical' : risk >= 70 ? 'high' : 'medium',
+      source: 'nova',
+      actionHint: 'Open NOVA → Look at this',
+      meta: { ticketKey: f.ticket_key, category: f.category, riskScore: risk, summary: f.summary, assignee: f.assignee },
+      _unsuppressable: isLegal, // legal/formal complaints can't be dismissed away
+      _userSuppressable: true, // explicit snooze/hide is still allowed
     });
   }
   return items;
@@ -398,14 +432,20 @@ function _applyOverrides(items, ctx) {
       item._unsuppressable = true;
     }
 
-    // 4. STANDUP FAILURE: late AND after 11:30 → force position #1, ignore snooze
+    // 4. STANDUP FAILURE: late in the morning only. After noon the reminder
+    // should fall away instead of repeatedly forcing itself to the front.
     if (item.type === 'nudge' && item.meta?.type === 'standup' &&
         observations.some(o => o.type === 'standup_late') &&
-        hour >= 11 && new Date().getMinutes() >= 30) {
+        hour === 11 && new Date().getMinutes() >= 30) {
       item.tier = 1;
       item.score = Math.max(item.score, 98);
       item._override = 'standup_failure';
       item._unsuppressable = true;
+    }
+
+    if (item.type === 'nudge' && item.meta?.type === 'standup' && hour >= 12) {
+      item.score = -100;
+      item._suppressedAfterCutoff = true;
     }
 
   }
@@ -499,26 +539,42 @@ function _getTypeDismissCountToday(type) {
 // ═══════════════════════════════════════════════════════
 
 function isSuppressed(itemId) {
+  _loadPersistedSuppressions();
   const entry = _suppressed.get(itemId);
   if (!entry) return false;
-  if (Date.now() - entry.suppressedAt > SUPPRESS_WINDOW_MS) {
+  if (Date.now() > entry.until) {
     _suppressed.delete(itemId);
+    _persistSuppressions();
     return false;
   }
   return true;
 }
 
-function suppressItem(itemId, reason) {
-  _suppressed.set(itemId, { suppressedAt: Date.now(), reason });
+function suppressItem(itemId, reason, options = {}) {
+  if (!itemId) return null;
+  _loadPersistedSuppressions();
+  const until = options.until || (Date.now() + (options.durationMs || SUPPRESS_WINDOW_MS));
+  const entry = {
+    suppressedAt: Date.now(),
+    until,
+    reason: reason || 'suppressed',
+  };
+  _suppressed.set(itemId, entry);
+  _persistSuppressions();
+  return entry;
 }
 
 function clearExpiredSuppressions() {
+  _loadPersistedSuppressions();
   const now = Date.now();
+  let changed = false;
   for (const [id, entry] of _suppressed) {
-    if (now - entry.suppressedAt > SUPPRESS_WINDOW_MS) {
+    if (now > entry.until) {
       _suppressed.delete(id);
+      changed = true;
     }
   }
+  if (changed) _persistSuppressions();
 }
 
 
@@ -548,6 +604,7 @@ async function evaluate(options = {}) {
   // Collect all signals
   const allSignals = [
     ...collectEscalations(ctx),
+    ...collectNovaFlags(ctx),
     ...collectMeetings(ctx),
     ...collectOverdueTodos(ctx),
     ...collectUrgentEmails(ctx),
@@ -609,7 +666,7 @@ async function evaluate(options = {}) {
     if (item.tier === 3 && !item._unsuppressable) continue;
 
     // Per-item suppression (user dismissed) — but not unsuppressable items
-    if (!item._unsuppressable && isSuppressed(item.id)) continue;
+    if ((!item._unsuppressable || item._userSuppressable) && isSuppressed(item.id)) continue;
 
     // Low urgency without deadline (unless nudge)
     if (item.urgency === 'low' && !item.meta?.dueDate && item.type !== 'nudge' && !item._unsuppressable) continue;
@@ -692,6 +749,62 @@ function dismiss(itemId, itemType) {
   }
 }
 
+function snooze(itemId, itemType, durationMs = NOVA_SNOOZE_MS) {
+  suppressItem(itemId, 'user-snoozed', { durationMs });
+  if (itemType) {
+    _trackDismiss(itemType);
+  }
+}
+
+function hideForToday(itemId, itemType) {
+  const tomorrow = new Date();
+  tomorrow.setHours(24, 0, 0, 0);
+  suppressItem(itemId, 'user-hidden-today', { until: tomorrow.getTime() });
+  if (itemType) {
+    _trackDismiss(itemType);
+  }
+}
+
+function getSuppressionFingerprint() {
+  _loadPersistedSuppressions();
+  clearExpiredSuppressions();
+  return [..._suppressed.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, entry]) => `${id}:${entry.until}`)
+    .join('|');
+}
+
+function _loadPersistedSuppressions() {
+  if (_suppressionStateLoaded) return;
+  _suppressionStateLoaded = true;
+  try {
+    const raw = db.getState(SUPPRESSION_STATE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    const now = Date.now();
+    for (const [itemId, entry] of Object.entries(parsed || {})) {
+      if (!entry || !entry.until || entry.until <= now) continue;
+      _suppressed.set(itemId, entry);
+    }
+  } catch (e) {
+    console.warn('[DecisionEngine] Failed to load suppressions:', e.message);
+  }
+}
+
+function _persistSuppressions() {
+  try {
+    const serializable = {};
+    const now = Date.now();
+    for (const [itemId, entry] of _suppressed) {
+      if (!entry || !entry.until || entry.until <= now) continue;
+      serializable[itemId] = entry;
+    }
+    db.setState(SUPPRESSION_STATE_KEY, JSON.stringify(serializable));
+  } catch (e) {
+    console.warn('[DecisionEngine] Failed to persist suppressions:', e.message);
+  }
+}
+
 function _countTiers(items) {
   const tiers = { tier1: 0, tier2: 0, tier3: 0 };
   for (const item of items) {
@@ -705,6 +818,9 @@ function _countTiers(items) {
 module.exports = {
   evaluate,
   dismiss,
+  snooze,
+  hideForToday,
+  getSuppressionFingerprint,
   FOCUS_DEFAULT,
   FOCUS_MAX,
 };

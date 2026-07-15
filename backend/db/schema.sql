@@ -192,6 +192,22 @@ CREATE TABLE IF NOT EXISTS do_next (
 
 CREATE INDEX IF NOT EXISTS idx_do_next_done ON do_next(done, due_date);
 
+-- NOVA flagged tickets ("Nick, look at this") — mirror of NOVA's risk scorer,
+-- pushed in via POST /api/nova-signals. NOVA is source of truth; each push
+-- replaces the whole active set, so resolved/reviewed tickets drop off.
+CREATE TABLE IF NOT EXISTS nova_flags (
+  ticket_key TEXT PRIMARY KEY,
+  risk_score INTEGER NOT NULL DEFAULT 0,
+  category TEXT,
+  why TEXT,
+  summary TEXT,
+  assignee TEXT,
+  ticket_status TEXT,
+  reasons TEXT,
+  flagged_at DATETIME,
+  synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS daily_summary (
   date_key TEXT PRIMARY KEY,
   standup_done INTEGER DEFAULT 0,

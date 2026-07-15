@@ -729,6 +729,44 @@ function deleteDoNext(id) {
   save();
 }
 
+// ── NOVA flags ("Nick, look at this") ──
+// NOVA is the source of truth: each sync replaces the entire active set so
+// tickets NOVA no longer flags (resolved / reviewed) disappear automatically.
+function replaceNovaFlags(flags) {
+  const d = getDb();
+  d.run('DELETE FROM nova_flags');
+  const stmt = d.prepare(
+    `INSERT INTO nova_flags
+       (ticket_key, risk_score, category, why, summary, assignee, ticket_status, reasons, flagged_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const f of flags || []) {
+    if (!f || !f.ticket_key) continue;
+    stmt.run([
+      f.ticket_key,
+      Number(f.risk_score) || 0,
+      f.category || null,
+      f.why || null,
+      f.summary || null,
+      f.assignee || null,
+      f.ticket_status || null,
+      Array.isArray(f.reasons) ? JSON.stringify(f.reasons) : (f.reasons || null),
+      f.flagged_at || null,
+    ]);
+  }
+  stmt.free();
+  save();
+  return (flags || []).length;
+}
+
+function getActiveNovaFlags() {
+  const stmt = getDb().prepare('SELECT * FROM nova_flags ORDER BY risk_score DESC');
+  const rows = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  stmt.free();
+  return rows;
+}
+
 // ── Location Visits ──
 
 function saveLocationVisit(dateKey, placeName, lat, lng, arrival, departure, durationMinutes, source, placeId) {
@@ -964,6 +1002,8 @@ module.exports = {
   getAllDoNext,
   completeDoNext,
   deleteDoNext,
+  replaceNovaFlags,
+  getActiveNovaFlags,
   // Location visits
   saveLocationVisit,
   getLocationVisits,
