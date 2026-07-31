@@ -45,7 +45,7 @@ const CACHE_PATH = process.env.MS_TOKEN_CACHE_PATH ||
 const CLIENT_ID = process.env.MS_CLIENT_ID || '084a3e9f-a9f4-43f7-89f9-d229cf97853e';
 const TENANT_ID = process.env.MS_TENANT_ID || 'db0f7383-5d7f-4a39-9841-02fbcd1444bd';
 
-const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Tasks.Read', 'User.Read'];
+const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Mail.Send', 'Tasks.Read', 'User.Read', 'Chat.Read'];
 
 // Additional scopes to add Monday via device code re-consent:
 //   'Mail.Send'               — enables brief emails
