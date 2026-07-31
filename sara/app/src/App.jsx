@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getPin, clearPin } from './api';
 import { usePushSubscription } from './hooks/usePushSubscription';
+import { useWakeLock } from './hooks/useWakeLock';
 import LockScreen from './components/LockScreen';
 import NotificationActionCard from './components/NotificationActionCard';
 import Capture from './views/Capture';
@@ -78,6 +79,7 @@ export default function App() {
   const [actionIntent, setActionIntent] = useState(() => readLaunchIntent());
   const [refreshing, setRefreshing] = useState(false);
   usePushSubscription(authed);
+  const wakeLock = useWakeLock(authed);
 
   useEffect(() => {
     const intent = readLaunchIntent();
@@ -146,6 +148,18 @@ export default function App() {
           title="Refresh SARA mobile"
           disabled={refreshing}
         >{refreshing ? '…' : '↻'}</button>
+        {wakeLock.supported && (
+          <button
+            className={`app__wake${wakeLock.enabled ? ' app__wake--on' : ''}`}
+            type="button"
+            onClick={wakeLock.toggle}
+            aria-pressed={wakeLock.enabled}
+            aria-label={wakeLock.enabled ? 'Let the screen sleep' : 'Keep the screen awake'}
+            title={wakeLock.enabled
+              ? (wakeLock.held ? 'Screen held awake' : 'Stay awake — tap the screen to arm')
+              : 'Keep the screen awake'}
+          >{wakeLock.enabled && !wakeLock.held ? '◐' : '☀'}</button>
+        )}
         <button
           className="app__lock"
           type="button"
