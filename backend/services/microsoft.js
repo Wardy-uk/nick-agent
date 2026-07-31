@@ -45,13 +45,16 @@ const CACHE_PATH = process.env.MS_TOKEN_CACHE_PATH ||
 const CLIENT_ID = process.env.MS_CLIENT_ID || '084a3e9f-a9f4-43f7-89f9-d229cf97853e';
 const TENANT_ID = process.env.MS_TENANT_ID || 'db0f7383-5d7f-4a39-9841-02fbcd1444bd';
 
-const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Tasks.Read', 'User.Read'];
+const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Mail.Send', 'Tasks.Read', 'User.Read', 'Chat.Read'];
 
-// Additional scopes to add Monday via device code re-consent:
-//   'Mail.Send'               — enables brief emails
-//   'Chat.Read'               — enables Teams DM + mention alerts
-//   'ChannelMessage.Read.All' — enables Teams channel message alerts
-// To activate: add to GRAPH_SCOPES above, then call /api/microsoft/device-code on the Pi.
+// Adding a scope here requires re-consent: call /api/microsoft/device-code on the
+// Pi and follow the URL. Until that happens the cached token lacks the new scope
+// and anything depending on it degrades gracefully (see email-sender.js, teams.js).
+//
+// NOT included: 'ChannelMessage.Read.All' (Teams *channel* message alerts). As a
+// delegated scope it needs tenant admin consent — requesting it makes the whole
+// device-code flow fail, taking Calendar/Mail down with it. Chat.Read alone still
+// covers Teams DMs and @mentions in chats.
 
 let msalClient = null;
 let graphTokenCache = { accessToken: null, expiresOn: 0 };
