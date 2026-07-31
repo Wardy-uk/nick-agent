@@ -40,6 +40,36 @@ const upload = multer({
   limits: { fileSize: MAX_FILE_SIZE }
 });
 
+function slugifyTitle(title) {
+  return (title || 'note')
+    .replace(/[^a-zA-Z0-9-_ ]/g, '')
+    .substring(0, 40)
+    .trim()
+    .replace(/\s+/g, '-');
+}
+
+function writeCapturedNote({ title, content, source = 'neuro-capture' }) {
+  ensureDirs();
+  const slug = slugifyTitle(title);
+  const filename = `${timestamp()}-${slug}.md`;
+  const filePath = path.join(getImportsDir(), filename);
+
+  const fmTitle = title ? `title: "${title.replace(/"/g, '\\"')}"\n` : '';
+  const now = new Date().toISOString();
+  const body = title
+    ? `---\ndate: ${now}\nsource: ${source}\nstatus: unprocessed\n${fmTitle}---\n\n# ${title}\n\n${content.trim()}\n`
+    : `---\ndate: ${now}\nsource: ${source}\nstatus: unprocessed\n---\n\n${content.trim()}\n`;
+
+  fs.writeFileSync(filePath, body, 'utf-8');
+
+  if (!fs.existsSync(filePath)) {
+    throw new Error('File write verification failed');
+  }
+
+  const written = fs.readFileSync(filePath, 'utf-8');
+  return { filePath, filename, written };
+}
+
 // POST /api/capture/note — quick text capture
 router.post('/note', (req, res) => {
   const { title, content } = req.body;
@@ -48,16 +78,7 @@ router.post('/note', (req, res) => {
   }
 
   try {
-    ensureDirs();
-    const slug = (title || 'note').replace(/[^a-zA-Z0-9-_ ]/g, '').substring(0, 40).trim().replace(/\s+/g, '-');
-    const filename = `${timestamp()}-${slug}.md`;
-    const filePath = path.join(getImportsDir(), filename);
-
-    const body = title
-      ? `${frontmatter(title)}# ${title}\n\n${content.trim()}\n`
-      : `${frontmatter(null)}${content.trim()}\n`;
-
-    fs.writeFileSync(filePath, body, 'utf-8');
+    const { filePath, filename, written } = writeCapturedNote({ title, content });
 
     // Verify the file actually landed
     if (!fs.existsSync(filePath)) {
@@ -72,7 +93,6 @@ router.post('/note', (req, res) => {
       return res.status(500).json({ error: 'File write verification failed' });
     }
 
-    const written = fs.readFileSync(filePath, 'utf-8');
     if (written.length < 10) {
       console.error(`[Capture] VERIFICATION FAILED — file too small: ${written.length} bytes`);
     }
@@ -88,6 +108,49 @@ router.post('/note', (req, res) => {
   }
 });
 
+// POST /api/capture/siri-note — Apple Watch / Siri Shortcut capture
+// Accepts a simple text payload and returns a short spoken confirmation.
+router.post('/siri-note', (req, res) => {
+  const note = (req.body.note || req.body.content || req.body.text || '').trim();
+  const title = (req.body.title || '').trim() || 'Watch note';
+  const source = 'sara-watch-siri';
+
+  if (!note) {
+    return res.status(400).json({
+      ok: false,
+      error: 'note is required',
+      spokenText: 'I did not catch a note to save.'
+    });
+  }
+
+  try {
+    const { filePath, filename, written } = writeCapturedNote({ title, content: note, source });
+
+    if (written.length < 10) {
+      console.error(`[Capture] Siri note unusually small: ${written.length} bytes`);
+    }
+
+    console.log(`[Capture] Siri note saved: ${filename} (${written.length} bytes)`);
+    res.json({
+      ok: true,
+      filename,
+      path: filePath,
+      spokenText: 'Saved to SARA.',
+      preview: note.slice(0, 120)
+    });
+
+    try { require('../services/activity').trackCapture('note'); } catch {}
+    try { require('../services/vault-hooks').onVaultWrite(filePath, 'capture-siri-note'); } catch {}
+  } catch (e) {
+    console.error('[Capture] Siri note error:', e);
+    res.status(500).json({
+      ok: false,
+      error: e.message,
+      spokenText: 'I could not save that note to SARA.'
+    });
+  }
+});
+
 // POST /api/capture/todo — quick todo capture, appends to Master Todo.md inbox section
 router.post('/todo', (req, res) => {
   const { text, priority } = req.body;
@@ -96,34 +159,10 @@ router.post('/todo', (req, res) => {
   }
 
   try {
-    const vaultPath = process.env.OBSIDIAN_VAULT_PATH || '';
-    const masterPath = path.join(vaultPath, 'Tasks', 'Master Todo.md');
-
-    if (!fs.existsSync(masterPath)) {
-      return res.status(404).json({ error: 'Master Todo.md not found in Tasks/' });
-    }
-
-    const priorityEmoji = priority === 'high' ? '🔴 ' : priority === 'low' ? '🟢 ' : '';
-    const todoLine = `- [ ] ${priorityEmoji}${text.trim()}`;
-
-    // Append to the ## 📥 Inbox section if it exists, otherwise append to end of file
-    let content = fs.readFileSync(masterPath, 'utf-8');
-    const inboxMatch = content.match(/^## .*📥.*Inbox.*/m);
-
-    if (inboxMatch) {
-      // Find the line after the inbox heading and insert there
-      const insertIdx = content.indexOf('\n', content.indexOf(inboxMatch[0])) + 1;
-      content = content.slice(0, insertIdx) + todoLine + '\n' + content.slice(insertIdx);
-    } else {
-      // No inbox section — append to end
-      content = content.trimEnd() + '\n' + todoLine + '\n';
-    }
-
-    fs.writeFileSync(masterPath, content, 'utf-8');
+    obsidian.addTodoToMasterList(text, { priority, origin: 'capture', trigger: 'capture-todo' });
     console.log(`[Capture] Todo saved: ${text.trim()}`);
     res.json({ success: true, text: text.trim() });
     try { require('../services/activity').trackCapture('todo'); } catch {}
-    try { require('../services/vault-hooks').onVaultWrite(masterPath, 'capture-todo'); } catch {}
   } catch (e) {
     console.error('[Capture] Todo error:', e);
     res.status(500).json({ error: e.message });

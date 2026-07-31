@@ -15,11 +15,13 @@ const DEFAULT_BASE_URL = 'https://nuero.nickward.co.uk';
 const neuroConfig = require('./neuroConfig');
 
 const ENDPOINTS = {
+  queue: '/api/queue/summary',
   focus: '/api/focus',
   todos: '/api/todos',
   context: '/api/context',
   team: '/api/team-health?severity=all',
   capture: '/api/capture/recent',
+  email: '/api/email/triage',
 };
 
 function trimSlash(value) {
@@ -53,6 +55,7 @@ function unavailable(reason, detail) {
       context: null,
       team: null,
       capture: null,
+      email: null,
     },
     errors: {},
   };
@@ -94,6 +97,7 @@ async function refresh() {
     context: null,
     team: null,
     capture: null,
+    email: null,
   };
   const errors = {};
 

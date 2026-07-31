@@ -113,7 +113,21 @@ function mapQueueTicket(ticket) {
 
 function buildQueue(neuroData) {
   const raw = neuroData?.queue;
-  if (!raw || !Array.isArray(raw.tickets)) return seed.queue();
+  if (!raw || !Array.isArray(raw.tickets)) {
+    return {
+      source: neuroData ? neuro.NEURO_SOURCE : 'seed',
+      summary: neuroData
+        ? 'Live queue feed is currently unavailable from NEURO.'
+        : seed.queue().summary,
+      open: 0,
+      breaching: 0,
+      sections: {
+        act_now: [],
+        today: [],
+        watch: [],
+      },
+    };
+  }
 
   const allTickets = raw.tickets.map(mapQueueTicket);
   const urgentKeys = new Set((raw.at_risk_tickets || []).map((ticket) => ticket.ticket_key || ticket.key || ticket.id));
@@ -165,7 +179,8 @@ function buildFocus(neuroData) {
     summary: reason || title,
     current: current
       ? {
-          id: current.id || current.key || current.ticket_key || 'focus-current',
+          id: current.focusItemId || current.id || current.key || current.ticket_key || 'focus-current',
+          itemType: current.focusItemType || current.kind || current.type || null,
           title,
           reason,
           timeboxMins:
@@ -288,7 +303,7 @@ function buildPresentation(neuroData, domains) {
         'What needs a direct follow-up from you?',
       ],
     },
-    todos: { source: 'placeholder', items: [] },
+    todos: { source: 'placeholder', items: [], candidates: [], todayLane: [] },
     capture: { source: 'placeholder', shortcuts: [], recent: [] },
   };
 
@@ -297,9 +312,10 @@ function buildPresentation(neuroData, domains) {
   const todos = neuroData?.todos;
   const context = neuroData?.context;
   const capture = neuroData?.capture;
+  const email = neuroData?.email;
   const team = neuroData?.team;
 
-  if (!queue && !focus && !todos && !context && !capture && !team) return fallback;
+  if (!queue && !focus && !todos && !context && !capture && !team && !email) return fallback;
 
   const whatMattersNow = [];
   for (const ticket of queue?.at_risk_tickets || []) {
@@ -329,6 +345,16 @@ function buildPresentation(neuroData, domains) {
       tone: 'attention',
     });
   }
+  const urgentEmails = email?.urgent || [];
+  if (urgentEmails.length) {
+    const topEmail = urgentEmails[0];
+    whatMattersNow.push({
+      id: `wmn-email-${topEmail.id || 'urgent'}`,
+      title: `${urgentEmails.length} urgent email${urgentEmails.length === 1 ? '' : 's'}`,
+      detail: trimText(topEmail.subject || topEmail.reason || topEmail.from || 'Urgent inbox item.'),
+      tone: 'urgent',
+    });
+  }
 
   const upNext = [];
   if (focus?.secondaryAction) {
@@ -354,6 +380,14 @@ function buildPresentation(neuroData, domains) {
         label: titleFromItem(task),
       });
     }
+  }
+  const replyEmails = email?.reply || [];
+  if (replyEmails.length && upNext.length < 3) {
+    upNext.push({
+      id: 'upnext-email-reply',
+      time: 'Inbox',
+      label: `${replyEmails.length} email${replyEmails.length === 1 ? '' : 's'} need a reply`,
+    });
   }
 
   const standupSections = {
@@ -385,6 +419,21 @@ function buildPresentation(neuroData, domains) {
       filePath: item.filePath || null,
       lineNumber: item.lineNumber ?? null,
     }));
+  const todoCandidates = (todos?.suggested || []).slice(0, 4).map((item) => ({
+    id: item.id,
+    title: item.text,
+    detail: item.reason || 'Suggested from a note',
+    confidence: item.confidence || 0,
+    sourcePath: item.sourcePath || null,
+  }));
+  const todayLane = (todos?.todayLane || []).slice(0, 4).map((item) => ({
+    id: item.id,
+    title: item.text,
+    detail: item.why || 'Must move today',
+    moscow: item.moscow || null,
+    context: item.context || null,
+    dueDate: item.due_date || null,
+  }));
 
   const recentCapture = (capture?.items || []).slice(0, 5).map((item, index) => ({
     id: `capture-recent-${index}`,
@@ -400,9 +449,32 @@ function buildPresentation(neuroData, domains) {
     upNext: upNext.length ? upNext : fallback.upNext,
     quickActions: fallback.quickActions,
     standup: standupSections,
+    email: {
+      source: email ? neuro.NEURO_SOURCE : 'placeholder',
+      available: email ? email.available !== false : false,
+      detail: email?.detail || null,
+      urgentCount: urgentEmails.length,
+      replyCount: replyEmails.length,
+      urgent: urgentEmails.slice(0, 5).map((item, index) => ({
+        id: item.id || `urgent-${index}`,
+        subject: item.subject || 'Urgent email',
+        from: item.from || item.fromEmail || 'Unknown sender',
+        reason: item.reason || '',
+        isRead: Boolean(item.isRead),
+      })),
+      reply: replyEmails.slice(0, 8).map((item, index) => ({
+        id: item.id || `reply-${index}`,
+        subject: item.subject || 'Needs reply',
+        from: item.from || item.fromEmail || 'Unknown sender',
+        reason: item.reason || '',
+        isRead: Boolean(item.isRead),
+      })),
+    },
     todos: {
-      source: todoItems.length ? neuro.NEURO_SOURCE : 'placeholder',
+      source: todoItems.length || todoCandidates.length || todayLane.length ? neuro.NEURO_SOURCE : 'placeholder',
       items: todoItems.length ? todoItems : fallback.todos.items,
+      candidates: todoCandidates,
+      todayLane,
     },
     capture: {
       source: recentCapture.length ? neuro.NEURO_SOURCE : 'placeholder',
@@ -596,8 +668,9 @@ function buildNova(snapshot) {
       id: 'overdue-tickets',
       kind: 'overdue',
       priority: overdue >= 20 ? 3 : 2,
-      title: `${overdue} ticket${overdue === 1 ? '' : 's'} past 2h response`,
-      detail: 'Open beyond the SLA response window.',
+      title: `${overdue} customer${overdue === 1 ? '' : 's'} overdue response`,
+      detail: 'Customers are waiting beyond the response target.',
+      count: overdue,
     });
   }
   // A standout long-running ticket is worth its own line.
@@ -606,8 +679,9 @@ function buildNova(snapshot) {
       id: 'worst-oldest',
       kind: 'overdue',
       priority: worstOldestDays >= 60 ? 3 : 1,
-      title: `Oldest open ticket: ${worstOldestDays} days`,
-      detail: 'A long-running ticket that may need a push.',
+      title: `Oldest overdue customer: ${worstOldestDays} days`,
+      detail: 'A long-running customer wait that may need a push.',
+      oldestDays: worstOldestDays,
     });
   }
 

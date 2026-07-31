@@ -1,6 +1,7 @@
 'use strict';
 
 const db = require('../db/database');
+const { evaluateEmail } = require('./email-priority');
 
 // CLAUDE_MODEL removed in Phase 3 — AI routing handles provider selection
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
@@ -69,15 +70,38 @@ Classify these ${emails.slice(0, 20).length} emails:\n\n${emailList}`
       }
   } catch (aiErr) {
     console.error('[EmailTriage] AI classification failed:', aiErr.message);
-    return emails.map(e => ({ ...e, category: 'FYI', reason: '', triaged: false }));
+    classifications = [];
   }
 
   return emails.map((email, i) => {
     const cls = (classifications || []).find(c => c.index === i);
+    const deterministic = evaluateEmail(email);
+    const aiCategory = String(cls?.category || 'FYI').toUpperCase();
+    let category = aiCategory;
+    if (deterministic.category === 'IGNORE') category = 'IGNORE';
+    else if (deterministic.category === 'FYI' && aiCategory === 'ACTION') category = 'FYI';
+    else if (deterministic.category === 'ACTION' && aiCategory === 'IGNORE') category = 'ACTION';
+    else if (deterministic.category === 'DELEGATE' && aiCategory !== 'ACTION') category = 'DELEGATE';
+    else if (deterministic.forced) category = deterministic.category;
+
+    const lane =
+      category === 'IGNORE' ? 'ignore'
+        : category === 'DELEGATE' ? 'delegate'
+          : deterministic.lane === 'urgent' ? 'urgent'
+            : category === 'ACTION' ? 'reply'
+              : deterministic.lane || 'fyi';
+
     return {
       ...email,
-      category: cls?.category || 'FYI',
-      reason: cls?.reason || '',
+      category,
+      lane,
+      urgency: deterministic.urgency,
+      urgent: lane === 'urgent',
+      needsReply: lane === 'reply' || lane === 'urgent',
+      reason: deterministic.reasons.length
+        ? deterministic.reasons.join(' · ')
+        : (cls?.reason || ''),
+      aiCategory,
       triaged: true,
       triagedAt: new Date().toISOString()
     };
@@ -94,7 +118,18 @@ async function runTriage() {
   try {
     const emails = await microsoft.fetchRecentEmails(24, 40);
     if (!emails || emails.length === 0) {
-      return { ok: true, count: 0, action: 0 };
+      db.setState('email_triage', JSON.stringify([]));
+      db.setState('email_triage_time', String(Date.now()));
+      return {
+        ok: true,
+        count: 0,
+        urgent: 0,
+        reply: 0,
+        action: 0,
+        fyi: 0,
+        delegate: 0,
+        ignore: 0,
+      };
     }
 
     const classified = await classifyEmails(emails);
@@ -118,9 +153,19 @@ async function runTriage() {
     db.setState('email_triage', JSON.stringify(updated));
     db.setState('email_triage_time', String(Date.now()));
 
-    const actionCount = classified.filter(e => e.category === 'ACTION').length;
-    console.log(`[EmailTriage] Classified ${classified.length} emails, ${actionCount} need action`);
-    return { ok: true, count: classified.length, action: actionCount };
+    const urgentCount = classified.filter(e => e.lane === 'urgent').length;
+    const replyCount = classified.filter(e => e.lane === 'reply').length;
+    console.log(`[EmailTriage] Classified ${classified.length} emails, ${urgentCount} urgent, ${replyCount} need reply`);
+    return {
+      ok: true,
+      count: classified.length,
+      urgent: urgentCount,
+      reply: replyCount,
+      action: classified.filter(e => e.category === 'ACTION').length,
+      fyi: classified.filter(e => e.category === 'FYI').length,
+      delegate: classified.filter(e => e.category === 'DELEGATE').length,
+      ignore: classified.filter(e => e.category === 'IGNORE').length,
+    };
   } catch (e) {
     console.error('[EmailTriage] Failed:', e.message);
     return { ok: false, error: e.message };
@@ -137,6 +182,8 @@ function getStoredTriage() {
 function getTriageByCategory() {
   const all = getStoredTriage().filter(e => !e.dismissed);
   return {
+    urgent: all.filter(e => e.lane === 'urgent'),
+    reply: all.filter(e => e.lane === 'reply'),
     action: all.filter(e => e.category === 'ACTION'),
     fyi: all.filter(e => e.category === 'FYI'),
     delegate: all.filter(e => e.category === 'DELEGATE'),
