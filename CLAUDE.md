@@ -5,7 +5,7 @@ Personal AI-powered productivity system. Aggregates Jira queue, Obsidian vault, 
 ## Tech Stack
 - **Backend:** Express 4 + Node.js (CommonJS, `require()` — NOT ESM)
 - **Frontend:** React 19 + CSS modules (per-component `.css` files) + Vite
-- **Database:** sql.js (in-memory SQLite, flushed to disk). Same flush caveat as NOVA.
+- **Database:** better-sqlite3 (native SQLite, WAL). Writes commit immediately — no flush step, and external scripts can read while the server runs.
 - **Auth:** PIN-based (`X-NEURO-PIN` header) + API token for machine clients (n8n)
 - **AI:** Anthropic SDK (Claude) + Ollama (local models on Pi) with AI routing layer
 - **External:** Jira REST, Microsoft Graph (MSAL device code), Strava OAuth, OwnTracks, Obsidian vault filesystem, n8n webhooks, web-push notifications
