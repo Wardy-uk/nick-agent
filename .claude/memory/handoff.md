@@ -12,6 +12,74 @@ Backups taken before the merge (keep until confident):
 - `/mnt/data/backups/.env.20260812-123852`
 - Branch `pi-local-2026-07-31` @ `9e954f9` on GitHub — the Pi's pre-merge state, and the rollback point.
 
+## THE TASK AUDIT (afternoon of 12 Aug) — READ THIS BEFORE THE PROCESS REVIEW
+
+**Nick is mid-triage.** Worksheet: `Tasks/TRIAGE - All Open Actions 2026-08-12.md` — 538 tickable
+lines, grouped by source, each tagged with its origin. **Nothing has been logged anywhere new.**
+He closes what's done, THEN we review the process, THEN move what's left to Master Todo and delete
+the PIP file + worksheets.
+
+### Definitive count: ~521 distinct (538 worksheet lines)
+
+| Source | Count |
+|---|---|
+| Meeting Actions — `Projects/PIP/Nick - Meeting Actions (2026-06 to 08).md` | 265 raw / 258 distinct |
+| NEW — found in meetings, in no list | 29 |
+| 90-Day Plan (3 files, deduped) | 169 / 159 distinct |
+| Jira — genuinely open | 19 |
+| Master Todo | 18 |
+| MS Planner | 14 |
+| MS To Do | 12 |
+| Flagged Emails | 12 |
+
+538 vs 521: the worksheet keeps each source's line as written rather than cross-deduping, on
+purpose — for triage you want the original wording.
+
+### Three findings that matter beyond this exercise
+
+**1. Jira is lying to you. 1,005 unresolved tickets assigned to Nick; 986 sit in a
+statusCategory="Done" status with no resolution set.** Real open workload is **19** (14 To Do,
+5 In Progress). Any report on "unresolved assigned to Nick" is inflated ~50x. Worth fixing at
+source — those 986 need bulk-resolving.
+
+**2. Ran the owner classifier over 2,875 previously-uncounted checkboxes across 9 vault areas.
+Every single Nick-attributable action came from `Meetings/`.**
+```
+area                    raw   MINE  others  unowned-act  noise
+Meetings               1404    128     333          420    523
+Projects (excl NOVA)   1038      0      19          256    763
+Daily                   208      0       1           65    142
+Documents               160      0      16           53     91
+Decision Log/MOCs/Personal/Reflections/Ideas  65  0  0   3   62
+```
+Projects, Daily, Documents, Ideas, Decision Log — **1,471 checkboxes, zero attributable to Nick**.
+The boundary doc's "those are records, not task lists" is now measured, not asserted. (Ideas was
+checked explicitly: 4 checkboxes, none his.)
+
+**3. The consolidated view is UNREACHABLE.** `TodoPanel` exists and `App.jsx` routes `case 'todos'`,
+but **`Sidebar.jsx` has no `todos` entry** (briefing/chat/capture/focus/dashboard/people/calendar/
+meeting-prep/vault/inbox/plan/standups/journal/imports/recent/insights/pi-health/admin). **SARA
+mobile has no todos tab either.** Only the nudge banner navigates there. I claimed earlier in the
+session that "the single view already exists" — it does in code, but Nick was right that it isn't
+a menu option. Fixing that is a prerequisite for any of this sticking.
+
+### Of the 128 Nick-owned meeting actions, 99 were already in the PIP list, 29 were not
+
+The 29 are mostly from **1-2-1s, which the PIP file excludes by design**, plus the 12 recovered
+meetings. Several are people-management commitments (Heidi 1-2-1 feedback, design work for
+Kayleigh/Isabel, circulating meeting notes) — the category you least want silently dropped.
+
+### REVISIT AT THE PROCESS REVIEW
+
+- **A+C was sized on NEW meetings (~41/week), never against the backlog.** There are **797
+  unowned-but-actionable** items sitting in the vault (420 meetings, 256 projects). Feeding those
+  into the review queue would recreate the 1,161 problem. Decide the backlog policy separately
+  from the go-forward policy.
+- **The 28 auto-promoted lines are still in Master Todo** (18 real items → 46). Mistagged
+  `#mustdo`, under `## Links`, ~half not Nick's. Cleanup still pending Nick's go-ahead.
+- `addTodoToMasterList()` appends to end-of-file when it can't find a `📥 Inbox` heading — Master
+  Todo's headings don't match its pattern, which is why the 28 landed under `## Links`.
+
 ## WHAT WAS FIXED
 
 **1. The proactive delivery chain — every path was dead, all three now live.**
