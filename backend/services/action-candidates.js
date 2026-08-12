@@ -7,6 +7,10 @@ const db = require('../db/database');
 
 const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
 const AUTO_PROMOTE_CONFIDENCE = 0.93;
+// Master kill switch. Kept as a constant rather than deleting the branch so the
+// behaviour is visible and reversible, but it stays off: see the note at the
+// promotion site for what happened the one time it ran unattended.
+const ALLOW_AUTO_PROMOTE = false;
 const ACTION_TYPES = new Set([
   'action',
   'actions',
@@ -384,7 +388,13 @@ function syncNoteActionCandidates(relativePath) {
     );
     created += 1;
 
-    if (candidate.autoPromote) {
+    // Auto-promote is disabled outright. On 12 Aug a Plaud repull wrote 73
+    // meeting notes, each firing onVaultWrite -> this function, and the
+    // checkbox extractor auto-promoted 28 items straight into Master Todo —
+    // including "Speaker 1 to email the Hughes Estates client", all tagged
+    // #mustdo (retired 10 Jul) and appended under ## Links rather than Inbox.
+    // Nothing reaches the task list without Nick approving it from the queue.
+    if (candidate.autoPromote && ALLOW_AUTO_PROMOTE) {
       const action = db.getSaraAction(actionId);
       if (!action) {
         // Row is in the DB but unreadable by id — leave it pending for review
