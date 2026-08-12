@@ -23,6 +23,7 @@ import StandupsPanel from './components/StandupsPanel';
 import JournalPanel from './components/JournalPanel';
 import FocusPanel from './components/FocusPanel';
 import BriefingPanel from './components/BriefingPanel';
+import PiHealthPanel from './components/PiHealthPanel';
 import MeetingPrep from './components/MeetingPrep';
 import InstallBanner from './components/InstallBanner';
 import usePushNotifications from './usePushNotifications';
@@ -278,6 +279,7 @@ function AuthenticatedApp() {
       case 'journal': return <JournalPanel />;
       case 'standups': return <StandupsPanel />;
       case 'insights': return <InsightsPanel onNavigate={handleNavigate} />;
+      case 'pi-health': return <PiHealthPanel />;
       case 'admin': return <AdminPanel pushState={pushState} />;
       default: return <BriefingPanel onNavigate={handleNavigate} />;
     }

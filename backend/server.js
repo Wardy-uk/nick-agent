@@ -159,6 +159,7 @@ app.use('/api/knowledge-gaps', require('./routes/knowledge-gaps'));
 app.use('/api/knowledge-memory', require('./routes/knowledge-memory'));
 app.use('/api/kb-article', require('./routes/kb-article'));
 app.use('/api/email', require('./routes/email-triage'));
+app.use('/api/pi-health', require('./routes/pi-health'));
 
 // Health / status endpoint
 app.get('/api/status', async (req, res) => {

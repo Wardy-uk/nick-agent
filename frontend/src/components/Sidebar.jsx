@@ -22,6 +22,7 @@ const SECONDARY_ITEMS = [
   { id: 'imports',    label: 'Imports',   icon: '>' },
   { id: 'recent',     label: 'Recent',    icon: '>' },
   { id: 'insights',   label: 'Insights',  icon: '◈' },
+  { id: 'pi-health',  label: 'Pi Health', icon: '▚' },
   { id: 'admin',      label: 'Settings',  icon: '>' },
 ];
 
