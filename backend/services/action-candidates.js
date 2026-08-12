@@ -20,6 +20,10 @@ const ACTION_TYPES = new Set([
   'open loops',
   'outstanding',
   'to do',
+  // PLAUD writes its action list under this heading. Without it, meeting notes
+  // contributed nothing but loose checkboxes.
+  'next arrangements',
+  'arrangements',
 ]);
 const ACTION_VERBS = [
   'send',
@@ -46,6 +50,15 @@ const ACTION_VERBS = [
   'message',
   'write',
   'confirm',
+  // Imperatives PLAUD actually produces in ## Next Arrangements. Without these
+  // the unowned-action filter rejected most genuine items as non-actions.
+  'reclassify', 'prioritize', 'prioritise', 'ensure', 'compile', 'obtain',
+  'initiate', 'align', 'monitor', 'press', 'remind', 'continue', 'meet',
+  'assess', 'implement', 'define', 'document', 'agree', 'investigate',
+  'produce', 'resolve', 'report', 'set', 'add', 'plan', 'evaluate', 'secure',
+  'arrange', 'coordinate', 'escalate', 'publish', 'circulate', 'contact',
+  'engage', 'clarify', 'progress', 'establish', 'introduce', 'revise',
+  'validate', 'audit', 'close', 'pursue', 'deliver', 'present', 'discuss',
 ];
 const ACTION_STOPWORDS = new Set([
   'a', 'an', 'and', 'the', 'to', 'for', 'of', 'on', 'in', 'into', 'with', 'from',
@@ -317,7 +330,7 @@ function syncNoteActionCandidates(relativePath) {
 
   const contentHash = hashKey(stripFrontmatter(content));
   const reviewState = readReviewState(relativePath);
-  const candidates = extractActionCandidates(content, relativePath);
+  const candidates = candidatesFor(content, relativePath);
   if (reviewState.contentHash === contentHash && candidates.length === 0) {
     return { created: 0, autoPromoted: 0, pending: 0, superseded: 0, candidates: [] };
   }
@@ -394,6 +407,143 @@ function syncNoteActionCandidates(relativePath) {
   return { created, autoPromoted, pending, superseded, candidates };
 }
 
+// ── Meeting action extraction (PLAUD "## Next Arrangements") ─────────────────
+//
+// The generic checkbox scan is unusable on meeting notes: every "- [ ]" scores
+// 0.93 (== AUTO_PROMOTE_CONFIDENCE), so a dry run proposed 562 candidates and
+// wanted to auto-write all of them into Master Todo — including other people's
+// actions and the NOVA backlog, which Tasks/Task System Boundary.md explicitly
+// routes elsewhere.
+//
+// PLAUD states ownership in the prose instead ("Nick to prepare…", "Abi to
+// monitor…", "Catherine will process…"), so we read that rather than relying on
+// a tag. Measured over 23 meetings / 261 action lines:
+//   A named-Nick 48 (18%) · B named-someone-else 45 (17%) · C unowned 168 (64%)
+// B is dropped outright — that IS the "don't carry other people's actions" rule.
+//
+// Nothing here auto-promotes. Everything goes to the review queue.
+
+const OWNER_RE = /^([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)?(?:\s*\/\s*[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)?)*)\s+(?:to|will|should|must|is to)\b/;
+const NICK_RE = /^nick(\s+ward)?$/i;
+
+// "A follow-up meeting … is scheduled for August 13" is a record, not a task.
+const STATEMENT_OF_FACT_RE = /\b(?:is|are|was|were|has been|have been|had been)\s+(?:scheduled|planned|arranged|agreed|booked|completed|confirmed|held|due|set up)\b/i;
+
+let _peopleCache = null;
+function peopleFirstNames() {
+  if (_peopleCache) return _peopleCache;
+  const set = new Set(['nick', 'nick ward']);
+  try {
+    const dir = path.join(VAULT_PATH, 'People');
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.md')) continue;
+      const full = f.replace(/\.md$/, '');
+      set.add(full.toLowerCase());
+      const first = full.split(/\s+/)[0];
+      if (first) set.add(first.toLowerCase());
+    }
+  } catch { /* no People/ index — everything falls through to unowned */ }
+  _peopleCache = set;
+  return set;
+}
+
+// mine | others | unowned. "Reclassify Lomond to low risk" must NOT read as an
+// owner, so a captured actor only counts if it matches the People/ index.
+function classifyActionOwner(text) {
+  const m = String(text || '').trim().match(OWNER_RE);
+  if (m) {
+    const actors = m[1].split('/').map((a) => a.trim()).filter(Boolean);
+    const known = actors.filter((a) => peopleFirstNames().has(a.toLowerCase()));
+    if (known.length) {
+      return known.some((a) => NICK_RE.test(a)) ? 'mine' : 'others';
+    }
+  }
+  // Unattributed but names Nick somewhere ("… with Nick", "Nick's team")
+  if (/\bnick\b/i.test(text)) return 'mine';
+  return 'unowned';
+}
+
+function extractMeetingActions(text, relativePath) {
+  const body = stripFrontmatter(text);
+  const lines = body.split(/\r?\n/);
+  const out = [];
+  const seen = new Set();
+  let inActionSection = false;
+  const todoIntelligence = require('./todo-intelligence');
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (/^#{1,6}\s+/.test(trimmed)) { inActionSection = isActionHeading(trimmed); continue; }
+    if (!inActionSection || !trimmed) continue;
+    // PLAUD's "## AI Suggestions" block is quoted prose about unresolved issues,
+    // explicitly NOT action items.
+    if (trimmed.startsWith('>')) continue;
+
+    const bullet = trimmed.match(/^[-*+]\s*(?:\[\s?\]\s*)?(.+)$/);
+    if (!bullet) continue;
+
+    const raw = cleanCandidateText(bullet[1]);
+    if (!raw || raw.length < 8 || raw.length > 220) continue;
+
+    const owner = classifyActionOwner(raw);
+    if (owner === 'others') continue;                       // B — not yours
+
+    if (owner === 'unowned') {                              // C — needs to look like an action
+      if (STATEMENT_OF_FACT_RE.test(raw)) continue;
+      if (!startsWithActionVerb(raw)) continue;
+    }
+
+    const dedupeKey = buildFocusItemId(relativePath, raw);
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    // Both tiers sit well below AUTO_PROMOTE_CONFIDENCE, and autoPromote is
+    // hard-false regardless — this queue is review-only by design.
+    const confidence = owner === 'mine' ? 0.8 : 0.55;
+
+    out.push({
+      type: 'capture_todo',
+      text: raw,
+      confidence,
+      reason: owner === 'mine'
+        ? `You were named in ${path.basename(relativePath, '.md')}`
+        : `Unassigned action from ${path.basename(relativePath, '.md')}`,
+      sourcePath: relativePath,
+      sourceLine: index + 1,
+      focusItemId: dedupeKey,
+      semanticSignature: buildSemanticSignature(raw),
+      autoPromote: false,
+      owner,
+      payload: {
+        text: raw,
+        sourcePath: relativePath,
+        sourceLine: index + 1,
+        semanticSignature: buildSemanticSignature(raw),
+        extractedFrom: 'meeting-action',
+        origin: 'meeting-candidate',
+        owner,
+        metadata: todoIntelligence.triageTodo({ text: raw, sourcePath: relativePath, dueDate: null, mustdo: false }),
+      },
+    });
+  }
+
+  return out;
+}
+
+// Meeting notes go through the owner-classified extractor; everything else keeps
+// the original checkbox/prefix heuristics.
+function isMeetingNote(relativePath) {
+  return /^meetings\//i.test(String(relativePath || '').replace(/\\/g, '/'));
+}
+
+function candidatesFor(content, relativePath) {
+  return isMeetingNote(relativePath)
+    ? extractMeetingActions(content, relativePath)
+    : extractActionCandidates(content, relativePath);
+}
+
 // Walk recently-modified vault notes and extract action candidates.
 //
 // syncNoteActionCandidates() only ever ran from vault-hooks.onVaultWrite(), which
@@ -453,7 +603,7 @@ function scanRecentNotes(options = {}) {
       // Extract only — no DB writes, no promotion, no review-state update.
       let content = '';
       try { content = fs.readFileSync(path.join(VAULT_PATH, rel), 'utf-8'); } catch { continue; }
-      const candidates = extractActionCandidates(content, rel);
+      const candidates = candidatesFor(content, rel);
       if (!candidates.length) continue;
       const auto = candidates.filter((c) => c.autoPromote).length;
       result.wouldCreate += candidates.length;
@@ -482,6 +632,8 @@ function scanRecentNotes(options = {}) {
 module.exports = {
   AUTO_PROMOTE_CONFIDENCE,
   scanRecentNotes,
+  extractMeetingActions,
+  classifyActionOwner,
   buildFocusItemId,
   buildSemanticSignature,
   extractActionCandidates,
