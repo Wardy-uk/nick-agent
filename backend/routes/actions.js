@@ -124,16 +124,21 @@ router.post('/batch', (req, res) => {
 
     const succeeded = [];
     const failed = [];
-    for (const id of ids) {
-      let outcome;
-      try {
-        outcome = verb === 'approve' ? approveAction(id) : rejectAction(id);
-      } catch (e) {
-        outcome = { status: 500, body: { error: e.message } };
+    // One DB flush for the whole batch. Each action would otherwise trigger
+    // three full 60MB+ database dumps, which is what made a 40-item dismiss
+    // sit there for minutes with the event loop blocked.
+    db.batchSaves(() => {
+      for (const id of ids) {
+        let outcome;
+        try {
+          outcome = verb === 'approve' ? approveAction(id) : rejectAction(id);
+        } catch (e) {
+          outcome = { status: 500, body: { error: e.message } };
+        }
+        if (outcome.status === 200) succeeded.push(Number(id));
+        else failed.push({ id: Number(id), error: outcome.body.error || 'failed', status: outcome.status });
       }
-      if (outcome.status === 200) succeeded.push(Number(id));
-      else failed.push({ id: Number(id), error: outcome.body.error || 'failed', status: outcome.status });
-    }
+    });
 
     workingMemory.invalidate(`sara actions batch ${verb}`);
 

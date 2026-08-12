@@ -74,14 +74,36 @@ async function init() {
   console.log('[DB] Initialized');
 }
 
+// Every write helper calls save(), and save() dumps the WHOLE database (60MB+)
+// synchronously. That is fine for one write and ruinous for a loop of them, so
+// batchSaves() lets a caller collapse many writes into a single flush.
+let saveDepth = 0;
+let savePending = false;
+
 function save() {
   if (!db) return;
+  if (saveDepth > 0) { savePending = true; return; }
   fs.mkdirSync(DB_DIR, { recursive: true });
   const data = db.export();
   const buffer = Buffer.from(data);
   const tempPath = path.join(DB_DIR, `agent.db.tmp-${process.pid}`);
   fs.writeFileSync(tempPath, buffer);
   fs.renameSync(tempPath, DB_PATH);
+}
+
+// Run a SYNCHRONOUS fn with save() deferred to one flush at the end. Not for
+// async work: an await would let unrelated writes join the deferral window.
+function batchSaves(fn) {
+  saveDepth += 1;
+  try {
+    return fn();
+  } finally {
+    saveDepth -= 1;
+    if (saveDepth === 0 && savePending) {
+      savePending = false;
+      save();
+    }
+  }
 }
 
 function getDb() {
@@ -871,12 +893,13 @@ function createSaraAction(type, payload, confidence, reason, focusItemId) {
      VALUES (?, ?, ?, ?, ?)`,
     [type, JSON.stringify(payload), confidence, reason, focusItemId || null]
   );
-  save();
-  // Return the inserted ID
+  // Read the id BEFORE save(): save() calls db.export(), which closes and
+  // reopens the sql.js connection, and last_insert_rowid() then returns 0.
   const stmt = getDb().prepare('SELECT last_insert_rowid() as id');
   stmt.step();
   const row = stmt.getAsObject();
   stmt.free();
+  save();
   return row.id;
 }
 
@@ -933,6 +956,7 @@ function getRecentSaraActions(limit = 20) {
 module.exports = {
   init,
   getDb,
+  batchSaves,
   saveMessage,
   getConversationHistory,
   getRecentConversations,

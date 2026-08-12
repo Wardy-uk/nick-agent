@@ -386,6 +386,13 @@ function syncNoteActionCandidates(relativePath) {
 
     if (candidate.autoPromote) {
       const action = db.getSaraAction(actionId);
+      if (!action) {
+        // Row is in the DB but unreadable by id — leave it pending for review
+        // rather than losing the rest of this note's candidates.
+        console.warn('[ActionCandidates] Created action', actionId, 'could not be re-read; leaving pending');
+        pending += 1;
+        continue;
+      }
       const result = suggestionEngine.executeAction(action);
       db.updateSaraActionStatus(actionId, result.ok ? 'executed' : 'failed');
       suggestionEngine.logActionExecution(action, result);
