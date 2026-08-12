@@ -56,6 +56,25 @@ async function sendBriefEmail(subject, htmlBody) {
 }
 
 /**
+ * The synthesis comes back from the model as markdown, so dropping it straight
+ * into the HTML body rendered literal "**like this**" in the email. Handles the
+ * inline subset the model actually emits — bold, italic, code — and escapes
+ * first, since this text is model output going into a mail body.
+ */
+function renderInlineMarkdown(text) {
+  const escaped = String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  return escaped
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\n/g, '<br>');
+}
+
+/**
  * Render a brief object into HTML for email.
  */
 function briefToHtml(brief) {
@@ -85,7 +104,7 @@ function briefToHtml(brief) {
   }
 
   if (brief.synthesis) {
-    sections.push(`<p style="background:#f8f9fa;padding:12px;border-radius:4px;font-style:italic">${brief.synthesis}</p>`);
+    sections.push(`<p style="background:#f8f9fa;padding:12px;border-radius:4px;font-style:italic">${renderInlineMarkdown(brief.synthesis)}</p>`);
   }
 
   const body = sections.length

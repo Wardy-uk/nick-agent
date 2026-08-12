@@ -65,6 +65,16 @@ async function refresh() {
     let todos = null;
     try { todos = vaultCache.getTodos(); } catch {}
 
+    // Merge in the 90-Day Plan tasks. They live in a separate file that only
+    // /api/todos read, so the decision engine was reasoning over a fraction of
+    // the real workload — Master Todo and Microsoft tasks but no plan at all.
+    try {
+      const planTasks = vaultCache.getPlanTasks();
+      if (todos && planTasks.length) {
+        todos = { ...todos, active: [...(todos.active || []), ...planTasks] };
+      }
+    } catch (e) { console.warn('[WorkingMemory] getPlanTasks failed:', e.message); }
+
     // 90-day plan (CACHED — only re-parses if file changed)
     let ninetyDayPlan = null;
     try { ninetyDayPlan = vaultCache.getPlan(); } catch (e) { console.warn('[WorkingMemory] getPlan failed:', e.message); }
