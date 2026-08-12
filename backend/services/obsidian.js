@@ -1434,12 +1434,18 @@ async function syncMicrosoftTasks() {
   const msTasksPath = path.join(tasksDir, 'Microsoft Tasks.md');
   let plannerCount = 0;
   let todoCount = 0;
+  // Track whether Graph actually answered. A failed/unauthenticated fetch returns
+  // null rather than throwing, which used to look identical to "you have no tasks"
+  // and overwrote the file with an empty header — see the guard before the write.
+  let plannerOk = false;
+  let todoOk = false;
 
   const lines = ['# Microsoft Tasks', '', `*Last synced: ${new Date().toLocaleString('en-GB')}*`, ''];
 
   // --- Planner ---
   try {
     const plannerTasks = await microsoft.fetchPlannerTasks();
+    if (Array.isArray(plannerTasks)) plannerOk = true;
     if (plannerTasks && plannerTasks.length > 0) {
       lines.push('## Planner', '');
       // Filter to incomplete tasks only
@@ -1467,6 +1473,7 @@ async function syncMicrosoftTasks() {
   // --- To-Do ---
   try {
     const todoLists = await microsoft.fetchTodoLists();
+    if (Array.isArray(todoLists)) todoOk = true;
     if (todoLists && todoLists.length > 0) {
       lines.push('## ToDo', '');
       for (const list of todoLists) {
@@ -1497,6 +1504,26 @@ async function syncMicrosoftTasks() {
   } catch (e) {
     console.error('[Sync] ToDo fetch failed:', e.message);
     lines.push('## ToDo', '', '*Failed to fetch — see logs*', '');
+  }
+
+  // NEVER overwrite a populated file with nothing. Graph auth expiring (AADSTS65001)
+  // silently returned null here for weeks, so every scheduled run rewrote this file
+  // as a bare header — destroying ~26 real tasks and, because the vault is synced,
+  // spawning a Syncthing conflict copy every single morning.
+  //
+  // Only write when Graph actually answered. A genuine "you have zero tasks" still
+  // writes (both fetches OK), but a failed fetch now leaves the last good file alone.
+  if (!plannerOk && !todoOk) {
+    console.warn('[Sync] Microsoft Tasks NOT written — Graph returned nothing (auth expired?). Keeping existing file.');
+    return { ok: false, skipped: true, reason: 'graph-unavailable' };
+  }
+
+  if (plannerCount + todoCount === 0 && fs.existsSync(msTasksPath)) {
+    const existing = fs.readFileSync(msTasksPath, 'utf-8');
+    if (/^- \[[ x]\] /m.test(existing)) {
+      console.warn('[Sync] Microsoft Tasks NOT written — fetch returned 0 tasks but the file has some. Keeping existing file.');
+      return { ok: false, skipped: true, reason: 'refusing-to-empty' };
+    }
   }
 
   fs.writeFileSync(msTasksPath, lines.join('\n'), 'utf-8');

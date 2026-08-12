@@ -216,8 +216,44 @@ function getStats() {
   return { hits: _perf.hits, misses: _perf.misses };
 }
 
+// 90-Day Plan tasks, normalised to the same shape parseVaultTodos() returns.
+//
+// The plan lives in its own file, so it was only ever surfaced by /api/todos —
+// which mapped it inline for the frontend. The decision engine reads
+// getTodos() instead, so all ~73 plan tasks were invisible to Focus and to the
+// briefing. This is the engine-facing view of the same data.
+function getPlanTasks() {
+  let plan = null;
+  try { plan = getPlan(); } catch { return []; }
+  if (!plan) return [];
+
+  const OUTCOMES = {
+    1: 'Visibility & BI', 2: 'Tiered Model', 3: 'Quality & CX',
+    4: 'People & Culture', 5: 'Cross-functional', 6: 'Production'
+  };
+
+  const out = [];
+  for (const t of plan.allTasks || []) {
+    if (t.isCheckpoint) continue;
+    if (t.status === 'x') continue;            // active only — done tasks aren't signals
+    const isOverdue = t.day > 0 && t.day < plan.currentDay;
+    const outcomeLabel = t.outcome ? OUTCOMES[t.outcome] || '' : '';
+    out.push({
+      text: t.text,
+      due_date: t.calendarDate || null,
+      priority: isOverdue ? 'high' : (t.day === plan.currentDay ? 'normal' : 'low'),
+      source: `90-Day Plan${outcomeLabel ? ` (${outcomeLabel})` : ''}`,
+      status: ' ',
+      filePath: plan.filePath || null,
+      lineNumber: t.lineNumber != null ? t.lineNumber : null,
+    });
+  }
+  return out;
+}
+
 module.exports = {
   getTodos,
+  getPlanTasks,
   getPlan,
   getPeopleIndex,
   getDailyNote,

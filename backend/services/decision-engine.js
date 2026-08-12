@@ -223,9 +223,19 @@ function collectOverdueTodos(ctx) {
   let dueTodayCount = 0;
   let topOverdue = null;
   let topDueToday = null;
+  // Undated work used to vanish entirely: no due_date meant `continue`, so a
+  // high-priority task with no date was worth exactly nothing to the engine.
+  let undatedHighCount = 0;
+  let topUndatedHigh = null;
 
   for (const todo of ctx.todos.active) {
-    if (!todo.due_date) continue;
+    if (!todo.due_date) {
+      if ((todo.priority || '').toLowerCase() === 'high') {
+        undatedHighCount++;
+        if (!topUndatedHigh) topUndatedHigh = { text: todo.text, source: todo.source };
+      }
+      continue;
+    }
     const dueStr = todo.due_date.split('T')[0];
     const isPlanTask = (todo.source || '').toLowerCase().includes('plan') ||
                        (todo.source || '').toLowerCase().includes('90');
@@ -270,6 +280,26 @@ function collectOverdueTodos(ctx) {
       source: topDueToday.source || 'vault',
       actionHint: dueTodayCount === 1 ? 'Do today' : 'Review todos',
       meta: { dueDate: topDueToday.dueStr, dueTodayCount },
+    });
+  }
+
+  // Scored just into Tier 2 — high-priority undated work deserves to be seen,
+  // but never above something with a real date on it.
+  if (undatedHighCount > 0 && topUndatedHigh) {
+    items.push({
+      type: 'todo',
+      id: 'todo-undated-high',
+      title: undatedHighCount === 1
+        ? topUndatedHigh.text
+        : `${undatedHighCount} high-priority tasks with no date`,
+      reason: undatedHighCount === 1
+        ? 'High priority, no due date'
+        : `Top: ${topUndatedHigh.text.substring(0, 60)}`,
+      score: 52,
+      urgency: 'medium',
+      source: topUndatedHigh.source || 'vault',
+      actionHint: 'Give these a date or drop them',
+      meta: { undatedHighCount },
     });
   }
 
