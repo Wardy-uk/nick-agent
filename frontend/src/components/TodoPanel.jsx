@@ -214,8 +214,10 @@ function buildTodoSaraLine(active, overdue) {
   return `${active.length} open. ${overdue.length} overdue.`;
 }
 
-function SuggestedTodoQueue({ items, actingId, onApprove, onReject }) {
+function SuggestedTodoQueue({ items, actingId, selected, onToggleSelect, onSelectAll, onClearSelection, onBatch, batching, batchError, onApprove, onReject }) {
   if (!items.length) return null;
+
+  const allSelected = selected.length === items.length;
 
   return (
     <section className="todo-suggestions">
@@ -224,28 +226,67 @@ function SuggestedTodoQueue({ items, actingId, onApprove, onReject }) {
           <div className="todo-suggestions-label">Extracted from notes</div>
           <div className="todo-suggestions-copy">SARA spotted these in the vault. Approve the uncertain ones; the obvious ones are auto-added.</div>
         </div>
-        <span className="todo-suggestions-count">{items.length} waiting</span>
+        <div className="todo-suggestions-header-right">
+          <button className="btn btn-secondary btn-sm" onClick={allSelected ? onClearSelection : onSelectAll}>
+            {allSelected ? 'Clear' : `Select all ${items.length}`}
+          </button>
+          <span className="todo-suggestions-count">{items.length} waiting</span>
+        </div>
       </div>
+
+      {selected.length > 0 && (
+        <div className="todo-batch-bar">
+          <span className="todo-batch-count">{selected.length} selected</span>
+          <div className="todo-batch-actions">
+            <button className="btn btn-secondary btn-sm" disabled={batching} onClick={onClearSelection}>
+              Clear
+            </button>
+            <button className="btn btn-secondary btn-sm" disabled={batching} onClick={() => onBatch('reject')}>
+              {batching ? 'Working...' : `Dismiss ${selected.length}`}
+            </button>
+            <button className="btn btn-primary btn-sm" disabled={batching} onClick={() => onBatch('approve')}>
+              {batching ? 'Working...' : `Add ${selected.length} todos`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {batchError && <div className="todo-batch-error">{batchError}</div>}
+
       <div className="todo-suggestions-list">
-        {items.map((item) => (
-          <div key={item.id} className="todo-suggestion-card">
-            <div className="todo-suggestion-main">
-              <div className="todo-suggestion-text">{item.text}</div>
-              <div className="todo-suggestion-meta">
-                {item.sourcePath && <span className="todo-source">{item.sourcePath}</span>}
-                <span className="todo-due">Confidence {Math.round((item.confidence || 0) * 100)}%</span>
+        {items.map((item) => {
+          const isSelected = selected.includes(item.id);
+          return (
+            <div key={item.id} className={`todo-suggestion-card ${isSelected ? 'selected' : ''}`}>
+              <input
+                type="checkbox"
+                className="todo-suggestion-check"
+                checked={isSelected}
+                disabled={batching}
+                onChange={() => onToggleSelect(item.id)}
+                aria-label={`Select: ${item.text}`}
+              />
+              <div className="todo-suggestion-main" onClick={() => !batching && onToggleSelect(item.id)}>
+                <div className="todo-suggestion-text">{item.text}</div>
+                <div className="todo-suggestion-meta">
+                  {item.sourcePath && <span className="todo-source">{item.sourcePath}</span>}
+                  <span className="todo-due">Confidence {Math.round((item.confidence || 0) * 100)}%</span>
+                  {item.duplicateIds?.length > 0 && (
+                    <span className="todo-due">+{item.duplicateIds.length} duplicate{item.duplicateIds.length > 1 ? 's' : ''}</span>
+                  )}
+                </div>
+              </div>
+              <div className="todo-suggestion-actions">
+                <button className="btn btn-secondary btn-sm" disabled={actingId === item.id || batching} onClick={() => onReject(item)}>
+                  Dismiss
+                </button>
+                <button className="btn btn-primary btn-sm" disabled={actingId === item.id || batching} onClick={() => onApprove(item)}>
+                  Add todo
+                </button>
               </div>
             </div>
-            <div className="todo-suggestion-actions">
-              <button className="btn btn-secondary btn-sm" disabled={actingId === item.id} onClick={() => onReject(item)}>
-                Dismiss
-              </button>
-              <button className="btn btn-primary btn-sm" disabled={actingId === item.id} onClick={() => onApprove(item)}>
-                Add todo
-              </button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
@@ -331,12 +372,54 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   // UI answers the click instead of waiting on a slow /api/todos refetch.
   const [resolvedSuggestions, setResolvedSuggestions] = useState([]);
   const [localDone, setLocalDone] = useState({}); // "filePath:lineNumber" -> 1
+  const [selectedSuggestions, setSelectedSuggestions] = useState([]);
+  const [batching, setBatching] = useState(false);
+  const [batchError, setBatchError] = useState(null);
 
   const todos = (fullData?.todos || []).map(t => (
     localDone[`${t.filePath}:${t.lineNumber}`] ? { ...t, done: 1 } : t
   ));
   const suggestedTodos = (fullData?.suggested || []).filter(s => !resolvedSuggestions.includes(s.id));
   const todayLane = fullData?.todayLane || [];
+
+  const toggleSuggestionSelect = (id) => {
+    setSelectedSuggestions(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  // Batch: approve/dismiss every selected card in one round trip. Duplicates of an
+  // approved card are dismissed rather than approved — the task only wants capturing once.
+  const handleBatch = async (verb) => {
+    const chosen = suggestedTodos.filter(s => selectedSuggestions.includes(s.id));
+    if (!chosen.length) return;
+    const primaries = chosen.map(s => s.id);
+    const duplicates = chosen.flatMap(s => s.duplicateIds || []);
+    setBatching(true);
+    try {
+      const post = (ids, v) => fetch(apiUrl('/api/actions/batch'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, verb: v }),
+      }).then(r => r.json());
+
+      const main = await post(primaries, verb);
+      if (duplicates.length) await post(duplicates, 'reject');
+
+      const done = main.succeeded || [];
+      setResolvedSuggestions(prev => [...prev, ...done, ...duplicates]);
+      setSelectedSuggestions(prev => prev.filter(id => !done.includes(id)));
+      if (main.failed?.length) {
+        console.error('[TodoPanel] Batch partially failed:', main.failed);
+        setBatchError(`${main.failed.length} of ${primaries.length} failed — left selected.`);
+      } else {
+        setBatchError(null);
+      }
+      await fetchTodos();
+    } catch (e) {
+      console.error('[TodoPanel] Batch error:', e);
+      setBatchError('Batch failed. Nothing was changed.');
+    }
+    setBatching(false);
+  };
 
   const handleSuggestionAction = async (item, verb) => {
     setActingSuggestionId(item.id);
@@ -473,6 +556,13 @@ export default function TodoPanel({ focusContext, onClearContext }) {
             <SuggestedTodoQueue
               items={suggestedTodos}
               actingId={actingSuggestionId}
+              selected={selectedSuggestions}
+              onToggleSelect={toggleSuggestionSelect}
+              onSelectAll={() => setSelectedSuggestions(suggestedTodos.map(s => s.id))}
+              onClearSelection={() => setSelectedSuggestions([])}
+              onBatch={handleBatch}
+              batching={batching}
+              batchError={batchError}
               onApprove={(item) => handleSuggestionAction(item, 'approve')}
               onReject={(item) => handleSuggestionAction(item, 'reject')}
             />
@@ -630,6 +720,13 @@ export default function TodoPanel({ focusContext, onClearContext }) {
       <SuggestedTodoQueue
         items={suggestedTodos}
         actingId={actingSuggestionId}
+        selected={selectedSuggestions}
+        onToggleSelect={toggleSuggestionSelect}
+        onSelectAll={() => setSelectedSuggestions(suggestedTodos.map(s => s.id))}
+        onClearSelection={() => setSelectedSuggestions([])}
+        onBatch={handleBatch}
+        batching={batching}
+        batchError={batchError}
         onApprove={(item) => handleSuggestionAction(item, 'approve')}
         onReject={(item) => handleSuggestionAction(item, 'reject')}
       />
