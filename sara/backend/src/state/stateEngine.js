@@ -114,10 +114,11 @@ function mapQueueTicket(ticket) {
 function buildQueue(neuroData) {
   const raw = neuroData?.queue;
   if (!raw || !Array.isArray(raw.tickets)) {
-    if (!neuroData) return seed.queue();
     return {
-      source: neuro.NEURO_SOURCE,
-      summary: 'Live queue feed is currently unavailable from NEURO.',
+      source: neuroData ? neuro.NEURO_SOURCE : 'seed',
+      summary: neuroData
+        ? 'Live queue feed is currently unavailable from NEURO.'
+        : seed.queue().summary,
       open: 0,
       breaching: 0,
       sections: {
