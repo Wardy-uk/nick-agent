@@ -1101,8 +1101,255 @@ function nightlySweep(root, { apply = true } = {}) {
   return { dedup, orphans, empties, reportPath: rel(root, outPath) };
 }
 
+// ── PLAUD "Summary" note rename ──────────────────────────────────────────────
+//
+// PLAUD's data_title names the summary TAB — the literal "Summary" — not the
+// meeting, and it used to beat recording.name in the fallback chain. So ~101
+// meeting notes were written as "<date> – Summary.md", then "Summary 3",
+// "Summary 4" as same-day collisions piled up, and the vault filled with notes
+// that couldn't be found by name. plaud-sync.js picks the right title going
+// forward; this repairs what was already written.
+//
+// The true title is recoverable OFFLINE — no PLAUD API call. Every one of these
+// notes carries transcript_path in frontmatter, and the transcript note's own
+// frontmatter title holds the real recording name.
+//
+// Renaming breaks every [[wikilink]] pointing at the note, so this rewrites
+// those too. That is the whole reason it isn't a one-line mv.
+
+const PLAUD_SUMMARY_BASENAME_RE = /[–-]\s*Summary(?:\s+\d+)?$/i;
+
+function readFrontmatterBlock(text) {
+  const m = String(text || '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return {};
+  const out = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (!kv) continue;
+    out[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, '');
+  }
+  return out;
+}
+
+// Mirrors buildCanonicalMeetingPath() in imports.js so a repaired name is
+// byte-identical to what a fresh import would produce.
+function normalisePlaudTitle(raw) {
+  return String(raw || '')
+    .replace(/^\d{4}-\d{2}-\d{2}[\s–-]*/u, '')
+    .replace(/^\d{2}-\d{2}[\s–-]*/u, '')
+    .replace(/\b(?:-summary|-obsidian meeting template|-transcript)\b/gi, '')
+    .replace(/[_:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function slugSegment(value, fallback = 'Meeting') {
+  const clean = String(value || '')
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean || fallback;
+}
+
+// Recover the meeting title without touching PLAUD: prefer the transcript
+// note's frontmatter title (that IS recording.name), else de-slug its filename.
+function recoverTitle(root, fm) {
+  const tp = fm.transcript_path;
+  if (!tp) return null;
+  const full = path.join(root, tp.replace(/^\/+/, ''));
+  if (fs.existsSync(full)) {
+    const tfm = readFrontmatterBlock(fs.readFileSync(full, 'utf8'));
+    const t = normalisePlaudTitle(tfm.title);
+    if (t && !/^summary(\s+\d+)?$/i.test(t)) return t;
+  }
+  // Filename fallback: "2026-07-01 07-01-Performance-Review-Zoe-Rees-Workload".
+  const base = path.basename(tp, '.md');
+  const deslugged = normalisePlaudTitle(base.replace(/-/g, ' '));
+  return deslugged && !/^summary(\s+\d+)?$/i.test(deslugged) ? deslugged : null;
+}
+
+function planPlaudSummaryRenames(root) {
+  const meetingsDir = path.join(root, 'Meetings');
+  const targets = walk(meetingsDir).filter((f) => {
+    const base = path.basename(f, '.md');
+    return PLAUD_SUMMARY_BASENAME_RE.test(base) && !/transcripts/i.test(rel(root, f));
+  });
+
+  const taken = new Set(walk(meetingsDir).map((f) => rel(root, f).toLowerCase()));
+  const renames = [];
+  const unresolved = [];
+
+  for (const file of targets) {
+    const relPath = rel(root, file);
+    const raw = fs.readFileSync(file, 'utf8');
+    const fm = readFrontmatterBlock(raw);
+    const title = recoverTitle(root, fm);
+    if (!title) {
+      unresolved.push({ rel: relPath, reason: fm.transcript_path ? 'transcript title unusable' : 'no transcript_path' });
+      continue;
+    }
+
+    const date = (fm.date || path.basename(file).slice(0, 10) || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      unresolved.push({ rel: relPath, reason: 'no usable date' });
+      continue;
+    }
+
+    const dir = path.dirname(relPath);
+    let candidate = `${date} – ${slugSegment(title)}`;
+    let target = `${dir}/${candidate}.md`;
+    // Same-day collisions keep the existing " 2"/" 3" convention.
+    let n = 1;
+    while (taken.has(target.toLowerCase()) && target.toLowerCase() !== relPath.toLowerCase()) {
+      n += 1;
+      candidate = `${date} – ${slugSegment(title)} ${n}`;
+      target = `${dir}/${candidate}.md`;
+    }
+    if (target.toLowerCase() === relPath.toLowerCase()) continue; // already correct
+    taken.add(target.toLowerCase());
+    taken.delete(relPath.toLowerCase());
+
+    renames.push({
+      from: relPath,
+      to: target,
+      fromBase: path.basename(relPath, '.md'),
+      toBase: candidate,
+      title,
+    });
+  }
+
+  // Which files reference the old names, and how many links each.
+  const byOldBase = new Map(renames.map((r) => [r.fromBase.toLowerCase(), r]));
+  const linkEdits = [];
+  let linkCount = 0;
+  for (const file of walk(root)) {
+    const raw = fs.readFileSync(file, 'utf8');
+    if (!raw.includes('[[')) continue;
+    let hits = 0;
+    for (const m of raw.matchAll(/!?\[\[([^\]]+?)\]\]/g)) {
+      const target = m[1].split('|')[0].split('#')[0].trim();
+      if (byOldBase.has(path.basename(target).toLowerCase())) hits += 1;
+    }
+    if (hits) { linkEdits.push({ rel: rel(root, file), links: hits }); linkCount += hits; }
+  }
+
+  return { renames, unresolved, linkEdits, linkCount };
+}
+
+// Rewrite [[old]] -> [[new]] preserving any path prefix, |alias and #heading.
+// Embeds (![[…]]) are included deliberately: the link graph elsewhere ignores
+// them, but a rename breaks an embed exactly as it breaks a link.
+function rewriteLinks(raw, byOldBase) {
+  return raw.replace(/(!?)\[\[([^\]]+?)\]\]/g, (whole, bang, inner) => {
+    const pipe = inner.indexOf('|');
+    const linkPart = pipe === -1 ? inner : inner.slice(0, pipe);
+    const aliasPart = pipe === -1 ? '' : inner.slice(pipe);
+    const hash = linkPart.indexOf('#');
+    const pathPart = hash === -1 ? linkPart : linkPart.slice(0, hash);
+    const headingPart = hash === -1 ? '' : linkPart.slice(hash);
+    const trimmed = pathPart.trim();
+    const hit = byOldBase.get(path.basename(trimmed).toLowerCase());
+    if (!hit) return whole;
+    const dir = trimmed.includes('/') ? trimmed.slice(0, trimmed.lastIndexOf('/') + 1) : '';
+    return `${bang}[[${dir}${hit.toBase}${headingPart}${aliasPart}]]`;
+  });
+}
+
+function renamePlaudSummaryNotes(root, { apply = false } = {}) {
+  const plan = planPlaudSummaryRenames(root);
+  const result = {
+    apply,
+    candidates: plan.renames.length,
+    unresolved: plan.unresolved,
+    linkCount: plan.linkCount,
+    filesWithLinks: plan.linkEdits.length,
+    renames: plan.renames,
+  };
+  if (!apply || !plan.renames.length) {
+    result.reportPath = writePlaudRenameReport(root, result, null);
+    return result;
+  }
+
+  const stamp = tsStamp();
+  const backupDir = path.join(root, ...BACKUP_REL, stamp);
+  const byOldBase = new Map(plan.renames.map((r) => [r.fromBase.toLowerCase(), r]));
+
+  // 1. Rewrite links first — while the old names still resolve, so a crash
+  //    between the two steps leaves links pointing at files that still exist.
+  let filesEdited = 0;
+  for (const entry of plan.linkEdits) {
+    const file = path.join(root, entry.rel);
+    const raw = fs.readFileSync(file, 'utf8');
+    const out = rewriteLinks(raw, byOldBase);
+    if (out === raw) continue;
+    const bk = path.join(backupDir, entry.rel);
+    ensureDir(path.dirname(bk));
+    fs.copyFileSync(file, bk);
+    fs.writeFileSync(file, out, 'utf8');
+    filesEdited += 1;
+  }
+
+  // 2. Rename the notes and correct the frontmatter title that caused this.
+  let renamed = 0;
+  const failures = [];
+  for (const r of plan.renames) {
+    const from = path.join(root, r.from);
+    const to = path.join(root, r.to);
+    try {
+      if (!fs.existsSync(from)) { failures.push({ ...r, error: 'source missing' }); continue; }
+      if (fs.existsSync(to)) { failures.push({ ...r, error: 'target exists' }); continue; }
+      const bk = path.join(backupDir, r.from);
+      ensureDir(path.dirname(bk));
+      fs.copyFileSync(from, bk);
+      const raw = fs.readFileSync(from, 'utf8');
+      const fixed = raw.replace(/^(---\r?\n[\s\S]*?)^title:\s*.*$/m, (_m, head) => `${head}title: "${r.title.replace(/"/g, '\\"')}"`);
+      fs.writeFileSync(from, fixed, 'utf8');
+      ensureDir(path.dirname(to));
+      fs.renameSync(from, to);
+      renamed += 1;
+    } catch (e) {
+      failures.push({ ...r, error: e.message });
+    }
+  }
+
+  result.renamed = renamed;
+  result.filesEdited = filesEdited;
+  result.failures = failures;
+  result.backupDir = rel(root, backupDir);
+  result.reportPath = writePlaudRenameReport(root, result, backupDir);
+  return result;
+}
+
+function writePlaudRenameReport(root, result, backupDir) {
+  const dir = path.join(root, ...REPORT_REL);
+  ensureDir(dir);
+  const today = todayStr();
+  const L = [`# PLAUD Summary Rename — ${today}`, ''];
+  L.push(result.apply
+    ? `**APPLIED.** Renamed ${result.renamed}/${result.candidates}, rewrote ${result.linkCount} links across ${result.filesEdited} files. Backups: \`${result.backupDir}\`.`
+    : `**DRY RUN.** ${result.candidates} notes would be renamed; ${result.linkCount} wikilinks across ${result.filesWithLinks} files would be rewritten.`);
+  L.push('');
+  if (result.unresolved.length) {
+    L.push(`## Unresolved (${result.unresolved.length}) — left alone`, '');
+    result.unresolved.forEach((u) => L.push(`- \`${u.rel}\` — ${u.reason}`));
+    L.push('');
+  }
+  if (result.failures && result.failures.length) {
+    L.push(`## Failures (${result.failures.length})`, '');
+    result.failures.forEach((f) => L.push(`- \`${f.from}\` — ${f.error}`));
+    L.push('');
+  }
+  L.push(`## Renames (${result.renames.length})`, '');
+  result.renames.forEach((r) => L.push(`- \`${r.fromBase}\` → **${r.toBase}**`));
+  const outPath = path.join(dir, `PLAUD Summary Rename ${today}.md`);
+  fs.writeFileSync(outPath, L.join('\n') + '\n', 'utf8');
+  return rel(root, outPath);
+}
+
 module.exports = {
   lint,
+  planPlaudSummaryRenames,
+  renamePlaudSummaryNotes,
   contextualLinkPlan,
   contextualLinkApply,
   aliasSuggest,
