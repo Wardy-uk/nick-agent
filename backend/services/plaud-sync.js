@@ -454,8 +454,29 @@ function buildNoteBaseName(recording) {
   return `${prefix} ${title}`;
 }
 
+// PLAUD's data_title names the summary TAB, not the meeting — it is almost always
+// the literal "Summary". Because it came first in the fallback chain it beat
+// recording.name (the actual meeting title), so every routed meeting note landed
+// as "<date> – Summary.md", then "Summary 3", "Summary 4" as collisions piled up.
+// The vault ended up full of notes Nick couldn't find by name. recording.name is
+// the same source the transcript filenames use, which is why those read properly.
+const GENERIC_NOTE_TITLES = new Set([
+  'summary', 'summaries', 'note', 'notes', 'transcript',
+  'obsidian meeting template', 'auto summary', 'ai summary', 'meeting',
+]);
+
+function pickNoteTitle(recording, note) {
+  for (const candidate of [note.data_title, note.data_tab_name]) {
+    const value = String(candidate || '').trim();
+    if (value && !GENERIC_NOTE_TITLES.has(value.toLowerCase())) return value;
+  }
+  const recordingName = String(recording.name || '').trim();
+  if (recordingName) return recordingName;
+  return String(note.data_title || note.data_tab_name || recording.id || '').trim();
+}
+
 function renderSummaryNote(recording, note, summaryBody, transcriptRelativePath) {
-  const noteTitle = (note.data_title || note.data_tab_name || recording.name || recording.id).trim();
+  const noteTitle = pickNoteTitle(recording, note);
   const lines = [
     '---',
     `plaud_id: "${escapeYaml(recording.id)}"`,
