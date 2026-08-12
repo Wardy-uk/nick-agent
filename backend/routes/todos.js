@@ -76,7 +76,9 @@ router.get('/', (req, res) => {
     // summary and the meeting note built from it, say. Show it once, and carry
     // the twins' ids so approving/dismissing resolves the whole set.
     const bySignature = new Map();
-    for (const action of db.getPendingSaraActions(200)) {
+    // The limit spans every pending action type, not just capture_todo, so it
+    // has to be generous or the queue silently drops the tail.
+    for (const action of db.getPendingSaraActions(1000)) {
       if (action.type !== 'capture_todo') continue;
       const text = action.payload?.text || action.reason || 'Suggested task';
       const signature = action.payload?.semanticSignature || text.toLowerCase();
