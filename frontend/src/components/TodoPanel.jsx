@@ -237,10 +237,10 @@ function SuggestedTodoQueue({ items, actingId, onApprove, onReject }) {
               </div>
             </div>
             <div className="todo-suggestion-actions">
-              <button className="btn btn-secondary btn-sm" disabled={actingId === item.id} onClick={() => onReject(item.id)}>
+              <button className="btn btn-secondary btn-sm" disabled={actingId === item.id} onClick={() => onReject(item)}>
                 Dismiss
               </button>
-              <button className="btn btn-primary btn-sm" disabled={actingId === item.id} onClick={() => onApprove(item.id)}>
+              <button className="btn btn-primary btn-sm" disabled={actingId === item.id} onClick={() => onApprove(item)}>
                 Add todo
               </button>
             </div>
@@ -325,23 +325,37 @@ export default function TodoPanel({ focusContext, onClearContext }) {
 
   // ── Full mode data ──
   const fullPath = `/api/todos${showDone ? '?all=true' : ''}`;
-  const { data: fullData, refresh: fetchTodos } = useCachedFetch(
-    mode === 'full' ? fullPath : null,
-    { transform: (json) => json || { todos: [], suggested: [] } }
-  );
+  const { data: fullData, refresh: fetchTodos } = useCachedFetch(mode === 'full' ? fullPath : null);
 
-  const todos = fullData?.todos || [];
-  const suggestedTodos = fullData?.suggested || [];
+  // Ids resolved locally (approved/dismissed/ticked) — hidden straight away so the
+  // UI answers the click instead of waiting on a slow /api/todos refetch.
+  const [resolvedSuggestions, setResolvedSuggestions] = useState([]);
+  const [localDone, setLocalDone] = useState({}); // "filePath:lineNumber" -> 1
+
+  const todos = (fullData?.todos || []).map(t => (
+    localDone[`${t.filePath}:${t.lineNumber}`] ? { ...t, done: 1 } : t
+  ));
+  const suggestedTodos = (fullData?.suggested || []).filter(s => !resolvedSuggestions.includes(s.id));
   const todayLane = fullData?.todayLane || [];
 
-  const handleSuggestionAction = async (id, verb) => {
-    setActingSuggestionId(id);
+  const handleSuggestionAction = async (item, verb) => {
+    setActingSuggestionId(item.id);
+    // Same task extracted from more than one note (a Plaud summary and the meeting
+    // note it came from, say) — resolve the twins too, or dismissing one just
+    // uncovers an identical card and looks like nothing happened.
+    const ids = [item.id, ...(item.duplicateIds || [])];
     try {
-      await fetch(apiUrl(`/api/actions/${id}/${verb}`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      const results = await Promise.all(
+        ids.map((id, i) => fetch(apiUrl(`/api/actions/${id}/${i === 0 ? verb : 'reject'}`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        }))
+      );
+      if (results.every(r => r.ok)) {
+        setResolvedSuggestions(prev => [...prev, ...ids]);
+      } else {
+        console.error(`[TodoPanel] Suggestion ${verb} failed:`, results.map(r => r.status));
+      }
       await fetchTodos();
     } catch (e) {
       console.error(`[TodoPanel] Suggestion ${verb} error:`, e);
@@ -354,8 +368,9 @@ export default function TodoPanel({ focusContext, onClearContext }) {
     const key = `${todo.filePath}:${todo.lineNumber}`;
     setToggling(prev => ({ ...prev, [key]: true }));
     try {
+      let res;
       if (todo.ms_id && (todo.source === 'MS Planner' || todo.source === 'MS ToDo')) {
-        await fetch(apiUrl('/api/todos/complete-ms'), {
+        res = await fetch(apiUrl('/api/todos/complete-ms'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -366,16 +381,18 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           })
         });
       } else {
-        await fetch(apiUrl('/api/todos/toggle'), {
+        res = await fetch(apiUrl('/api/todos/toggle'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ filePath: todo.filePath, lineNumber: todo.lineNumber })
         });
       }
+      if (res.ok) setLocalDone(prev => ({ ...prev, [key]: todo.done ? 0 : 1 }));
+      else console.error('[TodoPanel] Toggle failed:', res.status);
       // Small delay to let vault cache invalidate before refetch
       await new Promise(r => setTimeout(r, 300));
       if (mode === 'focused') refreshFocus();
-      else fetchTodos();
+      else await fetchTodos();
     } catch (e) { console.error('[TodoPanel] Toggle error:', e); }
     setToggling(prev => ({ ...prev, [key]: false }));
   };
@@ -456,8 +473,8 @@ export default function TodoPanel({ focusContext, onClearContext }) {
             <SuggestedTodoQueue
               items={suggestedTodos}
               actingId={actingSuggestionId}
-              onApprove={(id) => handleSuggestionAction(id, 'approve')}
-              onReject={(id) => handleSuggestionAction(id, 'reject')}
+              onApprove={(item) => handleSuggestionAction(item, 'approve')}
+              onReject={(item) => handleSuggestionAction(item, 'reject')}
             />
             <div className="todo-list">
               {items.map(todo => (
@@ -613,8 +630,8 @@ export default function TodoPanel({ focusContext, onClearContext }) {
       <SuggestedTodoQueue
         items={suggestedTodos}
         actingId={actingSuggestionId}
-        onApprove={(id) => handleSuggestionAction(id, 'approve')}
-        onReject={(id) => handleSuggestionAction(id, 'reject')}
+        onApprove={(item) => handleSuggestionAction(item, 'approve')}
+        onReject={(item) => handleSuggestionAction(item, 'reject')}
       />
       <MustMoveLane items={todayLane} />
 

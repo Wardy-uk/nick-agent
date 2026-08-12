@@ -19,17 +19,29 @@ export default function useCachedFetch(path, opts = {}) {
   const [cacheAge, setCacheAge] = useState(null); // ms since cache was written
   const mountedRef = useRef(true);
   const liveRef = useRef(false); // true once a live fetch has resolved
+  // Callers pass transform inline, so it is a new function every render. Hold it
+  // in a ref: if doFetch depended on it, doFetch's identity would change every
+  // render, the effect below would re-run every render, and the endpoint would
+  // be refetched in a loop with responses landing out of order.
+  const transformRef = useRef(transform);
+  transformRef.current = transform;
+  // Only the newest request may write state — a slow earlier response must not
+  // overwrite a fresher one (e.g. a post-mutation refresh).
+  const reqRef = useRef(0);
 
   const doFetch = useCallback(async () => {
+    const seq = ++reqRef.current;
+    const isCurrent = () => mountedRef.current && seq === reqRef.current;
+    const runTransform = (json) => (transformRef.current ? transformRef.current(json) : json);
+
     try {
       const res = await fetch(apiUrl(path));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      const value = transform ? transform(json) : json;
 
-      if (mountedRef.current) {
+      if (isCurrent()) {
         liveRef.current = true;
-        setData(value);
+        setData(runTransform(json));
         setStatus('live');
         setError(null);
         setCacheAge(null);
@@ -40,10 +52,9 @@ export default function useCachedFetch(path, opts = {}) {
     } catch (e) {
       // Fetch failed — try cache (only if we haven't already seeded)
       const cached = await cacheGet(path, maxAgeMs);
-      if (mountedRef.current) {
+      if (isCurrent()) {
         if (cached) {
-          const value = transform ? transform(cached.data) : cached.data;
-          setData(value);
+          setData(runTransform(cached.data));
           setStatus('cached');
           setCacheAge(Date.now() - cached.ts);
           setError(null);
@@ -53,7 +64,7 @@ export default function useCachedFetch(path, opts = {}) {
         }
       }
     }
-  }, [path, transform]);
+  }, [path, maxAgeMs]);
 
   // Seed from cache immediately, then fetch live data
   useEffect(() => {
@@ -63,7 +74,7 @@ export default function useCachedFetch(path, opts = {}) {
     // Load cached data first so UI renders instantly
     cacheGet(path, maxAgeMs).then(cached => {
       if (cached && mountedRef.current && !liveRef.current) {
-        const value = transform ? transform(cached.data) : cached.data;
+        const value = transformRef.current ? transformRef.current(cached.data) : cached.data;
         setData(value);
         setStatus('cached');
         setCacheAge(Date.now() - cached.ts);
@@ -82,7 +93,7 @@ export default function useCachedFetch(path, opts = {}) {
       mountedRef.current = false;
       if (timer) clearInterval(timer);
     };
-  }, [doFetch, interval]);
+  }, [doFetch, interval, maxAgeMs, path]);
 
   return { data, status, error, cacheAge, refresh: doFetch };
 }

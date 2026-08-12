@@ -72,17 +72,31 @@ router.get('/', (req, res) => {
     const enriched = mapped.map((task) => todoIntelligence.decorateTask(task));
     const todayLane = todoIntelligence.buildTodayLane(rankTasks(enriched.filter((task) => !task.done), new Date().toISOString().split('T')[0]));
 
-    const suggested = db.getPendingSaraActions(100)
-      .filter((action) => action.type === 'capture_todo')
-      .map((action) => ({
+    // The same action often gets extracted from more than one note — a Plaud
+    // summary and the meeting note built from it, say. Show it once, and carry
+    // the twins' ids so approving/dismissing resolves the whole set.
+    const bySignature = new Map();
+    for (const action of db.getPendingSaraActions(200)) {
+      if (action.type !== 'capture_todo') continue;
+      const text = action.payload?.text || action.reason || 'Suggested task';
+      const signature = action.payload?.semanticSignature || text.toLowerCase();
+      const seen = bySignature.get(signature);
+      if (seen) {
+        seen.duplicateIds.push(action.id);
+        continue;
+      }
+      bySignature.set(signature, {
         id: action.id,
-        text: action.payload?.text || action.reason || 'Suggested task',
+        text,
         reason: action.reason || 'Suggested from a note',
         confidence: action.confidence || 0,
         sourcePath: action.payload?.sourcePath || null,
         sourceLine: action.payload?.sourceLine || null,
         createdAt: action.created_at || null,
-      }));
+        duplicateIds: [],
+      });
+    }
+    const suggested = [...bySignature.values()];
 
     res.json({ todos: enriched, suggested, todayLane });
   } catch (e) {
