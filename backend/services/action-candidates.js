@@ -423,8 +423,13 @@ function syncNoteActionCandidates(relativePath) {
 //
 // Nothing here auto-promotes. Everything goes to the review queue.
 
-const OWNER_RE = /^([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)?(?:\s*\/\s*[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)?)*)\s+(?:to|will|should|must|is to)\b/;
-const NICK_RE = /^nick(\s+ward)?$/i;
+// PLAUD writes ownership three ways: "Nick to …", "Nick will …", and
+// "Nick Ward: …". Missing the colon form let other people's actions through —
+// "Naomi Wentworth: Test the pending ticket" was landing in the queue as yours.
+const NAME = "[A-Z][\\w'’-]*(?:\\s+[A-Z][\\w'’-]*)?";
+const ACTOR_GROUP = `${NAME}(?:\\s*(?:\\/|and|&)\\s*${NAME})*`;
+const OWNER_RE = new RegExp(`^(${ACTOR_GROUP})(?:\\s+(?:to|will|should|must|is to)\\b|\\s*:\\s)`);
+const NICK_RE = /^nick(\s+ward)?(?:’s|'s)?$/i;
 
 // "A follow-up meeting … is scheduled for August 13" is a record, not a task.
 const STATEMENT_OF_FACT_RE = /\b(?:is|are|was|were|has been|have been|had been)\s+(?:scheduled|planned|arranged|agreed|booked|completed|confirmed|held|due|set up)\b/i;
@@ -450,16 +455,24 @@ function peopleFirstNames() {
 // mine | others | unowned. "Reclassify Lomond to low risk" must NOT read as an
 // owner, so a captured actor only counts if it matches the People/ index.
 function classifyActionOwner(text) {
-  const m = String(text || '').trim().match(OWNER_RE);
+  const value = String(text || '').trim();
+  const m = value.match(OWNER_RE);
   if (m) {
-    const actors = m[1].split('/').map((a) => a.trim()).filter(Boolean);
-    const known = actors.filter((a) => peopleFirstNames().has(a.toLowerCase()));
+    const actors = m[1].split(/\s*(?:\/|and|&)\s*/).map((a) => a.trim()).filter(Boolean);
+    const known = actors.filter((a) => peopleFirstNames().has(a.replace(/(?:’s|'s)$/, '').toLowerCase()));
     if (known.length) {
       return known.some((a) => NICK_RE.test(a)) ? 'mine' : 'others';
     }
+    // Not in People/ — but "Catherine will process…" is still plainly someone
+    // else's, and the index only holds 42 names. Treat a leading proper noun as
+    // an owner UNLESS it is an action verb, which is what stops "Reclassify
+    // Lomond to low risk" and "Remind Taus to deliver…" being read as people.
+    const lead = actors[0] ? actors[0].split(/\s+/)[0].toLowerCase() : '';
+    if (lead && !ACTION_VERBS.includes(lead)) return 'others';
   }
-  // Unattributed but names Nick somewhere ("… with Nick", "Nick's team")
-  if (/\bnick\b/i.test(text)) return 'mine';
+  // Only a LEADING "Nick…" counts as ownership. A bare mention anywhere used to
+  // claim the line, so "Naomi Wentworth: … (agreed with Nick)" read as yours.
+  if (/^nick(\s+ward)?(?:’s|'s)?\b/i.test(value)) return 'mine';
   return 'unowned';
 }
 
@@ -556,10 +569,15 @@ function candidatesFor(content, relativePath) {
 // write straight into Master Todo, and a sweep sees far more notes than the write
 // hook ever did — so the blast radius has to be measured before it is allowed.
 function scanRecentNotes(options = {}) {
-  const { days = 7, dryRun = true, limit = 500 } = options;
+  // scope 'meetings' (default) restricts the sweep to Meetings/. Everywhere else
+  // still runs the old checkbox heuristics, which auto-promote at 0.93 and were
+  // measured proposing 258 items from a single PIP meeting-actions record and 61
+  // from the NOVA backlog — both of which Tasks/Task System Boundary.md routes
+  // away from Master Todo. Widen to 'all' only with a dry run in hand.
+  const { days = 7, dryRun = true, limit = 500, scope = 'meetings' } = options;
   const started = Date.now();
   const result = {
-    dryRun, days, scanned: 0, skipped: 0,
+    dryRun, days, scope, scanned: 0, skipped: 0,
     created: 0, autoPromoted: 0, pending: 0, superseded: 0,
     wouldCreate: 0, wouldAutoPromote: 0,
     files: [],
@@ -583,6 +601,7 @@ function scanRecentNotes(options = {}) {
         continue;
       }
       if (shouldSkipPath(rel)) { result.skipped += 1; continue; }
+      if (scope === 'meetings' && !isMeetingNote(rel)) { result.skipped += 1; continue; }
       let stat;
       try { stat = fs.statSync(full); } catch { continue; }
       if (stat.mtimeMs < cutoff) { result.skipped += 1; continue; }

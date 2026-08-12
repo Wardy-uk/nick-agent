@@ -152,6 +152,23 @@ function start() {
     } catch (e) {
       console.error('[Scheduler] Activity rollup failed:', e.message);
     }
+    // Meeting-action extraction. Embeddings (2am) and entity extraction (below)
+    // both had nightly jobs; action extraction never did — it only ran from
+    // vault-hooks.onVaultWrite(), which never fires for notes Syncthing delivers
+    // from Obsidian. So nothing was ever proposed from Nick's own meeting notes.
+    // Scoped to Meetings/ and review-only: nothing reaches Master Todo without
+    // being approved from the suggestions queue.
+    try {
+      const scan = require('./action-candidates').scanRecentNotes({ days: 7, dryRun: false, scope: 'meetings', limit: 500 });
+      console.log(`[Scheduler] Meeting actions: scanned ${scan.scanned}, created ${scan.created}, pending ${scan.pending}, superseded ${scan.superseded}`);
+      if (scan.pending > 0) {
+        require('./webpush').sendToAll('NEURO — Actions to review',
+          `${scan.pending} new action${scan.pending === 1 ? '' : 's'} from your meetings need a yes/no.`,
+          { type: 'todo', url: '/todos' }).catch(() => {});
+      }
+    } catch (e) {
+      console.error('[Scheduler] Meeting action scan failed:', e.message);
+    }
     try {
       const result = require('./entities').processRecentNotes(7);
       console.log(`[Scheduler] Entity extraction: ${result.processed} notes processed`);
