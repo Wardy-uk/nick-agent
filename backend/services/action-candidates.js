@@ -76,7 +76,18 @@ function shouldSkipPath(relativePath) {
     value.startsWith('Daily/') ||
     value.startsWith('Templates/') ||
     value.startsWith('.obsidian/') ||
-    value.startsWith('Archive/')
+    value.startsWith('Archive/') ||
+    // Generated, backup and conflict content. These were harmless while the only
+    // caller was the write hook (NEURO never writes here), but a scheduled sweep
+    // walks the whole vault: Scripts/ and .stversions/ alone hold ~10k checkboxes
+    // of generated output and old file versions.
+    value.startsWith('Scripts/') ||
+    value.startsWith('.stversions/') ||
+    value.startsWith('.trash/') ||
+    value.startsWith('.claude/') ||
+    value.startsWith('Conflicts/') ||
+    value.includes('/Archive/') ||
+    value.includes('sync-conflict')
   );
 }
 
@@ -383,8 +394,94 @@ function syncNoteActionCandidates(relativePath) {
   return { created, autoPromoted, pending, superseded, candidates };
 }
 
+// Walk recently-modified vault notes and extract action candidates.
+//
+// syncNoteActionCandidates() only ever ran from vault-hooks.onVaultWrite(), which
+// fires when NEURO writes a note. Notes written in Obsidian arrive on the Pi by
+// Syncthing — a file copy, not a NEURO write — so the hook never fired for them
+// and nothing was ever proposed. Embeddings and entity extraction both have
+// nightly jobs; action extraction never did. This is that missing job.
+//
+// dryRun is the default on purpose. Candidates at or above AUTO_PROMOTE_CONFIDENCE
+// write straight into Master Todo, and a sweep sees far more notes than the write
+// hook ever did — so the blast radius has to be measured before it is allowed.
+function scanRecentNotes(options = {}) {
+  const { days = 7, dryRun = true, limit = 500 } = options;
+  const started = Date.now();
+  const result = {
+    dryRun, days, scanned: 0, skipped: 0,
+    created: 0, autoPromoted: 0, pending: 0, superseded: 0,
+    wouldCreate: 0, wouldAutoPromote: 0,
+    files: [],
+  };
+  if (!VAULT_PATH) return result;
+
+  const cutoff = Date.now() - days * 86400000;
+  const queue = [VAULT_PATH];
+  const candidatesByFile = [];
+
+  while (queue.length) {
+    const dir = queue.pop();
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      const rel = path.relative(VAULT_PATH, full).replace(/\\/g, '/');
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        queue.push(full);
+        continue;
+      }
+      if (shouldSkipPath(rel)) { result.skipped += 1; continue; }
+      let stat;
+      try { stat = fs.statSync(full); } catch { continue; }
+      if (stat.mtimeMs < cutoff) { result.skipped += 1; continue; }
+      candidatesByFile.push(rel);
+    }
+  }
+
+  // Newest first, so a capped run covers what changed most recently.
+  candidatesByFile.sort((a, b) => {
+    try {
+      return fs.statSync(path.join(VAULT_PATH, b)).mtimeMs - fs.statSync(path.join(VAULT_PATH, a)).mtimeMs;
+    } catch { return 0; }
+  });
+
+  for (const rel of candidatesByFile.slice(0, limit)) {
+    result.scanned += 1;
+    if (dryRun) {
+      // Extract only — no DB writes, no promotion, no review-state update.
+      let content = '';
+      try { content = fs.readFileSync(path.join(VAULT_PATH, rel), 'utf-8'); } catch { continue; }
+      const candidates = extractActionCandidates(content, rel);
+      if (!candidates.length) continue;
+      const auto = candidates.filter((c) => c.autoPromote).length;
+      result.wouldCreate += candidates.length;
+      result.wouldAutoPromote += auto;
+      result.files.push({ path: rel, candidates: candidates.length, autoPromote: auto,
+        sample: candidates.slice(0, 3).map((c) => c.text) });
+      continue;
+    }
+
+    try {
+      const r = syncNoteActionCandidates(rel);
+      result.created += r.created;
+      result.autoPromoted += r.autoPromoted;
+      result.pending += r.pending;
+      result.superseded += r.superseded;
+      if (r.created || r.superseded) result.files.push({ path: rel, created: r.created, pending: r.pending });
+    } catch (e) {
+      console.warn('[ActionCandidates] scan failed for', rel, e.message);
+    }
+  }
+
+  result.ms = Date.now() - started;
+  return result;
+}
+
 module.exports = {
   AUTO_PROMOTE_CONFIDENCE,
+  scanRecentNotes,
   buildFocusItemId,
   buildSemanticSignature,
   extractActionCandidates,
