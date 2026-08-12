@@ -10,6 +10,9 @@ const PRIMARY_ITEMS = [
 
 const SECONDARY_ITEMS = [
   { id: 'focus',      label: 'Focus',     icon: '◎' },
+  // TodoPanel has always been routable via App.jsx but had no menu entry, so the
+  // one consolidated task view was only reachable if a nudge banner sent you there.
+  { id: 'todos',      label: 'Tasks',     icon: '☑' },
   { id: 'dashboard',  label: 'Review',    icon: '⬡' },
   { id: 'people',     label: 'People',    icon: '>' },
   { id: 'calendar',   label: 'Calendar',  icon: '>' },
