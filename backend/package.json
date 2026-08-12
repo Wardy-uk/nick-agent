@@ -12,6 +12,7 @@
     "@anthropic-ai/sdk": "^0.80.0",
     "@azure/msal-node": "^2.16.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^13.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.1",

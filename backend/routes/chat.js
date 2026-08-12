@@ -44,12 +44,9 @@ router.get('/history/:conversationId', (req, res) => {
 // GET /api/chat/decisions — recent logged decisions
 // TODO: surface in ChatPanel or a dedicated Decisions view
 router.get('/decisions', (req, res) => {
-  const stmt = db.getDb().prepare(
+  const rows = db.getDb().prepare(
     'SELECT id, conversation_id, decision_text, created_at FROM decisions ORDER BY created_at DESC LIMIT 50'
-  );
-  const rows = [];
-  while (stmt.step()) rows.push(stmt.getAsObject());
-  stmt.free();
+  ).all();
   res.json({ decisions: rows });
 });
 
