@@ -19,7 +19,6 @@ const SECONDARY_ITEMS = [
   { id: 'meeting-prep', label: 'Meeting Prep', icon: '>' },
   { id: 'vault',      label: 'Vault',     icon: '>' },
   { id: 'inbox',      label: 'Inbox',     icon: '>' },
-  { id: 'plan',       label: '90-Day Plan', icon: '>' },
   { id: 'standups',   label: 'Standups',  icon: '>' },
   { id: 'journal',    label: 'Journal',   icon: '>' },
   { id: 'imports',    label: 'Imports',   icon: '>' },
