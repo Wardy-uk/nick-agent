@@ -215,6 +215,30 @@ function collectMeetings(ctx) {
   return items;
 }
 
+// A 90-day plan that has run past its end date with items still open is not a
+// backlog of tasks — it's one decision you haven't made. Raise it once, as that
+// decision, rather than letting ~73 dead deliverables flood the queue and train
+// you to ignore the overdue count.
+function collectPlanClosure(ctx) {
+  const items = [];
+  const p = ctx.planSummary;
+  if (!p || !p.over || !p.unfinished) return items;
+
+  const daysOver = p.currentDay - p.totalDays;
+  items.push({
+    type: 'plan_closure',
+    id: 'plan-closure',
+    title: `90-Day Plan finished — ${p.unfinished} item${p.unfinished === 1 ? '' : 's'} still open`,
+    reason: `Day ${p.currentDay} of a ${p.totalDays}-day plan (${daysOver} days over). Close it out, or roll what still matters into Master Todo.`,
+    score: 58,
+    urgency: 'medium',
+    source: '90-day plan',
+    actionHint: 'Review plan → close or roll forward',
+    meta: { unfinished: p.unfinished, currentDay: p.currentDay, totalDays: p.totalDays, daysOver },
+  });
+  return items;
+}
+
 function collectOverdueTodos(ctx) {
   const items = [];
   if (!ctx.todos || !ctx.todos.active) return items;
@@ -659,6 +683,7 @@ async function evaluate(options = {}) {
     ...collectNovaFlags(ctx),
     ...collectMeetings(ctx),
     ...collectOverdueTodos(ctx),
+    ...collectPlanClosure(ctx),
     ...collectUrgentEmails(ctx),
     ...collectNudges(ctx),
     ...collectImports(ctx),

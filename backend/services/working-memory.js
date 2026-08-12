@@ -65,19 +65,44 @@ async function refresh() {
     let todos = null;
     try { todos = vaultCache.getTodos(); } catch {}
 
-    // Merge in the 90-Day Plan tasks. They live in a separate file that only
-    // /api/todos read, so the decision engine was reasoning over a fraction of
-    // the real workload — Master Todo and Microsoft tasks but no plan at all.
-    try {
-      const planTasks = vaultCache.getPlanTasks();
-      if (todos && planTasks.length) {
-        todos = { ...todos, active: [...(todos.active || []), ...planTasks] };
-      }
-    } catch (e) { console.warn('[WorkingMemory] getPlanTasks failed:', e.message); }
-
     // 90-day plan (CACHED — only re-parses if file changed)
     let ninetyDayPlan = null;
     try { ninetyDayPlan = vaultCache.getPlan(); } catch (e) { console.warn('[WorkingMemory] getPlan failed:', e.message); }
+
+    // Merge in ONLY the plan tasks that are actionable this fortnight.
+    //
+    // Tasks/Task System Boundary.md (10 Jul 2026) is explicit: plan deliverables
+    // are tracked in the plan and reach the task queue "only if actionable this
+    // fortnight". Merging the plan wholesale took overdue from 7 to 101 and
+    // recreated the failure that doc was written to fix — "a list of 1,161 items
+    // is functionally a list of zero items".
+    //
+    // A finished plan's leftovers are not 73 tasks, they're one unmade decision;
+    // collectPlanClosure() in the decision engine raises that separately.
+    let planSummary = null;
+    try {
+      const planTasks = vaultCache.getPlanTasks();
+      const windowMs = 14 * 86400000;
+      const todayMs = new Date(dateKey).getTime();
+      const actionable = planTasks.filter((t) => {
+        if (!t.due_date) return false;
+        const due = new Date(t.due_date.split('T')[0]).getTime();
+        return Math.abs(due - todayMs) <= windowMs;
+      });
+      if (todos && actionable.length) {
+        todos = { ...todos, active: [...(todos.active || []), ...actionable] };
+      }
+
+      const totalDays = ninetyDayPlan?.totalDays || 90;
+      const currentDay = ninetyDayPlan?.currentDay || 0;
+      planSummary = {
+        over: Boolean(ninetyDayPlan) && currentDay > totalDays,
+        unfinished: planTasks.length,
+        surfaced: actionable.length,
+        currentDay,
+        totalDays,
+      };
+    } catch (e) { console.warn('[WorkingMemory] plan task merge failed:', e.message); }
 
     // Today's calendar (fast — SQLite)
     let calendar = [];
@@ -130,6 +155,7 @@ async function refresh() {
       timeContext: { hour, day, isWeekend, isWorkHours },
       todos,
       ninetyDayPlan,
+      planSummary,
       calendar,
       nudges,
       todayActivity,
@@ -276,6 +302,7 @@ function _buildEmpty() {
     timeContext: { hour: new Date().getHours(), day: new Date().getDay(), isWeekend: false, isWorkHours: false },
     todos: null,
     ninetyDayPlan: null,
+    planSummary: null,
     calendar: [],
     nudges: [],
     todayActivity: [],
