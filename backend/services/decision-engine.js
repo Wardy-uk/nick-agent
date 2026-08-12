@@ -12,6 +12,7 @@
 
 const db = require('../db/database');
 const workingMemory = require('./working-memory');
+const { rankTasks } = require('./task-scoring');
 
 // ── Tier thresholds ──
 const TIER_1_MIN = 80;
@@ -189,6 +190,8 @@ function collectOverdueTodos(ctx) {
   let dueTodayCount = 0;
   let topOverdue = null;
   let topDueToday = null;
+  const overdueTasks = [];
+  const dueTodayTasks = [];
   // Undated work used to vanish entirely: no due_date meant `continue`, so a
   // high-priority task with no date was worth exactly nothing to the engine.
   let undatedHighCount = 0;
@@ -203,34 +206,51 @@ function collectOverdueTodos(ctx) {
       continue;
     }
     const dueStr = todo.due_date.split('T')[0];
-    const isPlanTask = (todo.source || '').toLowerCase().includes('plan') ||
-                       (todo.source || '').toLowerCase().includes('90');
 
-    if (dueStr < todayStr) {
-      overdueCount++;
-      const score = isPlanTask ? 85 : 65;
-      if (!topOverdue || score > topOverdue.score) {
-        topOverdue = { text: todo.text, dueStr, isPlanTask, score, source: todo.source };
-      }
-    } else if (dueStr === todayStr) {
-      dueTodayCount++;
-      const score = isPlanTask ? 68 : 45;
-      if (!topDueToday || score > topDueToday.score) {
-        topDueToday = { text: todo.text, dueStr, isPlanTask, score, source: todo.source };
-      }
-    }
+    if (dueStr < todayStr) overdueTasks.push(todo);
+    else if (dueStr === todayStr) dueTodayTasks.push(todo);
   }
+
+  overdueCount = overdueTasks.length;
+  dueTodayCount = dueTodayTasks.length;
+
+  // Pick the representative task with the real scorer rather than a flat
+  // constant. Every overdue task used to score an identical 65, so "Top:" was
+  // decided by iteration order — which surfaced the single oldest item in the
+  // vault (a Planner task four years overdue) as the headline. task-scoring
+  // already models what we want: ancient items get no urgency bonus at all and
+  // stale Planner/ToDo entries are actively buried, so what floats up is
+  // something worth doing rather than something worth ignoring.
+  const _pick = (tasks) => {
+    if (!tasks.length) return null;
+    const top = rankTasks(tasks, todayStr)[0];
+    const source = (top.source || '').toLowerCase();
+    return {
+      text: top.text,
+      dueStr: top.due_date ? top.due_date.split('T')[0] : null,
+      isPlanTask: source.includes('plan') || source.includes('90'),
+      source: top.source,
+      why: top._scoreReason || null,
+    };
+  };
+
+  topOverdue = _pick(overdueTasks);
+  topDueToday = _pick(dueTodayTasks);
 
   if (overdueCount > 0 && topOverdue) {
     items.push({
       type: 'todo',
       id: overdueCount === 1 ? 'todo-overdue-top' : 'todo-overdue-summary',
-      title: overdueCount === 1 ? topOverdue.text : `${overdueCount} overdue task${overdueCount > 1 ? 's' : ''}`,
-      reason: overdueCount === 1 ? `Overdue (due ${topOverdue.dueStr})` : `Top: ${topOverdue.text.substring(0, 60)}`,
-      score: topOverdue.score,
+      // Lead with the task, not the pile. "101 overdue tasks" is a threat
+      // display — it restates the anxiety instead of giving somewhere to start.
+      title: topOverdue.text,
+      reason: overdueCount === 1
+        ? (topOverdue.why || `Overdue (due ${topOverdue.dueStr})`)
+        : `${topOverdue.why || `Overdue (due ${topOverdue.dueStr})`} · ${overdueCount - 1} other overdue`,
+      score: topOverdue.isPlanTask ? 85 : 65,
       urgency: topOverdue.isPlanTask ? 'high' : 'medium',
       source: topOverdue.source || 'vault',
-      actionHint: overdueCount === 1 ? 'Complete or reschedule' : 'Review todos',
+      actionHint: overdueCount === 1 ? 'Complete or reschedule' : 'Start here, then review the rest',
       meta: { dueDate: topOverdue.dueStr, overdueCount },
     });
   }
@@ -239,12 +259,14 @@ function collectOverdueTodos(ctx) {
     items.push({
       type: 'todo',
       id: dueTodayCount === 1 ? 'todo-today-top' : 'todo-today-summary',
-      title: dueTodayCount === 1 ? topDueToday.text : `${dueTodayCount} task${dueTodayCount > 1 ? 's' : ''} due today`,
-      reason: dueTodayCount === 1 ? 'Due today' : `Top: ${topDueToday.text.substring(0, 60)}`,
-      score: topDueToday.score,
+      title: topDueToday.text,
+      reason: dueTodayCount === 1
+        ? (topDueToday.why || 'Due today')
+        : `${topDueToday.why || 'Due today'} · ${dueTodayCount - 1} other due today`,
+      score: topDueToday.isPlanTask ? 68 : 45,
       urgency: topDueToday.isPlanTask ? 'medium' : 'low',
       source: topDueToday.source || 'vault',
-      actionHint: dueTodayCount === 1 ? 'Do today' : 'Review todos',
+      actionHint: dueTodayCount === 1 ? 'Do today' : 'Start here, then review the rest',
       meta: { dueDate: topDueToday.dueStr, dueTodayCount },
     });
   }
