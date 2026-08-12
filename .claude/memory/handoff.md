@@ -59,6 +59,34 @@ and KPIs.md`. **Forward-looking only.**
 Sync itself is healthy (ran 08:01–08:04 on 12 Aug). Windows and Pi vaults are byte-identical,
 so Syncthing is fine. Three separate problems were found:
 
+### STATUS AT END OF SESSION — A and B are DONE
+
+**A (repull): DONE.** `present 217 → 292 / 295`, `missing 76 → 3`. 73 recovered.
+The 3 left: two (`07-07 Weekly Meeting: Customer Success…`, `07-22 Weekly Meeting: Project
+Delivery…`) fail repeatedly with `MCP error -32001: Request timed out` — both are among the
+longest recordings, so the transcript fetch is likely exceeding the MCP timeout. Retried
+explicitly, failed again; **this needs a code fix, not another retry.** The third is
+`08-12 Meeting: Team Performance, KPI Revisions…` — recorded after the last sync, arrives on
+the next 08:00 run.
+Gotcha that cost an hour: `nohup … &` inside an ssh command dies with the session. Use
+`setsid nohup … < /dev/null & disown`. The first run silently stopped at 24 of 76 and looked
+like Plaud rate-limiting when it was just a killed process.
+
+**B (rename): DONE.** `renamePlaudSummaryNotes(root, {apply:true})` — **101/101 renamed, 197
+links rewritten across 128 files, 0 failures**, in 680ms.
+Backups: `Scripts/.lint-backups/2026-08-12T14-54-41-880Z` (229 files).
+Report: `Documents/System/Vault Audit/PLAUD Summary Rename 2026-08-12.md`.
+Verified after: 0 generic `– Summary` notes remain; **0 broken links caused by the rename**.
+(One candidate turned out to be a 23-June file in `Conflicts/` — an excluded dir the pass never
+walked — pointing at a path that has never existed. Pre-existing, not ours.)
+Remaining cosmetic debt: **97 stale ALIASES in 34 files** — `[[new name|2026-06-03 – Summary]]`.
+The links resolve; only the display label is outdated. Mostly `Daily/` notes and `MOCs/Orphan.md`.
+Worth a follow-up alias-rewrite pass, low priority.
+
+**C (empty transcripts): STILL OPEN.** 9 stubs, `POST /api/plaud/repull-stubs`.
+
+### Original findings (kept for context)
+
 **A. 76 of 293 recordings had no note at all (26%).** Not trivia — performance reviews, 1-2-1s,
 a return-to-work HR discussion. `POST /api/plaud/repull` with `{}` was started in the background
 on 12 Aug ~13:20 and was still running at hand-off (~9 of 76 done). It is throttled (750ms gap,
