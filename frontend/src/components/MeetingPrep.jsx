@@ -21,14 +21,19 @@ export default function MeetingPrep() {
   const [detailLoading, setDetailLoading] = useState(false);
 
   const openDetail = async (eventId) => {
+    if (!eventId) return;
     setDetailLoading(true);
+    setDetailData(null);
+    setSelectedId(eventId);
+    setMode('detail');
     try {
-      const r = await fetch(apiUrl(`/api/meeting-prep/${eventId}`));
+      // Event ids contain '/', ':' and spaces — must be encoded or the route won't match
+      const r = await fetch(apiUrl(`/api/meeting-prep/${encodeURIComponent(eventId)}`));
       const d = await r.json();
-      setDetailData(d.meeting);
-      setSelectedId(eventId);
-      setMode('detail');
-    } catch {}
+      setDetailData(d.meeting || null);
+    } catch {
+      setDetailData(null);
+    }
     setDetailLoading(false);
   };
 

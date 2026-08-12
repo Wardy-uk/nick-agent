@@ -25,9 +25,9 @@ const TEAM_MEMBERS = [
 ];
 
 // GET /api/meeting-prep — next upcoming meeting with prep
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const meetings = _getUpcomingMeetings(4);
+    const meetings = await _getUpcomingMeetings(4);
     if (meetings.length === 0) {
       return res.json({ meeting: null, message: 'No upcoming meetings in the next 4 hours' });
     }
@@ -39,6 +39,7 @@ router.get('/', (req, res) => {
     res.json({
       meeting: { ...next, prep },
       laterToday: meetings.slice(1).map(m => ({
+        event_id: m.event_id,
         subject: m.subject,
         start: m.start_time,
         end: m.end_time,
@@ -52,9 +53,9 @@ router.get('/', (req, res) => {
 });
 
 // GET /api/meeting-prep/all — all today's meetings with prep
-router.get('/all', (req, res) => {
+router.get('/all', async (req, res) => {
   try {
-    const meetings = _getUpcomingMeetings(12);
+    const meetings = await _getUpcomingMeetings(12);
     const enriched = meetings.map(m => ({
       ...m,
       prep: _buildPrep(m),
@@ -70,32 +71,10 @@ router.get('/week', async (req, res) => {
   try {
     const daysAhead = parseInt(req.query.days) || 7;
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
-    const endDate = new Date(now.getTime() + daysAhead * 86400000);
-    const endStr = endDate.toISOString().split('T')[0];
+    const todayStr = _localDate(now);
+    const endStr = _localDate(new Date(now.getTime() + daysAhead * 86400000));
 
-    // Use live calendar (Microsoft Graph) — DB cache only has today
-    const obsidian = require('../services/obsidian');
-    let events;
-    try {
-      events = await obsidian.fetchCalendarEvents(todayStr, endStr);
-    } catch {
-      // Fall back to DB cache if Microsoft unavailable
-      events = db.getCalendarEvents(todayStr, endStr + 'T23:59:59');
-    }
-
-    // Normalise field names (live Graph API vs DB cache use different names)
-    const normalised = events.map(e => ({
-      event_id: e.event_id || e.id || '',
-      subject: e.subject || '',
-      start_time: e.start_time || e.start || '',
-      end_time: e.end_time || e.end || '',
-      is_all_day: e.is_all_day ?? e.isAllDay ?? false,
-      location: e.location || null,
-      organizer: e.organizer || null,
-      attendees: e.attendees || [],
-      showAs: e.showAs || e.show_as || null,
-    })).filter(e => !e.is_all_day);
+    const normalised = (await _fetchEvents(todayStr, endStr)).filter(e => !e.is_all_day);
 
     // Group by date
     const byDate = {};
@@ -124,7 +103,7 @@ router.get('/week', async (req, res) => {
         })),
       }));
 
-    res.json({ days, totalMeetings: events.length });
+    res.json({ days, totalMeetings: normalised.length });
   } catch (e) {
     console.error('[MeetingPrep] Week error:', e);
     res.status(500).json({ error: e.message });
@@ -135,30 +114,11 @@ router.get('/week', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
-    const weekEnd = new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0];
+    const todayStr = _localDate(now);
+    const weekEnd = _localDate(new Date(now.getTime() + 7 * 86400000));
 
-    const obsidian = require('../services/obsidian');
-    let events;
-    try {
-      events = await obsidian.fetchCalendarEvents(todayStr, weekEnd);
-    } catch {
-      events = db.getCalendarEvents(todayStr, weekEnd + 'T23:59:59');
-    }
-
-    // Normalise + find
-    const event = events
-      .map(e => ({
-        event_id: e.event_id || e.id || '',
-        subject: e.subject || '',
-        start_time: e.start_time || e.start || '',
-        end_time: e.end_time || e.end || '',
-        is_all_day: e.is_all_day ?? e.isAllDay ?? false,
-        location: e.location || null,
-        organizer: e.organizer || null,
-        attendees: e.attendees || [],
-      }))
-      .find(e => e.event_id === req.params.id);
+    const events = await _fetchEvents(todayStr, weekEnd);
+    const event = events.find(e => e.event_id === req.params.id);
 
     if (!event) return res.status(404).json({ error: 'Meeting not found' });
 
@@ -178,13 +138,46 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-function _getUpcomingMeetings(hoursAhead) {
+// Local (not UTC) YYYY-MM-DD — toISOString() shifts the day either side of midnight in BST
+function _localDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Fetch + normalise events for a date range.
+// Live Microsoft Graph first (the DB calendar cache is never populated and has
+// no attendee data), DB cache only as a fallback.
+async function _fetchEvents(startStr, endStr) {
+  const obsidian = require('../services/obsidian');
+  let events;
+  try {
+    events = await obsidian.fetchCalendarEvents(startStr, endStr);
+  } catch {
+    events = null;
+  }
+  if (!events || events.length === 0) {
+    events = db.getCalendarEvents(startStr, endStr + 'T23:59:59');
+  }
+
+  return (events || []).map(e => ({
+    event_id: e.event_id || e.id || '',
+    subject: e.subject || '',
+    start_time: e.start_time || e.start || '',
+    end_time: e.end_time || e.end || '',
+    is_all_day: e.is_all_day ?? e.isAllDay ?? false,
+    location: e.location || null,
+    organizer: e.organizer || null,
+    attendees: e.attendees || [],
+    showAs: e.showAs || e.show_as || null,
+  }));
+}
+
+async function _getUpcomingMeetings(hoursAhead) {
   const now = new Date();
-  const todayStr = now.toISOString().split('T')[0];
-  const tomorrowStr = new Date(now.getTime() + 86400000).toISOString().split('T')[0];
+  const todayStr = _localDate(now);
+  const tomorrowStr = _localDate(new Date(now.getTime() + 86400000));
   const cutoff = new Date(now.getTime() + hoursAhead * 60 * 60 * 1000);
 
-  const events = db.getCalendarEvents(todayStr, tomorrowStr);
+  const events = await _fetchEvents(todayStr, tomorrowStr);
 
   return events
     .filter(e => {
