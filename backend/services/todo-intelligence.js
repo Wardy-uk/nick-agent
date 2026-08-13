@@ -162,6 +162,11 @@ function buildFollowThroughCandidate(tasks, todayStr = todayDateString()) {
     .filter((task) => task.moscow !== 'could' && task.moscow !== 'wont')
     .filter((task) => task.ageDays == null || task.ageDays >= task.followThroughDays || task.stale || task.overdue || task.dueToday)
     .sort((a, b) => {
+      // MoSCoW first — same ranking as the Today lane, so the nudge and the
+      // lane agree on what matters. Without this a stale 'should' outranks a must.
+      const am = a.moscow === 'must' ? 0 : 1;
+      const bm = b.moscow === 'must' ? 0 : 1;
+      if (am !== bm) return am - bm;
       if ((b._score || 0) !== (a._score || 0)) return (b._score || 0) - (a._score || 0);
       return (b.ageDays || 0) - (a.ageDays || 0);
     });
@@ -170,15 +175,16 @@ function buildFollowThroughCandidate(tasks, todayStr = todayDateString()) {
   if (!top) return null;
 
   const sourceLabel = top.meta?.sourcePath ? top.meta.sourcePath.split('/').pop().replace(/\.md$/i, '') : null;
-  const staleText = top.ageDays != null && top.ageDays > 0 ? `${top.ageDays}d old` : top.overdue ? 'overdue' : 'still open';
+  // null when we have nothing to add — otherwise we render "still open (still open)"
+  const staleText = top.ageDays != null && top.ageDays > 0 ? `${top.ageDays}d old` : top.overdue ? 'overdue' : null;
+  const qualifier = staleText ? ` (${staleText})` : '';
+  const from = sourceLabel ? ` from ${sourceLabel}` : '';
   return {
     text: top.text,
     context: top.context,
     sourcePath: top.meta?.sourcePath || top.sourcePath || null,
     sourceLabel,
-    message: sourceLabel
-      ? `"${top.text}" is still open (${staleText}) from ${sourceLabel}. Move it or kill it.`
-      : `"${top.text}" is still open (${staleText}). Move it or kill it.`,
+    message: `"${top.text}" is still open${qualifier}${from}. Move it or kill it.`,
     navigate: 'todos',
     filter: top.moscow === 'must' ? 'mustdo' : top.overdue || top.dueToday ? 'today' : 'high',
   };

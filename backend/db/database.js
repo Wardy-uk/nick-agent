@@ -229,6 +229,10 @@ function getActiveNudgeByTypeAndDate(type, dateKey) {
   return get('SELECT * FROM nudges WHERE type = ? AND date_key = ? AND active = 1', [type, dateKey]);
 }
 
+function updateNudgeMessage(id, message) {
+  run('UPDATE nudges SET message = ? WHERE id = ?', [message, id]);
+}
+
 function completeNudge(id) {
   run("UPDATE nudges SET active = 0, completed_at = datetime('now') WHERE id = ?", [id]);
 }
@@ -815,6 +819,7 @@ module.exports = {
   createNudge,
   getActiveNudges,
   getActiveNudgeByTypeAndDate,
+  updateNudgeMessage,
   completeNudge,
   completeNudgeByType,
   completeAllNudgesByType,

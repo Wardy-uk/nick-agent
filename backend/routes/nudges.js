@@ -36,15 +36,15 @@ router.post('/:id/complete', (req, res) => {
   res.json({ success: true });
 });
 
-// POST /api/nudges/:type/snooze — snooze a nudge for 30 minutes
+// POST /api/nudges/:type/snooze — snooze a nudge. Body/query `minutes` (default 30).
 router.post('/:type/snooze', (req, res) => {
   const { type } = req.params;
-  const validTypes = ['standup', 'todo', 'eod', '121', 'plan_milestone', 'journal'];
-  if (!validTypes.includes(type)) {
+  if (!nudges.NUDGE_TYPES.includes(type)) {
     return res.status(400).json({ error: 'Invalid nudge type' });
   }
-  nudges.snoozeNudge(type);
-  res.json({ success: true, snoozed_for: '30 minutes' });
+  const minutes = req.body?.minutes ?? req.query.minutes;
+  const result = nudges.snoozeNudge(type, minutes);
+  res.json({ success: true, ...result, snoozed_for: `${result.minutes} minutes` });
 });
 
 // GET /api/nudges/diagnostic — check nudge system state

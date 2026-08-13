@@ -151,6 +151,13 @@ async function scanInbox() {
 
     lastScanTime = new Date().toISOString();
 
+    // Raise/refresh/clear the urgent-email nudge off the freshly triaged set
+    try {
+      require('./nudges').triggerUrgentEmailNudge();
+    } catch (e) {
+      console.warn('[InboxScanner] Failed to sync urgent email nudge:', e.message);
+    }
+
     // Cleanup dismissed items older than 7 days
     db.cleanupOldDismissed(7);
   } catch (err) {
@@ -184,6 +191,8 @@ function getFlaggedItems() {
 function dismissItem(emailId) {
   db.dismissInboxItem(emailId);
   console.log(`[InboxScanner] Dismissed item: ${emailId}`);
+  // Dismissing the last urgent item should silence the banner immediately
+  try { require('./nudges').triggerUrgentEmailNudge(); } catch {}
 }
 
 function start() {

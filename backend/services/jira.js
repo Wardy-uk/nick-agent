@@ -128,22 +128,12 @@ async function syncEscalations() {
     db.setState('escalation_last_sync', new Date().toISOString());
     db.setState('escalation_count', String(issues.length));
 
-    if (newUnseen > 0) {
-      try {
-        const nudges = require('./nudges');
-        const unseenList = Object.entries(updated)
-          .filter(([, v]) => !v.hasComment && !v.seen)
-          .slice(0, 3)
-          .map(([k, v]) => `${k}: ${v.summary}`)
-          .join('; ');
-        const msg = `${newUnseen} new escalation${newUnseen > 1 ? 's' : ''} need${newUnseen === 1 ? 's' : ''} your attention: ${unseenList}`;
-        nudges.broadcast({ type: 'nudge', nudge_type: 'escalation', message: msg, nag_count: 0 });
-        const webpush = require('./webpush');
-        webpush.sendToAll('NEURO — New Escalation', msg, { type: 'escalation', url: '/queue' }).catch(() => {});
-        console.log(`[Jira] Escalation nudge sent: ${newUnseen} new`);
-      } catch (e) {
-        console.warn('[Jira] Failed to send escalation nudge:', e.message);
-      }
+    // Always sync — this raises, refreshes AND clears the banner, so an escalation
+    // Nick has since replied to stops nagging without waiting for the nag cycle.
+    try {
+      require('./nudges').triggerEscalationNudge();
+    } catch (e) {
+      console.warn('[Jira] Failed to sync escalation nudge:', e.message);
     }
 
     return { ok: true, total: issues.length, newUnseen };
@@ -162,6 +152,8 @@ function markEscalationsSeen() {
     }
     db.setState('escalation_seen', JSON.stringify(known));
   } catch {}
+  // Nothing unseen left — drop the banner rather than waiting for the nag cycle
+  try { require('./nudges').triggerEscalationNudge(); } catch {}
 }
 
 function getUnseenEscalationCount() {

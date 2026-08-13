@@ -80,6 +80,42 @@
   flex-shrink: 0;
 }
 
+.nudge-snooze-wrap {
+  position: relative;
+}
+
+.nudge-snooze-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 110px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.nudge-snooze-option {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: left;
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  padding: 7px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.nudge-snooze-option:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
 .nudge-snooze {
   font-family: var(--font-mono);
   font-size: 11px;

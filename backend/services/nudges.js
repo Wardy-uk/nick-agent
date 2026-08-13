@@ -6,14 +6,23 @@ const todoIntelligence = require('./todo-intelligence');
 // SSE clients listening for nudges
 const clients = new Set();
 
-const SNOOZE_DURATION = 30 * 60 * 1000; // 30 minutes
+// Every nudge type that can be raised, snoozed and reported in snooze state.
+const NUDGE_TYPES = ['standup', 'todo', 'eod', '121', 'plan_milestone', 'journal', 'escalation', 'email'];
 
-function snoozeNudge(type) {
-  const until = Date.now() + SNOOZE_DURATION;
+const SNOOZE_DEFAULT_MINUTES = 30;
+const SNOOZE_MAX_MINUTES = 24 * 60; // enough for "rest of day" from any hour
+
+function snoozeNudge(type, minutes = SNOOZE_DEFAULT_MINUTES) {
+  const requested = Number(minutes);
+  const mins = Number.isFinite(requested) && requested > 0
+    ? Math.min(Math.round(requested), SNOOZE_MAX_MINUTES)
+    : SNOOZE_DEFAULT_MINUTES;
+  const until = Date.now() + mins * 60 * 1000;
   db.setState(`snooze_${type}`, String(until));
   try { require('./activity').trackNudgeSnooze(type); } catch {}
-  console.log(`[Nudge] ${type} snoozed until ${new Date(until).toLocaleTimeString()}`);
-  broadcast({ type: 'nudge_snoozed', nudge_type: type, until });
+  console.log(`[Nudge] ${type} snoozed for ${mins}m, until ${new Date(until).toLocaleTimeString()}`);
+  broadcast({ type: 'nudge_snoozed', nudge_type: type, until, minutes: mins });
+  return { until, minutes: mins };
 }
 
 function isSnoozed(type) {
@@ -356,6 +365,95 @@ function triggerTodoNudge() {
   webpush.sendToAll('SARA', msg, { type: 'todo', url: '/todos' }).catch(() => {});
 }
 
+// ── Escalations and urgent email ─────────────────────────────────────────────
+// These two are the nudges Nick actually wants interrupting him, so they say what
+// the thing IS rather than picking from the joke pool — and they re-state the
+// current facts on every nag instead of getting staler with each repeat.
+
+function getUnseenEscalations() {
+  try { return require('./jira').getUnseenEscalations(); } catch { return []; }
+}
+
+function buildEscalationMessage(items) {
+  if (!items || items.length === 0) return null;
+  // Count first — one banner for the lot, not one per ticket. The oldest is
+  // named only so opening Focus isn't a surprise.
+  const [oldest] = items; // getUnseenEscalations() sorts oldest first
+  const ageDays = oldest.created
+    ? Math.floor((Date.now() - new Date(oldest.created).getTime()) / 86400000)
+    : null;
+  const age = ageDays == null ? '' : ageDays === 0 ? ', raised today' : `, ${ageDays}d old`;
+  const n = items.length;
+  return n === 1
+    ? `1 escalation waiting on you — ${oldest.key}${age}.`
+    : `${n} escalations waiting on you — oldest is ${oldest.key}${age}.`;
+}
+
+// Only the lanes that mean "someone is waiting on Nick today"
+const URGENT_EMAIL_CATEGORIES = ['action-required', 'decision-needed', 'escalation'];
+
+function getUrgentEmails() {
+  try {
+    return db.getActiveInboxItems().filter(e =>
+      e.urgency === 'high' && URGENT_EMAIL_CATEGORIES.includes((e.category || '').toLowerCase())
+    );
+  } catch { return []; }
+}
+
+function buildEmailMessage(items) {
+  if (!items || items.length === 0) return null;
+  const [first] = items; // getActiveInboxItems() sorts urgent first
+  const from = first.from_name || first.from_email;
+  const n = items.length;
+  if (n === 1) {
+    return from ? `1 urgent email needs a reply — from ${from}.` : '1 urgent email needs a reply.';
+  }
+  return from
+    ? `${n} urgent emails need a reply — including one from ${from}.`
+    : `${n} urgent emails need a reply.`;
+}
+
+/**
+ * Raise, refresh or clear a fact-driven nudge. Unlike the standup/todo nudges
+ * this can update an existing banner in place — a second escalation landing
+ * shouldn't be silent just because one is already showing.
+ */
+function syncFactNudge(type, message, pushTitle, url) {
+  const dateKey = todayKey();
+  const existing = db.getActiveNudgeByTypeAndDate(type, dateKey);
+
+  if (!message) {
+    if (existing) {
+      db.completeNudge(existing.id);
+      broadcast({ type: 'nudge_cleared', nudge_type: type });
+      console.log(`[Nudge] ${type} nudge cleared — nothing outstanding`);
+    }
+    return;
+  }
+
+  if (isSnoozed(type)) return;
+
+  if (existing) {
+    if (existing.message === message) return; // nothing new to say — don't re-notify
+    db.updateNudgeMessage(existing.id, message);
+  } else {
+    db.createNudge(type, message, dateKey);
+  }
+
+  const nagCount = existing ? (existing.nag_count || 0) : 0;
+  console.log(`[Nudge] ${type} nudge ${existing ? 'updated' : 'created'}: ${message}`);
+  broadcast({ type: 'nudge', nudge_type: type, message, nag_count: nagCount });
+  webpush.sendToAll(pushTitle, message, { type, url }).catch(() => {});
+}
+
+function triggerEscalationNudge() {
+  syncFactNudge('escalation', buildEscalationMessage(getUnseenEscalations()), 'SARA — Escalation', '/focus');
+}
+
+function triggerUrgentEmailNudge() {
+  syncFactNudge('email', buildEmailMessage(getUrgentEmails()), 'SARA — Urgent email', '/inbox');
+}
+
 // Called every 15 min — escalates existing nudges
 function nagCheck() {
   const nudges = db.getActiveNudges();
@@ -392,6 +490,21 @@ function nagCheck() {
       continue;
     }
 
+    // Escalations answered / urgent email dealt with — stop nagging
+    if (nudge.type === 'escalation' && getUnseenEscalations().length === 0) {
+      db.completeNudge(nudge.id);
+      broadcast({ type: 'nudge_cleared', nudge_type: 'escalation' });
+      console.log('[Nudge] No unseen escalations — nudge cleared');
+      continue;
+    }
+
+    if (nudge.type === 'email' && getUrgentEmails().length === 0) {
+      db.completeNudge(nudge.id);
+      broadcast({ type: 'nudge_cleared', nudge_type: 'email' });
+      console.log('[Nudge] No urgent email outstanding — nudge cleared');
+      continue;
+    }
+
     // Skip escalation if snoozed
     if (isSnoozed(nudge.type)) {
       continue;
@@ -419,10 +532,18 @@ function nagCheck() {
     const newCount = (nudge.nag_count || 0) + 1;
     db.incrementNagCount(nudge.id);
     const followThrough = nudge.type === 'todo' ? getFollowThroughTodo() : null;
-    const msg = followThrough?.message || getNagMessage(nudge.type, newCount);
+    // Fact-driven types re-state the current position rather than escalating in tone
+    const factMessage = nudge.type === 'escalation' ? buildEscalationMessage(getUnseenEscalations())
+      : nudge.type === 'email' ? buildEmailMessage(getUrgentEmails())
+      : null;
+    const msg = factMessage || followThrough?.message || getNagMessage(nudge.type, newCount);
+    if (factMessage && factMessage !== nudge.message) db.updateNudgeMessage(nudge.id, factMessage);
     console.log(`[Nudge] Nag #${newCount} for ${nudge.type}: ${msg}`);
     broadcast({ type: 'nudge', nudge_type: nudge.type, message: msg, nag_count: newCount });
-    const url = nudge.type === 'standup' ? '/standup' : '/todos';
+    const url = nudge.type === 'standup' ? '/standup'
+      : nudge.type === 'escalation' ? '/focus'
+      : nudge.type === 'email' ? '/inbox'
+      : '/todos';
     webpush.sendToAll('SARA', msg, { type: nudge.type, url }).catch(() => {});
   }
 }
@@ -500,9 +621,8 @@ function checkPlanMilestoneNudge() {
 }
 
 function getSnoozeState() {
-  const types = ['standup', 'todo', 'eod', '121', 'plan_milestone', 'journal'];
   const state = {};
-  for (const type of types) {
+  for (const type of NUDGE_TYPES) {
     const val = db.getState(`snooze_${type}`);
     state[type] = val && Date.now() < parseInt(val, 10) ? parseInt(val, 10) : null;
   }
@@ -593,8 +713,11 @@ function markJournalDone() {
 module.exports = {
   addClient,
   broadcast,
+  NUDGE_TYPES,
   triggerStandupNudge,
   triggerTodoNudge,
+  triggerEscalationNudge,
+  triggerUrgentEmailNudge,
   nagCheck,
   markStandupDone,
   startupCheck,

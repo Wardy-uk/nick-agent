@@ -4,14 +4,53 @@ import useCachedFetch from '../useCachedFetch';
 import { speakIfEnabled } from '../voiceUtils';
 import './NudgeBanner.css';
 
-export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal, onGoToPeople }) {
+// Snooze durations offered per nudge. `minutes` is a function so "rest of day"
+// is measured from when the button is actually pressed.
+const SNOOZE_OPTIONS = [
+  { label: '30 min', minutes: () => 30 },
+  { label: '1 hour', minutes: () => 60 },
+  { label: '3 hours', minutes: () => 180 },
+  {
+    label: 'Rest of day',
+    minutes: () => {
+      const end = new Date();
+      end.setHours(23, 59, 0, 0);
+      return Math.max(5, Math.round((end.getTime() - Date.now()) / 60000));
+    }
+  }
+];
+
+export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal, onGoToPeople, onGoToBriefing, onGoToInbox }) {
   const transform = useMemo(() => (json) => ({
     nudges: json.nudges || [],
     snoozeState: json.snoozeState || {}
   }), []);
   const { data: nudgeData } = useCachedFetch('/api/nudges', { interval: 30000, transform });
   const [nudges, setNudges] = useState([]);
-  const [snoozed, setSnoozed] = useState({}); // { standup: true, todo: true }
+  const [snoozed, setSnoozed] = useState({}); // { todo: 1755102000000 } — snoozed-until epoch ms
+  const [menuOpen, setMenuOpen] = useState(null); // nudge type whose snooze menu is open
+  const [now, setNow] = useState(() => Date.now());
+
+  // Close the snooze menu when clicking anywhere outside it
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDocClick = (e) => {
+      if (!e.target.closest('.nudge-snooze-wrap')) setMenuOpen(null);
+    };
+    document.addEventListener('click', onDocClick);
+    return () => document.removeEventListener('click', onDocClick);
+  }, [menuOpen]);
+
+  // Cheap ticker so a snooze expires on its own without a page refresh
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  const applySnooze = (type, until) => {
+    setSnoozed(prev => ({ ...prev, [type]: until }));
+    setNow(Date.now());
+  };
 
   // Sync fetched nudges + snooze state into local state
   useEffect(() => {
@@ -19,27 +58,26 @@ export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal,
     setNudges(nudgeData.nudges);
     // Seed snooze state from server — makes all devices consistent
     const serverSnooze = nudgeData.snoozeState || {};
-    const now = Date.now();
+    const current = Date.now();
     const newSnoozed = {};
     for (const [type, until] of Object.entries(serverSnooze)) {
-      if (until && now < until) {
-        newSnoozed[type] = true;
-        // Set a timeout to clear it when it expires
-        const remaining = until - now;
-        setTimeout(() => setSnoozed(prev => ({ ...prev, [type]: false })), remaining);
-      }
+      if (until && current < until) newSnoozed[type] = until;
     }
     setSnoozed(newSnoozed);
+    setNow(current);
   }, [nudgeData]);
 
-  const handleSnooze = (type) => {
-    fetch(apiUrl(`/api/nudges/${type}/snooze`), { method: 'POST' })
+  const handleSnooze = (type, minutes) => {
+    setMenuOpen(null);
+    // Optimistic — the server response confirms the exact expiry
+    applySnooze(type, Date.now() + minutes * 60 * 1000);
+    fetch(apiUrl(`/api/nudges/${type}/snooze`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ minutes })
+    })
       .then(r => r.json())
-      .then(() => {
-        setSnoozed(prev => ({ ...prev, [type]: true }));
-        // Un-snooze in UI after 30 min
-        setTimeout(() => setSnoozed(prev => ({ ...prev, [type]: false })), 30 * 60 * 1000);
-      })
+      .then(res => { if (res && res.until) applySnooze(type, res.until); })
       .catch(console.error);
   };
 
@@ -66,8 +104,9 @@ export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal,
         } else if (data.type === 'nudge_cleared') {
           setNudges(prev => prev.filter(n => n.type !== data.nudge_type));
         } else if (data.type === 'nudge_snoozed') {
-          setSnoozed(prev => ({ ...prev, [data.nudge_type]: true }));
-          setTimeout(() => setSnoozed(prev => ({ ...prev, [data.nudge_type]: false })), 30 * 60 * 1000);
+          const until = data.until || (Date.now() + 30 * 60 * 1000);
+          setSnoozed(prev => ({ ...prev, [data.nudge_type]: until }));
+          setNow(Date.now());
         }
       };
     } catch (e) { /* SSE not supported or connection failed */ }
@@ -85,7 +124,7 @@ export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal,
   // Speak new nudges aloud (once per nudge type per session)
   const spokenNudgesRef = useRef(new Set());
   useEffect(() => {
-    const visible = nudges.filter(n => !snoozed[n.type]);
+    const visible = nudges.filter(n => !(snoozed[n.type] > Date.now()));
     for (const n of visible) {
       const key = `${n.type}_${n.nag_count || 0}`;
       if (!spokenNudgesRef.current.has(key) && n.message) {
@@ -98,7 +137,7 @@ export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal,
 
   const isWeekend = new Date().getDay() === 0 || new Date().getDay() === 6;
 
-  const visibleNudges = nudges.filter(n => !snoozed[n.type]);
+  const visibleNudges = nudges.filter(n => !(snoozed[n.type] > now));
 
   if (visibleNudges.length === 0) return null;
 
@@ -117,6 +156,8 @@ export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal,
                   : nudge.type === '121' ? '1-2-1'
                   : nudge.type === 'plan_milestone' ? 'PLAN'
                   : nudge.type === 'journal' ? 'JOURNAL'
+                  : nudge.type === 'escalation' ? 'ESCALATION'
+                  : nudge.type === 'email' ? 'EMAIL'
                   : nudge.type.toUpperCase()}
               </span>
               <span className="nudge-message">{nudge.message}</span>
@@ -131,13 +172,29 @@ export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal,
                   Dismiss
                 </button>
               )}
-              <button
-                className="nudge-snooze"
-                onClick={() => handleSnooze(nudge.type)}
-                title="Snooze for 30 minutes"
-              >
-                Snooze
-              </button>
+              <div className="nudge-snooze-wrap">
+                <button
+                  className="nudge-snooze"
+                  onClick={() => setMenuOpen(menuOpen === nudge.type ? null : nudge.type)}
+                  title="Snooze for…"
+                  aria-expanded={menuOpen === nudge.type}
+                >
+                  Snooze ▾
+                </button>
+                {menuOpen === nudge.type && (
+                  <div className="nudge-snooze-menu">
+                    {SNOOZE_OPTIONS.map(opt => (
+                      <button
+                        key={opt.label}
+                        className="nudge-snooze-option"
+                        onClick={() => handleSnooze(nudge.type, opt.minutes())}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <button
                 className="nudge-action"
                 onClick={() => {
@@ -145,6 +202,8 @@ export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal,
                   else if (nudge.type === 'todo') onGoToTodos();
                   else if (nudge.type === 'journal') { if (onGoToJournal) onGoToJournal(); }
                   else if (nudge.type === '121') { if (onGoToPeople) onGoToPeople(); }
+                  else if (nudge.type === 'escalation') { if (onGoToBriefing) onGoToBriefing(); }
+                  else if (nudge.type === 'email') { if (onGoToInbox) onGoToInbox(); }
                   handleDismiss(nudge);
                 }}
               >
@@ -153,6 +212,8 @@ export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal,
                   : nudge.type === 'eod' ? 'Do it'
                   : nudge.type === 'journal' ? 'Open'
                   : nudge.type === '121' ? 'Open'
+                  : nudge.type === 'escalation' ? 'Open'
+                  : nudge.type === 'email' ? 'Reply'
                   : 'Go'}
               </button>
             </div>
