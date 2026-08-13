@@ -103,6 +103,14 @@ function shouldSkipPath(relativePath) {
     value.startsWith('.trash/') ||
     value.startsWith('.claude/') ||
     value.startsWith('Conflicts/') ||
+    // Projects/ and Plaud/ generate nothing but noise, and the write hook — unlike
+    // the nightly sweep — is not scoped to Meetings/, so it kept proposing from
+    // them. Measured 12 Aug: 1,038 checkboxes under Projects/ produced ZERO
+    // attributable to Nick. Plaud/Summaries is raw intake; the routed note in
+    // Meetings/ is the record, so suggesting from both double-counts.
+    // Between them these two were the entire 105-item stale queue.
+    value.startsWith('Projects/') ||
+    value.startsWith('Plaud/') ||
     value.includes('/Archive/') ||
     value.includes('sync-conflict')
   );
