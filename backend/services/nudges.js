@@ -537,7 +537,9 @@ function nagCheck() {
       : nudge.type === 'email' ? buildEmailMessage(getUrgentEmails())
       : null;
     const msg = factMessage || followThrough?.message || getNagMessage(nudge.type, newCount);
-    if (factMessage && factMessage !== nudge.message) db.updateNudgeMessage(nudge.id, factMessage);
+    // Persist it — the row is what a page load renders, so broadcasting alone
+    // leaves the banner showing the message this nudge was first created with.
+    if (msg !== nudge.message) db.updateNudgeMessage(nudge.id, msg);
     console.log(`[Nudge] Nag #${newCount} for ${nudge.type}: ${msg}`);
     broadcast({ type: 'nudge', nudge_type: nudge.type, message: msg, nag_count: newCount });
     const url = nudge.type === 'standup' ? '/standup'
