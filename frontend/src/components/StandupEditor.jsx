@@ -119,7 +119,7 @@ function GuidedEod({ onDone }) {
   if (done) {
     return (
       <div className="guided-done">
-        <div className="guided-done-icon">&check;</div>
+        <div className="guided-done-icon">✓</div>
         <div className="guided-done-title">EOD filed.</div>
         <div className="guided-done-sub">Close the laptop.</div>
         {onDone && <button className="btn btn-secondary" style={{ marginTop: '16px' }} onClick={onDone}>Close</button>}
@@ -202,6 +202,78 @@ function MustDoPanel({ items }) {
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  );
+}
+
+// Accountability card — what Nick said he'd do vs what actually happened.
+// Anything rolling 3+ days must get a Today/Drop decision before the standup proceeds.
+function AccountabilityCard({ data, decisions, onDecide }) {
+  if (!data) return null;
+  const { headline, yesterday, openCommitments = [], skippedDays = [], overdueMustDos = [], queue } = data;
+  const hasBody = yesterday || openCommitments.length > 0 || overdueMustDos.length > 0 || queue;
+  if (!headline && !hasBody) return null;
+
+  return (
+    <div className="accountability-card">
+      {headline && <div className="accountability-headline">{headline}</div>}
+
+      {yesterday && (
+        <div className="accountability-score">
+          <span className="accountability-label">{yesterday.date}</span>
+          <span className={yesterday.done === 0 && yesterday.committed > 0 ? 'accountability-bad' : ''}>
+            {yesterday.done}/{yesterday.committed} done
+          </span>
+          {!yesterday.eodDone && <span className="accountability-bad">no EOD</span>}
+        </div>
+      )}
+
+      {yesterday?.unresolved && (
+        <div className="accountability-note">Yesterday you flagged: “{yesterday.unresolved}”</div>
+      )}
+
+      {openCommitments.length > 0 && (
+        <div className="accountability-section">
+          <div className="accountability-section-title">Still open — commit or drop</div>
+          {openCommitments.map(c => {
+            const stale = c.daysCarried >= 3;
+            const decision = decisions[c.key];
+            return (
+              <div key={c.key} className={`accountability-item ${stale ? 'stale' : ''} ${decision ? `decided-${decision}` : ''}`}>
+                <span className="accountability-item-text">{c.text}</span>
+                <span className="accountability-days">day {c.daysCarried}</span>
+                <button
+                  className={`accountability-btn ${decision === 'today' ? 'active' : ''}`}
+                  onClick={() => onDecide(c, decision === 'today' ? null : 'today')}
+                >Today</button>
+                <button
+                  className={`accountability-btn drop ${decision === 'drop' ? 'active' : ''}`}
+                  onClick={() => onDecide(c, decision === 'drop' ? null : 'drop')}
+                >Drop</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {overdueMustDos.length > 0 && (
+        <div className="accountability-section">
+          <div className="accountability-section-title">Overdue must-dos</div>
+          {overdueMustDos.slice(0, 4).map((m, i) => (
+            <div key={i} className="accountability-item">
+              <span className="accountability-item-text">{m.text}</span>
+              <span className="accountability-days bad">{m.daysLate}d late</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(queue || skippedDays.length >= 2) && (
+        <div className="accountability-footer">
+          {queue && <span>{queue.total} open · {queue.atRisk} at risk · {queue.p1s} P1</span>}
+          {skippedDays.length >= 2 && <span className="accountability-bad">standup skipped {skippedDays.length}d</span>}
+        </div>
       )}
     </div>
   );
@@ -293,11 +365,15 @@ function GuidedStandup({ onDone }) {
   const [done, setDone] = useState(false);
   const [error, setError] = useState(null);
   const [mustDos, setMustDos] = useState([]);
+  const [accountability, setAccountability] = useState(null);
+  const [decisions, setDecisions] = useState({});
+  const [gateMessage, setGateMessage] = useState('');
   const inputRef = useRef(null);
 
-  // Load must-dos + questions on mount
+  // Load must-dos + accountability + questions on mount
   useEffect(() => {
     fetch(apiUrl('/api/standup/must-dos')).then(r => r.json()).then(d => setMustDos(d.items || [])).catch(() => {});
+    fetch(apiUrl('/api/standup/accountability')).then(r => r.json()).then(setAccountability).catch(() => {});
     fetch(apiUrl('/api/standup/questions'))
       .then(r => r.json())
       .then(d => {
@@ -318,7 +394,17 @@ function GuidedStandup({ onDone }) {
     if (!loading && inputRef.current) inputRef.current.focus();
   }, [step, loading]);
 
+  // Anything rolling 3+ days has to be explicitly committed to or dropped —
+  // that's the accountability bit. Younger items can just carry.
+  const undecidedStale = (accountability?.openCommitments || [])
+    .filter(c => c.daysCarried >= 3 && !decisions[c.key]);
+
   const handleNext = () => {
+    if (step === 0 && undecidedStale.length > 0) {
+      setGateMessage(`${undecidedStale.length} item${undecidedStale.length > 1 ? 's have' : ' has'} been rolling 3+ days. Commit or drop before moving on.`);
+      return;
+    }
+    setGateMessage('');
     if (step < questions.length - 1) {
       setStep(s => s + 1);
     } else {
@@ -335,11 +421,17 @@ function GuidedStandup({ onDone }) {
 
   const handleSubmit = async () => {
     setSaving(true);
+    const commitments = (accountability?.openCommitments || []).map(c => ({
+      key: c.key,
+      text: c.text,
+      daysCarried: c.daysCarried,
+      decision: decisions[c.key] || 'hold',
+    }));
     try {
       const res = await fetch(apiUrl('/api/standup/submit-guided'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers, questions })
+        body: JSON.stringify({ answers, questions, commitments })
       });
       if (res.ok) {
         setDone(true);
@@ -368,7 +460,7 @@ function GuidedStandup({ onDone }) {
   if (done) {
     return (
       <div className="guided-done">
-        <div className="guided-done-icon">&check;</div>
+        <div className="guided-done-icon">✓</div>
         <div className="guided-done-title">Daily note written.</div>
         <div className="guided-done-sub">Go.</div>
         {onDone && <button className="btn btn-secondary" style={{ marginTop: '16px' }} onClick={onDone}>Close</button>}
@@ -379,6 +471,22 @@ function GuidedStandup({ onDone }) {
   return (
     <div className="guided-standup">
       <MustDoPanel items={mustDos} />
+
+      {/* Accountability — yesterday's commitments, what slipped */}
+      {step === 0 && (
+        <AccountabilityCard
+          data={accountability}
+          decisions={decisions}
+          onDecide={(item, decision) => {
+            setDecisions(d => {
+              const next = { ...d };
+              if (decision) next[item.key] = decision; else delete next[item.key];
+              return next;
+            });
+            setGateMessage('');
+          }}
+        />
+      )}
 
       {/* SARA briefing */}
       {briefing && step === 0 && (
@@ -400,6 +508,8 @@ function GuidedStandup({ onDone }) {
       <div className="guided-bubble assistant">
         {questions[step]}
       </div>
+
+      {gateMessage && <div className="accountability-gate">{gateMessage}</div>}
 
       {/* Progress */}
       <div className="guided-progress">
@@ -599,7 +709,7 @@ export default function StandupEditor() {
       {/* Guided done */}
       {mode === 'guided' && (standupDone || guidedDone) && !showEod && (
         <div className="guided-done">
-          <div className="guided-done-icon">&check;</div>
+          <div className="guided-done-icon">✓</div>
           <div className="guided-done-title">Standup done.</div>
           <div className="guided-done-sub">Written to vault.</div>
         </div>

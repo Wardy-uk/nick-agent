@@ -107,7 +107,7 @@ export default function JournalPanel() {
     return (
       <div className="journal-panel">
         <div className="journal-done">
-          <div className="journal-done-icon">&check;</div>
+          <div className="journal-done-icon">✓</div>
           <h2>Already done today.</h2>
           <p>Reflections/{date}-journal.md</p>
           <div className="journal-settings">
@@ -135,7 +135,7 @@ export default function JournalPanel() {
     return (
       <div className="journal-panel">
         <div className="journal-done">
-          <div className="journal-done-icon">&check;</div>
+          <div className="journal-done-icon">✓</div>
           <h2>Filed. That's today done.</h2>
           <p>Reflections/{date}-journal.md</p>
         </div>

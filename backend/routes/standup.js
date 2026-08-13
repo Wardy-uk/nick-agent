@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const obsidianService = require('../services/obsidian');
 const nudges = require('../services/nudges');
+const accountability = require('../services/standup-accountability');
 
 // ── Standup pre-warm cache ──────────────────────────────────────────────
 // Pre-generates the Phase 1 Ollama response before the user opens the standup,
@@ -410,19 +411,29 @@ async function generateStandupQuestions() {
   const dow = today.toLocaleDateString('en-GB', { weekday: 'long' });
   const isMonday = today.getDay() === 1;
 
+  let acc = null;
+  try { acc = accountability.buildAccountability(); } catch {}
+  const stale = (acc?.openCommitments || []).filter(c => c.daysCarried >= 3);
+
   const prompt = `Generate a morning standup briefing and 3 questions for Nick Ward, Head of Technical Support at Nurtur.
 
 Context:
 ${ctx.mustDoItems?.length ? `Must-dos: ${ctx.mustDoItems.length} non-negotiable items` : 'No must-dos'}
 ${ctx.systemPrompt.match(/Queue:.*?\./)?.[0] || 'No queue data'}
 ${ctx.systemPrompt.match(/90-day plan:.*?\./)?.[0] || ''}
-${ctx.systemPrompt.match(/Carry-overs.*?\./)?.[0] || 'No carry-overs'}
 ${ctx.systemPrompt.match(/Today's calendar:.*?\./)?.[0] || 'No meetings'}
+${acc?.yesterday ? `Yesterday (${acc.yesterday.date}): committed to ${acc.yesterday.committed}, completed ${acc.yesterday.done}.${acc.yesterday.eodDone ? '' : ' No EOD logged.'}${acc.yesterday.unresolved ? ` Flagged as not going to plan: ${acc.yesterday.unresolved}` : ''}` : 'No previous daily note found.'}
+${acc?.openCommitments?.length ? `Still open: ${acc.openCommitments.slice(0, 5).map(c => `${c.text} (day ${c.daysCarried})`).join('; ')}` : 'Nothing carried over.'}
+${stale.length ? `ROLLING 3+ DAYS: ${stale.map(c => c.text).join('; ')}` : ''}
+${acc?.overdueMustDos?.length ? `Overdue must-dos: ${acc.overdueMustDos.slice(0, 3).map(m => `${m.text} (${m.daysLate}d late)`).join('; ')}` : ''}
+${acc?.skippedDays?.length >= 2 ? `Standup skipped on ${acc.skippedDays.length} recent weekdays.` : ''}
 Day: ${dow}${isMonday ? ' (Monday)' : ''}
 
+Tone: direct and accountable. Name what has slipped — do not soften it or add praise.
+
 Output EXACTLY this format, nothing else:
-BRIEFING: [2-3 sentence morning context — queue status, key priorities, calendar highlights]
-Q1: [first question — about main focus today]
+BRIEFING: [2-3 sentences — lead with what slipped or is still open, then queue/calendar. Be blunt.]
+Q1: [${stale.length ? `a direct question challenging why "${stale[0].text}" is still open after ${stale[0].daysCarried} days` : 'a question about main focus today'}]
 Q2: [second question — about blockers or escalations]
 Q3: [third question — ${isMonday ? 'about the week ahead' : 'anything else or how they are feeling'}]`;
 
@@ -575,6 +586,16 @@ async function preWarmEodQuestions() {
   } finally { cache.warming = false; }
 }
 
+// GET /api/standup/accountability — deterministic "what you said vs what you did"
+router.get('/accountability', (req, res) => {
+  try {
+    res.json(accountability.buildAccountability());
+  } catch (e) {
+    console.error('[Standup] Accountability error:', e);
+    res.json({ headline: null, yesterday: null, openCommitments: [], staleCount: 0, skippedDays: [], overdueMustDos: [], queue: null, plan: null });
+  }
+});
+
 // GET /api/standup/questions — get pre-generated standup questions
 router.get('/questions', async (req, res) => {
   const todayStr = obsidianService.todayDateString();
@@ -596,16 +617,31 @@ router.get('/questions', async (req, res) => {
     }
   } catch {}
 
-  // Deterministic fallback — build briefing from context
+  // Deterministic fallback — build briefing + a pointed first question from context
   let briefing = '';
+  let questions = STANDUP_FALLBACK_QUESTIONS;
   try {
     const ctx = await buildStandupContext();
+    const acc = accountability.buildAccountability();
     const queue = ctx.systemPrompt.match(/Queue:.*?\./)?.[0] || '';
     const mustDos = ctx.mustDoItems?.length || 0;
-    briefing = `${mustDos > 0 ? `You have ${mustDos} must-dos today. ` : ''}${queue || 'Queue data loading.'}`;
+    const parts = [];
+    if (acc.headline) parts.push(acc.headline);
+    if (acc.yesterday) parts.push(`Yesterday: ${acc.yesterday.done}/${acc.yesterday.committed} done${acc.yesterday.eodDone ? '' : ', no EOD logged'}.`);
+    if (mustDos > 0) parts.push(`${mustDos} must-dos today.`);
+    if (queue) parts.push(queue);
+    briefing = parts.join(' ');
+
+    const stale = acc.openCommitments.filter(c => c.daysCarried >= 3);
+    if (stale.length > 0) {
+      questions = [
+        `"${stale[0].text}" is on day ${stale[0].daysCarried}. What's actually blocking it — and is it happening today?`,
+        ...STANDUP_FALLBACK_QUESTIONS.slice(1),
+      ];
+    }
   } catch {}
 
-  res.json({ briefing: briefing || 'Good morning.', questions: STANDUP_FALLBACK_QUESTIONS, source: 'fallback' });
+  res.json({ briefing: briefing || 'Good morning.', questions, source: 'fallback' });
 });
 
 // GET /api/standup/eod/questions — get pre-generated EOD questions
@@ -633,7 +669,7 @@ router.get('/eod/questions', async (req, res) => {
 // POST /api/standup/submit-guided — assemble daily note from guided answers
 router.post('/submit-guided', (req, res) => {
   try {
-    const { answers, questions } = req.body;
+    const { answers, questions, commitments } = req.body;
     if (!answers || !Array.isArray(answers) || answers.length < 2) {
       return res.status(400).json({ error: 'At least 2 answers required' });
     }
@@ -669,22 +705,36 @@ router.post('/submit-guided', (req, res) => {
       }
     } catch {}
 
-    // Carry-overs
+    // Carry-overs — driven by the decisions Nick made in the accountability card.
+    // Committed items are promoted into Focus Today with their age; dropped items
+    // are recorded explicitly so they stop silently rolling forward.
     let carrySection = '- None';
-    try {
-      const prev = obsidianService.readPreviousDailyNote();
-      if (prev) {
-        const lines = prev.content.split('\n');
-        let inCarry = false;
-        const carries = [];
-        for (const line of lines) {
-          if (line.startsWith('## Carry') || line.startsWith('## Focus Today')) { inCarry = true; continue; }
-          if (line.startsWith('## ') && inCarry) break;
-          if (inCarry && line.match(/^\s*-\s+\[\s\]/)) carries.push(line.trim());
-        }
-        if (carries.length > 0) carrySection = carries.join('\n');
+    let droppedSection = '';
+    const decided = Array.isArray(commitments) ? commitments : [];
+    if (decided.length > 0) {
+      const promoted = decided.filter(c => c.decision === 'today');
+      const dropped = decided.filter(c => c.decision === 'drop');
+      const held = decided.filter(c => c.decision !== 'today' && c.decision !== 'drop');
+
+      for (const c of promoted) {
+        focusLines.push(`- [ ] ${c.text} #focus #carried-${c.daysCarried || 1}d`);
       }
-    } catch {}
+      if (held.length > 0) {
+        carrySection = held.map(c => `- [ ] ${c.text} #carried-${c.daysCarried || 1}d`).join('\n');
+      }
+      if (dropped.length > 0) {
+        droppedSection = `\n## Dropped\n${dropped.map(c => `- ~~${c.text}~~ (dropped after ${c.daysCarried || 1} days)`).join('\n')}\n`;
+      }
+    } else {
+      try {
+        const acc = accountability.buildAccountability();
+        if (acc.openCommitments.length > 0) {
+          carrySection = acc.openCommitments
+            .map(c => `- [ ] ${c.text} #carried-${c.daysCarried}d`)
+            .join('\n');
+        }
+      } catch {}
+    }
 
     // Queue
     let queueLine = '- No queue data';
@@ -708,7 +758,7 @@ ${focusLines.join('\n')}
 
 ## Carry-Overs
 ${carrySection}
-
+${droppedSection}
 ## Blockers
 - ${blockers === 'None' || !blockers.trim() ? 'None' : blockers}
 
