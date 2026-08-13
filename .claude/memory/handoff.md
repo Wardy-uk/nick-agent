@@ -1,8 +1,44 @@
-> ## 🔴 NEURO BACKEND IS DOWN — better-sqlite3 segfaults on this Pi (2026-08-13 ~11:00)
+> ## ✅ RESOLVED 2026-08-13 11:40 — it was a Node ABI mismatch, NOT a bad platform/prebuild
 >
-> The Pi itself is FINE and back on the network (uptime 31 days — it never rebooted, it was the
-> router, exactly as the hypothesis below predicted). `sara-backend` is up. **`neuro-backend` is
-> `errored` with 55+ restart attempts.**
+> **NEURO is up on better-sqlite3 v13.0.3. Do NOT roll back the migration — that advice below is
+> superseded.** All three apps online, endpoints 200, `integrity_check ok`, 574 state / 33,745
+> entities (grown since 12 Aug, so nothing was lost and no restore was needed).
+>
+> **Real cause: the PM2 daemon ran Node 20.20.2 while the shell and `npm install` ran Node 22.22.2.**
+> A native module built for one Node ABI cannot load in the other (`NODE_MODULE_VERSION 115` vs
+> `127`). Proved by loading the same binary under both runtimes: Node 22 → OK; Node 20 → silent
+> death. That IS the "segfault". The prebuild inventory was a red herring — a clean install ships
+> `linux-arm64.node`; the earlier missing-prebuild reading came from a half-repaired module dir.
+> It ran fine on 12 Aug only because `pm2 restart --update-env` injected the shell's Node 22 into
+> the process env; once the router outage forced restarts from the daemon's own env, it fell back
+> to Node 20 and crashed.
+>
+> **Fixes applied (all verified):**
+> 1. Removed the conflicting root-level `better-sqlite3: ^11.10.0` (`git checkout package.json
+>    package-lock.json`). backend/package.json's `^13.0.3` is the single declaration again.
+> 2. Deleted both installed copies and reinstalled clean under Node 22. `prebuilds/linux-arm64.node`
+>    present; the other session's hand-edits (`prebuilds.disabled-*`, hand-compiled build/Release)
+>    are gone.
+> 3. Deleted **1.1GB of core dumps** (`backend/core.*`, 34 files) left by the crash loop.
+> 4. `pm2 update` — daemon now runs Node 22.22.2, matching the nvm default.
+> 5. **`/etc/systemd/system/pm2-nickw.service` hardcoded Node 20 in both `Environment=PATH` and
+>    `ExecStart`** — this was the real landmine: the fix would have survived only until the next
+>    reboot. Regenerated via `pm2 startup systemd` under Node 22. Backup:
+>    `pm2-nickw.service.bak-20260813`.
+> 6. Verified by *cold-boot simulation*: `pm2 kill` then `systemctl start pm2-nickw` → service
+>    `active`, all three apps online, neuro-backend on v22.22.2, restart counters 0. Also survives
+>    a plain `pm2 restart` with no `--update-env`.
+>
+> **Prevention:** any native module is now hostage to Node version drift — sql.js was pure JS and
+> immune. If the backend ever dies right after an `npm install`, check
+> `readlink -f /proc/<pid>/exe` for the app vs the node that ran the install BEFORE suspecting data.
+>
+> **Still open:** `sara-backend` runs under Node 20.20.2 even after the daemon moved to 22 (its
+> saved env pins it). It is healthy, and forcing it to 22 risks breaking native deps built for 20 —
+> left alone deliberately. Also `sara_actions` holds ~4,240 pending rows; a purge policy is still
+> worth doing.
+>
+> <details><summary>Original (superseded) diagnosis — kept for the trail</summary>
 >
 > **Cause: better-sqlite3 v13.0.3 segfaults (exit 139) on this platform.** Not the data:
 > - `sqlite3` CLI reads `db/agent.db` perfectly — `PRAGMA integrity_check` → **ok**, 55 tables, WAL.
@@ -32,6 +68,8 @@
 > Confirmed working before the crash: the 105 stale suggestions WERE rejected and persisted
 > (`sara_actions`: rejected 178). The Todos panel still showing 105 is IndexedDB cache, not state.
 > Also `sara_actions` holds **4,240 pending** rows overall — worth a purge policy once up.
+>
+> </details>
 >
 > ---
 >
