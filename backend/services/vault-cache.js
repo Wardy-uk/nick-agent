@@ -55,12 +55,23 @@ function _todoMtimes() {
     master: _mtime(path.join(VAULT_PATH, 'Tasks', 'Master Todo.md')),
     ms: _mtime(path.join(VAULT_PATH, 'Tasks', 'Microsoft Tasks.md')),
     daily: _mtime(path.join(VAULT_PATH, 'Daily')), // directory mtime changes when files added/modified
+    // Tasks NEURO owns live in the DB, whose writes touch no vault file. Without the
+    // revision counter an edited MoSCoW stays stale until some unrelated file changes.
+    tasks: _taskRevision(),
   };
+}
+
+function _taskRevision() {
+  try {
+    return require('./task-store').getRevision();
+  } catch {
+    return 0;
+  }
 }
 
 function _mtimesEqual(a, b) {
   if (!a || !b) return false;
-  return a.master === b.master && a.ms === b.ms && a.daily === b.daily;
+  return a.master === b.master && a.ms === b.ms && a.daily === b.daily && a.tasks === b.tasks;
 }
 
 /**
@@ -160,7 +171,7 @@ function getDailyNote() {
 function getScoredTasks(filter, ranker) {
   const dateKey = new Date().toISOString().split('T')[0];
   const mtimes = _todoMtimes();
-  const hash = mtimes ? `${mtimes.master}:${mtimes.ms}:${mtimes.daily}` : 'none';
+  const hash = mtimes ? `${mtimes.master}:${mtimes.ms}:${mtimes.daily}:${mtimes.tasks}` : 'none';
   const now = Date.now();
 
   if (_scoredTasks.data &&

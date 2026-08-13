@@ -82,6 +82,7 @@ function MoscowReview({ onClose }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          taskId: current.task_id,
           filePath: current.filePath,
           lineNumber: current.lineNumber,
           text: current.text,
@@ -148,6 +149,11 @@ function MoscowReview({ onClose }) {
       <div className="moscow-card">
         <div className="moscow-task-text">{current.text}</div>
         <div className="moscow-task-meta">
+          {current.proposedMoscow && (
+            <span className={`todo-moscow-badge ${current.proposedMoscow}`}>
+              {current.proposedMoscow}? — proposed, confirm or change
+            </span>
+          )}
           {current.source && <span className={`todo-source ${sourceClass(current.source)}`}>{current.source}</span>}
           {current.due_date && <span className={`todo-due ${isOverdue(current.due_date) ? 'due-overdue' : ''}`}>{formatDue(current.due_date)}</span>}
         </div>
@@ -176,30 +182,111 @@ function MoscowReview({ onClose }) {
   );
 }
 
+// ── Editing controls ──
+// Only shown for tasks NEURO owns (task_id present). Before the 13 Aug migration none
+// of MoSCoW / priority / due date could be edited anywhere: the metadata lived in a
+// worksheet file. Now it is a plain DB write and the vault export follows.
+function TaskControls({ todo, onPatch, busy }) {
+  const dueValue = todo.due_date ? todo.due_date.split('T')[0] : '';
+
+  return (
+    <div className="todo-edit">
+      <div className="todo-edit-group">
+        <span className="todo-edit-label">{todo.moscowProposed ? 'MoSCoW?' : 'MoSCoW'}</span>
+        {MOSCOW_OPTIONS.map(opt => (
+          <button
+            key={opt.key}
+            className={`todo-edit-btn ${todo.moscow === opt.key ? 'active' : ''}`}
+            style={{ '--moscow-color': opt.color }}
+            disabled={busy}
+            title={opt.desc}
+            onClick={() => onPatch({ moscow: todo.moscow === opt.key ? null : opt.key })}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="todo-edit-group">
+        <span className="todo-edit-label">Priority</span>
+        {[3, 2, 1].map(p => (
+          <button
+            key={p}
+            className={`todo-edit-btn ${todo.taskPriority === p ? 'active' : ''}`}
+            disabled={busy}
+            title={p === 3 ? 'Most pressing' : p === 1 ? 'Least pressing' : 'Middle'}
+            onClick={() => onPatch({ priority: todo.taskPriority === p ? null : p })}
+          >
+            P{p}
+          </button>
+        ))}
+      </div>
+
+      <div className="todo-edit-group">
+        <span className="todo-edit-label">Due</span>
+        <input
+          type="date"
+          className="todo-edit-date"
+          value={dueValue}
+          disabled={busy}
+          onChange={(e) => onPatch({ due_date: e.target.value || null })}
+        />
+        {dueValue && (
+          <button className="todo-edit-btn" disabled={busy} onClick={() => onPatch({ due_date: null })}>
+            Clear
+          </button>
+        )}
+      </div>
+
+      {todo.originPath && (
+        <div className="todo-edit-group">
+          <span className="todo-edit-label">From</span>
+          <span className="todo-source">{todo.originPath}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Shared todo item renderer ──
-function TodoItem({ todo, toggling, onToggle, expanded, onExpand }) {
+function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch }) {
   const overdue = isOverdue(todo.due_date);
   const dueLabel = formatDue(todo.due_date);
-  const toggleKey = `${todo.filePath}:${todo.lineNumber}`;
+  const toggleKey = todo.task_id ? `task:${todo.task_id}` : `${todo.filePath}:${todo.lineNumber}`;
   const isToggling = toggling[toggleKey];
   const isExpanded = expanded === `${todo.source}-${todo.id}`;
+  const editable = Boolean(todo.task_id);
 
   return (
     <div className={`todo-item priority-${todo.priority} ${overdue ? 'overdue' : ''} ${isExpanded ? 'expanded' : ''}`}>
       <button
         className={`todo-checkbox ${isToggling ? 'toggling' : ''}`}
         onClick={() => onToggle(todo)}
-        disabled={isToggling || !todo.filePath}
+        disabled={isToggling || (!editable && !todo.filePath)}
         title="Mark done"
       />
       <div className="todo-text-col" onClick={() => onExpand(isExpanded ? null : `${todo.source}-${todo.id}`)} style={{ cursor: 'pointer' }}>
         <span className={`todo-text ${isExpanded ? '' : 'todo-text-truncated'}`}>{todo.text}</span>
         <div className="todo-meta-row">
           {todo.source && <span className={`todo-source ${sourceClass(todo.source)}`}>{todo.source}</span>}
+          {todo.moscow && (
+            <span className={`todo-moscow-badge ${todo.moscow}`} title={todo.moscowProposed ? 'Proposed by the 12 Aug triage, not yet confirmed' : undefined}>
+              {todo.moscow}{todo.moscowProposed ? '?' : ''}
+            </span>
+          )}
+          {todo.taskPriority && <span className="todo-priority-num">P{todo.taskPriority}</span>}
           {dueLabel && <span className={`todo-due ${overdue ? 'due-overdue' : ''}`}>{dueLabel}</span>}
           {todo.planDay != null && <span className="todo-due">Day {todo.planDay}</span>}
           {todo._scoreReason && <span className="todo-score-reason">{todo._scoreReason}</span>}
         </div>
+        {isExpanded && editable && (
+          <TaskControls todo={todo} busy={Boolean(isToggling)} onPatch={(fields) => onPatch(todo, fields)} />
+        )}
+        {isExpanded && !editable && (
+          <div className="todo-edit todo-edit-readonly">
+            Mirrored from {todo.source} — edit it there. Only tasks NEURO owns are editable here.
+          </div>
+        )}
       </div>
       <span className={`todo-priority-badge ${todo.priority}`}>{todo.priority}</span>
     </div>
@@ -371,14 +458,24 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   // Ids resolved locally (approved/dismissed/ticked) — hidden straight away so the
   // UI answers the click instead of waiting on a slow /api/todos refetch.
   const [resolvedSuggestions, setResolvedSuggestions] = useState([]);
-  const [localDone, setLocalDone] = useState({}); // "filePath:lineNumber" -> 1
+  const [localDone, setLocalDone] = useState({}); // "filePath:lineNumber" | "task:id" -> 1
+  const [localPatches, setLocalPatches] = useState({}); // task_id -> pending field edits
+  const [newTaskText, setNewTaskText] = useState('');
+  const [adding, setAdding] = useState(false);
   const [selectedSuggestions, setSelectedSuggestions] = useState([]);
   const [batching, setBatching] = useState(false);
   const [batchError, setBatchError] = useState(null);
 
-  const todos = (fullData?.todos || []).map(t => (
-    localDone[`${t.filePath}:${t.lineNumber}`] ? { ...t, done: 1 } : t
-  ));
+  const applyLocal = (t) => {
+    const key = t.task_id ? `task:${t.task_id}` : `${t.filePath}:${t.lineNumber}`;
+    const patch = t.task_id ? localPatches[t.task_id] : null;
+    const merged = patch
+      ? { ...t, ...patch, taskPriority: 'priority' in patch ? patch.priority : t.taskPriority }
+      : t;
+    return localDone[key] ? { ...merged, done: 1 } : merged;
+  };
+
+  const todos = (fullData?.todos || []).map(applyLocal);
   const suggestedTodos = (fullData?.suggested || []).filter(s => !resolvedSuggestions.includes(s.id));
   const todayLane = fullData?.todayLane || [];
 
@@ -446,7 +543,74 @@ export default function TodoPanel({ focusContext, onClearContext }) {
     setActingSuggestionId(null);
   };
 
+  // Edit a task NEURO owns. Optimistic: the row updates immediately and the refetch
+  // confirms it, so setting a MoSCoW doesn't feel like it went nowhere.
+  const patchTask = async (todo, fields) => {
+    if (!todo.task_id) return;
+    const key = `task:${todo.task_id}`;
+    setToggling(prev => ({ ...prev, [key]: true }));
+    setLocalPatches(prev => ({ ...prev, [todo.task_id]: { ...(prev[todo.task_id] || {}), ...fields } }));
+    try {
+      const res = await fetch(apiUrl(`/api/tasks/${todo.task_id}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields),
+      });
+      if (!res.ok) {
+        console.error('[TodoPanel] Task patch failed:', res.status);
+        setLocalPatches(prev => {
+          const next = { ...prev };
+          delete next[todo.task_id];
+          return next;
+        });
+      }
+      if (mode === 'focused') refreshFocus(); else await fetchTodos();
+    } catch (e) {
+      console.error('[TodoPanel] Task patch error:', e);
+    }
+    setToggling(prev => ({ ...prev, [key]: false }));
+  };
+
+  const addTask = async () => {
+    const text = newTaskText.trim();
+    if (!text || adding) return;
+    setAdding(true);
+    try {
+      const res = await fetch(apiUrl('/api/tasks'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, source: 'manual' }),
+      });
+      if (res.ok) {
+        setNewTaskText('');
+        await fetchTodos();
+      } else {
+        console.error('[TodoPanel] Add task failed:', res.status);
+      }
+    } catch (e) {
+      console.error('[TodoPanel] Add task error:', e);
+    }
+    setAdding(false);
+  };
+
   const toggleTodo = async (todo) => {
+    // Tasks NEURO owns complete in the DB; file-backed mirrors still toggle the line.
+    if (todo.task_id) {
+      const key = `task:${todo.task_id}`;
+      setToggling(prev => ({ ...prev, [key]: true }));
+      try {
+        const res = await fetch(apiUrl(`/api/tasks/${todo.task_id}/${todo.done ? 'reopen' : 'complete'}`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (res.ok) setLocalDone(prev => ({ ...prev, [key]: todo.done ? 0 : 1 }));
+        else console.error('[TodoPanel] Task complete failed:', res.status);
+        if (mode === 'focused') refreshFocus(); else await fetchTodos();
+      } catch (e) { console.error('[TodoPanel] Task complete error:', e); }
+      setToggling(prev => ({ ...prev, [key]: false }));
+      return;
+    }
+
     if (!todo.filePath || todo.lineNumber == null) return;
     const key = `${todo.filePath}:${todo.lineNumber}`;
     setToggling(prev => ({ ...prev, [key]: true }));
@@ -482,7 +646,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
 
   // ── Focused Mode Render ──
   if (mode === 'focused') {
-    const items = focusData?.items || [];
+    const items = (focusData?.items || []).map(applyLocal);
     const totalCount = focusData?.totalCount || 0;
     const hidden = focusData?.hidden || 0;
     const breakdown = focusData?.breakdown || {};
@@ -575,6 +739,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
                   onToggle={toggleTodo}
                   expanded={expanded}
                   onExpand={setExpanded}
+                  onPatch={patchTask}
                 />
               ))}
             </div>
@@ -732,6 +897,20 @@ export default function TodoPanel({ focusContext, onClearContext }) {
       />
       <MustMoveLane items={todayLane} />
 
+      <div className="todo-add">
+        <input
+          className="todo-add-input"
+          placeholder="New task — Enter to add"
+          value={newTaskText}
+          disabled={adding}
+          onChange={(e) => setNewTaskText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') addTask(); }}
+        />
+        <button className="btn btn-primary btn-sm" disabled={adding || !newTaskText.trim()} onClick={addTask}>
+          {adding ? 'Adding...' : 'Add'}
+        </button>
+      </div>
+
       <div className="todo-filters">
         {[
           { key: 'all', label: 'All' },
@@ -790,6 +969,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
               onToggle={toggleTodo}
               expanded={expanded}
               onExpand={setExpanded}
+              onPatch={patchTask}
             />
           ))}
         </div>

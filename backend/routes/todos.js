@@ -4,6 +4,7 @@ const obsidian = require('../services/obsidian');
 const vaultCache = require('../services/vault-cache');
 const { rankTasks } = require('../services/task-scoring');
 const todoIntelligence = require('../services/todo-intelligence');
+const taskStore = require('../services/task-store');
 
 // GET /api/todos — reads tasks from Obsidian vault + 90-day plan
 router.get('/', (req, res) => {
@@ -13,9 +14,16 @@ router.get('/', (req, res) => {
 
     const todos = showDone ? [...active, ...done] : active;
 
-    // Map to shape the frontend expects
+    // Map to shape the frontend expects. `task_id` marks the rows NEURO owns —
+    // those are editable (MoSCoW / priority / due) and complete via /api/tasks;
+    // the rest are still file-backed mirrors (Microsoft, daily notes, the plan).
     const mapped = todos.map((t, i) => ({
       id: i + 1,
+      task_id: t.task_id || null,
+      taskPriority: t.taskPriority || null,
+      taskSource: t.taskSource || null,
+      notes: t.notes || null,
+      originPath: t.originPath || null,
       text: t.text,
       priority: t.priority || 'normal',
       due_date: t.due_date || null,
@@ -28,6 +36,7 @@ router.get('/', (req, res) => {
       lineNumber: t.lineNumber != null ? t.lineNumber : null,
       meta: t.meta || {},
       moscow: t.moscow || null,
+      moscowProposed: Boolean(t.moscowProposed),
       context: t.context || null,
       needsToday: Boolean(t.needsToday),
       createdAt: t.createdAt || null,
@@ -126,6 +135,8 @@ router.get('/focus', async (req, res) => {
 
       let tasks = active.map((t, i) => ({
         id: i + 1,
+        task_id: t.task_id || null,
+        taskPriority: t.taskPriority || null,
         text: t.text,
         priority: t.priority || 'normal',
         due_date: t.due_date || null,
@@ -288,27 +299,35 @@ async function _fireWebhook(taskId, source) {
 
 const db = require('../db/database');
 
-// GET /api/todos/moscow — get all MoSCoW ratings
+// GET /api/todos/moscow — MoSCoW ratings, keyed by task id for the tasks NEURO owns
+// and by the legacy path key for file-backed lines (Microsoft, daily notes).
 router.get('/moscow', (req, res) => {
   try {
-    const ratings = db.getAllTaskMoscow();
-    // Build a lookup map keyed by task_key
     const map = {};
-    for (const r of ratings) map[r.task_key] = r.moscow;
-    res.json({ ratings: map, total: ratings.length });
+    for (const r of db.getAllTaskMoscow()) map[r.task_key] = r.moscow;
+    for (const t of taskStore.listTasks({ status: 'all', includeDone: true })) {
+      if (t.moscow) map[`task:${t.id}`] = t.moscow;
+    }
+    res.json({ ratings: map, total: Object.keys(map).length });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// POST /api/todos/moscow — set MoSCoW for a task
+// POST /api/todos/moscow — set MoSCoW. A task NEURO owns is a plain DB write; a
+// file-backed line still uses the legacy path key, since there is no row to update.
 router.post('/moscow', (req, res) => {
   try {
-    const { filePath, lineNumber, text, moscow } = req.body;
+    const { taskId, filePath, lineNumber, text, moscow } = req.body;
     if (!moscow || !['must', 'should', 'could', 'wont'].includes(moscow)) {
       return res.status(400).json({ error: 'moscow must be: must, should, could, wont' });
     }
-    if (!text) return res.status(400).json({ error: 'text required' });
+    if (taskId) {
+      const task = taskStore.updateTask(Number(taskId), { moscow });
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      return res.json({ ok: true, taskId: task.id, moscow: task.moscow });
+    }
+    if (!text) return res.status(400).json({ error: 'text or taskId required' });
     const key = db.setTaskMoscow(filePath, lineNumber, text, moscow);
     res.json({ ok: true, key, moscow });
   } catch (e) {
@@ -327,49 +346,30 @@ router.delete('/moscow', (req, res) => {
   }
 });
 
-// GET /api/todos/moscow/review — get untriaged tasks for review
+// GET /api/todos/moscow/review — untriaged tasks for the swipe review.
+// Scoped to the tasks NEURO owns: they are the ones whose rating has somewhere to
+// live. File-backed mirrors (Microsoft, daily notes, the finished plan) are excluded
+// on purpose — rating them was writing metadata for rows that don't exist.
 router.get('/moscow/review', (req, res) => {
   try {
-    const { active } = vaultCache.getTodos();
-    const allRatings = db.getAllTaskMoscow();
-    const ratedKeys = new Set(allRatings.map(r => r.task_key));
-
-    // Build task key the same way the DB does
-    const taskKey = (t) => `${t.filePath || 'unknown'}::${(t.text || '').substring(0, 60).replace(/\s+/g, ' ').trim()}`;
-
-    // Also include 90-day plan tasks
-    let allTasks = active.map(t => ({
-      text: t.text,
-      source: t.source || null,
-      due_date: t.due_date || null,
-      filePath: t.filePath || null,
-      lineNumber: t.lineNumber != null ? t.lineNumber : null,
-      priority: t.priority || 'normal',
-    }));
-
-    try {
-      const plan = vaultCache.getPlan();
-      if (plan) {
-        for (const t of (plan.allTasks || [])) {
-          if (t.isCheckpoint || t.status === 'x') continue;
-          allTasks.push({
-            text: t.text,
-            source: '90-Day Plan',
-            due_date: t.calendarDate || null,
-            filePath: plan.filePath || null,
-            lineNumber: t.lineNumber != null ? t.lineNumber : null,
-            priority: 'normal',
-          });
-        }
-      }
-    } catch {}
-
-    // Filter to untriaged only
-    const untriaged = allTasks.filter(t => !ratedKeys.has(taskKey(t)));
+    const counts = taskStore.counts();
+    const untriaged = taskStore.listTasks({ status: 'open' })
+      .filter(t => !t.moscow || t.moscow_proposed)
+      .map(t => ({
+        task_id: t.id,
+        text: t.text,
+        source: t.source,
+        proposedMoscow: t.moscow_proposed ? t.moscow : null,
+        due_date: t.due_date || null,
+        priority: taskStore.legacyPriority(t),
+        taskPriority: t.priority || null,
+        filePath: null,
+        lineNumber: null,
+      }));
 
     res.json({
-      total: allTasks.length,
-      triaged: allRatings.length,
+      total: counts.open,
+      triaged: counts.open - counts.untriaged,
       untriaged: untriaged.length,
       tasks: untriaged,
     });

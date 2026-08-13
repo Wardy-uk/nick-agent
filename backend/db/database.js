@@ -2,7 +2,9 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = path.join(__dirname, 'agent.db');
+// NEURO_DB_PATH lets a test or a one-off script run against a scratch database
+// instead of the real one. Unset in production, where the path is fixed.
+const DB_PATH = process.env.NEURO_DB_PATH || path.join(__dirname, 'agent.db');
 const DB_DIR = path.dirname(DB_PATH);
 
 let db = null;
@@ -76,6 +78,17 @@ async function init() {
     }
   } catch (e) {
     console.error('[DB] Migration check failed:', e.message);
+  }
+
+  // Migration: tasks.moscow_proposed (added the day after the tasks table itself)
+  try {
+    const taskColumns = db.prepare('PRAGMA table_info(tasks)').all().map(r => r.name);
+    if (taskColumns.length && !taskColumns.includes('moscow_proposed')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN moscow_proposed INTEGER NOT NULL DEFAULT 0');
+      console.log('[DB] tasks.moscow_proposed added');
+    }
+  } catch (e) {
+    console.error('[DB] tasks migration check failed:', e.message);
   }
 
   console.log('[DB] Initialized');
@@ -656,6 +669,96 @@ function deleteTaskMoscow(filePath, lineNumber, text) {
   run('DELETE FROM task_moscow WHERE task_key = ?', [key]);
 }
 
+// ── Tasks (NEURO is the source of truth) ──
+// Callers should go through services/task-store.js rather than these directly —
+// it owns dedupe-key normalisation and re-exports the vault note after a write.
+
+const TASK_FIELDS = [
+  'text', 'status', 'moscow', 'moscow_proposed', 'priority', 'due_date', 'source',
+  'origin_path', 'origin_line', 'context', 'notes', 'ms_id',
+];
+
+function createTaskRow(task) {
+  const info = run(
+    `INSERT INTO tasks (text, status, moscow, moscow_proposed, priority, due_date, source,
+                        origin_path, origin_line, context, notes, ms_id, dedupe_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      task.text, task.status || 'open', task.moscow || null,
+      task.moscow_proposed ? 1 : 0, task.priority || null,
+      task.due_date || null, task.source || 'manual', task.origin_path || null,
+      task.origin_line == null ? null : task.origin_line, task.context || null,
+      task.notes || null, task.ms_id || null, task.dedupe_key,
+    ]
+  );
+  return info.lastInsertRowid;
+}
+
+function getTaskRow(id) {
+  return get('SELECT * FROM tasks WHERE id = ?', [id]);
+}
+
+function getTaskByDedupeKey(dedupeKey) {
+  return get('SELECT * FROM tasks WHERE dedupe_key = ?', [dedupeKey]);
+}
+
+// filters: { status: 'open'|'done'|'all', moscow, source, includeDone }
+function listTaskRows(filters = {}) {
+  const where = [];
+  const params = [];
+  if (filters.status && filters.status !== 'all') {
+    where.push('status = ?');
+    params.push(filters.status);
+  } else if (!filters.includeDone && filters.status !== 'all') {
+    where.push("status IN ('open', 'in-progress')");
+  }
+  if (filters.moscow) { where.push('moscow = ?'); params.push(filters.moscow); }
+  if (filters.source) { where.push('source = ?'); params.push(filters.source); }
+  const sql = `SELECT * FROM tasks${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY CASE moscow WHEN 'must' THEN 0 WHEN 'should' THEN 1 WHEN 'could' THEN 2
+                          WHEN 'wont' THEN 3 ELSE 4 END,
+              COALESCE(priority, 0) DESC,
+              CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date,
+              created_at`;
+  return all(sql, params);
+}
+
+// Only whitelisted columns, so a rogue body can't rewrite dedupe_key or ids.
+function updateTaskRow(id, fields) {
+  const sets = [];
+  const params = [];
+  for (const key of TASK_FIELDS) {
+    if (!(key in fields)) continue;
+    sets.push(`${key} = ?`);
+    params.push(fields[key] === '' ? null : fields[key]);
+  }
+  if ('dedupe_key' in fields) { sets.push('dedupe_key = ?'); params.push(fields.dedupe_key); }
+  if (!sets.length) return 0;
+  if ('status' in fields) {
+    sets.push("completed_at = CASE WHEN ? = 'done' THEN datetime('now') ELSE NULL END");
+    params.push(fields.status);
+  }
+  sets.push("updated_at = datetime('now')");
+  params.push(id);
+  return run(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`, params).changes;
+}
+
+function deleteTaskRow(id) {
+  return run('DELETE FROM tasks WHERE id = ?', [id]).changes;
+}
+
+function countTasks() {
+  return get(
+    `SELECT
+       COUNT(*) AS total,
+       COALESCE(SUM(CASE WHEN status IN ('open', 'in-progress') THEN 1 ELSE 0 END), 0) AS open,
+       COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS done,
+       COALESCE(SUM(CASE WHEN status IN ('open', 'in-progress') AND (moscow IS NULL OR moscow_proposed = 1) THEN 1 ELSE 0 END), 0) AS untriaged,
+       COALESCE(SUM(CASE WHEN status IN ('open', 'in-progress') AND moscow_proposed = 1 THEN 1 ELSE 0 END), 0) AS proposed
+     FROM tasks`
+  ) || { total: 0, open: 0, done: 0, untriaged: 0, proposed: 0 };
+}
+
 // ── SARA Actions ──
 
 function createSaraAction(type, payload, confidence, reason, focusItemId) {
@@ -774,7 +877,15 @@ module.exports = {
   getLocationVisits,
   getLocationVisitsByPlace,
   getFrequentLocations,
-  // MoSCoW
+  // Tasks (source of truth)
+  createTaskRow,
+  getTaskRow,
+  getTaskByDedupeKey,
+  listTaskRows,
+  updateTaskRow,
+  deleteTaskRow,
+  countTasks,
+  // MoSCoW (legacy — superseded by tasks.moscow, kept for the importer)
   setTaskMoscow,
   getTaskMoscow,
   getAllTaskMoscow,

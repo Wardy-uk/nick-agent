@@ -151,17 +151,27 @@ router.post('/siri-note', (req, res) => {
   }
 });
 
-// POST /api/capture/todo — quick todo capture, appends to Master Todo.md inbox section
+// POST /api/capture/todo — quick todo capture. Routes 1 (Watch/Siri) and 2 (NEURO
+// direct) both land here. Writes to the tasks table, which NEURO owns; the vault
+// export note is regenerated shortly after. Previously this appended markdown to
+// Master Todo.md — and threw, because `obsidian` was never required in this file.
 router.post('/todo', (req, res) => {
-  const { text, priority } = req.body;
+  const { text, priority, moscow, due, source } = req.body;
   if (!text || !text.trim()) {
     return res.status(400).json({ error: 'text is required' });
   }
 
   try {
-    obsidian.addTodoToMasterList(text, { priority, origin: 'capture', trigger: 'capture-todo' });
-    console.log(`[Capture] Todo saved: ${text.trim()}`);
-    res.json({ success: true, text: text.trim() });
+    const taskStore = require('../services/task-store');
+    const { id, created, task } = taskStore.createTask({
+      text,
+      priority,
+      moscow,
+      due_date: due || null,
+      source: source || 'capture',
+    });
+    console.log(`[Capture] Todo ${created ? 'created' : 'folded into'} task #${id}: ${task.text}`);
+    res.json({ success: true, taskId: id, created, text: task.text });
     try { require('../services/activity').trackCapture('todo'); } catch {}
   } catch (e) {
     console.error('[Capture] Todo error:', e);

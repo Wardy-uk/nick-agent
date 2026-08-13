@@ -268,3 +268,43 @@ CREATE TABLE IF NOT EXISTS task_moscow (
 
 CREATE INDEX IF NOT EXISTS idx_task_moscow_key ON task_moscow(task_key);
 CREATE INDEX IF NOT EXISTS idx_task_moscow_priority ON task_moscow(moscow);
+
+-- Tasks — NEURO is the source of truth (13 Aug 2026 migration).
+-- Before this, task metadata lived in three places at once: a triage worksheet,
+-- task_moscow, and vault markdown. This table is the one store; the vault gets a
+-- regenerated read-only export note instead (see services/task-export.js).
+-- priority is 1-3 as Nick uses it: 3 = most pressing, 1 = least. Not the
+-- high/normal/low string the vault parser produces — that is derived on read.
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in-progress', 'done', 'dropped')),
+  moscow TEXT CHECK(moscow IS NULL OR moscow IN ('must', 'should', 'could', 'wont')),
+  -- 1 = the bucket is a proposal, not a decision. The 12 Aug triage worksheet marked
+  -- inferred buckets with a trailing `?`; importing those as decided would invent
+  -- calls Nick never made, so they carry the flag and stay in the review queue.
+  moscow_proposed INTEGER NOT NULL DEFAULT 0,
+  priority INTEGER CHECK(priority IS NULL OR priority BETWEEN 1 AND 3),
+  due_date TEXT,
+  -- Where it came from: master-todo-import | capture | watch | obsidian-capture |
+  -- meeting-promotion | chat | mcp | manual
+  source TEXT NOT NULL DEFAULT 'manual',
+  -- Provenance backlink into the vault (relative path), so a task can always be
+  -- traced to the note that produced it.
+  origin_path TEXT,
+  origin_line INTEGER,
+  context TEXT,
+  notes TEXT,
+  ms_id TEXT,
+  -- Normalised text. UNIQUE so re-running the importer or draining the same
+  -- capture line twice cannot create a duplicate.
+  dedupe_key TEXT NOT NULL UNIQUE,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_moscow ON tasks(moscow);
+CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
+CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);

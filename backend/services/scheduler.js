@@ -16,6 +16,15 @@ function start() {
   // Start Jira polling (fetches on startup + every 5 min)
   jira.startPolling();
 
+  // Make sure the capture drop-box exists, and drain anything written while the
+  // backend was down — that is the whole point of the file surviving an outage.
+  try {
+    require('./task-capture-drain').ensureCaptureFile();
+    require('./task-capture-drain').drainCaptureFile({ force: true });
+  } catch (e) {
+    console.error('[Scheduler] Capture drain on startup failed:', e.message);
+  }
+
   // 8:55am weekdays — pre-warm standup questions
   cron.schedule('55 8 * * 1-5', () => {
     console.log('[Scheduler] 8:55am — pre-warming standup');
@@ -186,6 +195,31 @@ function start() {
       require('./location-history').recordTodaysDwells();
     } catch (e) {
       console.error('[Scheduler] Location recording failed:', e.message);
+    }
+  });
+
+  // Every 10 minutes — drain the Obsidian capture drop-box (route 3) into the task
+  // store. Cheap: it reads one small file and returns immediately when empty. The
+  // drain is what stops Tasks/Capture.md turning into a second source of truth.
+  cron.schedule('*/10 * * * *', () => {
+    try {
+      const result = require('./task-capture-drain').drainCaptureFile();
+      if (result.created || result.folded) {
+        console.log(`[Scheduler] Capture drained: ${result.created} new, ${result.folded} folded`);
+      }
+    } catch (e) {
+      console.error('[Scheduler] Capture drain failed:', e.message);
+    }
+  });
+
+  // Hourly — regenerate the read-only task export note. Writes already trigger an
+  // export; this is the belt-and-braces pass so the "last exported" stamp in the vault
+  // stays current, which is what tells Nick whether the offline copy can be trusted.
+  cron.schedule('20 * * * *', () => {
+    try {
+      require('./task-export').writeExport();
+    } catch (e) {
+      console.error('[Scheduler] Task export failed:', e.message);
     }
   });
 

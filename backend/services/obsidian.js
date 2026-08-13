@@ -232,10 +232,30 @@ function extractTags(content) {
   return tags;
 }
 
-// Vault todo parser — reads tasks from Master Todo, Microsoft Tasks, and daily notes
-function parseVaultTodos() {
+// Is the DB the sole owner of tasks yet? Set once the import is proven (step 6 of
+// the migration) — after that, Master Todo.md is history and stops being parsed.
+function masterTodoRetired() {
+  try {
+    return require('../db/database').getState('tasks.master_todo_retired') === 'true';
+  } catch {
+    return false;
+  }
+}
+
+// Vault todo parser — the READER for every task NEURO knows about.
+//
+// As of the 13 Aug 2026 migration the `tasks` table is the source of truth: DB rows are
+// merged in here and win any collision with a vault line, so every existing consumer
+// (todos routes, nudges, working memory, briefings) sees them without changing.
+// Master Todo.md is still parsed as a fallback until it retires; Microsoft Tasks and
+// daily notes stay file-backed because Microsoft and the daily note own that data.
+//
+// options.dbTasks: false — vault only, which is what the importer needs so it does not
+// read its own output back in.
+function parseVaultTodos(options = {}) {
   if (!isConfigured()) return { active: [], done: [] };
 
+  const includeDbTasks = options.dbTasks !== false;
   const vaultPath = getVaultPath();
   const allTasks = [];
   const priorityOrder = { high: 0, normal: 1, low: 2 };
@@ -245,9 +265,9 @@ function parseVaultTodos() {
     return (priorityOrder[existing] ?? 1) <= (priorityOrder[fallback] ?? 1) ? existing : fallback;
   };
 
-  // 1. Parse Master Todo
+  // 1. Parse Master Todo (fallback only — the DB owns tasks; see masterTodoRetired)
   const masterPath = path.join(vaultPath, 'Tasks', 'Master Todo.md');
-  if (fs.existsSync(masterPath)) {
+  if (fs.existsSync(masterPath) && !masterTodoRetired()) {
     const content = fs.readFileSync(masterPath, 'utf-8');
     const lines = content.split('\n');
     let currentPriority = 'normal';
@@ -351,6 +371,28 @@ function parseVaultTodos() {
       task.filePath = filePath;
       task.lineNumber = i;
       allTasks.push(task);
+    }
+  }
+
+  // 4. Merge in the tasks NEURO owns. These come last but win: a Master Todo or daily
+  // note line describing the same action is dropped, so the migration never shows a
+  // task twice while the old file is still on disk.
+  if (includeDbTasks) {
+    try {
+      const taskStore = require('./task-store');
+      const dbTasks = [...taskStore.activeTodos(), ...taskStore.doneTodos()];
+      if (dbTasks.length) {
+        const owned = new Set(dbTasks.map(t => taskStore.dedupeKey(t.text)));
+        const fileBacked = allTasks.filter(t => {
+          const fromMergeable = t.filePath === masterPath || String(t.source || '').startsWith('Daily');
+          return !(fromMergeable && owned.has(taskStore.dedupeKey(t.text)));
+        });
+        allTasks.length = 0;
+        allTasks.push(...fileBacked, ...dbTasks);
+      }
+    } catch (e) {
+      // Tasks are unreadable rather than lost — say so loudly and still return the vault.
+      console.error('[Obsidian] Could not merge DB tasks:', e.message);
     }
   }
 
@@ -1359,48 +1401,37 @@ function toWikiLink(relativePath) {
   return `[[${clean}|${label}]]`;
 }
 
+// Kept for its callers (capture route, chat, SARA suggestion approval) but it no
+// longer appends markdown: since 13 Aug 2026 every capture path writes to the tasks
+// table and the vault gets a regenerated export note. That also retires the `📥 Inbox`
+// heading fragility — the 28 items that landed under `## Links` came from this
+// function guessing where to insert — and the `#mustdo` tag, dead since 10 July.
+//
+// MoSCoW and priority are left unset unless the caller is explicit. An auto-classifier
+// that buckets everything is what produced the noise the migration is cleaning up;
+// untriaged is the honest state, and the review UI exists to resolve it.
 function addTodoToMasterList(text, options = {}) {
-  const vaultPath = getVaultPath();
-  const masterPath = path.join(vaultPath, 'Tasks', 'Master Todo.md');
-  if (!fs.existsSync(masterPath)) throw new Error('Master Todo.md not found');
+  const taskStore = require('./task-store');
+  const explicitMoscow = options.metadata?.moscow || (options.mustdo ? 'must' : null);
 
-  const todoIntelligence = require('./todo-intelligence');
-  const triage = todoIntelligence.triageTodo({
+  const { id, created, task } = taskStore.createTask({
     text,
-    sourcePath: options.sourcePath || null,
-    dueDate: options.dueDate || null,
-    mustdo: Boolean(options.mustdo),
-    priority: options.priority || null,
-    metadata: options.metadata || null,
+    moscow: explicitMoscow,
+    priority: options.metadata?.priority || null,
+    due_date: options.dueDate || null,
+    source: options.origin || 'manual',
+    origin_path: options.sourcePath || null,
   });
-  const effectivePriority = options.priority || triage.priority;
-  const priorityEmoji = effectivePriority === 'high' ? '🔴 ' : effectivePriority === 'low' ? '🟢 ' : '';
-  const sourceLink = options.sourcePath ? toWikiLink(options.sourcePath) : null;
-  const lineSuffix = sourceLink ? `  ${sourceLink}` : '';
-  const dueSuffix = options.dueDate ? ` 📅 ${options.dueDate}` : '';
-  const mustdoTag = options.mustdo || triage.moscow === 'must' ? ' #mustdo' : '';
-  const metadata = todoIntelligence.serializeEmbeddedMeta({
-    context: triage.context,
-    moscow: triage.moscow,
-    created: todoIntelligence.todayDateString(),
-    origin: options.origin || 'manual',
-    sourcePath: options.sourcePath || null,
-    followThroughDays: triage.followThroughDays,
-  });
-  const todoLine = `- [ ] ${priorityEmoji}${text.trim()}${mustdoTag}${dueSuffix}${lineSuffix}${metadata ? ` ${metadata}` : ''}`;
 
-  let content = fs.readFileSync(masterPath, 'utf-8');
-  const inboxMatch = content.match(/^## .*📥.*Inbox.*/m);
-
-  if (inboxMatch) {
-    const insertIdx = content.indexOf('\n', content.indexOf(inboxMatch[0])) + 1;
-    content = content.slice(0, insertIdx) + todoLine + '\n' + content.slice(insertIdx);
-  } else {
-    content = content.trimEnd() + '\n' + todoLine + '\n';
-  }
-  fs.writeFileSync(masterPath, content, 'utf-8');
-  try { require('./vault-hooks').onVaultWrite(masterPath, options.trigger || 'capture-todo'); } catch {}
-  return { ok: true, text: text.trim(), sourceLink, triage };
+  console.log(`[Tasks] ${created ? 'Created' : 'Folded into'} task #${id} (${options.trigger || 'capture'}): ${task.text}`);
+  return {
+    ok: true,
+    taskId: id,
+    created,
+    text: task.text,
+    sourceLink: options.sourcePath ? toWikiLink(options.sourcePath) : null,
+    triage: { moscow: task.moscow, context: task.context },
+  };
 }
 
 // Save a meeting note from chat

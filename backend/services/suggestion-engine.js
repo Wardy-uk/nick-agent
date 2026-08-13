@@ -238,19 +238,22 @@ function executeAction(action) {
       };
     }
 
+    // Route 4 — promotion from meetings. Approving a suggestion creates the task in
+    // NEURO (the source of truth) with a backlink to the note it came from.
     case 'capture_todo': {
-      const obsidian = require('./obsidian');
-      obsidian.addTodoToMasterList(payload.text, {
-        priority: payload.metadata?.priority || payload.priority || 'normal',
-        mustdo: payload.metadata?.moscow === 'must',
-        metadata: payload.metadata || null,
-        sourcePath: payload.sourcePath || null,
-        origin: payload.origin || 'candidate',
-        trigger: 'sara-action-capture-todo',
+      const taskStore = require('./task-store');
+      const { id, created } = taskStore.createTask({
+        text: payload.text,
+        moscow: payload.metadata?.moscow || null,
+        priority: payload.metadata?.priority || null,
+        due_date: payload.metadata?.dueDate || payload.dueDate || null,
+        source: 'meeting-promotion',
+        origin_path: payload.sourcePath || null,
+        origin_line: payload.sourceLine == null ? null : payload.sourceLine,
       });
       return {
         ok: true,
-        detail: `Added to Master Todo: ${payload.text}`,
+        detail: `${created ? 'Added task' : 'Folded into existing task'} #${id}: ${payload.text}`,
         navigate: 'todos',
       };
     }

@@ -685,14 +685,20 @@ server.tool('get_todos', 'Get prioritised todo shortlist', {
 // Tools: Actions
 // ═══════════════════════════════════════════════════════
 
-server.tool('create_task', 'Create a new task in the vault Master Todo', {
+// NEURO owns tasks (13 Aug 2026) — this writes to its task store, not to a vault
+// markdown file. The vault export note is regenerated from it shortly after.
+server.tool('create_task', 'Create a task in NEURO (the source of truth for tasks)', {
   text: z.string().describe('Task text'),
-}, async ({ text }) => {
-  await neuroApi('/api/capture/todo', {
+  moscow: z.enum(['must', 'should', 'could', 'wont']).optional().describe('MoSCoW bucket. Leave unset if unsure — untriaged is a valid state'),
+  priority: z.number().int().min(1).max(3).optional().describe('Priority 1-3, where 3 is most pressing'),
+  due: z.string().optional().describe('Due date, YYYY-MM-DD'),
+}, async ({ text, moscow, priority, due }) => {
+  const data = await neuroApi('/api/capture/todo', {
     method: 'POST',
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, moscow, priority, due, source: 'mcp' }),
   });
-  return { content: [{ type: 'text', text: `Task created: ${text}` }] };
+  const verb = data?.created === false ? 'Folded into existing task' : 'Task created';
+  return { content: [{ type: 'text', text: `${verb}${data?.taskId ? ` #${data.taskId}` : ''}: ${text}` }] };
 });
 
 // ═══════════════════════════════════════════════════════
