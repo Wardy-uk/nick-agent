@@ -23,6 +23,20 @@
 > the wife's PC, removing the ASUS from its dependency chain entirely; or dual-homing it (wired to
 > one, wifi to the other). Revisit the Plan B tiers with this in mind.
 >
+> **Nick confirms the ASUS router fails PERIODICALLY — this is a known recurring fault, not a
+> one-off.** So the goal is removing the dependency, not root-causing a single incident. He cannot
+> reach the router externally. Plan for the evening of 13 Aug:
+> - `dmesg -T | grep -i "link is"` on the Pi — with ~32 days uptime this is a full history of every
+>   ASUS drop since 12 July. Frequency and clustering turn "it plays up" into evidence. Pull it
+>   early, before the ring buffer rotates.
+> - SSH to the ASUS (AsusWRT/Merlin usually ships SSH **disabled** — Nick to enable it via
+>   Administration → System while home). Want: uptime, free memory, syslog. The classic ASUS
+>   failure is a memory leak that wedges the box every few weeks, which fits "periodic".
+> - Mitigations, cheapest first: (a) move the Pi 5 onto the broadband router entirely; (b) smart
+>   plug on the ASUS but joined to the **broadband** router's wifi, so it stays reachable when the
+>   ASUS dies and can power-cycle it remotely/automatically — a plug behind the failing router is
+>   useless; (c) scheduled nightly router reboot if it is a leak.
+>
 > **If it rebooted, capture evidence BEFORE anything rotates it:**
 > 1. `journalctl --list-boots` — if only boot 0 exists, journald is volatile and the previous
 >    boot's logs are already gone; say so rather than guessing at a cause.
