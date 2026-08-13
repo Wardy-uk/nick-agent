@@ -91,9 +91,16 @@ async function _aiSynthesis(buckets, emailSummary, teamsData) {
     const topItems = [...buckets.doNow, ...buckets.doNext].slice(0, 6);
     if (!topItems.length) return null;
 
-    const itemsList = topItems.map((i, n) =>
-      `${n + 1}. [${i.urgency}] ${i.title}${i.reason ? ` (${i.reason})` : ''}`
-    ).join('\n');
+    const itemsList = topItems.map((i, n) => {
+      let line = `${n + 1}. [${i.urgency}] ${i.title}${i.reason ? ` (${i.reason})` : ''}`;
+      // Give the model the actual tickets, not just "3 unseen escalations"
+      if (i.meta?.escalations?.length) {
+        line += i.meta.escalations
+          .map(e => `\n   - ${e.key}: ${e.summary}`)
+          .join('');
+      }
+      return line;
+    }).join('\n');
 
     const extras = [];
     if (emailSummary.urgent > 0) extras.push(`${emailSummary.urgent} urgent emails`);

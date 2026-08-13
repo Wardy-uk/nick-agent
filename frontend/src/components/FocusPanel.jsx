@@ -222,6 +222,24 @@ export default function FocusPanel({ onNavigate }) {
             {guidance?.why || current.reason}
           </p>
 
+          {/* Escalations name themselves — a count alone isn't actionable */}
+          {current.meta?.escalations?.length > 1 && (
+            <ul className="focus-card-list">
+              {current.meta.escalations.map(e => (
+                <li key={e.key} className="focus-card-list-item">
+                  <span className="focus-card-list-key">{e.key}</span>
+                  <span className="focus-card-list-text">{e.summary}</span>
+                  {e.ageDays != null && (
+                    <span className="focus-card-list-age">{e.ageDays === 0 ? 'today' : `${e.ageDays}d`}</span>
+                  )}
+                </li>
+              ))}
+              {current.meta.overflow > 0 && (
+                <li className="focus-card-list-more">+{current.meta.overflow} more</li>
+              )}
+            </ul>
+          )}
+
           {guidance?.action && (
             <div className="focus-card-action">{guidance.action}</div>
           )}

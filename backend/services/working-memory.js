@@ -124,11 +124,14 @@ async function refresh() {
     let dailyNote = null;
     try { dailyNote = vaultCache.getDailyNote(); } catch {}
 
-    // Escalation count
+    // Escalations — the list, not just the count (Focus/Briefing render them)
     let unseenEscalations = 0;
+    let unseenEscalationList = [];
     try {
       const jira = require('./jira');
-      unseenEscalations = jira.getUnseenEscalationCount ? jira.getUnseenEscalationCount() : 0;
+      unseenEscalationList = jira.getUnseenEscalations ? jira.getUnseenEscalations() : [];
+      unseenEscalations = unseenEscalationList.length ||
+        (jira.getUnseenEscalationCount ? jira.getUnseenEscalationCount() : 0);
     } catch {}
 
     // Pending imports count
@@ -161,6 +164,7 @@ async function refresh() {
       todayActivity,
       dailyNote: dailyNote ? true : false,
       unseenEscalations,
+      unseenEscalationList,
       pendingImports,
       userActiveToday: todayActivity.length > 0,
       standupDone: todayActivity.some(a => a.event_type === 'standup_done'),
@@ -308,6 +312,7 @@ function _buildEmpty() {
     todayActivity: [],
     dailyNote: false,
     unseenEscalations: 0,
+    unseenEscalationList: [],
     pendingImports: 0,
     userActiveToday: false,
     standupDone: false,

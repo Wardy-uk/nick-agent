@@ -135,19 +135,43 @@ function _scoreEmail(email) {
 function collectEscalations(ctx) {
   const items = [];
   if (ctx.unseenEscalations > 0) {
+    const list = (ctx.unseenEscalationList || []).slice(0, 5).map(e => ({
+      ...e,
+      ageDays: e.created ? Math.floor((Date.now() - new Date(e.created).getTime()) / 86400000) : null,
+    }));
+    const single = list.length === 1 ? list[0] : null;
+
     items.push({
       type: 'escalation',
       id: 'escalations-unseen',
-      title: `${ctx.unseenEscalations} unseen escalation${ctx.unseenEscalations > 1 ? 's' : ''}`,
-      reason: 'Escalations need your attention',
+      // A bare count doesn't tell Nick what to act on. One escalation names
+      // itself; several list underneath.
+      title: single
+        ? `${single.key} — ${single.summary}`
+        : `${ctx.unseenEscalations} unseen escalation${ctx.unseenEscalations > 1 ? 's' : ''}`,
+      reason: single
+        ? `Escalation with no reply from you${single.ageDays != null ? ` — raised ${_ageLabel(single.ageDays)}` : ''}`
+        : 'Escalations with no reply from you',
       score: 95,
       urgency: 'critical',
       source: 'jira',
       actionHint: 'Open Queue → Escalations',
+      meta: {
+        escalations: list,
+        ticket_key: single?.key || null,
+        url: single?.url || null,
+        overflow: Math.max(0, ctx.unseenEscalations - list.length),
+      },
       _unsuppressable: true, // overrides cannot suppress this
     });
   }
   return items;
+}
+
+function _ageLabel(days) {
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  return `${days}d ago`;
 }
 
 // NOVA flagged tickets ("Nick, look at this"). NOVA's risk scorer already did

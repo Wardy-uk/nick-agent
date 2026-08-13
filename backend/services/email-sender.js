@@ -75,6 +75,25 @@ function renderInlineMarkdown(text) {
 }
 
 /**
+ * Item-level detail (currently the escalation tickets behind a count) so the
+ * email says which tickets, not just how many. Ticket text is Jira-authored,
+ * so it gets escaped.
+ */
+function _detailList(item) {
+  const rows = item.meta?.escalations;
+  if (!rows?.length) return '';
+  const esc = s => String(s || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const lis = rows.map(r => {
+    const label = `<strong>${esc(r.key)}</strong> ${esc(r.summary)}`;
+    const age = r.ageDays != null ? ` <span style="color:#aaa">(${r.ageDays === 0 ? 'today' : `${r.ageDays}d`})</span>` : '';
+    return `<li>${r.url ? `<a href="${esc(r.url)}">${label}</a>` : label}${age}</li>`;
+  }).join('');
+  const more = item.meta.overflow > 0 ? `<li style="color:#888">+${item.meta.overflow} more</li>` : '';
+  return `<ul style="margin:4px 0 0;font-size:13px">${lis}${more}</ul>`;
+}
+
+/**
  * Render a brief object into HTML for email.
  */
 function briefToHtml(brief) {
@@ -86,14 +105,14 @@ function briefToHtml(brief) {
 
   if (brief.doNow?.length) {
     const items = brief.doNow.map(i =>
-      `<li><strong>[${i.type}]</strong> ${i.title}${i.reason ? ` <em style="color:#888">— ${i.reason}</em>` : ''}</li>`
+      `<li><strong>[${i.type}]</strong> ${i.title}${i.reason ? ` <em style="color:#888">— ${i.reason}</em>` : ''}${_detailList(i)}</li>`
     ).join('');
     sections.push(`<h3 style="color:#c0392b">Do now</h3><ul>${items}</ul>`);
   }
 
   if (brief.doNext?.length) {
     const items = brief.doNext.map(i =>
-      `<li><strong>[${i.type}]</strong> ${i.title}</li>`
+      `<li><strong>[${i.type}]</strong> ${i.title}${_detailList(i)}</li>`
     ).join('');
     sections.push(`<h3 style="color:#e67e22">Up next</h3><ul>${items}</ul>`);
   }

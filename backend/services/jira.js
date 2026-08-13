@@ -98,19 +98,24 @@ async function syncEscalations() {
       const key = issue.key;
       const hasComment = nickHasCommented(issue);
 
+      // Detail fields are refreshed every sync — Focus/Briefing render these,
+      // so a stale summary or priority would show Nick the wrong thing.
+      const details = {
+        summary: issue.fields?.summary || '',
+        created: issue.fields?.created,
+        status: issue.fields?.status?.name || null,
+        priority: issue.fields?.priority?.name || null,
+        assignee: issue.fields?.assignee?.displayName || null,
+      };
+
       if (!updated[key]) {
-        updated[key] = {
-          seen: false,
-          hasComment,
-          summary: issue.fields?.summary || '',
-          created: issue.fields?.created
-        };
+        updated[key] = { seen: false, hasComment, ...details };
         if (!hasComment) {
           newUnseen++;
           console.log(`[Jira] New escalation without Nick comment: ${key}`);
         }
       } else {
-        updated[key].hasComment = hasComment;
+        Object.assign(updated[key], details, { hasComment });
       }
     }
 
@@ -167,6 +172,29 @@ function getUnseenEscalationCount() {
   } catch { return 0; }
 }
 
+/**
+ * The unseen escalations themselves, oldest first — a count on its own doesn't
+ * tell Nick what to act on, so Focus/Briefing render these.
+ */
+function getUnseenEscalations() {
+  try {
+    const raw = db.getState('escalation_seen');
+    const known = raw ? JSON.parse(raw) : {};
+    return Object.entries(known)
+      .filter(([, v]) => !v.hasComment && !v.seen)
+      .map(([key, v]) => ({
+        key,
+        summary: v.summary || '',
+        created: v.created || null,
+        status: v.status || null,
+        priority: v.priority || null,
+        assignee: v.assignee || null,
+        url: JIRA_BASE_URL ? `${JIRA_BASE_URL.replace(/\/$/, '')}/browse/${key}` : null,
+      }))
+      .sort((a, b) => new Date(a.created || 0) - new Date(b.created || 0));
+  } catch { return []; }
+}
+
 // ── Polling (escalations only) ───────────────────────────────────────────────
 
 function startPolling() {
@@ -200,6 +228,7 @@ module.exports = {
   syncEscalations,
   markEscalationsSeen,
   getUnseenEscalationCount,
+  getUnseenEscalations,
   startPolling,
   stopPolling,
 };

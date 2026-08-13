@@ -170,6 +170,22 @@ export default function BriefingPanel({ onNavigate }) {
                 <div className="briefing-card-take">
                   {guidance?.why || item.reason}
                 </div>
+                {item.meta?.escalations?.length > 1 && (
+                  <ul className="briefing-card-list">
+                    {item.meta.escalations.map(e => (
+                      <li key={e.key}>
+                        <span className="briefing-card-list-key">{e.key}</span>
+                        <span className="briefing-card-list-text">{e.summary}</span>
+                        {e.ageDays != null && (
+                          <span className="briefing-card-list-age">{e.ageDays === 0 ? 'today' : `${e.ageDays}d`}</span>
+                        )}
+                      </li>
+                    ))}
+                    {item.meta.overflow > 0 && (
+                      <li className="briefing-card-list-more">+{item.meta.overflow} more</li>
+                    )}
+                  </ul>
+                )}
                 {guidance?.action && (
                   <div className="briefing-card-cta">{guidance.action}</div>
                 )}
