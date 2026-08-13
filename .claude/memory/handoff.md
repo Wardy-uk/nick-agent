@@ -1,3 +1,32 @@
+> ## ⚠ OPEN — Pi 5 went offline 2026-08-13 04:01 BST. Read this first.
+>
+> NEURO/SARA/quest are all down: the **host** is unreachable (ICMP, SSH :22 and HTTP :3001 all
+> time out), Tailscale shows `Online: false`, last seen `2026-08-13T03:01:37Z`. Not an app fault —
+> everything was verified healthy at 20:56 the previous evening.
+> No remote path exists: pi-dev has been offline 46 days and nothing else at home is on the tailnet.
+> Nick is 30 miles away and will look at it **this evening (13 Aug)**. Power/broadband are ruled
+> out — his wife works from home and would have flagged it. So: SD card, PSU, the HDD, or a hang.
+>
+> **When it boots, capture evidence BEFORE anything rotates it:**
+> 1. `journalctl --list-boots` — if only boot 0 exists, journald is volatile and the previous
+>    boot's logs are already gone; say so rather than guessing at a cause.
+> 2. `journalctl -b -1 -e` — last messages of the dead boot. Clean shutdown? Panic? Or just stops?
+> 3. `last -x | head` — wtmp survives reboots and distinguishes crash from shutdown.
+> 4. `vcgencmd get_throttled` — undervoltage/throttle flags since boot. **Note the HDD reports
+>    `Power-Off_Retract_Count 275`, i.e. a history of unclean power loss — PSU is a live suspect.**
+> 5. `dmesg -T | grep -iE "error|fail|panic|voltage|throttl|mmc|I/O"` — SD card errors matter most.
+> 6. `sudo smartctl -H -A -d sat /dev/sda` — the HGST was clean yesterday; confirm it still is.
+> 7. `systemctl --failed`, then `pm2 list`.
+> 8. `tail -20 /mnt/backup/backup.log` — confirm the 00:00 snapshot landed before the outage.
+>
+> **Also open:** pi-dev (Pi 4) has been down since 27 June. It is supposed to run the worker, which
+> is why the logs are full of `[AIRouting] Pi 4 worker failed for email_triage: fetch failed`.
+> Tally may be down with it. Nick wants a Plan B — agreed shape: **Tier 1** dead-man's-switch
+> alerting + off-site copy of the backup (this is what was actually missing today — nothing told
+> him), then **Tier 2** warm standby on pi-dev once it is proven stable. Tier 3 auto-failover
+> was judged not worth the moving parts. A standby in the same house shares power and broadband,
+> so it only covers Pi-specific death — that caveat was accepted.
+
 # HANDOFF — Briefing chain revived, task sources fixed, Pi reconciled
 
 **Session:** 2026-08-12. Everything below is deployed and verified live.
