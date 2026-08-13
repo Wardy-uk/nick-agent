@@ -23,12 +23,60 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
   const [replyText, setReplyText] = useState('');
   const [drafting, setDrafting] = useState(false);
   const [sending, setSending] = useState(false);
+  const [to, setTo] = useState([]);
+  const [cc, setCc] = useState([]);
+  const [replyAllCc, setReplyAllCc] = useState([]);
+  const [newTo, setNewTo] = useState('');
+  const [newCc, setNewCc] = useState('');
 
   const base = `/api/email/triage/${encodeURIComponent(email.id)}`;
 
   const toggle = (next) => {
     setError('');
     setMode(m => (m === next ? null : next));
+  };
+
+  // Both Full email and Reply need the Graph detail — fetch once, share it.
+  const loadDetail = () => {
+    if (detail) return Promise.resolve(detail);
+    setLoading(true);
+    return fetch(apiUrl(base))
+      .then(r => r.json())
+      .then(d => {
+        if (!d.ok) { setError(d.error || 'Could not load email'); return null; }
+        setDetail(d.email);
+        return d.email;
+      })
+      .catch(() => { setError('Could not load email'); return null; })
+      .finally(() => setLoading(false));
+  };
+
+  const openReply = () => {
+    toggle('reply');
+    if (mode === 'reply') return;
+    loadDetail().then(d => {
+      if (!d?.replyDefaults) return;
+      // Only prefill once — don't stamp on edits made before the fetch landed.
+      setTo(prev => (prev.length ? prev : d.replyDefaults.to || []));
+      setReplyAllCc(d.replyDefaults.replyAllCc || []);
+    });
+  };
+
+  const addRecipient = (value, list, setList, clear) => {
+    const email = value.trim().replace(/^.*<|>$/g, '').trim();
+    if (!email || !email.includes('@')) { setError('That does not look like an email address'); return; }
+    if (list.some(r => r.email.toLowerCase() === email.toLowerCase())) { clear(''); return; }
+    setError('');
+    setList([...list, { name: email, email }]);
+    clear('');
+  };
+
+  const addAllCc = () => {
+    const merged = [...cc];
+    replyAllCc.forEach(r => {
+      if (!merged.some(x => x.email.toLowerCase() === r.email.toLowerCase())) merged.push(r);
+    });
+    setCc(merged);
   };
 
   const showSummary = () => {
@@ -47,16 +95,8 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
 
   const showFull = () => {
     toggle('full');
-    if (detail || mode === 'full') return;
-    setLoading(true);
-    fetch(apiUrl(base))
-      .then(r => r.json())
-      .then(d => {
-        if (d.ok) setDetail(d.email);
-        else setError(d.error || 'Could not load email');
-      })
-      .catch(() => setError('Could not load email'))
-      .finally(() => setLoading(false));
+    if (mode === 'full') return;
+    loadDetail();
   };
 
   const draftWithAI = () => {
@@ -83,7 +123,7 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
     fetch(apiUrl(`${base}/reply`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body: replyText }),
+      body: JSON.stringify({ body: replyText, to, cc }),
     })
       .then(r => r.json())
       .then(d => {
@@ -135,6 +175,71 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
 
       {mode === 'reply' && (
         <div className="inbox-detail">
+          {loading && <div className="inbox-detail-loading">Loading recipients...</div>}
+
+          <div className="inbox-recip-row">
+            <span className="inbox-recip-label">To</span>
+            <div className="inbox-recip-chips">
+              {to.map(r => (
+                <span className="inbox-chip" key={r.email} title={r.email}>
+                  {r.name || r.email}
+                  <button
+                    className="inbox-chip-x"
+                    onClick={() => setTo(to.filter(x => x.email !== r.email))}
+                    aria-label={`Remove ${r.email}`}
+                  >×</button>
+                </span>
+              ))}
+              <input
+                className="inbox-recip-input"
+                value={newTo}
+                onChange={e => setNewTo(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    addRecipient(newTo, to, setTo, setNewTo);
+                  }
+                }}
+                onBlur={() => newTo.trim() && addRecipient(newTo, to, setTo, setNewTo)}
+                placeholder={to.length ? 'Add...' : 'name@company.com'}
+              />
+            </div>
+          </div>
+
+          <div className="inbox-recip-row">
+            <span className="inbox-recip-label">Cc</span>
+            <div className="inbox-recip-chips">
+              {cc.map(r => (
+                <span className="inbox-chip" key={r.email} title={r.email}>
+                  {r.name || r.email}
+                  <button
+                    className="inbox-chip-x"
+                    onClick={() => setCc(cc.filter(x => x.email !== r.email))}
+                    aria-label={`Remove ${r.email}`}
+                  >×</button>
+                </span>
+              ))}
+              <input
+                className="inbox-recip-input"
+                value={newCc}
+                onChange={e => setNewCc(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    addRecipient(newCc, cc, setCc, setNewCc);
+                  }
+                }}
+                onBlur={() => newCc.trim() && addRecipient(newCc, cc, setCc, setNewCc)}
+                placeholder={cc.length ? 'Add...' : 'none'}
+              />
+              {replyAllCc.length > 0 && replyAllCc.some(r => !cc.some(c => c.email === r.email)) && (
+                <button className="inbox-recip-all" onClick={addAllCc}>
+                  + everyone on thread ({replyAllCc.length})
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="inbox-reply-modes">
             <button className="inbox-action-btn" onClick={draftWithAI} disabled={drafting || sending}>
               {drafting ? 'Drafting...' : 'Draft with AI'}
@@ -154,9 +259,9 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
             <button
               className="inbox-action-btn inbox-action-done"
               onClick={sendReply}
-              disabled={sending || drafting || !replyText.trim()}
+              disabled={sending || drafting || !replyText.trim() || to.length === 0}
             >
-              {sending ? 'Sending...' : 'Send reply'}
+              {sending ? 'Sending...' : `Send to ${to.length || 'nobody'}`}
             </button>
             <button className="inbox-action-btn inbox-action-ignore" onClick={() => setMode(null)} disabled={sending}>
               Cancel
@@ -188,7 +293,7 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
         </button>
         <button
           className={`inbox-action-btn inbox-action-view${mode === 'reply' ? ' is-open' : ''}`}
-          onClick={() => toggle('reply')}
+          onClick={openReply}
         >
           Reply
         </button>

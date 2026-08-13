@@ -378,6 +378,25 @@ function htmlToText(value) {
     .trim();
 }
 
+// Who we're signed in as — so reply-all doesn't cc Nick back to himself.
+async function getSignedInAddress() {
+  try {
+    const accounts = await getClient().getTokenCache().getAllAccounts();
+    return accounts[0]?.username || null;
+  } catch {
+    return null;
+  }
+}
+
+function mapAddresses(list) {
+  return (list || [])
+    .map((item) => ({
+      name: item.emailAddress?.name || item.emailAddress?.address || '',
+      email: item.emailAddress?.address || '',
+    }))
+    .filter((r) => r.email);
+}
+
 async function fetchEmailById(emailId) {
   if (!emailId) return null;
 
@@ -394,6 +413,11 @@ async function fetchEmailById(emailId) {
           fromEmail: msg.from?.emailAddress?.address || '',
           to: (msg.toRecipients || []).map((item) => item.emailAddress?.name || item.emailAddress?.address).filter(Boolean),
           cc: (msg.ccRecipients || []).map((item) => item.emailAddress?.name || item.emailAddress?.address).filter(Boolean),
+          // Names alone can't be replied to — keep the addresses for the composer.
+          recipients: {
+            to: mapAddresses(msg.toRecipients),
+            cc: mapAddresses(msg.ccRecipients),
+          },
           received: msg.receivedDateTime,
           isRead: msg.isRead,
           importance: msg.importance,
@@ -677,7 +701,12 @@ async function completeMicrosoftTask(taskId, source = null, listId = null) {
 
 // Reply to a message via Graph. Needs Mail.Send — degrades with a reason
 // instead of throwing so the UI can tell Nick what to fix.
-async function sendEmailReply(emailId, bodyText, { replyAll = false } = {}) {
+//
+// The /reply action addresses the message itself and can only ever ADD
+// recipients, so when the composer hands us an explicit list we go the long way
+// round: createReply gives a draft (with the quoted original), we overwrite its
+// recipients and prepend the reply text, then send it.
+async function sendEmailReply(emailId, bodyText, { replyAll = false, to = null, cc = null } = {}) {
   const text = String(bodyText || '').trim();
   if (!emailId) return { sent: false, reason: 'no_email_id' };
   if (!text) return { sent: false, reason: 'empty_body' };
@@ -696,6 +725,10 @@ async function sendEmailReply(emailId, bodyText, { replyAll = false } = {}) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\n/g, '<br>');
+
+  if (Array.isArray(to)) {
+    return _sendReplyWithRecipients(emailId, html, to, cc || [], token);
+  }
 
   const action = replyAll ? 'replyAll' : 'reply';
   try {
@@ -725,6 +758,64 @@ async function sendEmailReply(emailId, bodyText, { replyAll = false } = {}) {
   }
 }
 
+function toGraphRecipients(list) {
+  return (list || [])
+    .map((r) => (typeof r === 'string' ? r : r.email))
+    .map((address) => String(address || '').trim())
+    .filter(Boolean)
+    .map((address) => ({ emailAddress: { address } }));
+}
+
+// createReply → set recipients + body → send. Three calls, but it's the only
+// way to drop a recipient the original thread had.
+async function _sendReplyWithRecipients(emailId, html, to, cc, token) {
+  const toList = toGraphRecipients(to);
+  if (!toList.length) return { sent: false, reason: 'no_recipients' };
+
+  const draft = await graphWrite(
+    `/me/messages/${encodeURIComponent(emailId)}/createReply`,
+    'POST',
+    {},
+    token
+  );
+  if (!draft.ok || !draft.data?.id) {
+    console.error('[Mail] createReply failed:', draft.reason, draft.detail || '');
+    return { sent: false, reason: draft.reason || 'createreply_failed' };
+  }
+
+  const draftId = draft.data.id;
+  // Keep the quoted original the draft already carries, above it our text.
+  const quoted = draft.data.body?.content || '';
+  const patched = await graphWrite(
+    `/me/messages/${encodeURIComponent(draftId)}`,
+    'PATCH',
+    {
+      toRecipients: toList,
+      ccRecipients: toGraphRecipients(cc),
+      body: { contentType: 'HTML', content: `<div>${html}</div>${quoted}` },
+    },
+    token
+  );
+  if (!patched.ok) {
+    console.error('[Mail] Draft PATCH failed:', patched.reason, patched.detail || '');
+    return { sent: false, reason: patched.reason };
+  }
+
+  const sent = await graphWrite(
+    `/me/messages/${encodeURIComponent(draftId)}/send`,
+    'POST',
+    undefined,
+    token
+  );
+  if (!sent.ok) {
+    console.error('[Mail] Draft send failed:', sent.reason, sent.detail || '');
+    return { sent: false, reason: sent.reason };
+  }
+
+  console.log(`[Mail] Reply sent for ${emailId} to ${toList.length} recipient(s)`);
+  return { sent: true };
+}
+
 module.exports = {
   isConfigured,
   isAuthenticated,
@@ -736,6 +827,7 @@ module.exports = {
   fetchRecentEmails,
   fetchEmailById,
   sendEmailReply,
+  getSignedInAddress,
   fetchTodoLists,
   fetchTodoTasks,
   fetchPlannerTasks,

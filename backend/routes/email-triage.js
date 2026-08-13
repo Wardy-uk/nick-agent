@@ -30,6 +30,33 @@ function buildFallbackSuggestedReply(message, triageItem) {
   return `Hi ${firstName},\n\nThanks for this. I’ve seen it and I’ll come back to you shortly.\n\nNick`;
 }
 
+// Reply goes to the sender; reply-all adds everyone else on the thread, minus
+// Nick himself. The composer shows both so nothing is sent blind.
+async function buildReplyDefaults(merged) {
+  const sender = merged.fromEmail
+    ? [{ name: merged.from || merged.fromEmail, email: merged.fromEmail }]
+    : [];
+  const me = (await microsoft.getSignedInAddress() || '').toLowerCase();
+  const others = [
+    ...(merged.recipients?.to || []),
+    ...(merged.recipients?.cc || []),
+  ].filter((r) => {
+    const email = (r.email || '').toLowerCase();
+    return email && email !== me && email !== (merged.fromEmail || '').toLowerCase();
+  });
+
+  // Dedupe — the same person often appears on both to and cc.
+  const seen = new Set();
+  const replyAllCc = others.filter((r) => {
+    const key = r.email.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return { to: sender, cc: [], replyAllCc };
+}
+
 // Merge the cached triage entry with the live Graph message. Returns null when
 // the email exists in neither.
 async function loadEmail(emailId) {
@@ -85,6 +112,7 @@ router.get('/triage/:emailId', async (req, res) => {
         suggestedReply: buildFallbackSuggestedReply(merged, triageItem),
         preview: merged.preview || '',
         body: merged.body || merged.preview || '',
+        replyDefaults: await buildReplyDefaults(merged),
       },
     });
   } catch (e) {
@@ -168,14 +196,22 @@ router.post('/triage/:emailId/reply', async (req, res) => {
     const body = String(req.body?.body || '').trim();
     if (!body) return res.status(400).json({ ok: false, error: 'Reply body is empty' });
 
+    const to = Array.isArray(req.body?.to) ? req.body.to : null;
+    if (to && to.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Add at least one recipient' });
+    }
+
     const result = await microsoft.sendEmailReply(emailId, body, {
       replyAll: Boolean(req.body?.replyAll),
+      to,
+      cc: Array.isArray(req.body?.cc) ? req.body.cc : null,
     });
 
     if (!result.sent) {
       const messages = {
         auth: 'Not signed in to Microsoft — reconnect in settings.',
         scope: 'Mail.Send permission not granted — re-consent to Microsoft.',
+        no_recipients: 'Add at least one recipient.',
       };
       return res.status(502).json({
         ok: false,
