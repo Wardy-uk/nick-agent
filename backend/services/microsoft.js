@@ -45,7 +45,10 @@ const CACHE_PATH = process.env.MS_TOKEN_CACHE_PATH ||
 const CLIENT_ID = process.env.MS_CLIENT_ID || '084a3e9f-a9f4-43f7-89f9-d229cf97853e';
 const TENANT_ID = process.env.MS_TENANT_ID || 'db0f7383-5d7f-4a39-9841-02fbcd1444bd';
 
-const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Mail.Send', 'Tasks.Read', 'User.Read', 'Chat.Read'];
+// Tasks.ReadWrite (was Tasks.Read) so completions can be pushed back to To Do
+// and Planner. Deliberately not asking for Group.ReadWrite.All — it needs admin
+// consent and would fail the whole grant; add it only if Planner writes 403.
+const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Mail.Send', 'Tasks.ReadWrite', 'User.Read', 'Chat.Read'];
 
 // Adding a scope here requires re-consent: call /api/microsoft/device-code on the
 // Pi and follow the URL. Until that happens the cached token lacks the new scope
