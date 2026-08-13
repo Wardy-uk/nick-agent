@@ -457,6 +457,11 @@ async function fetchTodoLists() {
   return null;
 }
 
+// The vault only records a bare <!--id:...--> for Microsoft tasks, so completing
+// a To-Do needs its list back. Every sync pass fills this in; a cold start falls
+// back to searching the lists.
+const _todoListByTask = new Map();
+
 // Fetch To-Do tasks for a specific list
 async function fetchTodoTasks(listId) {
   if (!listId) return null;
@@ -465,7 +470,10 @@ async function fetchTodoTasks(listId) {
   if (token) {
     try {
       const data = await graphFetch(`/me/todo/lists/${listId}/tasks?$top=100&$filter=status ne 'completed'`, token);
-      if (data && data.value) return data.value;
+      if (data && data.value) {
+        data.value.forEach(t => { if (t.id) _todoListByTask.set(t.id, listId); });
+        return data.value;
+      }
     } catch (err) {
       console.error('[Microsoft] ToDo tasks fetch error:', err.message);
     }
@@ -559,6 +567,161 @@ async function updatePlannerTask(taskId, updates) {
   return null;
 }
 
+// graphFetch is GET-only (https.get), so writes go through this.
+async function graphWrite(urlPath, method, body, token, extraHeaders = {}) {
+  const res = await fetch(`https://graph.microsoft.com/v1.0${urlPath}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...extraHeaders,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (res.status === 401) return { ok: false, status: 401, reason: 'auth' };
+  if (res.status === 403) return { ok: false, status: 403, reason: 'scope' };
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    return { ok: false, status: res.status, reason: `http_${res.status}`, detail: detail.slice(0, 300) };
+  }
+  const text = await res.text().catch(() => '');
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* 204 No Content */ }
+  return { ok: true, status: res.status, data };
+}
+
+// Which To-Do list holds this task? Cache first, then walk the lists.
+async function _resolveTodoList(taskId, token) {
+  if (_todoListByTask.has(taskId)) return _todoListByTask.get(taskId);
+  const lists = await fetchTodoLists();
+  if (!Array.isArray(lists)) return null;
+  for (const list of lists) {
+    try {
+      const task = await graphFetch(`/me/todo/lists/${list.id}/tasks/${encodeURIComponent(taskId)}`, token);
+      if (task?.id) {
+        _todoListByTask.set(taskId, list.id);
+        return list.id;
+      }
+    } catch { /* 404 in this list — keep looking */ }
+  }
+  return null;
+}
+
+async function completeTodoTask(taskId, listId = null) {
+  const token = await getAccessToken();
+  if (!token) return { completed: false, reason: 'auth' };
+
+  const resolved = listId || await _resolveTodoList(taskId, token);
+  if (!resolved) return { completed: false, reason: 'list_not_found' };
+
+  const result = await graphWrite(
+    `/me/todo/lists/${resolved}/tasks/${encodeURIComponent(taskId)}`,
+    'PATCH',
+    { status: 'completed' },
+    token
+  );
+  if (!result.ok) {
+    console.warn(`[ToDo] Complete failed for ${taskId}: ${result.reason} ${result.detail || ''}`);
+    return { completed: false, reason: result.reason };
+  }
+  console.log(`[ToDo] Completed ${taskId}`);
+  return { completed: true, kind: 'todo' };
+}
+
+// Planner PATCHes are optimistically concurrent — Graph rejects them without a
+// matching If-Match etag, so read the task first.
+async function completePlannerTask(taskId) {
+  const token = await getAccessToken();
+  if (!token) return { completed: false, reason: 'auth' };
+
+  let etag = null;
+  try {
+    const task = await graphFetch(`/planner/tasks/${encodeURIComponent(taskId)}`, token);
+    etag = task?.['@odata.etag'] || null;
+  } catch (e) {
+    console.warn(`[Planner] Could not read ${taskId}: ${e.message}`);
+  }
+  if (!etag) return { completed: false, reason: 'not_found' };
+
+  const result = await graphWrite(
+    `/planner/tasks/${encodeURIComponent(taskId)}`,
+    'PATCH',
+    { percentComplete: 100 },
+    token,
+    { 'If-Match': etag }
+  );
+  if (!result.ok) {
+    console.warn(`[Planner] Complete failed for ${taskId}: ${result.reason} ${result.detail || ''}`);
+    return { completed: false, reason: result.reason };
+  }
+  console.log(`[Planner] Completed ${taskId}`);
+  return { completed: true, kind: 'planner' };
+}
+
+// Complete by id, using the vault's section label as a hint. Without one, try
+// Planner then To-Do.
+async function completeMicrosoftTask(taskId, source = null, listId = null) {
+  if (!taskId) return { completed: false, reason: 'no_task_id' };
+
+  if (/planner/i.test(source || '')) return completePlannerTask(taskId);
+  if (/todo|to-do/i.test(source || '')) return completeTodoTask(taskId, listId);
+
+  const planner = await completePlannerTask(taskId);
+  if (planner.completed) return planner;
+  return completeTodoTask(taskId, listId);
+}
+
+// Reply to a message via Graph. Needs Mail.Send — degrades with a reason
+// instead of throwing so the UI can tell Nick what to fix.
+async function sendEmailReply(emailId, bodyText, { replyAll = false } = {}) {
+  const text = String(bodyText || '').trim();
+  if (!emailId) return { sent: false, reason: 'no_email_id' };
+  if (!text) return { sent: false, reason: 'empty_body' };
+
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (e) {
+    console.warn('[Mail] Reply auth failed:', e.message);
+    return { sent: false, reason: 'auth' };
+  }
+  if (!token) return { sent: false, reason: 'auth' };
+
+  const html = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>');
+
+  const action = replyAll ? 'replyAll' : 'reply';
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(emailId)}/${action}`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: html }),
+        signal: AbortSignal.timeout(30000)
+      }
+    );
+    if (res.status === 403) {
+      console.log('[Mail] Reply blocked — Mail.Send scope not granted');
+      return { sent: false, reason: 'scope' };
+    }
+    if (res.status === 202 || res.ok) {
+      console.log(`[Mail] Reply sent for ${emailId}`);
+      return { sent: true };
+    }
+    const detail = await res.text().catch(() => '');
+    console.error(`[Mail] Reply failed ${res.status}:`, detail.slice(0, 300));
+    return { sent: false, reason: `http_${res.status}` };
+  } catch (e) {
+    console.error('[Mail] Reply error:', e.message);
+    return { sent: false, reason: 'error', error: e.message };
+  }
+}
+
 module.exports = {
   isConfigured,
   isAuthenticated,
@@ -569,11 +732,16 @@ module.exports = {
   fetchCalendarEvents,
   fetchRecentEmails,
   fetchEmailById,
+  sendEmailReply,
   fetchTodoLists,
   fetchTodoTasks,
   fetchPlannerTasks,
   createTodoTask,
   updateTodoTask,
   updatePlannerTask,
-  graphFetch
+  completeTodoTask,
+  completePlannerTask,
+  completeMicrosoftTask,
+  graphFetch,
+  graphWrite
 };

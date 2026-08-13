@@ -423,6 +423,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   const [filter, setFilter] = useState('all');
   const [subFilters, setSubFilters] = useState([]);
   const [toggling, setToggling] = useState({});
+  const [msPushWarning, setMsPushWarning] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [showMoscow, setShowMoscow] = useState(false);
@@ -627,6 +628,9 @@ export default function TodoPanel({ focusContext, onClearContext }) {
             lineNumber: todo.lineNumber
           })
         });
+        // Vault is toggled either way, but say so when Microsoft didn't take it.
+        const data = await res.clone().json().catch(() => ({}));
+        setMsPushWarning(data.warning || null);
       } else {
         res = await fetch(apiUrl('/api/todos/toggle'), {
           method: 'POST',
@@ -673,6 +677,12 @@ export default function TodoPanel({ focusContext, onClearContext }) {
             <button className="btn btn-secondary btn-sm" onClick={refreshFocus}>Refresh</button>
           </div>
         </div>
+
+        {msPushWarning && (
+          <div className="todo-ms-warning" onClick={() => setMsPushWarning(null)}>
+            Marked done here, but not in Microsoft — {msPushWarning}
+          </div>
+        )}
 
         {/* Focus filter pills */}
         <div className="todo-filters">
@@ -857,6 +867,11 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         <span className="todo-sara-label">SARA</span>
         <span className="todo-sara-line">{todoSaraLine}</span>
       </div>
+      {msPushWarning && (
+        <div className="todo-ms-warning" onClick={() => setMsPushWarning(null)}>
+          Marked done here, but not in Microsoft — {msPushWarning}
+        </div>
+      )}
       <div className="todo-header">
         <h2 className="todo-title">Todos</h2>
         <div className="todo-header-right">

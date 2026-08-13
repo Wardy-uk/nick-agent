@@ -5,6 +5,7 @@ const vaultCache = require('../services/vault-cache');
 const { rankTasks } = require('../services/task-scoring');
 const todoIntelligence = require('../services/todo-intelligence');
 const taskStore = require('../services/task-store');
+const microsoft = require('../services/microsoft');
 
 // GET /api/todos — reads tasks from Obsidian vault + 90-day plan
 router.get('/', (req, res) => {
@@ -248,10 +249,12 @@ router.post('/toggle', (req, res) => {
   }
 });
 
-// POST /api/todos/complete-ms — complete a Microsoft task via Power Automate webhook + toggle in vault
+// POST /api/todos/complete-ms — complete a Microsoft To-Do/Planner task and
+// toggle the vault mirror. Pushes over Graph and reports whether it landed;
+// Power Automate stays as the fallback for when Graph auth is expired.
 router.post('/complete-ms', async (req, res) => {
   try {
-    const { msId, source, filePath, lineNumber } = req.body;
+    const { msId, source, filePath, lineNumber, listId } = req.body;
     if (!msId) return res.status(400).json({ error: 'msId required' });
 
     // Toggle in vault first (instant)
@@ -259,22 +262,36 @@ router.post('/complete-ms', async (req, res) => {
       obsidian.toggleTask(filePath, lineNumber);
     }
 
-    // Fire-and-forget webhook to Power Automate to complete in Microsoft
-    _fireWebhook(msId, source).catch(() => {});
+    const result = await microsoft.completeMicrosoftTask(msId, source, listId || null);
+    if (result.completed) {
+      return res.json({ ok: true, pushed: result.kind || 'graph' });
+    }
 
-    res.json({ ok: true });
+    // Graph refused — fall back to the Power Automate flow.
+    const webhookOk = await _fireWebhook(msId, source);
+    const reasons = {
+      auth: 'Microsoft sign-in expired — reconnect 365.',
+      scope: 'Tasks permission not granted — re-consent to Microsoft.',
+      list_not_found: 'Could not find the task in any To Do list.',
+      not_found: 'Task not found in Planner.',
+    };
+    res.json({
+      ok: true,
+      pushed: webhookOk ? 'webhook' : 'none',
+      warning: webhookOk ? null : (reasons[result.reason] || `Microsoft push failed (${result.reason})`),
+    });
   } catch (e) {
     console.error('[Todos] MS complete error:', e);
     res.status(500).json({ error: e.message });
   }
 });
 
-// Power Automate webhook — fire and forget
+// Power Automate webhook — fallback when Graph can't complete the task
 async function _fireWebhook(taskId, source) {
   const webhookUrl = process.env.PA_TASK_COMPLETE_WEBHOOK;
   if (!webhookUrl) {
     console.warn('[Todos] PA_TASK_COMPLETE_WEBHOOK not configured — skipping MS completion');
-    return;
+    return false;
   }
   try {
     const res = await fetch(webhookUrl, {
@@ -285,11 +302,13 @@ async function _fireWebhook(taskId, source) {
     });
     if (res.ok) {
       console.log(`[Todos] PA webhook fired: ${source} ${taskId}`);
-    } else {
-      console.warn(`[Todos] PA webhook returned ${res.status}`);
+      return true;
     }
+    console.warn(`[Todos] PA webhook returned ${res.status}`);
+    return false;
   } catch (e) {
     console.warn(`[Todos] PA webhook failed: ${e.message}`);
+    return false;
   }
 }
 

@@ -13,7 +13,89 @@ function timeAgo(timestamp) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function EmailCard({ email, borderClass, onDismiss, dismissing }) {
+function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
+  // mode: null | 'summary' | 'full' | 'reply'
+  const [mode, setMode] = useState(null);
+  const [summary, setSummary] = useState('');
+  const [detail, setDetail] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [replyText, setReplyText] = useState('');
+  const [drafting, setDrafting] = useState(false);
+  const [sending, setSending] = useState(false);
+
+  const base = `/api/email/triage/${encodeURIComponent(email.id)}`;
+
+  const toggle = (next) => {
+    setError('');
+    setMode(m => (m === next ? null : next));
+  };
+
+  const showSummary = () => {
+    toggle('summary');
+    if (summary || mode === 'summary') return;
+    setLoading(true);
+    fetch(apiUrl(`${base}/summary`), { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) setSummary(d.summary);
+        else setError(d.error || 'Could not summarise');
+      })
+      .catch(() => setError('Could not summarise'))
+      .finally(() => setLoading(false));
+  };
+
+  const showFull = () => {
+    toggle('full');
+    if (detail || mode === 'full') return;
+    setLoading(true);
+    fetch(apiUrl(base))
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) setDetail(d.email);
+        else setError(d.error || 'Could not load email');
+      })
+      .catch(() => setError('Could not load email'))
+      .finally(() => setLoading(false));
+  };
+
+  const draftWithAI = () => {
+    setDrafting(true);
+    setError('');
+    fetch(apiUrl(`${base}/draft`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instruction: replyText.trim() || undefined }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) setReplyText(d.draft);
+        else setError(d.error || 'Could not draft a reply');
+      })
+      .catch(() => setError('Could not draft a reply'))
+      .finally(() => setDrafting(false));
+  };
+
+  const sendReply = () => {
+    if (!replyText.trim()) return;
+    setSending(true);
+    setError('');
+    fetch(apiUrl(`${base}/reply`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: replyText }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) onReplied(email.id);
+        else setError(d.error || 'Send failed');
+      })
+      .catch(() => setError('Send failed'))
+      .finally(() => setSending(false));
+  };
+
+  const busy = dismissing === email.id;
+
   return (
     <div className={`inbox-item ${borderClass}`}>
       <div className="inbox-item-header">
@@ -21,23 +103,94 @@ function EmailCard({ email, borderClass, onDismiss, dismissing }) {
         {email.reason && <span className="inbox-item-cat">{email.reason}</span>}
       </div>
       <div className="inbox-item-subject">{email.subject}</div>
-      {email.preview && (
+      {email.preview && mode !== 'full' && (
         <div className="inbox-item-summary">{email.preview.substring(0, 150)}</div>
       )}
+
+      {mode === 'summary' && (
+        <div className="inbox-detail">
+          {loading ? <div className="inbox-detail-loading">Summarising...</div>
+            : <div className="inbox-detail-body">{summary}</div>}
+        </div>
+      )}
+
+      {mode === 'full' && (
+        <div className="inbox-detail">
+          {loading ? <div className="inbox-detail-loading">Loading email...</div> : detail && (
+            <>
+              <div className="inbox-detail-meta">
+                {detail.fromEmail && <span>{detail.fromEmail}</span>}
+                {detail.received && <span>{new Date(detail.received).toLocaleString('en-GB')}</span>}
+              </div>
+              <div className="inbox-detail-body inbox-detail-full">{detail.body}</div>
+              {detail.webLink && (
+                <a className="inbox-detail-link" href={detail.webLink} target="_blank" rel="noreferrer">
+                  Open in Outlook
+                </a>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {mode === 'reply' && (
+        <div className="inbox-detail">
+          <div className="inbox-reply-modes">
+            <button className="inbox-action-btn" onClick={draftWithAI} disabled={drafting || sending}>
+              {drafting ? 'Drafting...' : 'Draft with AI'}
+            </button>
+            <span className="inbox-reply-hint">
+              or just type below — anything you write is used as a steer if you then draft with AI
+            </span>
+          </div>
+          <textarea
+            className="inbox-reply-text"
+            value={replyText}
+            onChange={e => setReplyText(e.target.value)}
+            placeholder="Write your reply..."
+            rows={8}
+          />
+          <div className="inbox-item-actions">
+            <button
+              className="inbox-action-btn inbox-action-done"
+              onClick={sendReply}
+              disabled={sending || drafting || !replyText.trim()}
+            >
+              {sending ? 'Sending...' : 'Send reply'}
+            </button>
+            <button className="inbox-action-btn inbox-action-ignore" onClick={() => setMode(null)} disabled={sending}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && <div className="inbox-detail-error">{error}</div>}
+
       <div className="inbox-item-actions">
-        <button
-          className="inbox-action-btn inbox-action-done"
-          onClick={() => onDismiss(email.id)}
-          disabled={dismissing === email.id}
-        >
-          {dismissing === email.id ? '...' : 'Done'}
+        <button className="inbox-action-btn inbox-action-done" onClick={() => onDismiss(email.id)} disabled={busy}>
+          {busy ? '...' : 'Done'}
+        </button>
+        <button className="inbox-action-btn inbox-action-ignore" onClick={() => onDismiss(email.id)} disabled={busy}>
+          {busy ? '...' : 'Not relevant'}
         </button>
         <button
-          className="inbox-action-btn inbox-action-ignore"
-          onClick={() => onDismiss(email.id)}
-          disabled={dismissing === email.id}
+          className={`inbox-action-btn inbox-action-view${mode === 'summary' ? ' is-open' : ''}`}
+          onClick={showSummary}
         >
-          {dismissing === email.id ? '...' : 'Not relevant'}
+          Summary
+        </button>
+        <button
+          className={`inbox-action-btn inbox-action-view${mode === 'full' ? ' is-open' : ''}`}
+          onClick={showFull}
+        >
+          Full email
+        </button>
+        <button
+          className={`inbox-action-btn inbox-action-view${mode === 'reply' ? ' is-open' : ''}`}
+          onClick={() => toggle('reply')}
+        >
+          Reply
         </button>
       </div>
     </div>
@@ -76,6 +229,9 @@ export default function InboxPanel({ focusContext }) {
       .then(() => { fetchTriage(); setDismissing(null); })
       .catch(() => setDismissing(null));
   };
+
+  // The backend dismisses on send, so a reply just needs a refresh.
+  const handleReplied = () => fetchTriage();
 
   const action = triage?.action || [];
   const delegate = triage?.delegate || [];
@@ -129,7 +285,7 @@ export default function InboxPanel({ focusContext }) {
         <div className="inbox-section">
           <div className="inbox-section-label inbox-section-action">ACTION ({action.length})</div>
           {(showAllAction ? action : action.slice(0, 5)).map(e => (
-            <EmailCard key={e.id} email={e} borderClass="urgency-high" onDismiss={dismiss} dismissing={dismissing} />
+            <EmailCard key={e.id} email={e} borderClass="urgency-high" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} />
           ))}
           {!showAllAction && action.length > 5 && (
             <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={() => setShowAllAction(true)}>
@@ -149,7 +305,7 @@ export default function InboxPanel({ focusContext }) {
             <>
               <div className="inbox-section-label inbox-section-delegate">DELEGATE ({delegate.length})</div>
               {delegate.map(e => (
-                <EmailCard key={e.id} email={e} borderClass="urgency-medium" onDismiss={dismiss} dismissing={dismissing} />
+                <EmailCard key={e.id} email={e} borderClass="urgency-medium" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} />
               ))}
             </>
           )}
@@ -165,7 +321,7 @@ export default function InboxPanel({ focusContext }) {
             {fyiOpen ? '▾' : '▸'} FYI ({fyiTotal})
           </button>
           {fyiOpen && [...fyi, ...ignore].map(e => (
-            <EmailCard key={e.id} email={e} borderClass="urgency-low" onDismiss={dismiss} dismissing={dismissing} />
+            <EmailCard key={e.id} email={e} borderClass="urgency-low" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} />
           ))}
         </div>
       )}

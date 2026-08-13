@@ -890,3 +890,16 @@
   color: var(--text-secondary);
   background: rgba(92, 100, 120, 0.15);
 }
+
+/* Shown when the vault line toggled but Microsoft refused the push */
+.todo-ms-warning {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #f59e0b;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}

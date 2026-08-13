@@ -195,6 +195,7 @@
 /* Email action buttons */
 .inbox-item-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
 }
@@ -232,4 +233,110 @@
 .inbox-action-btn:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.inbox-action-view {
+  background: transparent;
+  border-color: rgba(96, 165, 250, 0.25);
+  color: #60a5fa;
+}
+
+.inbox-action-view:hover:not(:disabled) {
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.inbox-action-view.is-open {
+  background: rgba(96, 165, 250, 0.15);
+}
+
+/* Expanded summary / full email / reply area */
+.inbox-detail {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.inbox-detail-loading {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.inbox-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.inbox-detail-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary, #cbd5e1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.inbox-detail-full {
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.inbox-detail-link {
+  display: inline-block;
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #60a5fa;
+}
+
+.inbox-detail-error {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #f87171;
+}
+
+.inbox-reply-modes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.inbox-reply-modes .inbox-action-btn {
+  background: rgba(96, 165, 250, 0.1);
+  border-color: rgba(96, 165, 250, 0.3);
+  color: #60a5fa;
+}
+
+.inbox-reply-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.inbox-reply-text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 10px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-primary, #e2e8f0);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.inbox-reply-text:focus {
+  outline: none;
+  border-color: rgba(96, 165, 250, 0.5);
 }
