@@ -1,6 +1,7 @@
-# 🎯 AGREED DESIGN (13 Aug) — NEURO becomes the source of truth for tasks
+# ✅ BUILT (13 Aug) — NEURO IS the source of truth for tasks
 
-**Decision made by Nick, not an assumption. Build this next.**
+**Nick's decision, built and deployed the same day. Steps 1-5 live; step 6 (retiring
+`Master Todo.md`) deliberately left for him to trigger. Status block below the design.**
 
 ## The problem it solves
 
@@ -65,6 +66,57 @@ distinct name (`Tasks/Capture.md`) so the drain watcher can never pick up the ol
 4. Build route 3 (drain watcher).
 5. Editing UI.
 6. Retire `Master Todo.md` — last, only when 1-5 are proven.
+
+> ## ✅ DONE 2026-08-13 — steps 1-5 built, deployed, and live on the Pi. Step 6 is NOT run.
+>
+> Commit `7f5c938`. Pi == origin/main, backend restarted on Node 22.22.2, frontend rebuilt.
+> DB backed up first: `/mnt/data/backups/agent.db.pre-tasks-migration-20260813-132611`.
+>
+> **The import, live:** 130 open tasks from `Master Todo.md`, **130/130 matched a MoSCoW
+> bucket**, 24 carry a priority 1-3, **0 unmatched**, 11 done lines skipped. Export written
+> and `verify` clean (130 db / 130 file, no missing, extra or mismatched). `/api/todos` now
+> returns 148: 130 NEURO-owned + 16 Microsoft mirrors + 2 daily-note lines, **0 duplicate
+> texts** — the Master Todo lines are deduped against the DB, so nothing shows twice.
+>
+> **What made the import work:** Master Todo annotates lines with provenance inline —
+> `task text <sub>2026-08-11 · Lomond / TPFG review</sub>`. The worksheets carry the same
+> task without it, so 85 of 130 lines failed to match on the first attempt. The importer now
+> splits that off into `notes` (and the export renders it back as `<sub>`). Also `MUST***`
+> (Nick's own emphasis on three items) needed reading past the asterisks.
+>
+> **Judgement call worth knowing:** the worksheet documents `?` as "proposal, not decision",
+> and `moscow_proposed` exists to keep that distinction — but by the time it was read Nick had
+> already edited every `?` out (33 MUST + 3 MUST\*\*\* / 73 SHOULD / 81 COULD / 10 DONE), so
+> all 130 buckets imported as real decisions and 0 as proposals. The flag stays for future use.
+> The 10 DONE rows won: a worksheet "done" beats an unticked vault checkbox.
+>
+> **All four routes verified live**, then the two test tasks deleted:
+> route 3 drop-box (`Tasks/Capture.md` → task #131, file cleared) and route 1/2
+> (`/api/capture/todo` → task #132). `/api/capture/todo` had been **throwing on every call**
+> since it was written — `obsidian` was never required in that file. Nobody noticed because
+> the Capture tab's todo button is rarely used.
+>
+> **Editable at last:** MoSCoW, priority 1-3 and due date are editable per task (expand a row),
+> plus quick-add. Only NEURO-owned rows are editable; mirrors say so.
+>
+> **STEP 6 IS DELIBERATELY NOT RUN.** `Master Todo.md` is untouched and still parsed as a
+> fallback. `POST /api/tasks/retire-master` moves it to `Tasks/Archive/` and flips
+> `tasks.master_todo_retired`; it refuses unless the export verifies, and `{retired:false}`
+> reverses it. **Do it when Nick has used the new list for a few days, not before.**
+>
+> ### Live-in gotchas to watch
+> - The Pi is now load-bearing for tasks in a way it was not this morning. The export note is
+>   the offline copy; `Tasks/Capture.md` is the only write path during an outage. The Tier 1
+>   Plan B work (dead-man's-switch alerting, off-site backup) matters more because of this.
+> - 16 core dumps (510MB) sit in `/mnt/data/nuero/backend/` from the 12:10 Node-20 PATH
+>   incident. Harmless but worth clearing; left alone in case another session is reading them.
+> - `backend/routes/email-triage.js` + `backend/services/microsoft.js` had uncommitted work
+>   from another session in the tree — deliberately NOT committed with the migration.
+> - The 90-day plan tasks and `task_moscow` legacy path-keyed ratings still exist. MoSCoW review
+>   is now scoped to NEURO-owned tasks only: rating a mirror was writing metadata for a row
+>   that did not exist.
+>
+> ---
 
 ---
 
