@@ -7,7 +7,23 @@
 > Nick is 30 miles away and will look at it **this evening (13 Aug)**. Power/broadband are ruled
 > out — his wife works from home and would have flagged it. So: SD card, PSU, the HDD, or a hang.
 >
-> **When it boots, capture evidence BEFORE anything rotates it:**
+> **LEADING HYPOTHESIS (updated): the ASUS router, not the Pi.** Nick's wife's work PC is wired
+> direct to the *broadband* router and was unaffected; the Pi is plugged into a *separate ASUS
+> wifi router* that drives the rest of the house, and its wifi was dead. Corroborated by dmesg
+> from the previous day: `macb eth0: Link is Down` flaps on 6 Aug and **three drops on 10 Aug
+> starting 04:01:24** — the same minute-of-hour the Pi vanished on 13 Aug. It recovered then; it
+> did not this time.
+>
+> **So check `uptime` FIRST.** ~32 days continuous ⇒ the Pi never rebooted, it only lost its link:
+> router confirmed, Pi blameless, skip the crash forensics below. Near-zero uptime ⇒ it did
+> restart, so work the list. Then `dmesg -T | grep -i "link is"` for the exact drop time.
+>
+> **If it is the router:** a Pi 4 standby plugged into the same ASUS is worthless for this failure
+> mode — both die together. The cheap fix is moving the Pi 5 onto the broadband router alongside
+> the wife's PC, removing the ASUS from its dependency chain entirely; or dual-homing it (wired to
+> one, wifi to the other). Revisit the Plan B tiers with this in mind.
+>
+> **If it rebooted, capture evidence BEFORE anything rotates it:**
 > 1. `journalctl --list-boots` — if only boot 0 exists, journald is volatile and the previous
 >    boot's logs are already gone; say so rather than guessing at a cause.
 > 2. `journalctl -b -1 -e` — last messages of the dead boot. Clean shutdown? Panic? Or just stops?
