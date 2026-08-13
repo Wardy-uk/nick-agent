@@ -1,4 +1,41 @@
-> ## ⚠ OPEN — Pi 5 went offline 2026-08-13 04:01 BST. Read this first.
+> ## 🔴 NEURO BACKEND IS DOWN — better-sqlite3 segfaults on this Pi (2026-08-13 ~11:00)
+>
+> The Pi itself is FINE and back on the network (uptime 31 days — it never rebooted, it was the
+> router, exactly as the hypothesis below predicted). `sara-backend` is up. **`neuro-backend` is
+> `errored` with 55+ restart attempts.**
+>
+> **Cause: better-sqlite3 v13.0.3 segfaults (exit 139) on this platform.** Not the data:
+> - `sqlite3` CLI reads `db/agent.db` perfectly — `PRAGMA integrity_check` → **ok**, 55 tables, WAL.
+> - `require("better-sqlite3")` succeeds, but `new Database(":memory:")` segfaults — so it is not
+>   the file, not corruption, not the WAL. Instantiation itself crashes.
+> - Root of it: the hoisted module is at `/mnt/data/nuero/node_modules/better-sqlite3` (workspace
+>   root, NOT backend/) and ships prebuilds for `linuxmusl-x64`, `darwin-arm64`, `linux-x64` —
+>   **no `linux-arm64`**, and the Pi is aarch64.
+> - Tried: `npm rebuild` in backend/ (no-op, no copy there); `npm rebuild --build-from-source` at
+>   root (reports success, compiles nothing — v13 uses prebuildify, not node-gyp);
+>   `npm run build-release` in the module dir (DID compile `build/Release/better_sqlite3.node`);
+>   moving `prebuilds/` aside so it cannot load a wrong-arch binary. **Still segfaults after all
+>   of that.** `prebuilds/` is currently renamed `prebuilds.disabled-20260813`.
+>
+> **Data is safe and nothing is lost.** Preserved copies:
+> - `/mnt/data/backups/crash-20260813-105423/` — agent.db + -wal + -shm as found
+> - `/mnt/data/backups/agent.db.pre-bs3.20260812-185140` — **pre-migration, 63MB** ← restore target
+> - `/mnt/data/backups/agent.db.20260812-123913` — 57MB, midday 12 Aug
+>
+> **Two ways out, Nick's call:**
+> 1. **Roll back the migration.** Revert `00925c4` ("Migrate the database from sql.js to
+>    better-sqlite3") + `41f738e` (its docs), restore `agent.db.pre-bs3.20260812-185140`, restart.
+>    Known-good — sql.js ran for months. Loses whatever was written after 18:51 on 12 Aug.
+> 2. **Downgrade better-sqlite3** to v11.x, which has broader prebuild coverage, and keep the
+>    migration. One `npm i better-sqlite3@11 -w` at root plus a rebuild. Cheaper if it works.
+>
+> Confirmed working before the crash: the 105 stale suggestions WERE rejected and persisted
+> (`sara_actions`: rejected 178). The Todos panel still showing 105 is IndexedDB cache, not state.
+> Also `sara_actions` holds **4,240 pending** rows overall — worth a purge policy once up.
+>
+> ---
+>
+> ## ⚠ RESOLVED — Pi 5 went offline 2026-08-13 04:01 BST (router, not the Pi)
 >
 > NEURO/SARA/quest are all down: the **host** is unreachable (ICMP, SSH :22 and HTTP :3001 all
 > time out), Tailscale shows `Online: false`, last seen `2026-08-13T03:01:37Z`. Not an app fault —
