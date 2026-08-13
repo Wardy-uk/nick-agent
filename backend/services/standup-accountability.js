@@ -102,6 +102,27 @@ function buildAccountability({ lookbackDays = 14 } = {}) {
   const withNotes = days.filter(d => d.exists);
   const previous = withNotes[0] || null;
 
+  // ── Today, if the standup has already run ──
+  // Kept separate from the lookback: today's items aren't "carried" yet, but if
+  // the standup is already done we should be tracking progress against them.
+  let today = null;
+  const todayStr = dateStr(new Date());
+  const todayFile = path.join(vaultPath(), 'Daily', `${todayStr}.md`);
+  if (vaultPath() && fs.existsSync(todayFile)) {
+    try {
+      const parsed = parseDailyNote(fs.readFileSync(todayFile, 'utf-8'));
+      const all = [...parsed.focus, ...parsed.carry];
+      today = {
+        date: todayStr,
+        standupDone: parsed.standupDone,
+        eodDone: parsed.eodDone,
+        committed: all.length,
+        done: all.filter(i => i.done).length,
+        items: all.map(i => ({ text: i.text, done: i.done })),
+      };
+    } catch {}
+  }
+
   // ── Open commitments and how long they've been rolling ──
   // Walk oldest → newest so the newest mention wins.
   const tracked = new Map();
@@ -196,7 +217,12 @@ function buildAccountability({ lookbackDays = 14 } = {}) {
   // ── The blunt one-liner ──
   const stale = openCommitments.filter(c => c.daysCarried >= 3);
   let headline;
-  if (stale.length === 1) {
+  if (today?.standupDone && today.committed > 0) {
+    const open = today.committed - today.done;
+    headline = open === 0
+      ? `All ${today.committed} of today's commitments ticked off.`
+      : `You committed to ${today.committed} thing${today.committed > 1 ? 's' : ''} today. ${today.done} done, ${open} still open.`;
+  } else if (stale.length === 1) {
     headline = `"${stale[0].text}" has been on your list ${stale[0].daysCarried} days. Decide today.`;
   } else if (stale.length > 1) {
     headline = `${stale.length} things have been rolling for 3+ days. Commit or drop them.`;
@@ -212,6 +238,7 @@ function buildAccountability({ lookbackDays = 14 } = {}) {
 
   return {
     headline,
+    today,
     yesterday,
     openCommitments,
     staleCount: stale.length,

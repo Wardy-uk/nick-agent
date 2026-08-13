@@ -211,13 +211,25 @@ function MustDoPanel({ items }) {
 // Anything rolling 3+ days must get a Today/Drop decision before the standup proceeds.
 function AccountabilityCard({ data, decisions, onDecide }) {
   if (!data) return null;
-  const { headline, yesterday, openCommitments = [], skippedDays = [], overdueMustDos = [], queue } = data;
-  const hasBody = yesterday || openCommitments.length > 0 || overdueMustDos.length > 0 || queue;
+  const { headline, today, yesterday, openCommitments = [], skippedDays = [], overdueMustDos = [], queue } = data;
+  const hasBody = today || yesterday || openCommitments.length > 0 || overdueMustDos.length > 0 || queue;
   if (!headline && !hasBody) return null;
 
   return (
     <div className="accountability-card">
       {headline && <div className="accountability-headline">{headline}</div>}
+
+      {today?.standupDone && today.committed > 0 && (
+        <div className="accountability-section">
+          <div className="accountability-section-title">Today — already committed</div>
+          {today.items.map((item, i) => (
+            <div key={i} className={`accountability-item ${item.done ? 'decided-drop' : ''}`}>
+              <span className="accountability-days">{item.done ? '✓' : '○'}</span>
+              <span className="accountability-item-text">{item.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {yesterday && (
         <div className="accountability-score">
