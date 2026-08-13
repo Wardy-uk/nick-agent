@@ -284,12 +284,27 @@
   color: var(--text-primary);
 }
 
+.briefing-card-list-link {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  flex: 1;
+  min-width: 0;
+  text-decoration: none;
+}
+
+.briefing-card-list-link:hover .briefing-card-list-text {
+  text-decoration: underline;
+}
+
 .briefing-card-list-key {
   color: var(--accent);
   flex-shrink: 0;
 }
 
 .briefing-card-list-text {
+  /* explicit — inside an <a> it would otherwise take the UA link colour */
+  color: var(--text-primary);
   flex: 1;
   min-width: 0;
 }

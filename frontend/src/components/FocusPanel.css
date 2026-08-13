@@ -230,6 +230,19 @@
   line-height: 1.4;
 }
 
+.focus-card-list-link {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex: 1;
+  min-width: 0;
+  text-decoration: none;
+}
+
+.focus-card-list-link:hover .focus-card-list-text {
+  text-decoration: underline;
+}
+
 .focus-card-list-key {
   color: var(--accent);
   flex-shrink: 0;

@@ -174,8 +174,24 @@ export default function BriefingPanel({ onNavigate }) {
                   <ul className="briefing-card-list">
                     {item.meta.escalations.map(e => (
                       <li key={e.key}>
-                        <span className="briefing-card-list-key">{e.key}</span>
-                        <span className="briefing-card-list-text">{e.summary}</span>
+                        {e.url ? (
+                          /* the card itself navigates in-app — don't let that swallow the link */
+                          <a
+                            className="briefing-card-list-link"
+                            href={e.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(ev) => ev.stopPropagation()}
+                          >
+                            <span className="briefing-card-list-key">{e.key}</span>
+                            <span className="briefing-card-list-text">{e.summary}</span>
+                          </a>
+                        ) : (
+                          <>
+                            <span className="briefing-card-list-key">{e.key}</span>
+                            <span className="briefing-card-list-text">{e.summary}</span>
+                          </>
+                        )}
                         {e.ageDays != null && (
                           <span className="briefing-card-list-age">{e.ageDays === 0 ? 'today' : `${e.ageDays}d`}</span>
                         )}

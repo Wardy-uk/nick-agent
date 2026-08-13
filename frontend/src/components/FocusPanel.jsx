@@ -227,8 +227,22 @@ export default function FocusPanel({ onNavigate }) {
             <ul className="focus-card-list">
               {current.meta.escalations.map(e => (
                 <li key={e.key} className="focus-card-list-item">
-                  <span className="focus-card-list-key">{e.key}</span>
-                  <span className="focus-card-list-text">{e.summary}</span>
+                  {e.url ? (
+                    <a
+                      className="focus-card-list-link"
+                      href={e.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <span className="focus-card-list-key">{e.key}</span>
+                      <span className="focus-card-list-text">{e.summary}</span>
+                    </a>
+                  ) : (
+                    <>
+                      <span className="focus-card-list-key">{e.key}</span>
+                      <span className="focus-card-list-text">{e.summary}</span>
+                    </>
+                  )}
                   {e.ageDays != null && (
                     <span className="focus-card-list-age">{e.ageDays === 0 ? 'today' : `${e.ageDays}d`}</span>
                   )}
