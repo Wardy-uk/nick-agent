@@ -99,7 +99,11 @@ export default function BriefingPanel({ onNavigate }) {
     return sara.items.find(ai => ai.id === item.id) || null;
   };
 
-  const topItems = items.slice(0, 6);
+  // nextAction is built FROM one of these items, so rendering both showed the
+  // same thing twice — as the SOON band and again as a card underneath it.
+  const topItems = items
+    .filter(item => !nextAction || item.id !== nextAction.focusItemId)
+    .slice(0, 6);
 
   return (
     <div className="briefing">
