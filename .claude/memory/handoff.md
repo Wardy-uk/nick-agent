@@ -1,3 +1,73 @@
+# 🎯 AGREED DESIGN (13 Aug) — NEURO becomes the source of truth for tasks
+
+**Decision made by Nick, not an assumption. Build this next.**
+
+## The problem it solves
+
+Task metadata has nowhere to live. MoSCoW, priority 1-3 and due dates currently exist in a
+worksheet file, `task_moscow`, and vault markdown simultaneously — three places, which is how
+today's mess happened. One store fixes it.
+
+## The trade-off — accepted deliberately
+
+Today the Pi went down **twice** (router at 04:01, Node ABI mismatch at ~09:10). Under the current
+vault-as-truth model that is survivable: tasks are markdown, Nick edits in Obsidian, NEURO catches
+up. **Under NEURO-as-truth an outage makes tasks read-only.** Anything typed into Obsidian during
+an outage is either overwritten by the next export or needs reconciling, and two-way sync is
+exactly the thing that always breaks. Nick accepted this. The Pi's reliability is now load-bearing
+in a way it was not before — the Plan B work (dead-man's-switch alerting, off-site backup) matters
+more because of this decision, not less.
+
+## Shape
+
+- **NEURO owns tasks + metadata.** One `tasks` table: text, source, due, moscow, priority (1-3),
+  state, provenance backlink. `task_moscow` folds into it.
+- **`parseVaultTodos()` becomes an importer, not the source.** Runs once to seed from
+  `Master Todo.md`, then stops being authoritative.
+- **One export note** — e.g. `Tasks/NEURO Tasks (export).md` — regenerated on every change and on
+  a schedule. Grouped by MoSCoW, showing priority + due. Read-only by convention, with a
+  "last exported" timestamp so a stale copy during an outage is obvious. **This export IS the
+  offline safety net and the migration's rollback path.**
+- **`Master Todo.md` retires** to `Tasks/Archive/` once the import is verified — otherwise it
+  becomes source #4.
+
+## Four inputs, one store, one export
+
+| # | Route | Status |
+|---|---|---|
+| 1 | Watch / Siri shortcut | spec exists: `docs/sara-watch-siri-mvp.md`; posts to `/api/capture/todo` |
+| 2 | NEURO direct | exists — Capture tab, chat command, MCP `create_task` |
+| 3 | **Obsidian capture file** | **NEW** — the only new plumbing |
+| 4 | Promotion from meetings | built 12 Aug — owner-classified suggestions, Nick approves |
+
+**Route 3 must be a drop-box, not a store.** NEURO ingests and **drains the line** (creates the
+task, then clears/marks it). If lines linger it silently becomes a second source of truth and we
+are back to today. Being one-way also means capture keeps working while the Pi is down — it drains
+on the next sync — which partly offsets the read-only trade-off above.
+
+**Naming caution:** `Tasks/Archive/New ToDos.md` already exists from an earlier attempt. Use a
+distinct name (`Tasks/Capture.md`) so the drain watcher can never pick up the old one.
+
+## Also needed
+
+- UI to edit moscow / priority / due in NEURO (Nick's original ask — none of these are editable today).
+- Due-date editing is the delicate part *only* while the vault is authoritative; once NEURO owns
+  the data it is a plain DB write and the export handles the file. **Do the migration first.**
+- Repoint all capture paths to write to the DB, not to append markdown. This also removes the
+  `📥 Inbox` heading fragility entirely.
+
+## Migration order (each step reversible)
+
+1. Schema + import from `Master Todo.md` (113 open, MoSCoW/priority from
+   `Tasks/MoSCoW - Open Actions 2026-08-12.md` and `Tasks/MUST - Prioritise 1-3.md`).
+2. Exporter + verify the export matches the DB exactly.
+3. Repoint capture routes 1/2/4.
+4. Build route 3 (drain watcher).
+5. Editing UI.
+6. Retire `Master Todo.md` — last, only when 1-5 are proven.
+
+---
+
 > ## ✅ RESOLVED 2026-08-13 11:40 — it was a Node ABI mismatch, NOT a bad platform/prebuild
 >
 > **NEURO is up on better-sqlite3 v13.0.3. Do NOT roll back the migration — that advice below is
