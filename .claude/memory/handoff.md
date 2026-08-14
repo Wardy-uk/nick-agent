@@ -70,10 +70,12 @@ were right; nothing read them.
 
 - **NOTHING IS DEPLOYED.** All of this is uncommitted on Windows. The Pi has not
   been touched, so the board still shows the March dates until it's deployed.
-- **`book()` has never actually created an event.** It goes through
-  `microsoft.createCalendarEvent`, which the 14 Aug handoff already flagged as
-  code-complete but never exercised. First real use sends a live invite to a real
-  colleague — try a throwaway first.
+- ~~`book()` has never actually created an event.~~ **RESOLVED 14 Aug** — Nick
+  booked Zoe via Book now: the event exists in Graph as `1-2-1 — Nick / Zoe`
+  (18 Aug 15:00), `next-1-2-1-due` was stamped to 2026-08-18, and `last-1-2-1`
+  correctly stayed at 2026-07-01. The daily cap then counted that real event when
+  planning the batch, which is how the 18th correctly took only one more.
+  `bookAll()` (the batch path) has still not been exercised against Graph.
 - **Nathan Rutland has no 1-2-1 on record at all in 2026** and Stephen's last
   genuine one is 2026-03-26 (~20 weeks). Kayleigh's was 21 weeks until the
   mislabelled July note was corrected. These are real gaps, not data artefacts.
