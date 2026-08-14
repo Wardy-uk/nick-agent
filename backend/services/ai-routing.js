@@ -682,4 +682,8 @@ module.exports = {
   // each response before it can run anything), so it has to report its own usage
   // or the daily budget silently under-counts every turn that used tools.
   recordUsage: _recordOpenRouterUsage,
+  // Same reason, for health: a turn that bypasses the routing tiers would
+  // otherwise be invisible to the provider mix — and tool-using chat is the
+  // path Nick uses most.
+  recordOutcome: _recordOutcome,
 };

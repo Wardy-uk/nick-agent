@@ -648,6 +648,19 @@ async function _runWithTools(systemPrompt, messages, mode) {
   );
 
   try { require('./ai-routing').recordUsage(result.usage); } catch {}
+  // This turn never touched the routing tiers, so it has to report its own
+  // outcome too — otherwise the provider mix shows only background tasks and
+  // says nothing about the chat Nick actually watches.
+  try {
+    require('./ai-routing').recordOutcome({
+      taskType: 'chat_tools',
+      provider: picked.name,
+      ok: Boolean(result.text),
+      ms: Date.now() - t0,
+      fallback: false,
+      errorClass: null,
+    });
+  } catch {}
 
   const ran = (result.toolCalls || []).map(c => c.name).join(', ');
   console.log(`[Chat] Tools via ${picked.name}: ${result.toolCalls?.length || 0} call(s)${ran ? ` (${ran})` : ''} in ${Date.now() - t0}ms`);
