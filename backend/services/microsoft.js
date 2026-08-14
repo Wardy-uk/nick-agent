@@ -251,7 +251,7 @@ async function fetchCalendarEvents(startDate, endDate) {
       // does no conversion. It also makes Graph read the day window below as
       // local, which is what "events on the 14th" is supposed to mean.
       const data = await graphFetch(
-        `/me/calendarView?startDateTime=${start}&endDateTime=${end}&$top=50&$orderby=start/dateTime&$select=subject,start,end,location,isAllDay,showAs,isCancelled,attendees,organizer`,
+        `/me/calendarView?startDateTime=${start}&endDateTime=${end}&$top=50&$orderby=start/dateTime&$select=id,subject,start,end,location,isAllDay,showAs,isCancelled,attendees,organizer`,
         token,
         { Prefer: `outlook.timezone="${EVENT_TIMEZONE}"` }
       );
@@ -263,7 +263,11 @@ async function fetchCalendarEvents(startDate, endDate) {
           const startTime = startDt.split('T')[1]?.substring(0, 5);
 
           return {
-            id: `graph-${date}-${startTime}-${(event.subject || '').substring(0, 20)}`,
+            // Graph's real event id, so anything downstream can actually address
+            // the event (/me/events/{id} for detail, decline, propose). This used
+            // to be a synthesised date-time-subject string, which read fine but
+            // could not be used to DO anything with the meeting.
+            id: event.id || `graph-${date}-${startTime}-${(event.subject || '').substring(0, 20)}`,
             date,
             start: startDt,
             end: endDt,

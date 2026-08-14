@@ -469,6 +469,20 @@ function start() {
     require('./email-triage').runTriage().catch(() => {});
   }, 60000);
 
+  // Every 20 minutes — refresh the calendar cache. Nothing populated it before,
+  // so Focus, the meeting alerts and every calendar-aware tool ran blind.
+  cron.schedule('*/20 * * * *', async () => {
+    try {
+      await require('./calendar-sync').sync({ days: 14 });
+    } catch (e) { console.error('[Scheduler] Calendar sync failed:', e.message); }
+  });
+
+  // Startup sync — 20s in, so the cache is warm before the first agent loop.
+  setTimeout(() => {
+    require('./calendar-sync').sync({ days: 14 }).catch(e =>
+      console.error('[Scheduler] Startup calendar sync failed:', e.message));
+  }, 20 * 1000);
+
   // 8:20am weekdays — check the week ahead for meetings with no stated purpose
   // and QUEUE a chaser for each. Queued, never sent: these are emails to real
   // colleagues. Once a day is deliberate — this looks at the same fortnight
