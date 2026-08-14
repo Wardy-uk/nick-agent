@@ -88,6 +88,18 @@ router.post('/route', (req, res) => {
   }
 });
 
+// POST /api/imports/restamp-people — backfill `people:` on existing meeting notes.
+// Defaults to a dry run; pass { dryRun: false } to write (files are backed up).
+router.post('/restamp-people', (req, res) => {
+  try {
+    const { dryRun = true, limit = 1000 } = req.body || {};
+    res.json(importsService.restampMeetingPeople({ dryRun, limit }));
+  } catch (e) {
+    console.error('[Imports] Restamp error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/imports/flag — mark file as needs-review
 router.post('/flag', (req, res) => {
   const { filePath, reason } = req.body;

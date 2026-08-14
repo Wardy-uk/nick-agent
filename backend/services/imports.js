@@ -110,20 +110,121 @@ function extractMeetingType(content, title = '') {
   return 'Operational Meeting';
 }
 
+// PLAUD writes its people list under `## Mentioned`; the older hand-written notes
+// use `### Attendees`. Matching only the latter meant `people:` came out empty on
+// 223 of 229 meeting notes — the whole person graph hung off a heading that had
+// stopped being written. Match either, at either level.
+const PEOPLE_HEADING_RE = /(?:^|\n)#{2,3}[ \t]*(?:Attendees|Mentioned|Participants|Present)[ \t]*\r?\n([\s\S]*?)(?=\n---[ \t]*\n|\n#{1,6}[ \t]|$)/i;
+
+// `## Mentioned` also collects note links (MOCs, projects). A person is 1-4 words
+// of name-ish text; anything else is a note, not an attendee.
+function looksLikePersonName(name) {
+  if (!name || name.length > 60) return false;
+  if (/unknown speaker|^speaker\b|^\{|^MOC\b/i.test(name)) return false;
+  if (name.includes(' - ') || name.includes('/')) return false;
+  const words = name.split(/\s+/);
+  return words.length <= 4 && /^[\p{L}][\p{L}'’.-]*$/u.test(words[0]);
+}
+
 function extractAttendeesForFrontmatter(content) {
   const matches = [];
-  const attendeesBlock = String(content).match(/### Attendees\s*\n([\s\S]*?)(?=\n---\s*\n|\n###\s+|\n##\s+|$)/i);
+  const attendeesBlock = String(content).match(PEOPLE_HEADING_RE);
   if (!attendeesBlock) return matches;
   for (const line of attendeesBlock[1].split('\n')) {
     const bullet = line.match(/^\s*-\s+(.+?)\s*$/);
     if (!bullet) continue;
     const rawName = bullet[1].replace(/\[\[(?:[^|\]]+\|)?([^\]]+)\]\]/g, '$1').trim();
-    if (!rawName || /unknown speaker/i.test(rawName)) continue;
-    const matched = matchKnownPerson(rawName) || rawName;
-    const link = matched === rawName ? `[[People/${slugifySegment(rawName)}|${rawName}]]` : `[[People/${matched}|${rawName}]]`;
-    if (!matches.includes(link)) matches.push(link);
+    if (!rawName || !looksLikePersonName(rawName)) continue;
+    const matched = matchKnownPerson(rawName);
+    // No People note yet: record the bare name rather than inventing
+    // `[[People/{slug}]]`, which only ever produced a dangling link. The nightly
+    // people-gap pass is what turns these into notes.
+    const entry = matched ? `[[People/${matched}|${rawName}]]` : rawName;
+    if (!matches.includes(entry)) matches.push(entry);
   }
   return matches;
+}
+
+// Surgical `people:` rewrite. Deliberately NOT updateFrontmatter(): that one
+// reserialises the whole block through a line-based parser that silently drops
+// list values, which would eat any other list-valued key in the note.
+function replacePeopleBlock(content, attendees) {
+  const fm = content.match(/^---\r?\n([\s\S]*?\r?\n)---/);
+  if (!fm) return null;
+
+  // Match the note's own line endings — a handful of vault notes are CRLF and
+  // splicing LF into them leaves a mixed-ending file.
+  const eol = fm[1].includes('\r\n') ? '\r\n' : '\n';
+  const value = attendees.length
+    ? `people:${eol}${attendees.map(p => `  - "${p}"`).join(eol)}${eol}`
+    : `people: ${eol}`;
+
+  const existing = fm[1].match(/^people:[^\n]*\n(?:[ \t]+-[^\n]*\n)*/m);
+  const block = existing
+    ? fm[1].replace(existing[0], value)
+    : `${fm[1]}${value}`;
+
+  return content.replace(fm[1], block);
+}
+
+/**
+ * Backfill `people:` on meeting notes already in the vault. The heading fix only
+ * reaches notes imported from here on; 223 of 229 existing notes were stamped
+ * empty by the old `### Attendees`-only regex.
+ *
+ * dryRun by default. Touched files are backed up first.
+ */
+function restampMeetingPeople({ dryRun = true, limit = 1000 } = {}) {
+  const vaultPath = getVaultPath();
+  const meetingsDir = path.join(vaultPath, 'Meetings');
+  if (!fs.existsSync(meetingsDir)) return { status: 'error', error: 'Meetings/ not found' };
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupDir = path.join(vaultPath, 'Scripts', '.lint-backups', `people-restamp-${stamp}`);
+  const changed = [];
+  const skipped = [];
+
+  (function walk(dir) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (changed.length >= limit) return;
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!/^(transcripts|_transcripts|Archive)$/i.test(entry.name)) walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith('.md')) continue;
+
+      let content;
+      try { content = fs.readFileSync(full, 'utf-8'); } catch { continue; }
+      const attendees = extractAttendeesForFrontmatter(content);
+      if (!attendees.length) { skipped.push(entry.name); continue; }
+
+      const updated = replacePeopleBlock(content, attendees);
+      if (!updated || updated === content) { skipped.push(entry.name); continue; }
+
+      const relativePath = path.relative(vaultPath, full).replace(/\\/g, '/');
+      if (!dryRun) {
+        const backupPath = path.join(backupDir, relativePath);
+        fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+        fs.writeFileSync(backupPath, content, 'utf-8');
+        fs.writeFileSync(full, updated, 'utf-8');
+        try { require('./vault-hooks').onVaultWrite(full, 'people-restamp'); } catch {}
+      }
+      changed.push({ path: relativePath, people: attendees });
+    }
+  })(meetingsDir);
+
+  return {
+    status: 'ok',
+    dryRun,
+    changed: changed.length,
+    skipped: skipped.length,
+    backup: dryRun ? null : path.relative(vaultPath, backupDir).replace(/\\/g, '/'),
+    notes: changed.slice(0, 20),
+  };
 }
 
 function setCanonicalMeetingFrontmatter(filePath, extraFields = {}) {
@@ -405,7 +506,7 @@ function renderKnownPersonLinks(content) {
   if (!people.length) return content;
 
   let updated = String(content).replace(
-    /(### Attendees\s*\n)([\s\S]*?)(?=\n---\s*\n|\n###\s+|\n##\s+|$)/,
+    /((?:^|\n)#{2,3}[ \t]*(?:Attendees|Mentioned|Participants|Present)[ \t]*\r?\n)([\s\S]*?)(?=\n---[ \t]*\n|\n#{1,6}[ \t]|$)/i,
     (match, prefix, attendeesBlock) => {
       const lines = attendeesBlock
         .split('\n')
@@ -1336,5 +1437,7 @@ module.exports = {
   routePlaudSummary,
   backfillPlaudNotes,
   updateFrontmatter,
-  autoClassify
+  autoClassify,
+  extractAttendeesForFrontmatter,
+  restampMeetingPeople
 };

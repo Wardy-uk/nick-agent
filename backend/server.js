@@ -152,6 +152,7 @@ app.use('/api/training', require('./routes/training-sync'));
 app.use('/api/nova-signals', require('./routes/nova-signals'));
 app.use('/api/team-health', require('./routes/team-health'));
 app.use('/api/person-profile', require('./routes/person-profile'));
+app.use('/api/people-gap', require('./routes/people-gap'));
 app.use('/api/evidence', require('./routes/evidence-register'));
 app.use('/api/checkpoint', require('./routes/checkpoint'));
 app.use('/api/weekly-summary', require('./routes/weekly-summary'));

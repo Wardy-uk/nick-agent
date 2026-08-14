@@ -184,6 +184,23 @@ function start() {
     } catch (e) {
       console.error('[Scheduler] Entity extraction failed:', e.message);
     }
+    // People gap — nothing else in NEURO ever proposed a People note, so the
+    // roster only grew when Nick typed one in and every consumer keyed off it
+    // stayed capped. READ-ONLY: reports to Vault Audit, creation is an explicit
+    // POST /api/people-gap/apply.
+    try {
+      const gap = require('./people-gap').runNightlyScan({ days: 90 });
+      if (gap.status === 'ok') {
+        console.log(`[Scheduler] People gap: ${gap.candidates.length} candidates, ${gap.belowThreshold.length} seen once`);
+        if (gap.candidates.length > 0) {
+          require('./webpush').sendToAll('NEURO — People notes',
+            `${gap.candidates.length} ${gap.candidates.length === 1 ? 'person has' : 'people have'} no People note. Review in Vault Audit.`,
+            { type: 'vault_hygiene', url: '/people' }).catch(() => {});
+        }
+      }
+    } catch (e) {
+      console.error('[Scheduler] People gap scan failed:', e.message);
+    }
     // Write working memory observations to daily note
     try {
       require('./working-memory').writeObservationsToDaily();
