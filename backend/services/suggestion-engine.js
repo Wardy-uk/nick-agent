@@ -178,7 +178,13 @@ function generateSuggestions(focusItems) {
   // Only deduplicate against PENDING actions (not executed/rejected).
   // Navigation actions (open_ticket, open_task, etc.) are repeatable —
   // the user should always have a "Do it" option available.
-  const pendingActions = db.getPendingSaraActions();
+  //
+  // The limit is explicit and large because getPendingSaraActions defaults to
+  // TEN. Once more than ten actions were pending, the ones being generated fell
+  // outside the dedupe window and were re-queued on every /api/focus call —
+  // which is hit by every Focus load, every agent loop and every briefing. That
+  // compounded to 15,605 pending rows, most of them the same handful repeated.
+  const pendingActions = db.getPendingSaraActions(1000);
   const pendingKeys = new Set(
     pendingActions.map(a => `${a.type}:${a.focus_item_id}`)
   );
@@ -225,7 +231,16 @@ function queueAction(type, payload, reason, confidence = 0.9, focusItemId = null
  */
 function persistSuggestions(suggestions) {
   const created = [];
+  // Second guard, at the write rather than the decision. The caller's dedupe
+  // depends on reading a complete pending set; this one cannot be defeated by a
+  // limit, a race between two /api/focus calls, or a future caller that forgets.
+  const existing = new Set(
+    db.getPendingSaraActions(1000).map(a => `${a.type}:${a.focus_item_id}`)
+  );
   for (const s of suggestions) {
+    const key = `${s.type}:${s.focusItemId}`;
+    if (existing.has(key)) continue;
+    existing.add(key);
     const id = db.createSaraAction(s.type, s.payload, s.confidence, s.reason, s.focusItemId);
     created.push({ ...s, id, status: 'pending' });
   }
