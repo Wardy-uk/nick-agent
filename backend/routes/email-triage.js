@@ -237,11 +237,30 @@ router.post('/triage/run', async (req, res) => {
   }
 });
 
-// POST /api/email/triage/dismiss/:emailId — dismiss an email from triage
-router.post('/triage/dismiss/:emailId', (req, res) => {
+// POST /api/email/triage/dismiss/:emailId — dismiss an email from triage.
+// Body { markRead: true } also marks it read in Outlook, so clearing it here
+// clears it everywhere. The dismiss always lands even if the Graph write does
+// not — a missing Mail.ReadWrite scope shouldn't strand the item in triage.
+router.post('/triage/dismiss/:emailId', async (req, res) => {
   try {
-    emailTriage.dismissEmail(decodeURIComponent(req.params.emailId));
-    res.json({ ok: true });
+    const emailId = decodeURIComponent(req.params.emailId);
+    let markedRead = null;
+    let readError = null;
+
+    if (req.body?.markRead) {
+      const result = await microsoft.markEmailRead(emailId);
+      markedRead = result.marked;
+      if (!result.marked) {
+        readError = result.reason === 'scope'
+          ? 'Dismissed here, but Outlook still shows it unread — Mail.ReadWrite not granted yet.'
+          : result.reason === 'auth'
+            ? 'Dismissed here, but not signed in to Microsoft so it is still unread in Outlook.'
+            : `Dismissed here, but marking it read in Outlook failed (${result.reason}).`;
+      }
+    }
+
+    emailTriage.dismissEmail(emailId);
+    res.json({ ok: true, markedRead, readError });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }

@@ -48,7 +48,17 @@ const TENANT_ID = process.env.MS_TENANT_ID || 'db0f7383-5d7f-4a39-9841-02fbcd144
 // Tasks.ReadWrite (was Tasks.Read) so completions can be pushed back to To Do
 // and Planner. Deliberately not asking for Group.ReadWrite.All — it needs admin
 // consent and would fail the whole grant; add it only if Planner writes 403.
-const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Mail.Send', 'Tasks.ReadWrite', 'User.Read', 'Chat.Read'];
+//
+// Calendars.ReadWrite (was Calendars.Read) so events can be created from NEURO.
+// Mail.ReadWrite (was Mail.Read) so inbox items can be marked read on dismiss —
+// it is a superset of Mail.Read, so nothing on the read path changes.
+// People.Read resolves "abdi" to an address off the org's people graph.
+// All three are delegated and user-consentable: no admin approval, so the
+// device-code flow still completes on its own.
+const GRAPH_SCOPES = [
+  'Calendars.ReadWrite', 'Mail.ReadWrite', 'Mail.Send', 'Tasks.ReadWrite',
+  'User.Read', 'Chat.Read', 'People.Read'
+];
 
 // Adding a scope here requires re-consent: call /api/microsoft/device-code on the
 // Pi and follow the URL. Until that happens the cached token lacks the new scope
@@ -58,6 +68,11 @@ const GRAPH_SCOPES = ['Calendars.Read', 'Mail.Read', 'Mail.Send', 'Tasks.ReadWri
 // delegated scope it needs tenant admin consent — requesting it makes the whole
 // device-code flow fail, taking Calendar/Mail down with it. Chat.Read alone still
 // covers Teams DMs and @mentions in chats.
+
+// Nick's wall-clock timezone. Both directions hang off this: Graph is asked to
+// ANSWER in it (Prefer header on calendarView) and to READ writes in it, so no
+// code here ever does an offset conversion by hand.
+const EVENT_TIMEZONE = process.env.NEURO_TIMEZONE || 'Europe/London';
 
 let msalClient = null;
 let graphTokenCache = { accessToken: null, expiresOn: 0 };
@@ -201,13 +216,13 @@ async function startDeviceCodeFlow() {
 }
 
 // Graph API fetch helper
-function graphFetch(urlPath, token) {
+function graphFetch(urlPath, token, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const url = new URL(`https://graph.microsoft.com/v1.0${urlPath}`);
     const options = {
       hostname: url.hostname,
       path: url.pathname + url.search,
-      headers: { 'Authorization': `Bearer ${token}` }
+      headers: { 'Authorization': `Bearer ${token}`, ...extraHeaders }
     };
     const req = https.get(options, res => {
       let data = '';
@@ -231,9 +246,14 @@ async function fetchCalendarEvents(startDate, endDate) {
     try {
       const start = `${startDate}T00:00:00`;
       const end = `${endDate}T23:59:59`;
+      // Without this Prefer header Graph answers in UTC, so every BST event came
+      // back an hour early — the frontend slices the time out of the string and
+      // does no conversion. It also makes Graph read the day window below as
+      // local, which is what "events on the 14th" is supposed to mean.
       const data = await graphFetch(
         `/me/calendarView?startDateTime=${start}&endDateTime=${end}&$top=50&$orderby=start/dateTime&$select=subject,start,end,location,isAllDay,showAs,isCancelled,attendees,organizer`,
-        token
+        token,
+        { Prefer: `outlook.timezone="${EVENT_TIMEZONE}"` }
       );
       if (data && data.value) {
         return data.value.map(event => {
@@ -816,6 +836,118 @@ async function _sendReplyWithRecipients(emailId, html, to, cc, token) {
   return { sent: true };
 }
 
+// Create an event on the default calendar. Needs Calendars.ReadWrite — degrades
+// with a reason instead of throwing so the UI can tell Nick what to fix.
+//
+// start/end are naive local strings ('2026-08-15T14:00:00'), NOT ISO instants.
+// Sending attendees makes Graph email the invite, so this is only ever called
+// behind an explicit confirm.
+async function createCalendarEvent({
+  subject, start, end, attendees = [], location = null,
+  body = null, isAllDay = false, isOnline = false,
+} = {}) {
+  if (!subject || !String(subject).trim()) return { created: false, reason: 'no_subject' };
+  if (!start || !end) return { created: false, reason: 'no_times' };
+
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (e) {
+    console.warn('[Calendar] Create auth failed:', e.message);
+    return { created: false, reason: 'auth' };
+  }
+  if (!token) return { created: false, reason: 'auth' };
+
+  const payload = {
+    subject: String(subject).trim(),
+    start: { dateTime: start, timeZone: EVENT_TIMEZONE },
+    end: { dateTime: end, timeZone: EVENT_TIMEZONE },
+    isAllDay: Boolean(isAllDay),
+    attendees: toGraphRecipients(attendees).map((r) => ({ ...r, type: 'required' })),
+  };
+  if (location) payload.location = { displayName: String(location) };
+  if (body) payload.body = { contentType: 'text', content: String(body) };
+  if (isOnline) {
+    payload.isOnlineMeeting = true;
+    payload.onlineMeetingProvider = 'teamsForBusiness';
+  }
+
+  const result = await graphWrite('/me/events', 'POST', payload, token);
+  if (!result.ok) {
+    console.warn(`[Calendar] Create failed: ${result.reason} ${result.detail || ''}`);
+    return { created: false, reason: result.reason, detail: result.detail };
+  }
+
+  const ev = result.data || {};
+  console.log(`[Calendar] Created "${payload.subject}" at ${start} (${payload.attendees.length} attendee(s))`);
+  return {
+    created: true,
+    event: {
+      id: ev.id || null,
+      subject: ev.subject || payload.subject,
+      start: ev.start?.dateTime || start,
+      end: ev.end?.dateTime || end,
+      webLink: ev.webLink || null,
+      onlineMeetingUrl: ev.onlineMeeting?.joinUrl || null,
+    },
+  };
+}
+
+// Mark a message read in Outlook. Needs Mail.ReadWrite.
+async function markEmailRead(emailId) {
+  if (!emailId) return { marked: false, reason: 'no_email_id' };
+
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (e) {
+    return { marked: false, reason: 'auth' };
+  }
+  if (!token) return { marked: false, reason: 'auth' };
+
+  const result = await graphWrite(
+    `/me/messages/${encodeURIComponent(emailId)}`,
+    'PATCH',
+    { isRead: true },
+    token
+  );
+  if (!result.ok) {
+    console.warn(`[Mail] Mark-read failed for ${emailId}: ${result.reason} ${result.detail || ''}`);
+    return { marked: false, reason: result.reason };
+  }
+  return { marked: true };
+}
+
+// Search the org people graph for a name. Needs People.Read; returns [] rather
+// than throwing so callers can fall back to locally-harvested addresses.
+async function searchPeople(query, limit = 5) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch { return []; }
+  if (!token) return [];
+
+  try {
+    const data = await graphFetch(
+      `/me/people?$search=${encodeURIComponent(`"${q}"`)}&$top=${limit}&$select=displayName,scoredEmailAddresses,personType`,
+      token
+    );
+    return (data?.value || [])
+      .map((p) => ({
+        name: p.displayName || '',
+        email: p.scoredEmailAddresses?.[0]?.address || '',
+        source: 'graph',
+      }))
+      .filter((p) => p.email);
+  } catch (e) {
+    console.warn('[People] Search failed:', e.message);
+    return [];
+  }
+}
+
 module.exports = {
   isConfigured,
   isAuthenticated,
@@ -824,9 +956,13 @@ module.exports = {
   getAccessToken,
   startDeviceCodeFlow,
   fetchCalendarEvents,
+  createCalendarEvent,
   fetchRecentEmails,
   fetchEmailById,
   sendEmailReply,
+  markEmailRead,
+  searchPeople,
+  EVENT_TIMEZONE,
   getSignedInAddress,
   fetchTodoLists,
   fetchTodoTasks,

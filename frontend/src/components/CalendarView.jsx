@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiUrl } from '../api';
+import EventComposer from './EventComposer';
 import './CalendarView.css';
 
 function formatDateLabel(date) {
@@ -19,10 +20,17 @@ function formatTime(isoStr) {
   return isoStr.split('T')[1]?.substring(0, 5) || '';
 }
 
+// Local wall-clock, not toISOString() — that returns the UTC date, so on a BST
+// evening it reports tomorrow. Matters now that this date is what gets booked.
+function isoLocal(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 function dateStr(offset = 0) {
   const d = new Date();
   d.setDate(d.getDate() + offset);
-  return d.toISOString().split('T')[0];
+  return isoLocal(d);
 }
 
 export default function CalendarView() {
@@ -30,6 +38,7 @@ export default function CalendarView() {
   const [dayOffset, setDayOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [composing, setComposing] = useState(false);
 
   const currentDate = dateStr(dayOffset);
 
@@ -85,12 +94,23 @@ export default function CalendarView() {
           <button className="cal-nav-btn" onClick={() => setDayOffset(o => o - 1)}>&lt;</button>
           <button className="cal-nav-btn today-btn" onClick={() => setDayOffset(0)}>Today</button>
           <button className="cal-nav-btn" onClick={() => setDayOffset(o => o + 1)}>&gt;</button>
+          <button className="cal-nav-btn today-btn" onClick={() => setComposing(c => !c)}>
+            {composing ? 'Close' : '+ New'}
+          </button>
         </div>
       </div>
 
+      {composing && (
+        <EventComposer
+          defaultDate={currentDate}
+          onCreated={() => fetchEvents(currentDate)}
+          onClose={() => setComposing(false)}
+        />
+      )}
+
       <div className="calendar-day-strip">
         {stripDays.map((d, i) => {
-          const iso = d.toISOString().split('T')[0];
+          const iso = isoLocal(d);
           const isSelected = iso === currentDate;
           const isToday = iso === dateStr(0);
           return (

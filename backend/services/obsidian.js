@@ -701,10 +701,30 @@ function parseIcsDate(val) {
     if (dm) return { date: `${dm[1]}-${dm[2]}-${dm[3]}`, time: null, isDate: true };
     return null;
   }
+
+  let [, y, mo, d, hh, mm, ss] = m;
+
+  // A trailing Z means UTC, and Outlook's published feeds use it. Everything
+  // downstream (display, is-it-now) treats these strings as local wall-clock,
+  // so during BST an unconverted 08:15Z showed as 08:15 for a 09:15 meeting.
+  if (/Z$/.test(clean)) {
+    // Converted against NEURO_TIMEZONE explicitly, not the host clock — the Pi
+    // may well be running in UTC, which would silently make this a no-op.
+    const utc = new Date(Date.UTC(+y, +mo - 1, +d, +hh, +mm, +ss));
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: process.env.NEURO_TIMEZONE || 'Europe/London',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).formatToParts(utc);
+    const part = (type) => parts.find((p) => p.type === type).value;
+    [y, mo, d] = [part('year'), part('month'), part('day')];
+    [hh, mm, ss] = [part('hour'), part('minute'), part('second')];
+  }
+
   return {
-    date: `${m[1]}-${m[2]}-${m[3]}`,
-    time: `${m[4]}:${m[5]}`,
-    iso: `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`,
+    date: `${y}-${mo}-${d}`,
+    time: `${hh}:${mm}`,
+    iso: `${y}-${mo}-${d}T${hh}:${mm}:${ss}`,
     isDate: false
   };
 }

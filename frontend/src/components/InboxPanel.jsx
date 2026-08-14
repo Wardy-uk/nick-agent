@@ -276,6 +276,14 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
         <button className="inbox-action-btn inbox-action-done" onClick={() => onDismiss(email.id)} disabled={busy}>
           {busy ? '...' : 'Done'}
         </button>
+        <button
+          className="inbox-action-btn inbox-action-done"
+          onClick={() => onDismiss(email.id, { markRead: true })}
+          disabled={busy}
+          title="Marks it read in Outlook as well as clearing it from triage"
+        >
+          {busy ? '...' : 'Read & dismiss'}
+        </button>
         <button className="inbox-action-btn inbox-action-ignore" onClick={() => onDismiss(email.id)} disabled={busy}>
           {busy ? '...' : 'Not relevant'}
         </button>
@@ -309,6 +317,7 @@ export default function InboxPanel({ focusContext }) {
   const [triage, setTriage] = useState(null);
   const [running, setRunning] = useState(false);
   const [dismissing, setDismissing] = useState(null);
+  const [dismissNote, setDismissNote] = useState('');
   const [fyiOpen, setFyiOpen] = useState(false);
 
   const fetchTriage = () => {
@@ -328,10 +337,21 @@ export default function InboxPanel({ focusContext }) {
       .catch(() => setRunning(false));
   };
 
-  const dismiss = (emailId) => {
+  const dismiss = (emailId, { markRead = false } = {}) => {
     setDismissing(emailId);
-    fetch(apiUrl(`/api/email/triage/dismiss/${encodeURIComponent(emailId)}`), { method: 'POST' })
-      .then(() => { fetchTriage(); setDismissing(null); })
+    setDismissNote('');
+    fetch(apiUrl(`/api/email/triage/dismiss/${encodeURIComponent(emailId)}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ markRead }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        // The dismiss still happened — this only reports the Outlook half failing.
+        if (d?.readError) setDismissNote(d.readError);
+        fetchTriage();
+        setDismissing(null);
+      })
       .catch(() => setDismissing(null));
   };
 
@@ -375,6 +395,13 @@ export default function InboxPanel({ focusContext }) {
           </button>
         </div>
       </div>
+
+      {dismissNote && (
+        <div className="inbox-dismiss-note">
+          <span>{dismissNote}</span>
+          <button className="inbox-dismiss-note-x" onClick={() => setDismissNote('')}>×</button>
+        </div>
+      )}
 
       {!triage && <div className="inbox-empty">Loading...</div>}
 

@@ -302,6 +302,33 @@
   color: #f87171;
 }
 
+/* Dismissed here, but the Outlook mark-read half didn't land */
+.inbox-dismiss-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 2px solid #fbbf24;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.inbox-dismiss-note-x {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
 .inbox-reply-modes {
   display: flex;
   flex-wrap: wrap;
