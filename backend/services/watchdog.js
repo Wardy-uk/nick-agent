@@ -55,9 +55,20 @@ function checkBackups() {
         detail: `${BACKUP_SNAPSHOTS} does not exist — the USB drive may be unplugged`,
       }];
     }
+    // Read the run time from the directory NAME, not its mtime: rsync -a copies
+    // the SOURCE directory's mtime onto the snapshot, so every snapshot claims
+    // the age of /mnt/data (2026-07-11) and this check reported "backups have
+    // stopped" while they were running perfectly. A false critical is worse
+    // than no check — it is what teaches you to ignore the alerts.
     const dirs = fs.readdirSync(BACKUP_SNAPSHOTS)
       .filter(d => d !== 'latest')
       .map(d => {
+        const m = d.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})$/);
+        if (m) {
+          const [, Y, Mo, D, H, Mi, S] = m;
+          return { d, t: new Date(+Y, +Mo - 1, +D, +H, +Mi, +S).getTime() };
+        }
+        // Unrecognised name — fall back to mtime rather than dropping it.
         try { return { d, t: fs.statSync(path.join(BACKUP_SNAPSHOTS, d)).mtimeMs }; }
         catch { return null; }
       })

@@ -358,8 +358,12 @@ async function _runTaskInner(taskType, payload, options = {}) {
         return { text: workerResult.result, provider: workerResult.provider, fallback: false };
       }
       console.warn(`[AIRouting] Pi 4 worker failed for ${taskType}: ${workerResult.error}`);
+      // Background tasks have no fallback tier, so a dead worker silently drops
+      // the work. Record it so the panel shows evidence rather than a guess.
+      _recordProviderError('pi4Worker', workerResult.error || 'worker returned no result');
     } catch (e) {
       console.warn(`[AIRouting] Pi 4 worker unreachable for ${taskType}: ${e.message}`);
+      _recordProviderError('pi4Worker', e.message);
     }
     return { text: '', provider: 'none', fallback: true, reason: 'Pi 4 worker unavailable' };
   }

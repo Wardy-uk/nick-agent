@@ -337,7 +337,10 @@ export default function PiHealthPanel() {
           <div className="ph-providers">
             {[
               { key: 'ollama', label: 'Ollama (local)', up: ollamaReachable !== false, detail: `${ai.ollama?.model || '—'}${ai.ollama?.queueDepth ? ` · queue ${ai.ollama.queueDepth}` : ''}${ai.ollama?.inUse ? ' · busy' : ''}` },
-              { key: 'pi4Worker', label: 'Pi 4 worker', up: !ai.pi4Worker?.enabled ? null : ai.pi4Worker?.lastHealthy !== false, detail: ai.pi4Worker?.enabled ? (ai.pi4Worker.url || '') : 'disabled' },
+              // lastHealthy is null until an explicit health check runs, which may
+              // never happen. Showing "not false" as green painted a dead worker
+              // green while calls to it were failing — unknown must read as unknown.
+              { key: 'pi4Worker', label: 'Pi 4 worker', up: !ai.pi4Worker?.enabled ? null : (ai.pi4Worker?.lastHealthy === true ? true : ai.pi4Worker?.lastHealthy === false ? false : null), detail: ai.pi4Worker?.enabled ? `${ai.pi4Worker.url || ''}${ai.pi4Worker.lastHealthy == null ? ' · unverified' : ''}` : 'disabled' },
               { key: 'anthropic', label: 'Anthropic', up: ai.anthropic?.configured ? (ai.anthropic?.enabled ? true : null) : null, detail: ai.anthropic?.configured ? `${ai.anthropic.model}${ai.anthropic.enabled ? '' : ' · disabled'}` : 'not configured' },
               { key: 'openai', label: 'OpenAI', up: ai.openai?.configured ? true : null, detail: ai.openai?.configured ? ai.openai.model : 'not configured' },
               { key: 'openrouter', label: 'OpenRouter', up: ai.openrouter?.configured && ai.openrouter?.enabled ? !ai.openrouter.throttled : null, detail: ai.openrouter?.configured ? `${ai.openrouter.callsToday}/${ai.openrouter.dailyCallLimit} calls · ${ai.openrouter.tokensToday}/${ai.openrouter.dailyTokenLimit} tokens${ai.openrouter.throttled ? ' · THROTTLED' : ''}` : 'not configured' },
