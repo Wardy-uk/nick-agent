@@ -62,6 +62,58 @@ function clear(kind, dateKey = _today()) {
   db.setState(_key(dateKey, kind), '');
 }
 
+// ── Working schedule ─────────────────────────────────────────────────────────
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function _isWorkingDay(d) {
+  const day = d.getDay();
+  return day >= 1 && day <= 5;
+}
+
+// Local getters, never toISOString() — the Pi may run in UTC, which would roll
+// the date forward an hour early on a BST evening. Same rule as everywhere else.
+function _dateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function _addDays(d, n) {
+  const out = new Date(d);
+  out.setDate(out.getDate() + n);
+  return out;
+}
+
+/**
+ * Nick works Monday to Friday. The context used to carry a bare date string and
+ * no weekday at all, so on a Friday evening the EOD would tell him what to do
+ * "tomorrow morning, before anything else" and hand tasks Saturday due dates —
+ * it knew the date, never the day, so every plan it made ran into the weekend.
+ */
+function buildSchedule(now = new Date()) {
+  const tomorrow = _addDays(now, 1);
+  let next = tomorrow;
+  while (!_isWorkingDay(next)) next = _addDays(next, 1);
+  return {
+    today: { name: DAY_NAMES[now.getDay()], date: _dateStr(now), working: _isWorkingDay(now) },
+    tomorrow: { name: DAY_NAMES[tomorrow.getDay()], date: _dateStr(tomorrow), working: _isWorkingDay(tomorrow) },
+    nextWorkingDay: { name: DAY_NAMES[next.getDay()], date: _dateStr(next) },
+  };
+}
+
+function _renderSchedule(s) {
+  if (!s) return null;
+  const lines = [
+    `TODAY: ${s.today.name} ${s.today.date}${s.today.working ? '' : ' — a NON-working day'}.`,
+  ];
+  if (s.tomorrow.working) {
+    lines.push(`Tomorrow is ${s.tomorrow.name} ${s.tomorrow.date}, a working day.`);
+  } else {
+    lines.push(`Tomorrow is ${s.tomorrow.name} ${s.tomorrow.date} — NOT a working day. Nick works Monday to Friday.`);
+    lines.push(`The next working day is ${s.nextWorkingDay.name} ${s.nextWorkingDay.date}. Say "${s.nextWorkingDay.name}", never "tomorrow" or "first thing in the morning", and never give a task a weekend due date.`);
+  }
+  return lines.join('\n');
+}
+
 // ── Context ──────────────────────────────────────────────────────────────────
 
 /**
@@ -70,7 +122,7 @@ function clear(kind, dateKey = _today()) {
  * a standup that takes thirty seconds to think is a standup that gets skipped.
  */
 async function buildContext(kind) {
-  const ctx = { kind, dateKey: _today() };
+  const ctx = { kind, dateKey: _today(), schedule: buildSchedule() };
 
   try {
     const { buildAccountability } = require('./standup-accountability');
@@ -113,6 +165,10 @@ async function buildContext(kind) {
 function _renderContext(ctx) {
   const parts = [];
   const acc = ctx.accountability;
+
+  // First, because everything below is relative to it. Recomputed when a session
+  // predates this block, so a resumed session isn't left day-blind.
+  parts.push(_renderSchedule(ctx.schedule || buildSchedule()));
 
   if (acc?.yesterday) {
     parts.push(`YESTERDAY (${acc.yesterday.date}): committed to ${(acc.yesterday.focus || []).length} things, ${(acc.yesterday.focus || []).filter(f => f.done).length} done.`);
@@ -158,7 +214,9 @@ const SHARED_VOICE = `You are SARA, running Nick's ritual. Nick Ward, Head of Te
 
 Voice: direct, warm, short. British English. No emoji. Never open with "Sure", "Great", "Absolutely". Talk TO him, second person. One question at a time — never stack two questions in one message, he will answer neither.
 
-This is a conversation, not a form. React to what he actually says.`;
+This is a conversation, not a form. React to what he actually says.
+
+Nick works Monday to Friday. The context opens with today's weekday and the next working day — read it. Never say "tomorrow" without checking what tomorrow actually is, and never set a due date on a Saturday or Sunday.`;
 
 const STANDUP_PROMPT = `${SHARED_VOICE}
 
@@ -177,17 +235,18 @@ Run it roughly like this, adapting to his answers:
 - If he says he is struggling, drop the process. Ask what is in the way. The ritual matters less than the answer.
 - Never guess a commitment key or task id — use the ones in the context.
 - Do not write the daily note yourself. When the focus is agreed, call set_focus; the system writes the note.
-- Keep every message under about 60 words.`;
+- Keep every message under about 60 words.
+- If the context says today is not a working day, he has chosen to do this on his day off. Keep it short, do not chase carried work, and do not build him a full day's plan.`;
 
 const EOD_PROMPT = `${SHARED_VOICE}
 
 ## Your job this evening
-Close the day honestly, and make tomorrow easier.
+Close the day honestly, and make the next working day easier.
 
 1. Open by reflecting back what actually got done today from the context — do not ask "what did you get done?" when you can already see it. Ask him to confirm or correct it.
 2. Ask what did not go to plan. One question.
 3. If something slipped that he also committed to yesterday, name it — gently, as a fact. Twice in a row is a pattern worth noticing out loud; do not moralise about it.
-4. Ask what tomorrow's first thing should be. Capture it with create_task if it is a real action.
+4. Ask what the first thing on the NEXT WORKING DAY should be — on a Friday that is Monday, not tomorrow. Capture it with create_task if it is a real action, dated to that day.
 5. Acknowledge the day's wins without ceremony. "That's a good day's work" not "Amazing!".
 6. When you have enough, call set_eod_summary and tell him he's done.
 
@@ -243,7 +302,7 @@ const SESSION_TOOLS = [
       properties: {
         done: { type: 'array', items: { type: 'string' }, description: 'What actually got finished.' },
         didnt_go: { type: 'string', description: 'What did not go to plan. Empty string if nothing.' },
-        tomorrow_first: { type: 'string', description: "The first thing tomorrow, if he named one." },
+        tomorrow_first: { type: 'string', description: 'The first thing on the next WORKING day, if he named one — on a Friday that is Monday.' },
         mood: { type: 'string', description: 'How the day felt, one short phrase.' },
       },
       required: ['done'],
@@ -604,6 +663,8 @@ module.exports = {
   save,
   clear,
   buildContext,
+  buildSchedule,
+  _renderSchedule,
   toolDefinitions,
   executeTool,
   _renderContext,

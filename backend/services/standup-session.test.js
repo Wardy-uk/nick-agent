@@ -156,3 +156,38 @@ test('the context tells the model to chase carried work, with the keys to do it'
   assert.match(rendered, /carried 5 days/);
   assert.match(rendered, /key: ship the qa framework/);
 });
+
+test('the schedule knows Nick works Monday to Friday', () => {
+  // Friday: tomorrow is Saturday, so the next working day is Monday.
+  const fri = session.buildSchedule(new Date(2026, 7, 14, 18, 0));
+  assert.equal(fri.today.name, 'Friday');
+  assert.equal(fri.tomorrow.name, 'Saturday');
+  assert.equal(fri.tomorrow.working, false);
+  assert.deepEqual(fri.nextWorkingDay, { name: 'Monday', date: '2026-08-17' });
+
+  // Midweek: tomorrow IS the next working day.
+  const tue = session.buildSchedule(new Date(2026, 7, 11, 9, 0));
+  assert.equal(tue.tomorrow.working, true);
+  assert.equal(tue.nextWorkingDay.date, '2026-08-12');
+
+  // Saturday itself is not a working day, and Sunday is not the answer.
+  const sat = session.buildSchedule(new Date(2026, 7, 15, 10, 0));
+  assert.equal(sat.today.working, false);
+  assert.equal(sat.nextWorkingDay.date, '2026-08-17');
+});
+
+test('a Friday session is told not to say "tomorrow"', () => {
+  const rendered = session._renderSchedule(session.buildSchedule(new Date(2026, 7, 14, 18, 0)));
+  assert.match(rendered, /TODAY: Friday 2026-08-14/);
+  assert.match(rendered, /NOT a working day/);
+  assert.match(rendered, /next working day is Monday 2026-08-17/);
+
+  // Midweek must NOT carry the weekend warning, or it reads as noise every day.
+  const midweek = session._renderSchedule(session.buildSchedule(new Date(2026, 7, 11, 9, 0)));
+  assert.doesNotMatch(midweek, /NOT a working day/);
+});
+
+test('every session context leads with the day, not just the date', () => {
+  const rendered = session._renderContext(fixture().context);
+  assert.match(rendered.split('\n')[0], /^TODAY: (Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day \d{4}-\d{2}-\d{2}/);
+});
