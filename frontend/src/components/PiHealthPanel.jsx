@@ -100,11 +100,18 @@ function assessAi(ai, ollamaReachable) {
   if (ollamaReachable === false) issues.push({ level: 'critical', title: 'Ollama unreachable', detail: ai.ollama?.url || 'local model server is down' });
   else if ((ai.ollama?.queueDepth || 0) > 2) issues.push({ level: 'warn', title: `Ollama queue ${ai.ollama.queueDepth}`, detail: 'requests are backing up' });
 
-  if (ai.pi4Worker?.enabled && ai.pi4Worker?.lastHealthy === false) {
+  // lastHealthy is null until something actually calls the worker, so "not
+  // false" is not "fine" — unknown has to be visible or a worker that has been
+  // dead for weeks reads as healthy, which is the blind spot this panel exists
+  // to close.
+  if (ai.pi4Worker?.enabled && ai.pi4Worker?.lastHealthy !== true) {
+    const neverChecked = ai.pi4Worker.lastHealthy == null;
     issues.push({
-      level: 'critical',
-      title: 'Pi 4 worker unreachable',
-      detail: `${ai.pi4Worker.url} — background AI tasks are being skipped${ai.pi4Worker.healthCheckedAt ? `, last checked ${new Date(ai.pi4Worker.healthCheckedAt).toLocaleString()}` : ''}`,
+      level: neverChecked ? 'warn' : 'critical',
+      title: neverChecked ? 'Pi 4 worker status unknown' : 'Pi 4 worker unreachable',
+      detail: neverChecked
+        ? `${ai.pi4Worker.url} — no health check since restart; background AI tasks have not run`
+        : `${ai.pi4Worker.url} — background AI tasks are being skipped${ai.pi4Worker.healthCheckedAt ? `, last checked ${new Date(ai.pi4Worker.healthCheckedAt).toLocaleString()}` : ''}`,
     });
   }
 

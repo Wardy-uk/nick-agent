@@ -434,7 +434,38 @@ async function _runTaskInner(taskType, payload, options = {}) {
  * Streaming chat — same 4-tier priority as runTask.
  * Anthropic → OpenAI → OpenRouter → Ollama
  */
+// Streaming chat is the highest-volume path and the one Nick actually watches,
+// so it needs the same telemetry as runTask — instrumented the same way, from
+// the outside, leaving the routing body alone.
 async function runStreamingChat(systemPrompt, messages, res, options = {}) {
+  const started = Date.now();
+  const taskType = options.taskType || 'chat_stream';
+  try {
+    const result = await _runStreamingChatInner(systemPrompt, messages, res, options);
+    const provider = result?.provider || 'none';
+    _recordOutcome({
+      taskType,
+      provider,
+      ok: provider !== 'none' && Boolean(result?.text),
+      ms: Date.now() - started,
+      fallback: Boolean(result?.fallback),
+      errorClass: provider === 'none' ? 'other' : null,
+    });
+    return result;
+  } catch (e) {
+    _recordOutcome({
+      taskType,
+      provider: 'none',
+      ok: false,
+      ms: Date.now() - started,
+      fallback: true,
+      errorClass: _recordProviderError('routing', e.message),
+    });
+    throw e;
+  }
+}
+
+async function _runStreamingChatInner(systemPrompt, messages, res, options = {}) {
   _resetIfNewDay();
   const taskType = options.taskType || 'chat_stream';
   const forceCloud = options.forceCloud || false;
@@ -487,6 +518,7 @@ async function runStreamingChat(systemPrompt, messages, res, options = {}) {
       }
     } catch (err) {
       console.warn(`[AIRouting] ${provider} stream failed: ${err.message}`);
+      _recordProviderError(provider, err.message);
     }
   }
 
