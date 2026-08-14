@@ -75,17 +75,29 @@ router.post('/people/:name/update', (req, res) => {
 
   // Changing the cadence should move the due date with it — otherwise switching
   // someone from weekly to monthly leaves them reading overdue against the old
-  // interval. Only when the caller hasn't set a date explicitly.
+  // interval. Two things it must NOT do: override a date the caller set
+  // explicitly, or overwrite a due date already in the future, because that one
+  // is a meeting that has been BOOKED. Recomputing over a booking silently
+  // detaches the card from the invite sitting in the calendar.
   let derivedNextDue = next121Due;
   if (cadence && !next121Due) {
     const detect = require('../services/one-to-one-detect');
+    const existing = obsidianService.readPersonNote(req.params.name);
+    const fm = obsidianService.parseFrontmatter(existing || '');
     const offCadence = /^(n\/?a|none|-)$/i.test(String(cadence).trim());
+
     if (offCadence) {
       derivedNextDue = ''; // clear it — nothing to schedule against any more
     } else {
-      const existing = obsidianService.readPersonNote(req.params.name);
-      const last = last121 || obsidianService.parseFrontmatter(existing || '')['last-1-2-1'];
-      if (last && /^\d{4}-\d{2}-\d{2}$/.test(last)) {
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const currentDue = fm['next-1-2-1-due'];
+      const alreadyBooked = currentDue && /^\d{4}-\d{2}-\d{2}$/.test(currentDue) && currentDue >= todayStr;
+
+      const last = last121 || fm['last-1-2-1'];
+      if (alreadyBooked) {
+        derivedNextDue = undefined; // leave the booked date alone
+      } else if (last && /^\d{4}-\d{2}-\d{2}$/.test(last)) {
         const d = new Date(`${last}T12:00:00`);
         d.setDate(d.getDate() + detect.cadenceDays(cadence));
         derivedNextDue = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
