@@ -232,6 +232,11 @@ function _quickWins(todos, dateKey) {
     const text = String(todo.text || '').trim();
     if (!text) continue;
     if (todo.due_date && todo.due_date.split('T')[0] < dateKey) continue;
+    // Plenty of vault lines carry the date in the text rather than in due_date
+    // ("Review applicants — due 2026-07-28"), and those were slipping through
+    // the overdue guard and being offered as warm-ups.
+    const inlineDue = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+    if (inlineDue && inlineDue[1] < dateKey) continue;
     if (text.split(/\s+/).length > QUICK_WIN_MAX_WORDS) continue;
     if (NOT_QUICK.test(text)) continue;
     if (!QUICK_WIN_VERBS.test(text)) continue;

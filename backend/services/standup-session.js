@@ -366,12 +366,17 @@ function _emptySession(kind, ctx) {
 async function _turn(session) {
   const prompt = `${session.kind === KIND_EOD ? EOD_PROMPT : STANDUP_PROMPT}\n\n---\nCONTEXT (${session.dateKey}):\n${_renderContext(session.context)}`;
 
+  const anthropic = require('./providers/anthropic-provider');
+  const aiRouting = require('./ai-routing');
   let reply = '';
-  try {
-    const anthropic = require('./providers/anthropic-provider');
-    const aiRouting = require('./ai-routing');
 
-    if (anthropic.isConfigured() && aiRouting.isCloudAllowed('standup_interactive')) {
+  // Tool path first. `isConfigured()` only proves a key exists — it can still
+  // fail at call time (expired key, no credit, rate limit), and when it does the
+  // ritual must degrade, not die. A standup without tools is worth far more than
+  // no standup; it simply cannot record decisions itself, so finish() writes
+  // whatever was agreed in the transcript.
+  if (anthropic.isConfigured() && aiRouting.isCloudAllowed('standup_interactive')) {
+    try {
       const result = await anthropic.chatWithTools(
         prompt,
         session.messages,
@@ -380,27 +385,36 @@ async function _turn(session) {
         { maxTokens: 400, maxRounds: 4 }
       );
       reply = result.text || '';
+      session.degraded = false;
       try { aiRouting.recordUsage(result.usage); } catch {}
-    } else {
-      // No tool-capable provider. Still run the conversation — a standup without
-      // tools is worth more than no standup — it just cannot record decisions
-      // itself, so finish() falls back to reading them out of the transcript.
+    } catch (e) {
+      console.warn('[StandupSession] Tool path failed, degrading:', e.message);
+      session.degradedReason = e.message.slice(0, 120);
+    }
+  }
+
+  // Tool-less fallback — routes through the normal tiers (OpenAI → OpenRouter →
+  // local Ollama), so this still works with the Pi offline from every cloud.
+  if (!reply.trim()) {
+    try {
       const result = await aiRouting.runTask('standup_interactive', {
         systemPrompt: prompt,
         messages: session.messages,
         maxTokens: 400,
       });
       reply = result.text || '';
-      session.degraded = true;
+      if (reply.trim()) session.degraded = true;
+    } catch (e) {
+      console.error('[StandupSession] Fallback failed too:', e.message);
     }
-  } catch (e) {
-    console.error('[StandupSession] Turn failed:', e.message);
-    session.lastError = e.message;
-    save(session);
-    throw e;
   }
 
-  if (!reply.trim()) reply = "I lost my thread there. Say that again?";
+  if (!reply.trim()) {
+    const detail = session.degradedReason || 'no AI provider available';
+    session.lastError = detail;
+    save(session);
+    throw new Error(`Could not reach any AI provider (${detail})`);
+  }
 
   session.messages.push({ role: 'assistant', content: reply });
   session.updatedAt = new Date().toISOString();

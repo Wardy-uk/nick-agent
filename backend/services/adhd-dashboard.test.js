@@ -89,6 +89,7 @@ test('quick wins are short action verbs, never projects or overdue work', () => 
     { text: 'Approve Heidi leave request' },
     { text: 'Write up the full QA framework proposal for SMT review' }, // too long + project
     { text: 'Chase the Engineering handover', due_date: '2020-01-01' }, // overdue
+    { text: 'Review applicants — due 2020-07-28' },                     // overdue, date in the text
     { text: 'The printer is broken' },                                  // no action verb
   ], today);
 
