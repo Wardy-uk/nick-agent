@@ -345,34 +345,47 @@ async function _runTaskInner(taskType, payload, options = {}) {
     return { text: '', provider: 'none', fallback: false, reason: 'AI mode is off' };
   }
 
-  // ── Background tasks → Pi 4 worker ──
+  // ── Background tasks → Pi 4 worker, then fail over ──
+  // These used to dead-end here: if the worker was unreachable the task returned
+  // provider 'none' and the work was simply dropped. The Pi 4 has been offline
+  // since June, so every email triage and transcript in that window silently did
+  // nothing. Now a dead worker falls through to the cloud stack instead.
+  let workerFellBack = false;
   if (BACKGROUND_TASKS.has(taskType) && !forceLocal) {
     if (!pi4Worker.isEnabled()) {
-      console.log(`[AIRouting] ${taskType}: skipped (Pi 4 worker not enabled)`);
-      return { text: '', provider: 'none', fallback: true, reason: 'Pi 4 worker not enabled' };
-    }
-    try {
-      const workerResult = await pi4Worker.runTask(taskType, payload);
-      if (workerResult.ok && workerResult.result) {
-        console.log(`[AIRouting] ${taskType}: Pi 4 worker (${workerResult.duration}ms)`);
-        return { text: workerResult.result, provider: workerResult.provider, fallback: false };
+      console.log(`[AIRouting] ${taskType}: Pi 4 worker not enabled, using cloud`);
+      workerFellBack = true;
+    } else {
+      try {
+        const workerResult = await pi4Worker.runTask(taskType, payload);
+        if (workerResult.ok && workerResult.result) {
+          console.log(`[AIRouting] ${taskType}: Pi 4 worker (${workerResult.duration}ms)`);
+          return { text: workerResult.result, provider: workerResult.provider, fallback: false };
+        }
+        console.warn(`[AIRouting] Pi 4 worker failed for ${taskType}: ${workerResult.error}`);
+        // Recorded so the panel shows evidence of the worker being down, rather
+        // than only the absence of successes.
+        _recordProviderError('pi4Worker', workerResult.error || 'worker returned no result');
+      } catch (e) {
+        console.warn(`[AIRouting] Pi 4 worker unreachable for ${taskType}: ${e.message}`);
+        _recordProviderError('pi4Worker', e.message);
       }
-      console.warn(`[AIRouting] Pi 4 worker failed for ${taskType}: ${workerResult.error}`);
-      // Background tasks have no fallback tier, so a dead worker silently drops
-      // the work. Record it so the panel shows evidence rather than a guess.
-      _recordProviderError('pi4Worker', workerResult.error || 'worker returned no result');
-    } catch (e) {
-      console.warn(`[AIRouting] Pi 4 worker unreachable for ${taskType}: ${e.message}`);
-      _recordProviderError('pi4Worker', e.message);
+      workerFellBack = true;
     }
-    return { text: '', provider: 'none', fallback: true, reason: 'Pi 4 worker unavailable' };
   }
 
   const cloudOk = !forceLocal && _isCloudAllowed(taskType);
-  const order = _providerOrder(taskType);
+  // Background work that has lost its worker goes to OpenRouter first. Ollama is
+  // still last in line rather than removed — if OpenRouter is over budget or
+  // disabled, doing the work slowly on the Pi beats not doing it at all.
+  const order = workerFellBack
+    ? ['openrouter', 'anthropic', 'openai', 'ollama']
+    : _providerOrder(taskType);
   // Whichever provider the policy puts first is the intended one; anything after
   // it is a fallback, and the caller is told so via `fallback`.
-  let attempted = 0;
+  // Starting at 1 when the worker died means whatever serves it is correctly
+  // reported as a fallback — the intended provider was the worker.
+  let attempted = workerFellBack ? 1 : 0;
 
   for (const provider of order) {
     try {
