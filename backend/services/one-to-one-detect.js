@@ -40,9 +40,12 @@ const MIN_MENTIONS = 12;   // below this, a "dominant" name is just noise
 const DOMINANCE = 0.6;     // share of mentions needed to own the note
 const MAX_PER_PERSON = 5;  // how much history to keep per person
 
-// Not on a recurring cadence, or away — either way, nothing to schedule.
+// Whether someone is scheduled is decided by `cadence` alone, never by reading
+// the free-text `status`. A first attempt matched /maternity/ against status and
+// promptly excluded Maria for the status "Active — returned FROM maternity" —
+// prose describing a person is not a flag. `cadence: n/a` is what the vault's
+// own 1-2-1 Tracker has always used to mean "exclude", so use exactly that.
 const NO_CADENCE = /^(n\/?a|none|-|)$/;
-const ON_LEAVE = /maternity|paternity|parental|adoption|shared parental|sabbatical|long[- ]term sick/;
 
 // Generated output and dead copies — scanning these resurrects archived 1-2-1s
 // and double-counts Plaud summary variants.
@@ -101,18 +104,18 @@ function buildRoster({ includeInactive = false } = {}) {
     const archived = String(fm['archived'] || '').toLowerCase() === 'true';
     if (archived && !includeInactive) continue;
 
-    const cadence = (fm.cadence || 'fortnightly').toLowerCase();
-    const status = String(fm.status || '').toLowerCase();
+    const cadence = (fm.cadence || 'fortnightly').toLowerCase().trim();
     const person = {
       name,
       role: fm.role || '',
       cadence,
       status: fm.status || '',
-      // Someone on leave is still a direct report — they keep their history and
-      // their card — but they must never be scheduled. The vault's own 1-2-1
-      // Tracker has always said "Mat leave — N/A, exclude"; this is that rule.
-      bookable: !archived && !NO_CADENCE.test(cadence) && !ON_LEAVE.test(status),
+      // Someone off-cadence is still a direct report — they keep their card and
+      // their history — but they are never scheduled. To take someone out of the
+      // rota (maternity, long-term sick, anything), set `cadence: n/a`.
+      bookable: !archived && !NO_CADENCE.test(cadence),
       recordedLast: fm['last-1-2-1'] || null,
+      recordedNextDue: fm['next-1-2-1-due'] || null,
       email: fm.email || null,
       archived,
     };
@@ -478,6 +481,16 @@ function syncPeopleNotes({ apply = false } = {}) {
       continue;
     }
     if (person.recordedLast && person.recordedLast >= latest.date) {
+      // The last-1-2-1 is current, but the due date can still be missing — a
+      // note that was off-cadence and came back on it (Maria returning from
+      // maternity) has nothing to schedule against, so she would never appear
+      // as due and would silently stop being booked. Backfill it.
+      if (person.bookable && !person.recordedNextDue) {
+        const nextDue = addDays(person.recordedLast, cadenceDays(person.cadence));
+        changes.push({ person: person.name, action: 'due-date-backfilled', recorded: person.recordedLast, nextDue });
+        if (apply) obsidian.updatePersonNote(person.name, { next121Due: nextDue });
+        continue;
+      }
       changes.push({ person: person.name, action: 'already-current', recorded: person.recordedLast });
       continue;
     }

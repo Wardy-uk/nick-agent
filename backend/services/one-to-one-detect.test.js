@@ -155,32 +155,70 @@ test('an orphaned transcript still proves the 1-2-1 happened', () => {
   assert.equal(list[0].noteType, 'transcript');
 });
 
-test('someone on maternity leave keeps their card but is never bookable', () => {
+test('cadence n/a keeps the card but is never bookable', () => {
   const root = makeVault();
-  person(root, 'Maria Pappa', 'status: Maternity leave\ncadence: n/a\n');
+  person(root, 'Adele Norman-Swift', 'status: Maternity leave\ncadence: n/a\n');
   person(root, 'Heidi Power');
 
   const roster = load(root).buildRoster();
-  const maria = roster.people.find(p => p.name === 'Maria Pappa');
+  const adele = roster.people.find(p => p.name === 'Adele Norman-Swift');
   const heidi = roster.people.find(p => p.name === 'Heidi Power');
-  assert.ok(maria, 'still a direct report — history and card are kept');
-  assert.equal(maria.bookable, false, 'must never be scheduled');
+  assert.ok(adele, 'still a direct report — history and card are kept');
+  assert.equal(adele.bookable, false, 'must never be scheduled');
   assert.equal(heidi.bookable, true);
+});
+
+test('bookability reads cadence, never the free-text status', () => {
+  // "Active — returned from maternity" is someone who IS back. Matching the
+  // word "maternity" in prose excluded her; cadence is the flag, status is a
+  // description for humans.
+  const root = makeVault();
+  person(root, 'Maria Pappa',
+    'status: Active — returned from maternity 2026-05-01; 4-day week\ncadence: fortnightly\n');
+
+  const maria = load(root).buildRoster().people.find(p => p.name === 'Maria Pappa');
+  assert.equal(maria.bookable, true, 'back from leave and on a cadence = bookable');
 });
 
 test('cadence n/a does not get a due date invented for it', () => {
   // cadenceDays() used to fall through to 14 for anything unrecognised, which
   // handed someone on maternity leave a due date and put them in the overdue list.
   const root = makeVault();
-  person(root, 'Maria Pappa', 'status: Maternity leave\ncadence: n/a\n');
-  meeting(root, '2026-07-05 – 1-2-1 Maria.md',
-    'type: meeting\ndate: 2026-07-05\nmeeting-type: "1-1"', 'Maria '.repeat(20));
+  person(root, 'Adele Norman-Swift', 'status: Maternity leave\ncadence: n/a\n');
+  meeting(root, '2026-07-05 – 1-2-1 Adele.md',
+    'type: meeting\ndate: 2026-07-05\nmeeting-type: "1-1"', 'Adele '.repeat(20));
 
   const change = load(root).syncPeopleNotes({ apply: false })
-    .changes.find(c => c.person === 'Maria Pappa');
+    .changes.find(c => c.person === 'Adele Norman-Swift');
   assert.equal(change.action, 'updated', 'the 1-2-1 still counts as history');
   assert.equal(change.to, '2026-07-05');
   assert.equal(change.nextDue, null, 'but no next due date is invented');
+});
+
+test('a missing due date is backfilled when someone comes back on cadence', () => {
+  // Maria returning from maternity: last-1-2-1 is already current, so the sync
+  // had nothing to update and never gave her a due date — she would have stayed
+  // invisible to the overdue list and quietly stopped being booked.
+  const root = makeVault();
+  person(root, 'Maria Pappa', 'last-1-2-1: 2026-05-19\ncadence: fortnightly\n');
+  meeting(root, '2026-05-19 – 1-2-1 Maria.md',
+    'type: meeting\ndate: 2026-05-19\nmeeting-type: "1-1"', 'Maria '.repeat(20));
+
+  const change = load(root).syncPeopleNotes({ apply: false })
+    .changes.find(c => c.person === 'Maria Pappa');
+  assert.equal(change.action, 'due-date-backfilled');
+  assert.equal(change.nextDue, '2026-06-02', 'last + fortnight');
+});
+
+test('a missing due date is NOT backfilled for someone on leave', () => {
+  const root = makeVault();
+  person(root, 'Adele Norman-Swift', 'last-1-2-1: 2026-05-19\ncadence: n/a\nstatus: Maternity leave\n');
+  meeting(root, '2026-05-19 – 1-2-1 Adele.md',
+    'type: meeting\ndate: 2026-05-19\nmeeting-type: "1-1"', 'Adele '.repeat(20));
+
+  const change = load(root).syncPeopleNotes({ apply: false })
+    .changes.find(c => c.person === 'Adele Norman-Swift');
+  assert.equal(change.action, 'already-current', 'nothing to schedule against');
 });
 
 test('archived people drop off the roster', () => {
@@ -212,5 +250,9 @@ test('syncPeopleNotes never moves a recorded date backwards', () => {
 
   const result = load(root).syncPeopleNotes({ apply: false });
   const change = result.changes.find(c => c.person === 'Zoe Rees');
-  assert.equal(change.action, 'already-current');
+  // It may backfill her missing due date, but it must never rewrite last-1-2-1
+  // to the older detected meeting.
+  assert.notEqual(change.action, 'updated', 'the newer manual date must stand');
+  assert.equal(change.to, undefined);
+  assert.equal(change.recorded, '2026-08-01');
 });
