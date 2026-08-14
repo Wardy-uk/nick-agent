@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { apiUrl } from '../api';
+import { apiFetch } from '../api';
 import './StandupSession.css';
 
 // The ritual as a conversation.
@@ -19,8 +19,11 @@ const LABELS = {
   eod: { title: 'End of day', opener: 'Winding down…', finish: 'Write the EOD' },
 };
 
+// Must go through apiFetch, not raw fetch(apiUrl(...)): NEURO_PIN is set on the
+// Pi and apiFetch is what attaches the X-Neuro-Pin header. Plenty of older
+// components still call fetch(apiUrl(...)) directly and 401 silently.
 async function call(path, options = {}) {
-  const res = await fetch(apiUrl(path), {
+  const res = await apiFetch(path, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
   });
