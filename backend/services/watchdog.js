@@ -6,7 +6,7 @@
 // the Pi cannot speak: power, router, kernel, crash loop. It cannot cover the
 // opposite case, which is the one that has actually bitten repeatedly here —
 // the Pi perfectly healthy while something ON it is quietly broken:
-//   · the Pi 4 worker unreachable since June, AI tasks silently skipped
+//   · the Pi 4 worker unreachable 27 June to 14 Aug, AI tasks silently skipped
 //   · backup-db.sh missing since May, cron logging "not found" every 6 hours
 // Both were invisible for months because nothing pushed them at anyone.
 //

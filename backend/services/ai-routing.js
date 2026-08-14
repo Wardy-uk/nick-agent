@@ -89,6 +89,23 @@ const TASK_MODELS = {
   eod_interactive: 'gemma3:4b',
 };
 
+// Where background work goes when the Pi 4 worker cannot take it.
+//
+// Not a blanket "send it to the cloud": the worker runs qwen2.5:1.5b, the same
+// model Pi 5's Ollama would use, so local fallback is quality-EQUAL to the
+// worker and free. Cloud is an upgrade over anything these tasks have ever had,
+// which is only worth paying for where the output is prose Nick reads.
+//   · email_triage, transcript_processing → cloud. 1.5B is genuinely poor at
+//     both, and a bad summary wastes his attention rather than a byte of disk.
+//   · import_classification → local. A routing decision; a wrong answer costs
+//     one misfiled note.
+//   · journal_prompts → local. Once a day, and a clumsier prompt is not worth
+//     a token.
+const CLOUD_ON_WORKER_FALLBACK = new Set([
+  'email_triage',
+  'transcript_processing',
+]);
+
 // ── Background tasks → Pi 4 worker ──
 const BACKGROUND_TASKS = new Set([
   'email_triage',
@@ -375,8 +392,9 @@ async function _runTaskInner(taskType, payload, options = {}) {
   // ── Background tasks → Pi 4 worker, then fail over ──
   // These used to dead-end here: if the worker was unreachable the task returned
   // provider 'none' and the work was simply dropped. The Pi 4 has been offline
-  // since June, so every email triage and transcript in that window silently did
-  // nothing. Now a dead worker falls through to the cloud stack instead.
+  // for months at a time without anyone noticing (it was down from 27 June to
+  // 14 Aug), and every email triage and transcript in that window silently did
+  // nothing. Now a dead worker falls through to the rest of the stack instead.
   let workerFellBack = false;
   if (BACKGROUND_TASKS.has(taskType) && !forceLocal) {
     if (!pi4Worker.isEnabled()) {
@@ -402,11 +420,14 @@ async function _runTaskInner(taskType, payload, options = {}) {
   }
 
   const cloudOk = !forceLocal && _isCloudAllowed(taskType);
-  // Background work that has lost its worker goes to OpenRouter first. Ollama is
-  // still last in line rather than removed — if OpenRouter is over budget or
-  // disabled, doing the work slowly on the Pi beats not doing it at all.
+  // Background work that has lost its worker is re-routed per task (see
+  // CLOUD_ON_WORKER_FALLBACK). Either way every tier stays in the list, so if
+  // the preferred one is over budget or unreachable the work still gets done
+  // rather than dropped — that dead-end is what this whole path exists to fix.
   const order = workerFellBack
-    ? ['openrouter', 'anthropic', 'openai', 'ollama']
+    ? (CLOUD_ON_WORKER_FALLBACK.has(taskType)
+        ? ['openrouter', 'anthropic', 'openai', 'ollama']
+        : ['ollama', 'openrouter', 'anthropic', 'openai'])
     : _providerOrder(taskType);
   // Whichever provider the policy puts first is the intended one; anything after
   // it is a fallback, and the caller is told so via `fallback`.

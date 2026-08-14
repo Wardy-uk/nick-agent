@@ -98,7 +98,8 @@ test('both tool providers expose the same contract, so callers stay provider-agn
 
 // Background tasks used to dead-end at the Pi 4 worker: if it was unreachable the
 // task returned provider 'none' and the work was dropped, silently. The Pi 4 has
-// been offline since June, so every email triage in that window did nothing.
+// been offline for months at a time unnoticed (27 June to 14 Aug), so every
+// email triage in that window did nothing.
 //
 // Note: withEnv() above is synchronous — its finally block restores the env before
 // an awaited body ever reads it — so this sets the env itself.
@@ -145,6 +146,52 @@ test('a dead Pi 4 worker fails background work over to OpenRouter, not into the 
     openrouter.generate = saved.generate;
     ollama.generate = saved.ollamaGen;
     for (const k of ['AI_MODE','OPENROUTER_ENABLED','OPENROUTER_API_KEY','OPENROUTER_ALLOWED_TASKS']) {
+      if (saved.env[k] === undefined) delete process.env[k]; else process.env[k] = saved.env[k];
+    }
+  }
+});
+
+// The other half of the split. Worth pinning separately: a single test proving
+// "fallback reaches the cloud" would happily stay green if someone made every
+// background task cloud-first, which is the thing this policy deliberately does
+// not do.
+test('background work that is not prose falls back to LOCAL, not the cloud', async () => {
+  const pi4 = require('./pi4-worker-client');
+  const openrouter = require('./providers/openrouter-provider');
+  const ollama = require('./providers/ollama-provider');
+
+  const saved = {
+    run: pi4.runTask, enabled: pi4.isEnabled,
+    configured: openrouter.isConfigured, generate: openrouter.generate,
+    ollamaGen: ollama.generate,
+    env: { ...process.env },
+  };
+
+  pi4.isEnabled = () => true;
+  pi4.runTask = async () => { throw new Error('fetch failed'); };
+  // OpenRouter is fully available — the point is that it is NOT chosen.
+  openrouter.isConfigured = () => true;
+  openrouter.generate = async () => ({ text: 'served by openrouter', usage: { total_tokens: 10 } });
+  ollama.generate = async () => 'classified locally';
+
+  Object.assign(process.env, {
+    AI_MODE: 'hybrid',
+    OPENROUTER_ENABLED: 'true',
+    OPENROUTER_API_KEY: 'test-key',
+    OPENROUTER_ALLOWED_TASKS: 'all',
+  });
+
+  try {
+    const result = await routing.runTask('import_classification', { prompt: 'x' });
+    assert.equal(result.provider, 'ollama', 'a routing decision does not need cloud quality');
+    assert.equal(result.text, 'classified locally');
+  } finally {
+    pi4.runTask = saved.run;
+    pi4.isEnabled = saved.enabled;
+    openrouter.isConfigured = saved.configured;
+    openrouter.generate = saved.generate;
+    ollama.generate = saved.ollamaGen;
+    for (const k of ['AI_MODE', 'OPENROUTER_ENABLED', 'OPENROUTER_API_KEY', 'OPENROUTER_ALLOWED_TASKS']) {
       if (saved.env[k] === undefined) delete process.env[k]; else process.env[k] = saved.env[k];
     }
   }
