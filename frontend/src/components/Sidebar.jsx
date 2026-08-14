@@ -22,7 +22,11 @@ const SECONDARY_ITEMS = [
   { id: 'meeting-prep', label: 'Meeting Prep', icon: '>' },
   { id: 'vault',      label: 'Vault',     icon: '>' },
   { id: 'inbox',      label: 'Inbox',     icon: '>' },
-  { id: 'standups',   label: 'Standups',  icon: '>' },
+  // 'standup' is the editor (start the guided standup / EOD); 'standups' is the
+  // read-only streak history. Only the history had a menu entry, so the ritual
+  // itself was reachable only from a nudge banner or a push notification.
+  { id: 'standup',    label: 'Standup',   icon: '✎' },
+  { id: 'standups',   label: 'Standup history', icon: '>' },
   { id: 'journal',    label: 'Journal',   icon: '>' },
   { id: 'imports',    label: 'Imports',   icon: '>' },
   { id: 'recent',     label: 'Recent',    icon: '>' },
