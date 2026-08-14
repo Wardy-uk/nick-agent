@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { apiUrl } from '../api';
 import useCachedFetch from '../useCachedFetch';
+import { duePresets } from '../../../shared/due-dates.cjs';
 import './TodoPanel.css';
 
 function sourceClass(source) {
@@ -224,6 +225,17 @@ function TaskControls({ todo, onPatch, busy }) {
 
       <div className="todo-edit-group">
         <span className="todo-edit-label">Due</span>
+        {/* Presets first: "how far away?" is answerable at a glance, "which
+            day?" needs a calendar held in your head. The picker stays for when
+            a specific date is genuinely the point. Weekends are never offered. */}
+        {duePresets().map(p => (
+          <button
+            key={p.id}
+            className={`todo-edit-btn${dueValue === p.date ? ' active' : ''}`}
+            disabled={busy}
+            onClick={() => onPatch({ due_date: p.date })}
+          >{p.label}</button>
+        ))}
         <input
           type="date"
           className="todo-edit-date"

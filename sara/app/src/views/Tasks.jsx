@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../api';
 import { completeTask } from '../completeTask';
+import DueControl from '../components/DueControl';
 import './Tasks.css';
 
 // Tasks = the list you can actually work from on the phone.
@@ -143,11 +144,9 @@ export default function Tasks() {
             <div className="tasks__text">{item.text}</div>
             <div className="tasks__meta">
               {item.moscow && <span className={`tasks__moscow tasks__moscow--${item.moscow}`}>{item.moscow}</span>}
-              {item.due_date && (
-                <span className={`tasks__due${item.due_date.split('T')[0] < new Date().toISOString().split('T')[0] ? ' tasks__due--over' : ''}`}>
-                  {item.due_date.split('T')[0]}
-                </span>
-              )}
+              {/* Dating a task is the cheapest way to stop it rotting undated,
+                  so it lives inline on the row rather than behind an edit view. */}
+              <DueControl task={item} onChanged={load} />
               {item.source && <span className="tasks__source">{item.source}</span>}
             </div>
           </div>

@@ -1,0 +1,58 @@
+.due { position: relative; display: inline-flex; }
+
+.due__btn {
+  background: transparent;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* A set date reads as committed; an unset one reads as an invitation. */
+.due__btn:not(:empty) { border-style: solid; }
+.due__btn--over { color: #ff9db0; border-color: #ff9db0; }
+.due__btn--today { color: var(--accent); border-color: var(--accent); }
+
+/* The tap target is bigger than the pill — this sits in a dense list and gets
+   used one-handed. */
+.due__btn::after {
+  content: '';
+  position: absolute;
+  inset: -0.55rem;
+}
+
+.due__menu {
+  position: absolute;
+  bottom: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 8.5rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.25rem;
+  gap: 0.1rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.due__opt {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.due__opt:hover:not(:disabled) { background: var(--accent-dim); }
+.due__opt:disabled { opacity: 0.5; cursor: default; }
+.due__opt--clear { color: var(--muted); border-top: 1px solid var(--line); border-radius: 0 0 7px 7px; }
+
+.due__err { color: #ff9db0; font-size: 0.7rem; padding: 0.3rem 0.6rem; }
