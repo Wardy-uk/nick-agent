@@ -158,3 +158,79 @@ booking into NOVA — NEURO holds the Graph token.
 Open question before building: whether NOVA's `agent_development_plans` roster is
 current (does it still list Arman and Willem?). Couldn't check — NOVA wasn't
 running.
+
+---
+
+# Session Handoff — 2026-08-14 (actions, rituals, measurement, meetings)
+
+Ran alongside the 1-2-1 session above, in the same working tree. Everything below
+is committed and deployed to the Pi (`6af06a7`+). 153 backend tests, CI now runs
+both suites on push.
+
+## The one thing to internalise
+
+**Five of the ten bugs found today were the same species: something existed, so it
+looked done.** Config in this codebase lives far from the code that uses it, and a
+service's presence proves nothing about whether it is switched on.
+
+- `queueSummary` was read in 4 places and set by nobody — chat had never seen the queue
+- `upsertCalendarEvent` was defined, exported, and **called by nothing**; `calendar_cache`
+  had been empty since creation, so meetings never reached Focus and the "starting in
+  10 min" push had *never fired*. Hidden because calendar VIEWS call Graph live
+- `briefing` called `emailTriage.getTriagedEmails()`, which does not exist — caught and
+  swallowed, so every brief claimed an empty inbox
+- SARA mobile's stream parser listened for `chunk` while every provider emits `text`
+- NOVA's Teams webhook (`agent_teams_webhook_url`) is **unset**, so its sender has never
+  sent anything — and it targets a retired O365 connector API anyway
+
+**Verify from the running system** — pm2 logs, `/api/status`, the `agent_state` row —
+never from a value you or the code hardcoded. I got this wrong four times in one day.
+
+## Gotchas that will bite the next session
+
+- **AI keys live in the DB, not `.env`.** `ai_setting_openrouter_api_key` in
+  `agent_state`, bootstrapped into `process.env` at `server.js` start(). The blank
+  `.env` line is by design. See memory note `neuro-ai-keys-in-db`.
+- **The frontend PIN comes from a `window.fetch` monkey-patch** in `frontend/src/api.js`.
+  121 raw `fetch(apiUrl(...))` calls work because of it. Anything off `window` loses auth.
+- **`npm test` result depends on cwd.** Run from `backend/` (153) or `sara/backend/` (34);
+  at the repo root `node --test` walks both trees. CI runs each from its own directory.
+- **PM2 daemon runs Node 22.22.2.** Always `export PATH=/home/nickw/.nvm/versions/node/v22.22.2/bin:$PATH`.
+- **`getPendingSaraActions()` defaults to a limit of 10.** That default caused a 15,605-row
+  duplicate pile-up. Pass an explicit limit anywhere you dedupe against it.
+
+## Shipped
+
+Actuators (`reply_email`, `complete_task`, `schedule_focus_block`, `respond_meeting`,
+`chase_agenda`) · chat tools (`chat-tools.js`, 3 tiers: read / write / queued) ·
+ADHD dashboard (`adhd-dashboard.js` + Today on both surfaces) · collaborative
+standup/EOD (`standup-session.js`) · notification governor (quiet hours, dedupe,
+hourly cap, persisted) · latency-based AI routing (OpenRouter for interactive,
+Ollama for scheduled; Anthropic/OpenAI demoted to backstops — the Anthropic key has
+**zero credit**) · mobile Tasks tab · snooze-to-date (`shared/due-dates.cjs`) ·
+outcomes measurement (`outcomes.js`, weekly snapshot, Friday 4:30pm) · meeting
+agenda triage + decline/propose.
+
+## Open / next
+
+1. **463 pending `capture_todo` actions** — meeting-action candidates awaiting yes/no.
+   Working as designed (review-only), but it needs a batch review session.
+2. **Plan for the rest**: https://claude.ai/code/artifact/cd51cfe0-e7db-4328-bdf8-8aac285f09d2
+   Remaining: NOVA manual escalation (its `escalation_log` table already exists and
+   already records CC→T2 tier moves; needs a `reason_kind` split because the seeded
+   reasons are capability-flavoured, not urgency), person record → NOVA with vault
+   notes as capture points, agent-id join key, 1-2-1 agenda, Teams (a real build, not
+   a config toggle), commitment chasing, escalation first-drafts.
+3. **Baseline to beat**: week 2026-W33 = 9 things finished, 26 nudges pushed back.
+   The nudge tone ladder changed on 14 Aug (shame tiers deleted, gradient inverted so
+   it warms rather than sharpens) — next Friday's number is the first honest read.
+4. **`sara/` tree** — two backends, seed data, a state engine duplicating the decision
+   engine. Nick has not yet decided whether it is the future or scaffolding to retire.
+
+## Working alongside another session
+
+Nick runs 2–3 Claude sessions on this repo **in the same working directory**. Today
+one committed on top of mine mid-push. **Stage files explicitly — never `git add -A`** —
+or you will sweep up their in-flight work. Re-check `git status` and `git fetch`
+immediately before every commit, and `git pull --ff-only` so a concurrent push fails
+loudly rather than merging silently.
