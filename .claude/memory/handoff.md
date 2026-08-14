@@ -66,6 +66,24 @@ were right; nothing read them.
   it as a held 1-2-1. It carries the never-closed commitment from April: a
   structured career-progression follow-up that was due 2026-05-06.
 
+## PARKED — "make the team cards fully editable" (14 Aug)
+
+Raised by Nick, then parked: **another session is also working on People**, so
+nobody should refactor `PeopleBoard.jsx` without checking with them first.
+
+The blocker if it's picked up: `role`, the team grouping and the grey note come
+from the hardcoded `TEAMS` constant at the top of `PeopleBoard.jsx`, not the
+vault — which is why moving Nathan to Customer Care needed a code edit. The
+vault already holds `role`, `team`, `line`, `status`, `contract`, `cadence`,
+`email` for everyone, so most of a vault-driven board is already there.
+
+Two things to settle before building:
+- `TEAMS` carries a PeopleHR id used only as a React key — droppable.
+- Grouping does NOT map cleanly to existing frontmatter: Isabel is
+  `team: Production, line: Production` but displays under "Digital Design", and
+  Heidi is `line: 1st Line` under "1st Line Customer Care". Either add an
+  explicit `board-group` field or pick one existing field and correct the notes.
+
 ## What's still pending
 
 - **NOTHING IS DEPLOYED.** All of this is uncommitted on Windows. The Pi has not
