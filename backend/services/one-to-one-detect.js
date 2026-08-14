@@ -40,6 +40,10 @@ const MIN_MENTIONS = 12;   // below this, a "dominant" name is just noise
 const DOMINANCE = 0.6;     // share of mentions needed to own the note
 const MAX_PER_PERSON = 5;  // how much history to keep per person
 
+// Not on a recurring cadence, or away — either way, nothing to schedule.
+const NO_CADENCE = /^(n\/?a|none|-|)$/;
+const ON_LEAVE = /maternity|paternity|parental|adoption|shared parental|sabbatical|long[- ]term sick/;
+
 // Generated output and dead copies — scanning these resurrects archived 1-2-1s
 // and double-counts Plaud summary variants.
 const EXCLUDE_DIRS = new Set([
@@ -97,10 +101,17 @@ function buildRoster({ includeInactive = false } = {}) {
     const archived = String(fm['archived'] || '').toLowerCase() === 'true';
     if (archived && !includeInactive) continue;
 
+    const cadence = (fm.cadence || 'fortnightly').toLowerCase();
+    const status = String(fm.status || '').toLowerCase();
     const person = {
       name,
       role: fm.role || '',
-      cadence: (fm.cadence || 'fortnightly').toLowerCase(),
+      cadence,
+      status: fm.status || '',
+      // Someone on leave is still a direct report — they keep their history and
+      // their card — but they must never be scheduled. The vault's own 1-2-1
+      // Tracker has always said "Mat leave — N/A, exclude"; this is that rule.
+      bookable: !archived && !NO_CADENCE.test(cadence) && !ON_LEAVE.test(status),
       recordedLast: fm['last-1-2-1'] || null,
       email: fm.email || null,
       archived,
@@ -471,18 +482,26 @@ function syncPeopleNotes({ apply = false } = {}) {
       continue;
     }
 
-    const next121Due = addDays(latest.date, cadenceDays(person.cadence));
+    // Only people on an actual cadence get a next due date. cadenceDays() used
+    // to fall through to 14 for anything it didn't recognise, which invented a
+    // due date for `cadence: n/a` — that put someone on maternity leave into the
+    // overdue list and very nearly into a batch booking.
+    const next121Due = person.bookable ? addDays(latest.date, cadenceDays(person.cadence)) : null;
     changes.push({
       person: person.name,
       action: 'updated',
       from: person.recordedLast || null,
       to: latest.date,
       nextDue: next121Due,
+      bookable: person.bookable,
       evidence: latest.path,
     });
 
     if (apply) {
-      obsidian.updatePersonNote(person.name, { last121: latest.date, next121Due });
+      obsidian.updatePersonNote(person.name, {
+        last121: latest.date,
+        ...(next121Due ? { next121Due } : {}),
+      });
     }
   }
 

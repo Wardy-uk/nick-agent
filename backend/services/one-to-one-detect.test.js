@@ -155,6 +155,34 @@ test('an orphaned transcript still proves the 1-2-1 happened', () => {
   assert.equal(list[0].noteType, 'transcript');
 });
 
+test('someone on maternity leave keeps their card but is never bookable', () => {
+  const root = makeVault();
+  person(root, 'Maria Pappa', 'status: Maternity leave\ncadence: n/a\n');
+  person(root, 'Heidi Power');
+
+  const roster = load(root).buildRoster();
+  const maria = roster.people.find(p => p.name === 'Maria Pappa');
+  const heidi = roster.people.find(p => p.name === 'Heidi Power');
+  assert.ok(maria, 'still a direct report — history and card are kept');
+  assert.equal(maria.bookable, false, 'must never be scheduled');
+  assert.equal(heidi.bookable, true);
+});
+
+test('cadence n/a does not get a due date invented for it', () => {
+  // cadenceDays() used to fall through to 14 for anything unrecognised, which
+  // handed someone on maternity leave a due date and put them in the overdue list.
+  const root = makeVault();
+  person(root, 'Maria Pappa', 'status: Maternity leave\ncadence: n/a\n');
+  meeting(root, '2026-07-05 – 1-2-1 Maria.md',
+    'type: meeting\ndate: 2026-07-05\nmeeting-type: "1-1"', 'Maria '.repeat(20));
+
+  const change = load(root).syncPeopleNotes({ apply: false })
+    .changes.find(c => c.person === 'Maria Pappa');
+  assert.equal(change.action, 'updated', 'the 1-2-1 still counts as history');
+  assert.equal(change.to, '2026-07-05');
+  assert.equal(change.nextDue, null, 'but no next due date is invented');
+});
+
 test('archived people drop off the roster', () => {
   const root = makeVault();
   person(root, 'Arman Shazad', 'archived: true\n');

@@ -199,6 +199,9 @@ async function propose(name, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
   const index = detect.getIndex();
   const person = index.people?.find(p => p.name === name);
   if (!person) return { ok: false, error: `${name} is not an active direct report` };
+  if (!person.bookable) {
+    return { ok: false, error: `${name} is not on a 1-2-1 cadence${person.status ? ` (${person.status})` : ''}` };
+  }
 
   const latest = index.byPerson?.[name]?.[0] || null;
 
@@ -235,17 +238,23 @@ async function propose(name, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
 async function planAll(names, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
   const index = detect.getIndex();
   const active = new Set((index.people || []).map(p => p.name));
+  const byName = new Map((index.people || []).map(p => [p.name, p]));
 
   const wanted = [...new Set(names || [])].filter(Boolean);
   const unknown = wanted.filter(n => !active.has(n));
+  // Anyone on leave or off-cadence is dropped here rather than planned and then
+  // quietly failed — the caller is told, by name and reason.
+  const notBookable = wanted
+    .filter(n => active.has(n) && !byName.get(n).bookable)
+    .map(n => ({ person: n, reason: byName.get(n).status || 'not on a 1-2-1 cadence' }));
   const candidates = wanted
-    .filter(n => active.has(n))
+    .filter(n => active.has(n) && byName.get(n).bookable)
     .map(n => ({ name: n, fmDue: readNextDue(n), latest: index.byPerson?.[n]?.[0] || null }))
     // No due date at all is the most neglected case, so it sorts first.
     .sort((a, b) => String(a.fmDue || '0000-00-00').localeCompare(String(b.fmDue || '0000-00-00')));
 
   if (!candidates.length) {
-    return { ok: false, error: 'No active direct reports in that list', unknown };
+    return { ok: false, error: 'Nobody in that list is due a 1-2-1', unknown, notBookable };
   }
 
   // One read covers everyone: the earliest possible start is the same for all.
@@ -276,6 +285,7 @@ async function planAll(names, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
     planned,
     skipped,
     unknown,
+    notBookable,
     totalRequested: wanted.length,
     withoutInvite: planned.filter(p => !p.attendee?.email).map(p => p.person),
   };

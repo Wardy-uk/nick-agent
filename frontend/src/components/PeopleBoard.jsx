@@ -393,6 +393,11 @@ function BookAllDialog({ names, onClose, onBooked }) {
               </tbody>
             </table>
 
+            {plan.notBookable?.length > 0 && (
+              <div className="book-warn">
+                Excluded — not on a 1-2-1 cadence: {plan.notBookable.map(s => `${s.person} (${s.reason})`).join(', ')}
+              </div>
+            )}
             {plan.skipped?.length > 0 && (
               <div className="book-warn">
                 Couldn't place: {plan.skipped.map(s => s.person).join(', ')} — {plan.skipped[0].reason}
