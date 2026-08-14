@@ -1,0 +1,50 @@
+name: tests
+
+# Runs the suites nobody was running. Both were green only when someone
+# remembered to type `npm test`, which is how sara/backend sat red without
+# anyone noticing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Pi's PM2 daemon (v22.22.2). better-sqlite3 is a native
+          # module compiled against a specific Node ABI — testing on a different
+          # major than production defeats the point of testing it at all.
+          node-version: '22'
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci || npm install
+
+      - name: Run backend tests
+        working-directory: backend
+        # MUST run from backend/. `node --test` with no path walks the whole
+        # repo from the cwd, so running this at the root silently pulls in
+        # sara/backend's suite too and the result depends on where you stood.
+        run: npm test
+
+  sara-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # SARA's runtime is deliberately pinned to Node 20 on the Pi.
+          node-version: '20'
+
+      - name: Install SARA deps
+        working-directory: sara/backend
+        run: npm ci || npm install
+
+      - name: Run SARA tests
+        working-directory: sara/backend
+        run: npm test

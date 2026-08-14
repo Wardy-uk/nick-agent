@@ -113,12 +113,22 @@ function mapQueueTicket(ticket) {
 
 function buildQueue(neuroData) {
   const raw = neuroData?.queue;
+
+  // No NEURO at all → seed, whole. This used to keep the seed's summary STRING
+  // while hardcoding open/breaching to 0 and the sections to empty, so the queue
+  // domain contradicted itself: "4 open, 2 breaching SLA" alongside breaching: 0
+  // and no tickets. Everything downstream reads the structured fields, so the
+  // briefing silently dropped its SLA line and the queue view rendered empty.
+  // buildFocus below has always done this correctly — `return seed.focus()`.
+  if (!neuroData) return seed.queue();
+
+  // NEURO answered but the queue payload is unusable — that is a genuine outage
+  // and must NOT be dressed up in seed data, or a dead feed looks like a calm
+  // queue. Empty is the honest answer here.
   if (!raw || !Array.isArray(raw.tickets)) {
     return {
-      source: neuroData ? neuro.NEURO_SOURCE : 'seed',
-      summary: neuroData
-        ? 'Live queue feed is currently unavailable from NEURO.'
-        : seed.queue().summary,
+      source: neuro.NEURO_SOURCE,
+      summary: 'Live queue feed is currently unavailable from NEURO.',
       open: 0,
       breaching: 0,
       sections: {
