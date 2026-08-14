@@ -264,6 +264,24 @@ function updateTask(id, fields = {}) {
   }
 
   db.updateTaskRow(id, patch);
+
+  // Finishing something is the one event the activity log never recorded, which
+  // left "what did I actually get done today" unanswerable from the data. Logged
+  // on the transition only, so re-saving a done task doesn't inflate the count.
+  if (patch.status === 'done' && row.status !== 'done') {
+    try {
+      db.logActivity('task_done', {
+        taskId: id,
+        text: row.text,
+        moscow: row.moscow || null,
+        source: row.source || null,
+        ageDays: row.created_at
+          ? Math.floor((Date.now() - new Date(row.created_at.replace(' ', 'T')).getTime()) / 86400000)
+          : null,
+      });
+    } catch {}
+  }
+
   scheduleExport();
   return db.getTaskRow(id);
 }

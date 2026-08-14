@@ -98,6 +98,22 @@ const SUGGESTION_RULES = [
     }),
   },
   {
+    // A single urgent email we can name → offer to draft the reply rather than
+    // just pointing at the inbox. Approving drafts; sending is a second approval.
+    match: (item) => item.type === 'email' && !!item.meta?.emailId,
+    generate: (item) => ({
+      type: 'draft_reply',
+      confidence: 0.82,
+      reason: `Draft a reply to ${item.meta.from || 'sender'} — "${item.meta.subject || item.title}"`,
+      payload: {
+        emailId: item.meta.emailId,
+        subject: item.meta.subject || null,
+        from: item.meta.from || null,
+        navigate: 'inbox',
+      },
+    }),
+  },
+  {
     // Urgent emails → open inbox
     match: (item) => item.type === 'email',
     generate: (item) => ({
@@ -194,6 +210,17 @@ function generateSuggestions(focusItems) {
 }
 
 /**
+ * Queue a single action for approval and return its id.
+ *
+ * This is the front door for anything that wants SARA to *do* something without
+ * doing it itself — chat tools especially. Nothing here executes; the action sits
+ * pending until it is approved through /api/actions/:id/approve.
+ */
+function queueAction(type, payload, reason, confidence = 0.9, focusItemId = null) {
+  return db.createSaraAction(type, payload || {}, confidence, reason || type, focusItemId);
+}
+
+/**
  * Persist suggestions to the database.
  */
 function persistSuggestions(suggestions) {
@@ -207,10 +234,19 @@ function persistSuggestions(suggestions) {
 
 /**
  * Execute an approved action.
- * For navigation actions: returns the target so the frontend can navigate.
- * For vault actions: performs the write then returns confirmation.
+ *
+ * Three kinds live here now:
+ *   - navigation (open_*)     — the frontend moves; nothing is written
+ *   - vault writes            — capture_todo
+ *   - real actuators          — draft_reply, reply_email, complete_task,
+ *                               schedule_focus_block. These change the outside
+ *                               world via Graph, which is why they are async.
+ *
+ * Outbound email is deliberately two-gated: approving `draft_reply` only writes
+ * a draft and queues a `reply_email` action carrying it, so nothing is sent
+ * until Nick has approved the actual words.
  */
-function executeAction(action) {
+async function executeAction(action) {
   const payload = action.payload;
 
   switch (action.type) {
@@ -229,12 +265,143 @@ function executeAction(action) {
       };
     }
 
+    // Gate 1 of 2 for outbound email: draft the words, show them, send nothing.
+    // Approving this queues a reply_email action holding the draft.
     case 'draft_reply': {
-      // Future: open a draft composer
+      const emailId = payload.emailId;
+      if (!emailId) return { ok: false, detail: 'draft_reply needs an emailId' };
+
+      let draft = payload.body || '';
+      if (!draft) {
+        try {
+          const microsoft = require('./microsoft');
+          const message = await microsoft.fetchEmailById(emailId);
+          const prompt = `Draft a reply to this email as Nick Ward, Head of Technical Support at Nurtur. Direct, warm, concise — British English, no corporate padding. Sign off "Nick". Output only the reply body, no subject line and no commentary.
+
+From: ${message?.from || payload.from || 'Unknown'}
+Subject: ${message?.subject || payload.subject || '(no subject)'}
+
+${String(message?.body || message?.preview || '').slice(0, 4000)}`;
+          const result = await require('./ai-routing').runTask('email_draft', { prompt, maxTokens: 500 });
+          draft = (result?.text || '').trim();
+        } catch (e) {
+          console.warn('[Suggestion] Draft generation failed:', e.message);
+        }
+      }
+      if (!draft) return { ok: false, detail: 'Could not draft a reply — open the composer instead' };
+
+      const replyId = db.createSaraAction(
+        'reply_email',
+        { emailId, body: draft, subject: payload.subject || null, to: payload.to || null },
+        0.9,
+        `Send reply to ${payload.from || 'sender'}: "${payload.subject || 'email'}"`,
+        action.focus_item_id || null
+      );
+
       return {
         ok: true,
-        detail: 'Draft reply prepared',
+        detail: `Drafted a reply — approve action #${replyId} to send it`,
+        draft,
+        pendingActionId: replyId,
         navigate: 'inbox',
+      };
+    }
+
+    // Gate 2: the words have been seen and approved. This one really sends.
+    case 'reply_email': {
+      if (!payload.emailId) return { ok: false, detail: 'reply_email needs an emailId' };
+      if (!payload.body || !String(payload.body).trim()) {
+        return { ok: false, detail: 'reply_email has no body — nothing to send' };
+      }
+
+      const microsoft = require('./microsoft');
+      const result = await microsoft.sendEmailReply(payload.emailId, String(payload.body).trim(), {
+        replyAll: Boolean(payload.replyAll),
+        to: Array.isArray(payload.to) && payload.to.length ? payload.to : null,
+        cc: Array.isArray(payload.cc) && payload.cc.length ? payload.cc : null,
+      });
+
+      if (!result.sent) {
+        const reasons = {
+          auth: 'Not signed in to Microsoft — reconnect 365.',
+          scope: 'Mail.Send not granted — re-consent to Microsoft.',
+          no_recipients: 'No recipients resolved for that thread.',
+        };
+        return { ok: false, detail: reasons[result.reason] || `Send failed (${result.reason})` };
+      }
+
+      // Replied means handled — clear it from triage so it doesn't come back.
+      try { require('./email-triage').dismissEmail(payload.emailId); } catch {}
+      return { ok: true, detail: `Reply sent: "${payload.subject || payload.emailId}"`, navigate: 'inbox' };
+    }
+
+    // Ticking a task off. NEURO-owned tasks go to the task store; Microsoft-owned
+    // ones push over Graph. A Graph refusal is reported, not swallowed — the
+    // local state still changes so the task stops nagging either way.
+    case 'complete_task': {
+      const detail = [];
+
+      if (payload.taskId) {
+        const taskStore = require('./task-store');
+        const task = taskStore.setStatus(payload.taskId, 'done');
+        if (!task) return { ok: false, detail: `Task #${payload.taskId} not found` };
+        detail.push(`Completed: ${task.text}`);
+      }
+
+      if (payload.filePath && payload.lineNumber != null) {
+        try { require('./obsidian').toggleTask(payload.filePath, payload.lineNumber); } catch (e) {
+          detail.push(`(vault line not toggled: ${e.message})`);
+        }
+      }
+
+      if (payload.msId) {
+        const microsoft = require('./microsoft');
+        const result = await microsoft.completeMicrosoftTask(payload.msId, payload.source || null, payload.listId || null);
+        detail.push(result.completed
+          ? `pushed to Microsoft (${result.kind || 'graph'})`
+          : `Microsoft push failed (${result.reason}) — complete it there manually`);
+      }
+
+      if (!detail.length) return { ok: false, detail: 'complete_task needs a taskId or msId' };
+      return { ok: true, detail: detail.join(' · '), navigate: 'todos' };
+    }
+
+    // Put the work in the diary. Defaults to a 60-minute block starting at the
+    // next half hour, because "schedule it" with no time is the common case.
+    case 'schedule_focus_block': {
+      const microsoft = require('./microsoft');
+      const start = payload.start ? new Date(payload.start) : _nextHalfHour();
+      if (Number.isNaN(start.getTime())) return { ok: false, detail: `Unparseable start time: ${payload.start}` };
+      const minutes = Number(payload.minutes) > 0 ? Number(payload.minutes) : 60;
+      const end = payload.end ? new Date(payload.end) : new Date(start.getTime() + minutes * 60000);
+
+      const result = await microsoft.createCalendarEvent({
+        subject: payload.subject || 'Focus block',
+        start: _graphLocalTime(start),
+        end: _graphLocalTime(end),
+        body: payload.body || null,
+        location: payload.location || null,
+        attendees: payload.attendees || [],
+        isOnline: Boolean(payload.isOnline),
+      });
+
+      if (!result.created) {
+        const reasons = {
+          auth: 'Not signed in to Microsoft — reconnect 365.',
+          scope: 'Calendars.ReadWrite not granted — re-consent to Microsoft.',
+        };
+        return { ok: false, detail: reasons[result.reason] || `Calendar write failed (${result.reason})` };
+      }
+
+      const when = start.toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+      // Say when invites actually went out — approving this emails real people.
+      const invited = (payload.attendees || []).length;
+      return {
+        ok: true,
+        detail: `Booked "${result.event.subject}" ${when} (${minutes} min)`
+          + (invited ? ` — invited ${invited} ${invited === 1 ? 'person' : 'people'}` : ''),
+        url: result.event.webLink || null,
+        navigate: 'calendar',
       };
     }
 
@@ -261,6 +428,23 @@ function executeAction(action) {
     default:
       return { ok: false, detail: `Unknown action type: ${action.type}` };
   }
+}
+
+function _nextHalfHour() {
+  const d = new Date();
+  d.setSeconds(0, 0);
+  d.setMinutes(d.getMinutes() > 30 ? 60 : 30);
+  return d;
+}
+
+/**
+ * Graph wants a naive local datetime — the timezone travels separately in the
+ * payload (EVENT_TIMEZONE), so appending a Z or an offset here would shift the
+ * booking. Format the local wall-clock components by hand.
+ */
+function _graphLocalTime(date) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}:00`;
 }
 
 /**
@@ -297,4 +481,5 @@ module.exports = {
   persistSuggestions,
   executeAction,
   logActionExecution,
+  queueAction,
 };

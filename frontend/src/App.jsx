@@ -22,6 +22,7 @@ import InsightsPanel from './components/InsightsPanel';
 import StandupsPanel from './components/StandupsPanel';
 import JournalPanel from './components/JournalPanel';
 import FocusPanel from './components/FocusPanel';
+import AdhdPanel from './components/AdhdPanel';
 import BriefingPanel from './components/BriefingPanel';
 import PiHealthPanel from './components/PiHealthPanel';
 import MeetingPrep from './components/MeetingPrep';
@@ -262,6 +263,7 @@ function AuthenticatedApp() {
     switch (activeView) {
       case 'briefing': return <BriefingPanel onNavigate={handleNavigate} />;
       case 'focus': return <FocusPanel onNavigate={handleNavigate} />;
+      case 'today': return <AdhdPanel onNavigate={handleNavigate} />;
       case 'dashboard': return <Dashboard onNavigate={handleNavigate} />;
       case 'standup': return <StandupEditor />;
       case 'people': return <PeopleBoard />;

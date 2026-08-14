@@ -1,6 +1,6 @@
 'use strict';
 
-const SARA_LITE_TABS = new Set(['focus', 'capture', 'voice', 'chat', 'prep', 'brain']);
+const SARA_LITE_TABS = new Set(['today', 'focus', 'tasks', 'capture', 'voice', 'chat', 'prep', 'brain']);
 
 function lower(value) {
   return String(value || '').trim().toLowerCase();
@@ -65,6 +65,7 @@ function resolveSaraLiteTab(raw = {}) {
   if (['journal', 'brain'].includes(kind)) return 'brain';
   if (kind === 'capture') return 'capture';
   if (kind === 'chat') return 'chat';
+  if (kind === 'todo') return 'tasks';
   return 'focus';
 }
 
@@ -76,11 +77,13 @@ function resolveSaraLitePlan(raw = {}) {
     return { kind, canHandle: true, presentation: 'external', tab: resolveSaraLiteTab(raw) };
   }
 
-  if (['standup', 'eod', 'journal', 'todo', 'meeting', 'brain'].includes(kind)) {
+  if (['standup', 'eod', 'journal', 'meeting', 'brain'].includes(kind)) {
     return { kind, canHandle: true, presentation: 'sheet', tab: resolveSaraLiteTab(raw) };
   }
 
-  if (['capture', 'chat'].includes(kind)) {
+  // 'todo' used to be a sheet because there was nowhere to send it. It has a real
+  // tab now, and the full list beats a five-item card pulled from a notification.
+  if (['capture', 'chat', 'todo'].includes(kind)) {
     return { kind, canHandle: true, presentation: 'tab', tab: resolveSaraLiteTab(raw) };
   }
 

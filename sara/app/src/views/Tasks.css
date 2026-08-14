@@ -1,0 +1,121 @@
+.tasks__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.tasks__refresh {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 10px;
+  width: 2.4rem;
+  height: 2.4rem;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.tasks__hint { margin-top: 0.5rem; color: var(--muted); font-size: 0.8rem; }
+
+.tasks__filters { display: flex; gap: 0.4rem; margin: 0.75rem 0; }
+.tasks__filter {
+  flex: 1;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 10px;
+  padding: 0.5rem 0;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.tasks__filter--on {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: inherit;
+}
+
+.tasks__add { display: flex; gap: 0.4rem; margin-bottom: 0.75rem; }
+.tasks__add-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: inherit;
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  font: inherit;
+  font-size: 0.95rem;
+}
+.tasks__add-btn {
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  color: inherit;
+  border-radius: 10px;
+  width: 2.9rem;
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+.tasks__add-btn:disabled { opacity: 0.45; cursor: default; }
+
+.tasks__clear { text-align: center; color: var(--muted); }
+
+.tasks__item { display: flex; align-items: flex-start; gap: 0.7rem; }
+.tasks__item--done { opacity: 0.5; }
+.tasks__item--done .tasks__text { text-decoration: line-through; }
+
+/* Deliberately oversized: this is the one control that has to work first time,
+   one-handed, on a phone, on a bad day. 44px is the minimum comfortable target. */
+.tasks__tick {
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  margin: 0.15rem 0;
+  padding: 0;
+  background: transparent;
+  border: 2px solid var(--line);
+  border-radius: 7px;
+  color: var(--accent);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  position: relative;
+}
+.tasks__tick::after {
+  content: '';
+  position: absolute;
+  inset: -0.7rem;
+}
+.tasks__tick:disabled { cursor: default; }
+
+.tasks__body { flex: 1; min-width: 0; }
+.tasks__text { line-height: 1.35; }
+
+.tasks__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.tasks__moscow {
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tasks__moscow--must { background: #4a1420; color: #ff9db0; }
+.tasks__moscow--should { background: #4a3a14; color: #ffd79d; }
+.tasks__moscow--could { background: #1c3348; color: #9dc8ff; }
+.tasks__moscow--wont { background: var(--panel); color: var(--muted); }
+
+.tasks__due--over { color: #ff9db0; }
+.tasks__source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+
+.tasks__hidden {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 0.75rem;
+}

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiFetch, apiUrl } from '../api';
+import { completeTask } from '../completeTask';
 import actionSurfaces from '../../../../shared/action-surfaces.cjs';
 import './NotificationActionCard.css';
 
@@ -110,25 +111,9 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
     if (!item) return;
     setDoneIds((current) => ({ ...current, [item.id]: true }));
     try {
-      if (item.ms_id) {
-        await apiFetch('/api/todos/complete-ms', {
-          method: 'POST',
-          body: JSON.stringify({
-            msId: item.ms_id,
-            source: item.source,
-            filePath: item.filePath,
-            lineNumber: item.lineNumber,
-          }),
-        });
-      } else {
-        await apiFetch('/api/todos/toggle', {
-          method: 'POST',
-          body: JSON.stringify({
-            filePath: item.filePath,
-            lineNumber: item.lineNumber,
-          }),
-        });
-      }
+      // Shared with the Tasks view — this used to have no task_id branch, so a
+      // NEURO-owned task posted a null filePath to /toggle and never completed.
+      await completeTask(item);
       setState((current) => ({
         ...current,
         data: {

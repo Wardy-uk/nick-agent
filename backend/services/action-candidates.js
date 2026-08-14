@@ -7,10 +7,6 @@ const db = require('../db/database');
 
 const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
 const AUTO_PROMOTE_CONFIDENCE = 0.93;
-// Master kill switch. Kept as a constant rather than deleting the branch so the
-// behaviour is visible and reversible, but it stays off: see the note at the
-// promotion site for what happened the one time it ran unattended.
-const ALLOW_AUTO_PROMOTE = false;
 const ACTION_TYPES = new Set([
   'action',
   'actions',
@@ -362,9 +358,10 @@ function syncNoteActionCandidates(relativePath) {
   }
 
   let created = 0;
-  let autoPromoted = 0;
+  // Always 0 now that promotion is review-only, but kept in the result shape
+  // because scanRecentNotes() and the routes still tally it.
+  const autoPromoted = 0;
   let pending = 0;
-  const suggestionEngine = require('./suggestion-engine');
 
   for (const candidate of candidates) {
     const alreadyTracked = existing.some((action) => {
@@ -396,31 +393,16 @@ function syncNoteActionCandidates(relativePath) {
     );
     created += 1;
 
-    // Auto-promote is disabled outright. On 12 Aug a Plaud repull wrote 73
-    // meeting notes, each firing onVaultWrite -> this function, and the
+    // Every candidate stays pending. Auto-promote used to live here behind a
+    // hard-false flag; it was removed once suggestionEngine.executeAction became
+    // async (real Graph actuators), because this function is synchronous and
+    // would have recorded every promotion as failed. On 12 Aug a Plaud repull
+    // wrote 73 meeting notes, each firing onVaultWrite -> this function, and the
     // checkbox extractor auto-promoted 28 items straight into Master Todo —
-    // including "Speaker 1 to email the Hughes Estates client", all tagged
-    // #mustdo (retired 10 Jul) and appended under ## Links rather than Inbox.
-    // Nothing reaches the task list without Nick approving it from the queue.
-    if (candidate.autoPromote && ALLOW_AUTO_PROMOTE) {
-      const action = db.getSaraAction(actionId);
-      if (!action) {
-        // Row is in the DB but unreadable by id — leave it pending for review
-        // rather than losing the rest of this note's candidates.
-        console.warn('[ActionCandidates] Created action', actionId, 'could not be re-read; leaving pending');
-        pending += 1;
-        continue;
-      }
-      const result = suggestionEngine.executeAction(action);
-      db.updateSaraActionStatus(actionId, result.ok ? 'executed' : 'failed');
-      suggestionEngine.logActionExecution(action, result);
-      if (result.ok) {
-        autoPromoted += 1;
-        rememberReviewedAction(action, 'executed');
-      }
-    } else {
-      pending += 1;
-    }
+    // including "Speaker 1 to email the Hughes Estates client". Nothing reaches
+    // the task list without Nick approving it from the queue. If auto-promote is
+    // ever wanted again, make this function async first.
+    pending += 1;
   }
 
   writeReviewState(relativePath, {

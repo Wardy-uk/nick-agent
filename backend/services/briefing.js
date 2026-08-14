@@ -30,18 +30,23 @@ async function _collectFocusItems() {
   }
 }
 
+// email-triage exposes getTriageByCategory(), not getTriagedEmails() — the old
+// name never existed, so the typeof guard always failed and every brief since
+// this was written has silently claimed an empty inbox.
 async function _collectEmailSummary() {
   try {
     const emailTriage = require('./email-triage');
-    if (typeof emailTriage.getTriagedEmails === 'function') {
-      const emails = await emailTriage.getTriagedEmails();
-      const urgent = (emails || []).filter(e => e.category === 'high' || e.category === 'urgent');
-      return { total: (emails || []).length, urgent: urgent.length, items: urgent.slice(0, 3) };
-    }
+    const triage = emailTriage.getTriageByCategory();
+    const urgent = triage.urgent || [];
+    // Count the CATEGORY buckets only. urgent/reply are lanes and overlap them,
+    // so summing all six would double-count every actionable email.
+    const total = ['action', 'fyi', 'delegate', 'ignore']
+      .reduce((n, cat) => n + (triage[cat] || []).length, 0);
+    return { total, urgent: urgent.length, items: urgent.slice(0, 3) };
   } catch (e) {
-    // email triage not available or API not matching — skip
+    console.warn('[Briefing] Email summary failed:', e.message);
+    return { total: 0, urgent: 0, items: [] };
   }
-  return { total: 0, urgent: 0, items: [] };
 }
 
 async function _collectTeams() {

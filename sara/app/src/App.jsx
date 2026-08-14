@@ -6,6 +6,8 @@ import LockScreen from './components/LockScreen';
 import NotificationActionCard from './components/NotificationActionCard';
 import Capture from './views/Capture';
 import Focus from './views/Focus';
+import Today from './views/Today';
+import Tasks from './views/Tasks';
 import Chat from './views/Chat';
 import MeetingPrep from './views/MeetingPrep';
 import BrainManagement from './views/BrainManagement';
@@ -18,7 +20,10 @@ import './App.css';
 // Five areas, nothing else — see the "NEURO & SARA — What They Are" vault note.
 // This is SARA on the go; the heavier command-centre lives on the kiosk/desktop SARA surfaces.
 const TABS = [
+  // Today is the default: the one to open when you don't know where to start.
+  { id: 'today', label: 'Today', icon: '◐', Component: Today },
   { id: 'focus', label: 'Focus', icon: '🎯', Component: Focus },
+  { id: 'tasks', label: 'Tasks', icon: '✓', Component: Tasks },
   { id: 'capture', label: 'Capture', icon: '➕', Component: Capture },
   { id: 'voice', label: 'Voice', icon: '🎙️', Component: Capture }, // jumps straight into recording
   { id: 'chat', label: 'Chat', icon: '💬', Component: Chat },
@@ -75,7 +80,7 @@ function clearLaunchIntentFromUrl() {
 export default function App() {
   const runtime = readRuntime();
   const [authed, setAuthed] = useState(() => !!getPin());
-  const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'focus');
+  const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'today');
   const [actionIntent, setActionIntent] = useState(() => readLaunchIntent());
   const [refreshing, setRefreshing] = useState(false);
   usePushSubscription(authed);
@@ -125,14 +130,17 @@ export default function App() {
     }
   }
 
-  if (runtime.deploymentIssue) return <DeploymentGuard />;
-
-  if (!authed) return <LockScreen onUnlock={() => setAuthed(true)} />;
-
+  // Must sit above the early returns — unlocking flips `authed` and any hook
+  // below a conditional return changes the hook count between renders, which
+  // React rejects outright ("rendered more hooks than during the previous render").
   const ActiveView = useMemo(
     () => TABS.find((t) => t.id === active)?.Component || Focus,
     [active]
   );
+
+  if (runtime.deploymentIssue) return <DeploymentGuard />;
+
+  if (!authed) return <LockScreen onUnlock={() => setAuthed(true)} />;
 
   return (
     <div className="app">

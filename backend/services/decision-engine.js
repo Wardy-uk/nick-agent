@@ -401,7 +401,14 @@ function collectUrgentEmails(ctx) {
         urgency: 'high',
         source: 'email',
         actionHint: 'Check inbox',
-        meta: { count: actionEmails.length },
+        // Carry the top email's identity so the suggestion engine can offer to
+        // draft a reply to *that* email rather than just opening the inbox.
+        meta: {
+          count: actionEmails.length,
+          emailId: topEmail.id || null,
+          subject: topEmail.subject || null,
+          from: topEmail.from || null,
+        },
       });
     }
 

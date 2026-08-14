@@ -162,6 +162,8 @@ app.use('/api/email', require('./routes/email-triage'));
 app.use('/api/pi-health', require('./routes/pi-health'));
 app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/calendar', require('./routes/calendar'));
+app.use('/api/adhd', require('./routes/adhd'));
+app.use('/api/standup-session', require('./routes/standup-session'));
 
 // Health / status endpoint
 app.get('/api/status', async (req, res) => {

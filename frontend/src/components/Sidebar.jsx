@@ -9,6 +9,9 @@ const PRIMARY_ITEMS = [
 ];
 
 const SECONDARY_ITEMS = [
+  // "Today" is the ADHD dashboard — one thing, momentum, avoidance, quick wins.
+  // Sits above Focus because it's the one to open when you don't know where to start.
+  { id: 'today',      label: 'Today',     icon: '◐' },
   { id: 'focus',      label: 'Focus',     icon: '◎' },
   // TodoPanel has always been routable via App.jsx but had no menu entry, so the
   // one consolidated task view was only reachable if a nudge banner sent you there.

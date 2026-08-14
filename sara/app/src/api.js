@@ -48,7 +48,11 @@ export async function apiFetch(path, options = {}) {
 // Streaming chat over the brain's SSE endpoint (POST /api/chat). Parses the
 // `data: {...}` event stream and fans out to callbacks. Falls back is the caller's
 // job — if this throws, call /api/chat/sync instead.
-export async function chatStream(body, { onMode, onChunk, onDone, onError, signal } = {}) {
+// Event names come from the providers, and they all emit `text` — mobile used to
+// listen for `chunk`, which matched nothing. Because a missing event is not an
+// error, nothing threw, the sync fallback never fired, and every reply rendered
+// as an empty bubble. `chunk` stays accepted in case an older backend is live.
+export async function chatStream(body, { onMode, onChunk, onDone, onError, onTool, signal } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   const pin = getPin();
   if (pin) headers['X-Neuro-Pin'] = pin;
@@ -78,7 +82,8 @@ export async function chatStream(body, { onMode, onChunk, onDone, onError, signa
       let evt;
       try { evt = JSON.parse(payload); } catch { continue; }
       if (evt.type === 'mode') onMode?.(evt.mode);
-      else if (evt.type === 'chunk') onChunk?.(evt.content);
+      else if (evt.type === 'text' || evt.type === 'chunk') onChunk?.(evt.content);
+      else if (evt.type === 'tool') onTool?.(evt.name);
       else if (evt.type === 'done') onDone?.(evt.provider);
       else if (evt.type === 'error') onError?.(evt.content);
     }

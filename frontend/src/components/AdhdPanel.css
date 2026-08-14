@@ -1,0 +1,230 @@
+.adhd {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 1000px;
+}
+
+/* ── Day shape ── */
+.adhd__shape {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.adhd__mode {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.68rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+.adhd__mode--morning { background: var(--accent-dim); color: var(--accent); }
+.adhd__mode--weekend { background: var(--bg-tertiary); color: var(--success); }
+.adhd__shape-line { flex: 1; }
+.adhd__refresh {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  width: 2rem;
+  height: 2rem;
+  cursor: pointer;
+}
+
+/* ── The one thing ──
+   Deliberately the largest element on the page by a wide margin. If it competes
+   with anything else visually, the page has failed at its only real job. */
+.adhd__now {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  box-shadow: var(--shadow-card);
+}
+.adhd__now--critical { border-left-color: var(--danger); }
+.adhd__now--high { border-left-color: var(--warning); }
+.adhd__now--none { border-left-color: var(--success); }
+
+.adhd__now-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+.adhd__now-title {
+  font-size: 1.6rem;
+  line-height: 1.25;
+  margin: 0.4rem 0 0;
+  color: var(--text-primary);
+}
+.adhd__now-title--clear { color: var(--success); }
+.adhd__now-reason {
+  color: var(--text-secondary);
+  margin: 0.5rem 0 0;
+  font-size: 0.95rem;
+}
+.adhd__now-actions { display: flex; gap: 0.6rem; margin-top: 1.1rem; flex-wrap: wrap; }
+.adhd__do {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 1.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.adhd__later {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 1.1rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+.adhd__waiting { color: var(--text-muted); font-size: 0.8rem; margin: 0.9rem 0 0; }
+
+/* ── Cards ── */
+.adhd__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 760px) { .adhd__grid { grid-template-columns: 1fr; } }
+
+.adhd__card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.1rem;
+}
+.adhd__card--err { border-color: var(--danger); color: var(--danger); }
+.adhd__h {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin: 0 0 0.85rem;
+}
+.adhd__empty { color: var(--text-muted); font-size: 0.9rem; margin: 0; }
+.adhd__note {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin: 0.9rem 0 0;
+  line-height: 1.4;
+}
+
+/* ── Momentum ── */
+.adhd__momentum { display: flex; align-items: baseline; gap: 0.7rem; }
+.adhd__big {
+  font-size: 2.6rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--success);
+  font-family: var(--font-mono);
+}
+.adhd__big-label { color: var(--text-secondary); font-size: 0.9rem; }
+.adhd__streak {
+  display: block;
+  color: var(--accent);
+  font-size: 0.78rem;
+  margin-top: 0.15rem;
+}
+
+.adhd__spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.35rem;
+  height: 62px;
+  margin: 1rem 0 0.4rem;
+}
+.adhd__spark-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 0.25rem;
+}
+.adhd__spark-bar {
+  background: var(--bg-tertiary);
+  border-radius: 3px 3px 0 0;
+  min-height: 3px;
+}
+.adhd__spark-bar--today { background: var(--accent); }
+.adhd__spark-day {
+  text-align: center;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}
+
+.adhd__rituals { display: flex; gap: 1rem; margin-top: 0.6rem; font-size: 0.82rem; color: var(--text-muted); }
+.adhd__ritual--on { color: var(--success); }
+
+/* ── Avoidance ──
+   Kept visually quiet on purpose. This is information to act on, not an
+   accusation to sit under. */
+.adhd__avoid { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.7rem; }
+.adhd__avoid-item { display: flex; flex-direction: column; gap: 0.15rem; }
+.adhd__avoid-label { color: var(--text-primary); font-size: 0.92rem; }
+.adhd__avoid-detail { color: var(--text-muted); font-size: 0.78rem; }
+
+/* ── Quick wins ── */
+.adhd__quick, .adhd__wins { list-style: none; margin: 0; padding: 0; }
+.adhd__quick-item {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.adhd__quick-item:last-child { border-bottom: none; }
+.adhd__tick {
+  flex: none;
+  width: 1.35rem;
+  height: 1.35rem;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 0;
+}
+.adhd__tick:hover:not(:disabled) { border-color: var(--accent); }
+.adhd__quick-text { color: var(--text-primary); font-size: 0.95rem; }
+
+/* ── Wins ── */
+.adhd__win {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+  font-size: 0.9rem;
+}
+.adhd__win-time { color: var(--text-muted); font-family: var(--font-mono); font-size: 0.8rem; flex: none; }
+.adhd__win-text { color: var(--text-secondary); }
+
+.adhd__logwin { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+.adhd__logwin-input {
+  flex: 1;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  font-size: 0.88rem;
+}
+.adhd__logwin-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+.adhd__logwin-btn:disabled { opacity: 0.45; cursor: default; }

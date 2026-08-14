@@ -442,4 +442,18 @@ async function checkOllama() {
   return ollamaProvider.isAvailable();
 }
 
-module.exports = { runTask, runStreamingChat, getStatus, checkOllama, getAIMode: () => _cfg().aiMode };
+module.exports = {
+  runTask,
+  runStreamingChat,
+  getStatus,
+  checkOllama,
+  getAIMode: () => _cfg().aiMode,
+  // Exposed so chat tool-use can ask the same question the routing tiers ask,
+  // rather than re-deriving it from getStatus() and missing the budget caps —
+  // one tool-using turn can be several API calls.
+  isCloudAllowed: _isCloudAllowed,
+  // Tool-using chat calls the Anthropic provider directly (the loop has to see
+  // each response before it can run anything), so it has to report its own usage
+  // or the daily budget silently under-counts every turn that used tools.
+  recordUsage: _recordOpenRouterUsage,
+};

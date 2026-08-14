@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { apiUrl } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import ReactMarkdown from 'react-markdown';
+import StandupSession from './StandupSession';
 import './StandupEditor.css';
 
 function EodCapture({ onDone }) {
@@ -671,7 +672,13 @@ export default function StandupEditor() {
             <button className={`mode-btn ${eodMode === 'quick' ? 'active' : ''}`} onClick={() => setEodMode('quick')}>Quick</button>
           </div>
           {eodMode === 'guided'
-            ? <GuidedEod onDone={() => { setShowEod(false); setEodMode('quick'); }} />
+            ? (
+              <StandupSession
+                kind="eod"
+                onDone={() => { setShowEod(false); setEodMode('quick'); }}
+                onSwitchToManual={() => setEodMode('quick')}
+              />
+            )
             : <EodCapture onDone={() => setShowEod(false)} />
           }
         </div>
@@ -713,9 +720,15 @@ export default function StandupEditor() {
         </div>
       )}
 
-      {/* Guided mode */}
+      {/* Guided mode — now a real conversation with the brain, not a fixed
+          three-question stepper. The transcript lives on the Pi, so a dropped
+          request is a retry rather than a lost standup. */}
       {mode === 'guided' && !standupDone && (
-        <GuidedStandup onDone={() => { setGuidedDone(true); setForceRedo(false); setMode('manual'); }} />
+        <StandupSession
+          kind="standup"
+          onDone={() => { setGuidedDone(true); setForceRedo(false); setMode('manual'); }}
+          onSwitchToManual={() => setMode('manual')}
+        />
       )}
 
       {/* Guided done */}

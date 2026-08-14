@@ -104,6 +104,22 @@ async function refresh() {
       };
     } catch (e) { console.warn('[WorkingMemory] plan task merge failed:', e.message); }
 
+    // Jira queue (fast — SQLite). Four consumers read ctx.queueSummary — chat
+    // context, the SARA tone builder and the Focus stats — and none of them ever
+    // saw anything, because nothing set it. The full ticket list is dropped: this
+    // cache is held for 10 minutes and read on every chat turn, so it carries the
+    // counts plus the at-risk few that actually get rendered.
+    let queueSummary = null;
+    try {
+      const q = db.getQueueSummary();
+      queueSummary = {
+        total: q.total,
+        at_risk_count: q.at_risk_count,
+        open_p1s: q.open_p1s,
+        at_risk_tickets: (q.at_risk_tickets || []).slice(0, 10),
+      };
+    } catch (e) { console.warn('[WorkingMemory] getQueueSummary failed:', e.message); }
+
     // Today's calendar (fast — SQLite)
     let calendar = [];
     try {
@@ -159,6 +175,7 @@ async function refresh() {
       todos,
       ninetyDayPlan,
       planSummary,
+      queueSummary,
       calendar,
       nudges,
       todayActivity,
@@ -307,6 +324,7 @@ function _buildEmpty() {
     todos: null,
     ninetyDayPlan: null,
     planSummary: null,
+    queueSummary: null,
     calendar: [],
     nudges: [],
     todayActivity: [],

@@ -62,14 +62,9 @@ const SAFE_AUTO_ACTIONS = {
     },
     cooldown: 4 * 60 * 60 * 1000, // Once per 4h
   },
-
-  // Log outcome when a high-urgency item was handled (action approved)
-  outcome_log: {
-    match: () => false, // Triggered externally after action approval, not from focus items
-    execute: () => null,
-    cooldown: 0,
-  },
 };
+// Outcome logging after an approved action is handled by logOutcome() below —
+// it is called externally, not matched from focus items.
 
 // Cooldown tracker: { [actionKey]: lastExecutedAt }
 const _autoActionCooldowns = new Map();

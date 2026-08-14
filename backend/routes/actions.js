@@ -28,7 +28,9 @@ router.get('/', (req, res) => {
 
 // Approve one action. Throws nothing — returns { status, body } for the caller
 // to send or tally, so single and batch approval can't drift apart.
-function approveAction(id) {
+// Async since the real actuators (reply_email, complete_task, schedule_focus_block)
+// go out over Graph.
+async function approveAction(id) {
   const action = db.getSaraAction(parseInt(id));
   if (!action) return { status: 404, body: { error: 'Action not found' } };
   if (action.status !== 'pending') {
@@ -36,7 +38,7 @@ function approveAction(id) {
   }
 
   // Execute
-  const result = suggestionEngine.executeAction(action);
+  const result = await suggestionEngine.executeAction(action);
 
   // Update status
   db.updateSaraActionStatus(action.id, result.ok ? 'executed' : 'failed');
@@ -55,6 +57,10 @@ function approveAction(id) {
       navigate: result.navigate || null,
       navigateContext: result.navigateContext || null,
       url: result.url || null,
+      // draft_reply hands back the words plus the send action they belong to,
+      // so the caller can show the draft and offer the second approval.
+      draft: result.draft || null,
+      pendingActionId: result.pendingActionId || null,
       action,
     },
   };
@@ -85,9 +91,9 @@ function rejectAction(id) {
 }
 
 // POST /api/actions/:id/approve — approve and execute
-router.post('/:id/approve', (req, res) => {
+router.post('/:id/approve', async (req, res) => {
   try {
-    const { status, body } = approveAction(req.params.id);
+    const { status, body } = await approveAction(req.params.id);
     // Invalidate working memory so focus fingerprint changes
     workingMemory.invalidate('sara action approved');
     res.status(status).json(body);
@@ -112,7 +118,7 @@ router.post('/:id/reject', (req, res) => {
 // Body: { ids: [1,2,3], verb: "approve" | "reject" }
 // Always 200 with a per-id breakdown: a batch is partially-successful by nature,
 // and the caller needs to know which ones landed.
-router.post('/batch', (req, res) => {
+router.post('/batch', async (req, res) => {
   try {
     const { ids, verb } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -124,21 +130,20 @@ router.post('/batch', (req, res) => {
 
     const succeeded = [];
     const failed = [];
-    // One DB flush for the whole batch. Each action would otherwise trigger
-    // three full 60MB+ database dumps, which is what made a 40-item dismiss
-    // sit there for minutes with the event loop blocked.
-    db.batchSaves(() => {
-      for (const id of ids) {
-        let outcome;
-        try {
-          outcome = verb === 'approve' ? approveAction(id) : rejectAction(id);
-        } catch (e) {
-          outcome = { status: 500, body: { error: e.message } };
-        }
-        if (outcome.status === 200) succeeded.push(Number(id));
-        else failed.push({ id: Number(id), error: outcome.body.error || 'failed', status: outcome.status });
+    // Sequential, and NOT inside batchSaves(): approvals now await Graph calls,
+    // and better-sqlite3's transaction helper only wraps synchronous work. The
+    // flush-batching this used to need died with the sql.js driver — writes
+    // commit immediately now, so a loop is no longer the slow path it was.
+    for (const id of ids) {
+      let outcome;
+      try {
+        outcome = verb === 'approve' ? await approveAction(id) : rejectAction(id);
+      } catch (e) {
+        outcome = { status: 500, body: { error: e.message } };
       }
-    });
+      if (outcome.status === 200) succeeded.push(Number(id));
+      else failed.push({ id: Number(id), error: outcome.body.error || 'failed', status: outcome.status });
+    }
 
     workingMemory.invalidate(`sara actions batch ${verb}`);
 

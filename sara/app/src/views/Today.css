@@ -1,0 +1,124 @@
+.today__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+.today__shape { flex: 1; color: var(--muted); font-size: 0.85rem; line-height: 1.4; margin: 0; }
+.today__refresh {
+  flex: none;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 10px;
+  width: 2.2rem;
+  height: 2.2rem;
+  cursor: pointer;
+}
+.today__hint { margin-top: 0.5rem; color: var(--muted); font-size: 0.8rem; }
+
+/* ── The one thing. Biggest thing on the screen, by a distance. ── */
+.today__now { border-left: 3px solid var(--accent); }
+.today__now--critical { border-left-color: #ff6b8a; }
+.today__now--high { border-left-color: #ffb45c; }
+.today__now--none { border-left-color: #5ad18f; }
+
+.today__now-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+.today__now-title { font-size: 1.25rem; font-weight: 600; line-height: 1.3; margin-top: 0.3rem; }
+.today__now-title--clear { color: #5ad18f; }
+.today__now-reason { color: var(--muted); font-size: 0.85rem; margin-top: 0.35rem; line-height: 1.4; }
+
+.today__now-actions { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+.today__do {
+  flex: 1;
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: 10px;
+  padding: 0.8rem 1rem;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.today__later {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 10px;
+  padding: 0.8rem 0.9rem;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.today__waiting { color: var(--muted); font-size: 0.75rem; margin-top: 0.75rem; }
+
+/* ── Momentum ── */
+.today__momentum {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.today__momentum:disabled { cursor: default; }
+.today__count {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #5ad18f;
+}
+.today__count-label { flex: 1; color: var(--muted); font-size: 0.85rem; }
+.today__streak { display: block; color: var(--accent); font-size: 0.75rem; margin-top: 0.1rem; }
+.today__rituals { display: flex; gap: 0.4rem; color: var(--muted); font-size: 0.95rem; }
+.today__rituals .on { color: #5ad18f; }
+
+.today__wins { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.88rem; }
+.today__win { display: flex; gap: 0.6rem; color: var(--muted); }
+.today__win-time { flex: none; font-size: 0.78rem; opacity: 0.8; }
+
+/* ── Quick wins ── */
+.today__h {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 0.6rem;
+}
+.today__quick-item {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0;
+  font-size: 0.92rem;
+}
+/* Same oversized target as the Tasks list — one-handed, first time, bad day. */
+.today__tick {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  background: transparent;
+  border: 2px solid var(--line);
+  border-radius: 7px;
+  color: var(--accent);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  position: relative;
+}
+.today__tick::after { content: ''; position: absolute; inset: -0.7rem; }
+.today__tick:disabled { cursor: default; }
+
+/* ── Avoidance: one line, quiet, factual ── */
+.today__avoid { display: flex; flex-direction: column; gap: 0.2rem; }
+.today__avoid-label { font-size: 0.9rem; }
+.today__avoid-detail { color: var(--muted); font-size: 0.76rem; }

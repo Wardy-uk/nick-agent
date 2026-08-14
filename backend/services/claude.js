@@ -515,9 +515,10 @@ ${queueSummary.at_risk_tickets.length > 0 ? '### At-Risk Tickets\n' + queueSumma
 
 // ── Post-response processing (shared by both backends) ──
 
+// NOTE: does NOT save the assistant message — both callers already did, and
+// saving here too put every reply in the history twice, which then fed back in
+// as duplicated context on the next turn.
 function handleResponse(conversationId, fullResponse) {
-  db.saveMessage(conversationId, 'assistant', fullResponse);
-
   const decisionRegex = /\[DECISION\]\s*(.*?)(?:\n|$)/g;
   let match;
   while ((match = decisionRegex.exec(fullResponse)) !== null) {
@@ -590,13 +591,66 @@ function _getChatMode() {
 }
 
 /**
+ * Tool use needs a provider that supports it. Anthropic is Tier 1 in ai-routing
+ * and its SDK is already a dependency; OpenAI/OpenRouter/Ollama fall back to the
+ * text-only path rather than pretending to have hands.
+ */
+function _toolsAvailable() {
+  if (process.env.CHAT_TOOLS_ENABLED === 'false') return false;
+  // Same gate the routing tiers use: honours AI_MODE plus the daily call/token
+  // budgets, so a tool-using turn can't quietly blow through the cost controls.
+  if (!require('./ai-routing').isCloudAllowed('chat_sync')) return false;
+  return process.env.ANTHROPIC_ENABLED !== 'false' &&
+    require('./providers/anthropic-provider').isConfigured();
+}
+
+// Appended when tools are live. The bracket markers stay in the base prompt for
+// the text-only providers, but with tools available they'd double-write — the
+// model would call create_task AND emit [ADD TODO:], and handleResponse would
+// add it a second time.
+const TOOL_PROMPT = `
+
+## Tools
+You have tools. Use them rather than guessing or describing what you would do.
+- Never state a queue figure, task, calendar entry or vault fact from memory — read it with a tool first.
+- Never invent a task id. Call get_tasks before complete_task.
+- When Nick commits to something, call create_task. Do NOT use the [ADD TODO: ...] marker while you have tools — it would create the task twice.
+- draft_email_reply and schedule_focus_block only QUEUE work for approval. They send and book nothing. Say so plainly: tell him it's waiting for his approval, don't imply it's done.
+- Act, then report in one or two sentences. Don't narrate each tool call.`;
+
+/**
  * Build the system prompt with context.
  */
-async function _buildChatPrompt(userMessage, mode) {
+async function _buildChatPrompt(userMessage, mode, withTools = false) {
   const weekend = isWeekend();
   const basePrompt = weekend ? WEEKEND_SYSTEM_PROMPT : SYSTEM_PROMPT;
   const { systemContext } = await buildChatContext(userMessage, { mode });
-  return `${basePrompt}\n\n---\nCONTEXT:\n${systemContext}`;
+  return `${basePrompt}${withTools ? TOOL_PROMPT : ''}\n\n---\nCONTEXT:\n${systemContext}`;
+}
+
+/**
+ * Run the tool-enabled turn. Returns null if tools aren't available or the loop
+ * produced nothing, so callers can fall through to the normal path.
+ */
+async function _runWithTools(systemPrompt, messages, mode) {
+  const chatTools = require('./chat-tools');
+  const anthropic = require('./providers/anthropic-provider');
+  const policy = getChatPolicy(mode);
+
+  const t0 = Date.now();
+  const result = await anthropic.chatWithTools(
+    systemPrompt,
+    messages,
+    chatTools.toolDefinitions(),
+    (name, input) => chatTools.execute(name, input),
+    { maxTokens: policy.maxTokens, maxRounds: 5 }
+  );
+
+  try { require('./ai-routing').recordUsage(result.usage); } catch {}
+
+  const ran = (result.toolCalls || []).map(c => c.name).join(', ');
+  console.log(`[Chat] Tools: ${result.toolCalls?.length || 0} call(s)${ran ? ` (${ran})` : ''} in ${Date.now() - t0}ms`);
+  return result.text ? result : null;
 }
 
 /**
@@ -610,8 +664,11 @@ async function streamChat(conversationId, userMessage, res, location = null) {
   const chatMode = _getChatMode();
   const policy = getChatPolicy(chatMode);
   const t0 = Date.now();
-  // Build context and prompt using Chat Context v2
-  const systemPrompt = await _buildChatPrompt(userMessage, chatMode);
+  // Build context and prompt using Chat Context v2. Built once and reused by
+  // whichever path runs — the context block does vault retrieval, so building it
+  // twice per turn is the expensive mistake here.
+  const useTools = _toolsAvailable();
+  const systemPrompt = await _buildChatPrompt(userMessage, chatMode, useTools);
   const history = db.getConversationHistory(conversationId, policy.maxHistory);
 
   const messages = history.map(msg => ({ role: msg.role, content: msg.content }));
@@ -631,6 +688,36 @@ async function streamChat(conversationId, userMessage, res, location = null) {
   // Send mode indicator to frontend
   if (!res.writableEnded) {
     res.write(`data: ${JSON.stringify({ type: 'mode', mode: chatMode })}\n\n`);
+  }
+
+  // Tool-enabled turn first. Tools can't stream (the loop has to see each full
+  // response before it can run anything), so the reply arrives as one chunk —
+  // which for a two-sentence SARA answer is barely different from streaming it.
+  if (useTools) {
+    try {
+      const toolResult = await _runWithTools(systemPrompt, messages, chatMode);
+      if (toolResult) {
+        for (const call of toolResult.toolCalls || []) {
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ type: 'tool', name: call.name })}\n\n`);
+          }
+        }
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ type: 'text', content: toolResult.text })}\n\n`);
+        }
+        db.saveMessage(conversationId, 'assistant', toolResult.text);
+        handleResponse(conversationId, toolResult.text);
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ type: 'done', provider: 'anthropic', tools: (toolResult.toolCalls || []).length })}\n\n`);
+          res.end();
+        }
+        return;
+      }
+    } catch (e) {
+      // Tool loop failed — fall through to the plain streaming path rather than
+      // losing the turn. Nick still gets an answer, just without hands.
+      console.warn('[Chat] Tool loop failed, falling back to plain chat:', e.message);
+    }
   }
 
   // Route through AI provider (API-primary: OpenAI first, Ollama fallback)
@@ -677,11 +764,31 @@ async function syncChat(conversationId, userMessage, location = null) {
   const chatMode = _getChatMode();
   const policy = getChatPolicy(chatMode);
 
-  const systemPrompt = await _buildChatPrompt(userMessage, chatMode);
+  const useTools = _toolsAvailable();
+  const systemPrompt = await _buildChatPrompt(userMessage, chatMode, useTools);
   const history = db.getConversationHistory(conversationId, policy.maxHistory);
   const messages = history.map(msg => ({ role: msg.role, content: msg.content }));
 
   console.log(`[Chat/Sync] Mode: ${chatMode}, context: ${Date.now() - t0}ms, ${messages.length} msgs`);
+
+  if (useTools) {
+    try {
+      const toolResult = await _runWithTools(systemPrompt, messages, chatMode);
+      if (toolResult) {
+        db.saveMessage(conversationId, 'assistant', toolResult.text);
+        handleResponse(conversationId, toolResult.text);
+        return {
+          conversationId,
+          message: toolResult.text,
+          provider: 'anthropic',
+          mode: chatMode,
+          tools: (toolResult.toolCalls || []).map(c => c.name),
+        };
+      }
+    } catch (e) {
+      console.warn('[Chat/Sync] Tool loop failed, falling back to plain chat:', e.message);
+    }
+  }
 
   // Route through AI provider (respects all routing/cost controls)
   const aiRouting = require('./ai-routing');
