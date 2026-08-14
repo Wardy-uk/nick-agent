@@ -86,7 +86,9 @@
 
 .nudge-snooze-menu {
   position: absolute;
-  top: calc(100% + 4px);
+  /* Opens UPWARD — .nudge-container is pinned to the bottom of the viewport,
+     so a downward menu falls off the screen and can't be tapped. */
+  bottom: calc(100% + 4px);
   right: 0;
   z-index: 20;
   display: flex;
