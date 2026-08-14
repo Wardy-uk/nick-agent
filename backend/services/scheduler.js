@@ -118,6 +118,19 @@ function start() {
     } catch (e) { console.error('[Scheduler] Weekly hygiene failed:', e.message); }
   });
 
+  // Every 30 min — watchdog. Pairs with the healthchecks.io dead man's switch:
+  // that one catches a Pi that cannot speak, this one catches a healthy Pi with
+  // something broken on it (dead worker, stopped backups, failing AI provider).
+  // Alerts fire on transition only, so a persistent fault is not a repeat page.
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      const r = await require('./watchdog').run();
+      if (r.alerted.length || r.resolved.length) {
+        console.log(`[Scheduler] Watchdog: ${r.alerted.length} new alert(s)${r.alerted.length ? ` — ${r.alerted.join('; ')}` : ''}${r.resolved.length ? ` | resolved: ${r.resolved.join('; ')}` : ''}`);
+      }
+    } catch (e) { console.error('[Scheduler] Watchdog failed:', e.message); }
+  });
+
   // Nightly 2:30am — hygiene sweep (APPLY): content-safe Summary-N dedup, collect
   // unnamed "Speaker N" recordings into the Orphan hub, archive empty stragglers.
   // All mutations are reversible (archive + backups) and reported to Vault Audit.

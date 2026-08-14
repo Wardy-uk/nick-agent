@@ -14,4 +14,17 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/pi-health/watchdog — run the checks on demand.
+// ?notify=1 actually sends the push; default is a dry run so the alerting can
+// be inspected without paging anyone.
+router.get('/watchdog', async (req, res) => {
+  try {
+    const notify = req.query.notify === '1';
+    res.json(await require('../services/watchdog').run({ notify }));
+  } catch (e) {
+    console.error('[PiHealth] watchdog failed:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 module.exports = router;
