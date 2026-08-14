@@ -74,6 +74,11 @@ async function runTask(task, payload) {
     }
 
     const data = await r.json();
+    // A completed task is stronger evidence of health than any probe, so record
+    // it. Without this, lastHealthy stayed null forever — isHealthy() is only
+    // called by /api/ai/settings, so a worker doing real work all day still
+    // reported "status unknown" on the health panel.
+    _healthCache = { ok: true, at: Date.now() };
     return {
       ok: data.ok,
       result: data.result || '',
@@ -82,6 +87,9 @@ async function runTask(task, payload) {
       duration: data.duration || 0,
     };
   } catch (e) {
+    // Equally, a failed call is evidence the worker is down — record that too
+    // rather than leaving the panel to guess.
+    _healthCache = { ok: false, at: Date.now() };
     return { ok: false, error: e.message };
   } finally {
     clearTimeout(timer);

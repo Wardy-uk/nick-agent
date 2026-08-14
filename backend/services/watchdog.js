@@ -92,9 +92,16 @@ function checkBackups() {
   return out;
 }
 
-function checkAi() {
+async function checkAi() {
   const out = [];
   let status;
+  // Actively probe the worker first. Nothing else does: isHealthy() is only
+  // called by /api/ai/settings, so without this a worker can be up and serving
+  // while the panel still says "status unknown" indefinitely.
+  try {
+    const pi4 = require('./pi4-worker-client');
+    if (pi4.isEnabled()) await pi4.isHealthy();
+  } catch { /* the check below reports whatever state we end up with */ }
   try { status = require('./ai-routing').getStatus(); }
   catch (e) { return [{ key: 'ai:status-failed', level: 'warn', title: 'AI status unavailable', detail: e.message }]; }
 
@@ -151,7 +158,7 @@ async function checkHost() {
 async function run({ notify = true } = {}) {
   const issues = [
     ...checkBackups(),
-    ...checkAi(),
+    ...(await checkAi()),
     ...(await checkHost()),
   ];
 
