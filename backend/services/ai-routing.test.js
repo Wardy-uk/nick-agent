@@ -119,8 +119,12 @@ test('a dead Pi 4 worker fails background work over to OpenRouter, not into the 
   openrouter.isConfigured = () => true;
   // payload carries { prompt }, so the routing layer calls generate(), not chat()
   openrouter.generate = async () => ({ text: 'triaged', usage: { total_tokens: 10 } });
-  // Fail Ollama loudly so a silent local success cannot mask OpenRouter never being tried
-  ollama.generate = async () => { throw new Error('ollama should not be reached first'); };
+  // Ollama must SUCCEED here. Making it throw would let this test pass even if
+  // the OpenRouter-first override were deleted: the order would fall back to
+  // _providerOrder (Ollama-first for background tasks), Ollama would throw, and
+  // OpenRouter would serve it anyway. A working Ollama is the only way to prove
+  // the override is what puts OpenRouter first.
+  ollama.generate = async () => 'served by ollama';
 
   Object.assign(process.env, {
     AI_MODE: 'hybrid',
@@ -132,7 +136,7 @@ test('a dead Pi 4 worker fails background work over to OpenRouter, not into the 
   try {
     const result = await routing.runTask('email_triage', { prompt: 'x' });
     assert.equal(result.provider, 'openrouter', 'should reach OpenRouter rather than returning none');
-    assert.equal(result.text, 'triaged');
+    assert.equal(result.text, 'triaged', 'must be OpenRouter output, not the local model');
     assert.equal(result.fallback, true, 'the worker was the intended provider, so this is a fallback');
   } finally {
     pi4.runTask = saved.run;
