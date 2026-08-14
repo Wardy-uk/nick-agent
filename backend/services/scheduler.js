@@ -469,6 +469,19 @@ function start() {
     require('./email-triage').runTriage().catch(() => {});
   }, 60000);
 
+  // 8:20am weekdays — check the week ahead for meetings with no stated purpose
+  // and QUEUE a chaser for each. Queued, never sent: these are emails to real
+  // colleagues. Once a day is deliberate — this looks at the same fortnight
+  // repeatedly, and anything already pending is skipped.
+  cron.schedule('20 8 * * 1-5', async () => {
+    try {
+      const result = await require('./meeting-triage').scanUpcoming({ days: 7 });
+      if (result.queued > 0) {
+        console.log(`[Scheduler] Agenda chasers queued: ${result.queued}`);
+      }
+    } catch (e) { console.error('[Scheduler] Agenda check failed:', e.message); }
+  });
+
   // Meeting prep push — check every 5 minutes 8am-6pm weekdays
   cron.schedule('*/5 8-18 * * 1-5', async () => {
     try {

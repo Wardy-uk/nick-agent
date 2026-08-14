@@ -103,4 +103,50 @@ router.post('/events', async (req, res) => {
   }
 });
 
+// ── Meeting triage ───────────────────────────────────────────────────────────
+
+// GET /api/calendar/agenda-check — what would be chased, and why each one was
+// skipped. Read-only: a dry run, so the rules can be inspected before anything
+// is queued. The skip reasons are the useful half when tuning them.
+router.get('/agenda-check', async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 21);
+    res.json(await require('../services/meeting-triage').scanUpcoming({ days, dryRun: true }));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/calendar/agenda-check — queue chasers for approval. Queues only:
+// these are emails to real colleagues, so nothing sends without an approval.
+router.post('/agenda-check', async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.body?.days, 10) || 7, 1), 21);
+    res.json(await require('../services/meeting-triage').scanUpcoming({ days }));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/calendar/events/:id/respond — accept, decline or tentatively accept,
+// optionally proposing a different time. Queued for approval rather than sent
+// directly: declining a meeting is visible to everyone on the invite.
+router.post('/events/:id/respond', (req, res) => {
+  try {
+    const { response = 'decline', comment = '', proposedNewTime = null, subject = null } = req.body || {};
+    if (!['accept', 'decline', 'tentative'].includes(response)) {
+      return res.status(400).json({ ok: false, error: 'response must be accept, decline or tentative' });
+    }
+    const id = require('../services/suggestion-engine').queueAction(
+      'respond_meeting',
+      { eventId: req.params.id, response, comment, proposedNewTime, subject },
+      `${response === 'decline' ? 'Decline' : response === 'accept' ? 'Accept' : 'Tentatively accept'} "${subject || req.params.id}"${proposedNewTime ? ' and propose a new time' : ''}`,
+      0.9
+    );
+    res.json({ ok: true, queuedActionId: id, sent: false });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 module.exports = router;

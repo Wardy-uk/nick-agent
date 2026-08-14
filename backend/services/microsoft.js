@@ -893,6 +893,85 @@ async function createCalendarEvent({
   };
 }
 
+/**
+ * Fetch one calendar event in full. The calendar cache stores no body, and
+ * adding a column would collide with work in flight — but agenda checks run
+ * over a handful of upcoming meetings, so fetching fresh detail is cheap and
+ * avoids reasoning about a stale cache anyway.
+ */
+async function fetchEventById(eventId) {
+  if (!eventId) return null;
+  let token;
+  try { token = await getAccessToken(); } catch { return null; }
+  if (!token) return null;
+
+  const select = 'id,subject,bodyPreview,body,start,end,location,attendees,organizer,isOrganizer,isCancelled,type,seriesMasterId,responseStatus,webLink,onlineMeeting';
+  try {
+    const data = await graphFetch(`/me/events/${encodeURIComponent(eventId)}?$select=${select}`, token);
+    if (!data || !data.id) return null;
+    return {
+      id: data.id,
+      subject: data.subject || '',
+      bodyPreview: data.bodyPreview || '',
+      bodyHtml: data.body?.content || '',
+      start: data.start?.dateTime || null,
+      end: data.end?.dateTime || null,
+      location: data.location?.displayName || null,
+      organizer: data.organizer?.emailAddress || null,
+      isOrganizer: Boolean(data.isOrganizer),
+      isCancelled: Boolean(data.isCancelled),
+      // 'singleInstance' | 'occurrence' | 'exception' | 'seriesMaster'
+      type: data.type || 'singleInstance',
+      responseStatus: data.responseStatus?.response || null,
+      attendees: (data.attendees || []).map(a => ({
+        name: a.emailAddress?.name || '',
+        email: a.emailAddress?.address || '',
+        type: a.type || 'required',
+      })),
+      webLink: data.webLink || null,
+      isOnline: Boolean(data.onlineMeeting),
+    };
+  } catch (e) {
+    console.warn('[Calendar] Event fetch failed:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Respond to a meeting invitation.
+ *
+ * `proposedNewTime` turns a decline or tentative into a counter-proposal, which
+ * is the useful form: "no, but here" moves the meeting instead of bouncing it
+ * back to the organiser to solve.
+ */
+async function respondToEvent(eventId, response, { comment = '', proposedNewTime = null, sendResponse = true } = {}) {
+  const verb = { accept: 'accept', decline: 'decline', tentative: 'tentativelyAccept' }[response];
+  if (!eventId) return { ok: false, reason: 'no_event_id' };
+  if (!verb) return { ok: false, reason: 'bad_response' };
+  // Graph only accepts a counter-proposal on decline/tentative, never accept.
+  if (proposedNewTime && response === 'accept') return { ok: false, reason: 'cannot_propose_on_accept' };
+
+  let token;
+  try { token = await getAccessToken(); } catch { return { ok: false, reason: 'auth' }; }
+  if (!token) return { ok: false, reason: 'auth' };
+
+  const payload = { comment: String(comment || ''), sendResponse: Boolean(sendResponse) };
+  if (proposedNewTime?.start && proposedNewTime?.end) {
+    payload.proposedNewTime = {
+      start: { dateTime: proposedNewTime.start, timeZone: EVENT_TIMEZONE },
+      end: { dateTime: proposedNewTime.end, timeZone: EVENT_TIMEZONE },
+    };
+  }
+
+  const result = await graphWrite(`/me/events/${encodeURIComponent(eventId)}/${verb}`, 'POST', payload, token);
+  if (!result.ok) {
+    console.warn(`[Calendar] ${verb} failed: ${result.reason} ${result.detail || ''}`);
+    return { ok: false, reason: result.reason, detail: result.detail };
+  }
+  console.log(`[Calendar] ${verb} sent for ${eventId}${payload.proposedNewTime ? ' with a counter-proposal' : ''}`);
+  return { ok: true, response, proposed: Boolean(payload.proposedNewTime) };
+}
+
 // Mark a message read in Outlook. Needs Mail.ReadWrite.
 async function markEmailRead(emailId) {
   if (!emailId) return { marked: false, reason: 'no_email_id' };
@@ -957,6 +1036,8 @@ module.exports = {
   startDeviceCodeFlow,
   fetchCalendarEvents,
   createCalendarEvent,
+  fetchEventById,
+  respondToEvent,
   fetchRecentEmails,
   fetchEmailById,
   sendEmailReply,

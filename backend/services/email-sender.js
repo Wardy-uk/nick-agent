@@ -144,4 +144,57 @@ function briefToHtml(brief) {
 </html>`;
 }
 
-module.exports = { sendBriefEmail, briefToHtml };
+/**
+ * Send a plain-text email to named recipients.
+ *
+ * Separate from sendBriefEmail, which always writes to Nick's own address — the
+ * brief is a note to self and hardcoding that is a safety feature worth keeping.
+ * This one goes to other people, so it takes explicit recipients and refuses
+ * without them rather than defaulting anywhere.
+ */
+async function sendMail({ to, subject, body, cc = null }) {
+  const recipients = (Array.isArray(to) ? to : []).filter(r => r?.email);
+  if (!recipients.length) return { sent: false, reason: 'no_recipients' };
+  if (!String(body || '').trim()) return { sent: false, reason: 'empty_body' };
+
+  let token;
+  try {
+    token = await microsoft.getAccessToken();
+  } catch (e) {
+    console.warn('[EmailSender] Could not get access token:', e.message);
+    return { sent: false, reason: 'auth' };
+  }
+  if (!token) return { sent: false, reason: 'auth' };
+
+  const message = {
+    subject: subject || '(no subject)',
+    // Text, not HTML: these are short human messages, and HTML invites the kind
+    // of formatting that makes a one-line question look like a mailshot.
+    body: { contentType: 'Text', content: String(body) },
+    toRecipients: recipients.map(r => ({ emailAddress: { address: r.email, name: r.name || undefined } })),
+  };
+  if (Array.isArray(cc) && cc.length) {
+    message.ccRecipients = cc.filter(r => r?.email).map(r => ({ emailAddress: { address: r.email } }));
+  }
+
+  try {
+    const res = await fetch(`${GRAPH}/me/sendMail`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    });
+    if (res.status === 403) return { sent: false, reason: 'scope' };
+    if (res.status === 202 || res.ok) {
+      console.log(`[EmailSender] Sent "${message.subject}" to ${recipients.map(r => r.email).join(', ')}`);
+      return { sent: true };
+    }
+    const detail = await res.text().catch(() => '');
+    console.error(`[EmailSender] sendMail failed ${res.status}:`, detail.slice(0, 300));
+    return { sent: false, reason: `http_${res.status}` };
+  } catch (e) {
+    console.error('[EmailSender] sendMail error:', e.message);
+    return { sent: false, reason: 'error', error: e.message };
+  }
+}
+
+module.exports = { sendBriefEmail, sendMail, briefToHtml };

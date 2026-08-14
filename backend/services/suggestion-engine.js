@@ -366,6 +366,59 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
       return { ok: true, detail: detail.join(' · '), navigate: 'todos' };
     }
 
+    // Ask the organiser what a meeting is for. An email to a real colleague —
+    // often a senior one — so it only ever runs on approval.
+    case 'chase_agenda': {
+      if (!payload.eventId) return { ok: false, detail: 'chase_agenda needs an eventId' };
+      const body = String(payload.body || '').trim();
+      if (!body) return { ok: false, detail: 'No chaser text to send' };
+
+      // Graph's emailAddress object is { name, address }; our own helpers use
+      // { name, email }. Accept either rather than silently finding neither.
+      const organiserEmail = payload.organizer?.email || payload.organizer?.address;
+      if (!organiserEmail) return { ok: false, detail: 'No organiser address to send to' };
+      const to = [{ name: payload.organizer.name || organiserEmail, email: organiserEmail }];
+
+      const result = await require('./email-sender').sendMail({
+        to,
+        subject: `Re: ${payload.subject || 'your meeting'}`,
+        body,
+      });
+      if (!result.sent) {
+        const reasons = {
+          auth: 'Not signed in to Microsoft — reconnect 365.',
+          scope: 'Mail.Send not granted — re-consent to Microsoft.',
+        };
+        return { ok: false, detail: reasons[result.reason] || `Send failed (${result.reason})` };
+      }
+      return { ok: true, detail: `Asked ${payload.organizer?.name || 'the organiser'} what "${payload.subject}" is for`, navigate: 'calendar' };
+    }
+
+    // Decline, or counter-propose a time. "No, but here" moves the meeting
+    // rather than bouncing it back for the organiser to solve.
+    case 'respond_meeting': {
+      if (!payload.eventId) return { ok: false, detail: 'respond_meeting needs an eventId' };
+      const microsoft = require('./microsoft');
+      const result = await microsoft.respondToEvent(payload.eventId, payload.response || 'decline', {
+        comment: payload.comment || '',
+        proposedNewTime: payload.proposedNewTime || null,
+      });
+      if (!result.ok) {
+        const reasons = {
+          auth: 'Not signed in to Microsoft — reconnect 365.',
+          scope: 'Calendars.ReadWrite not granted — re-consent to Microsoft.',
+          cannot_propose_on_accept: 'Graph will not take a counter-proposal on an accept.',
+        };
+        return { ok: false, detail: reasons[result.reason] || `Response failed (${result.reason})` };
+      }
+      const verb = { decline: 'Declined', accept: 'Accepted', tentative: 'Tentatively accepted' }[payload.response || 'decline'];
+      return {
+        ok: true,
+        detail: `${verb} "${payload.subject || payload.eventId}"${result.proposed ? ' with a new time proposed' : ''}`,
+        navigate: 'calendar',
+      };
+    }
+
     // Put the work in the diary. Defaults to a 60-minute block starting at the
     // next half hour, because "schedule it" with no time is the common case.
     case 'schedule_focus_block': {
