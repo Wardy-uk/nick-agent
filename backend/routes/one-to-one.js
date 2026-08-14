@@ -60,6 +60,37 @@ router.post('/propose', async (req, res) => {
   }
 });
 
+// Plan slots for several people at once. Reads only; creates nothing.
+router.post('/plan-all', async (req, res) => {
+  try {
+    const { people, durationMinutes } = req.body || {};
+    if (!Array.isArray(people) || !people.length) {
+      return res.status(400).json({ ok: false, error: 'people (array) is required' });
+    }
+    const result = await booking.planAll(people, { durationMinutes });
+    res.json(result);
+  } catch (e) {
+    console.error('[1to1/plan-all]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Create every event in a confirmed plan. Each is independent — one failure
+// does not abandon the rest, and nothing is retried.
+router.post('/book-all', async (req, res) => {
+  try {
+    const { items } = req.body || {};
+    if (!Array.isArray(items) || !items.length) {
+      return res.status(400).json({ ok: false, error: 'items (array) is required' });
+    }
+    const result = await booking.bookAll(items);
+    res.json(result);
+  } catch (e) {
+    console.error('[1to1/book-all]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Create the event. Only reached after Nick has confirmed a proposal.
 router.post('/book', async (req, res) => {
   try {

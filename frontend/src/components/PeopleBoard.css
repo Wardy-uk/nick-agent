@@ -6,6 +6,32 @@
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.team-sara-main {
+  min-width: 0;
+}
+
+.team-sara-book-all {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-tertiary);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 7px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.team-sara-book-all:hover {
+  background: rgba(96, 165, 250, 0.12);
 }
 
 .team-sara-label {
@@ -543,6 +569,93 @@
   line-height: 1.5;
   color: var(--success);
   margin-bottom: 14px;
+}
+
+/* ── Book all outstanding ── */
+.book-dialog-wide {
+  width: min(680px, 94vw);
+}
+
+.book-plan {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+
+.book-plan th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 500;
+  padding: 0 8px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.book-plan td {
+  padding: 6px 8px 6px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  vertical-align: top;
+}
+
+.book-plan-when {
+  font-family: var(--font-mono);
+  color: var(--success);
+  white-space: nowrap;
+}
+
+.book-plan-email {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.book-plan-noemail {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--warning);
+}
+
+.book-warn {
+  margin-bottom: 10px;
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--warning);
+  background: rgba(240, 160, 64, 0.08);
+  border-radius: 3px;
+}
+
+.book-results {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.book-results li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+}
+
+.book-results li.ok { color: var(--text-primary); }
+.book-results li.bad { color: var(--danger); }
+
+.book-results-name {
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* Edit Note button */

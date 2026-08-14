@@ -290,6 +290,142 @@ function RecentOneToOnes({ meetings }) {
 }
 
 /**
+ * Batch booking for everyone whose 1-2-1 is overdue.
+ *
+ * Same two-step contract as the single booking, and more important here: this
+ * can send a dozen real invites at once, so the plan is shown in full — who,
+ * when, and which address each invite goes to — before anything is created.
+ */
+function BookAllDialog({ names, onClose, onBooked }) {
+  const [plan, setPlan] = useState(null);
+  const [error, setError] = useState('');
+  const [booking, setBooking] = useState(false);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    fetch(apiUrl('/api/1to1/plan-all'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ people: names }),
+    })
+      .then(r => r.json())
+      .then(d => { if (d.ok) setPlan(d); else setError(d.error || 'Could not build a plan'); })
+      .catch(e => setError(e.message));
+  }, []);
+
+  const confirm = async () => {
+    setBooking(true);
+    setError('');
+    try {
+      const res = await fetch(apiUrl('/api/1to1/book-all'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: plan.planned.map(p => ({
+            person: p.person,
+            start: p.start,
+            end: p.end,
+            email: p.attendee?.email || undefined,
+            subject: p.subject,
+          })),
+        }),
+      });
+      const d = await res.json();
+      setResult(d);
+      onBooked?.();
+    } catch (e) { setError(e.message); }
+    setBooking(false);
+  };
+
+  const hhmm = iso => iso.split('T')[1].slice(0, 5);
+
+  return (
+    <div className="note-editor-overlay" onClick={onClose}>
+      <div className="book-dialog book-dialog-wide" onClick={e => e.stopPropagation()}>
+        <div className="note-editor-header">
+          <span className="note-editor-title">
+            {result ? 'Booking results' : `Book all outstanding 1-2-1s${plan ? ` (${plan.planned.length})` : ''}`}
+          </span>
+          <button className="note-editor-close" onClick={onClose}>x</button>
+        </div>
+
+        {result ? (
+          <div className="book-dialog-body">
+            <div className={result.booked ? 'book-ok' : 'book-error'}>
+              {result.booked} booked{result.invited ? `, ${result.invited} invite${result.invited === 1 ? '' : 's'} sent` : ''}
+              {result.failed ? ` · ${result.failed} failed` : ''}
+            </div>
+            <ul className="book-results">
+              {(result.results || []).map((r, i) => (
+                <li key={i} className={r.ok ? 'ok' : 'bad'}>
+                  <span className="book-results-name">{r.person}</span>
+                  {r.ok
+                    ? <span>{formatDate(r.start?.split('T')[0])} {r.start ? hhmm(r.start) : ''}{r.invited ? '' : ' — no invite'}</span>
+                    : <span>{r.error}</span>}
+                </li>
+              ))}
+            </ul>
+            <div className="book-actions"><button className="btn btn-primary" onClick={onClose}>Done</button></div>
+          </div>
+        ) : !plan && !error ? (
+          <div className="note-editor-loading">Finding slots for {names.length} people...</div>
+        ) : error && !plan ? (
+          <div className="book-dialog-body">
+            <div className="book-error">{error}</div>
+            <div className="book-actions"><button className="btn" onClick={onClose}>Close</button></div>
+          </div>
+        ) : (
+          <div className="book-dialog-body">
+            <table className="book-plan">
+              <thead>
+                <tr><th>Who</th><th>When</th><th>Invite to</th></tr>
+              </thead>
+              <tbody>
+                {plan.planned.map(p => (
+                  <tr key={p.person}>
+                    <td>{p.person}</td>
+                    <td className="book-plan-when">{formatDate(p.date)} · {hhmm(p.start)}–{hhmm(p.end)}</td>
+                    <td className={p.attendee?.email ? 'book-plan-email' : 'book-plan-noemail'}>
+                      {p.attendee?.email || 'no address — no invite'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {plan.skipped?.length > 0 && (
+              <div className="book-warn">
+                Couldn't place: {plan.skipped.map(s => s.person).join(', ')} — {plan.skipped[0].reason}
+              </div>
+            )}
+            {plan.withoutInvite?.length > 0 && (
+              <div className="book-warn">
+                No email resolved for {plan.withoutInvite.join(', ')} — those go in your calendar with no invite.
+              </div>
+            )}
+
+            <p className="book-caveat">
+              Slots are free in your calendar; the team's availability isn't visible to NEURO,
+              so these go out as normal invites they can decline. Max 2 a day, 10:00–12:00 or
+              14:00–16:30 only.
+            </p>
+            {error && <div className="book-error">{error}</div>}
+            <div className="book-actions">
+              <button className="btn" onClick={onClose} disabled={booking}>Cancel</button>
+              <button className="btn btn-primary" onClick={confirm} disabled={booking || !plan.planned.length}>
+                {booking
+                  ? 'Booking...'
+                  : `Confirm & send ${plan.planned.filter(p => p.attendee?.email).length} invite${plan.planned.filter(p => p.attendee?.email).length === 1 ? '' : 's'}`}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Two-step booking. Propose reads the calendar and shows a draft; nothing is
  * created until Confirm, because attendees mean Graph emails a real invite.
  */
@@ -534,6 +670,7 @@ export default function PeopleBoard() {
   const [editingPerson, setEditingPerson] = useState(null); // person name being updated
   const [editingNote, setEditingNote] = useState(null); // person name whose raw note is being edited
   const [bookingFor, setBookingFor] = useState(null); // person name being booked
+  const [bookingAll, setBookingAll] = useState(null); // names being batch-booked
   const [oneToOnes, setOneToOnes] = useState(null); // { [name]: [{date,title,highlights}] }
   const [autoExpanded, setAutoExpanded] = useState(() => sessionStorage.getItem('people-auto-expanded') === 'true');
   const [pendingApprovals, setPendingApprovals] = useState([]);
@@ -633,12 +770,30 @@ export default function PeopleBoard() {
 
   const saraLine = buildTeamSaraLine(TEAMS, peopleData, personSummaries);
 
+  // Everyone the board is currently showing an overdue 1-2-1 badge for. Driving
+  // this off the same get121Status the cards use keeps the button honest — it
+  // books exactly who you can see is overdue, nobody else.
+  const overdueNames = Object.values(TEAMS).flat()
+    .filter(p => get121Status(peopleData[p.name]?.frontmatter)?.status === 'overdue')
+    .map(p => p.name);
+
   return (
     <div className="people-board">
       {/* SARA team assessment */}
       <div className="team-sara">
-        <span className="team-sara-label">SARA</span>
-        <p className="team-sara-line">{saraLine}</p>
+        <div className="team-sara-main">
+          <span className="team-sara-label">SARA</span>
+          <p className="team-sara-line">{saraLine}</p>
+        </div>
+        {overdueNames.length > 0 && (
+          <button
+            className="team-sara-book-all"
+            onClick={() => setBookingAll(overdueNames)}
+            title={`Plan 1-2-1s for: ${overdueNames.join(', ')}`}
+          >
+            Book all outstanding ({overdueNames.length})
+          </button>
+        )}
       </div>
 
       <div className="people-header">
@@ -656,6 +811,22 @@ export default function PeopleBoard() {
       </div>
 
       {viewMode === 'reports' && <ApprovalPanel approvals={pendingApprovals} onRefresh={fetchApprovals} />}
+
+      {bookingAll && (
+        <BookAllDialog
+          names={bookingAll}
+          onClose={() => setBookingAll(null)}
+          onBooked={() => {
+            // next-1-2-1-due moved for everyone booked — refresh the badges
+            bookingAll.forEach(n => {
+              fetch(apiUrl(`/api/obsidian/people/${encodeURIComponent(n)}`))
+                .then(r => r.json())
+                .then(data => setPeopleData(prev => ({ ...prev, [n]: data })))
+                .catch(() => {});
+            });
+          }}
+        />
+      )}
 
       {bookingFor && (
         <BookDialog

@@ -5,7 +5,8 @@ const assert = require('node:assert/strict');
 
 const { _internals } = require('./one-to-one-booking');
 const {
-  findGapInWindow, countOneToOnes, dateStr, isWorkingDay, toMinutes,
+  findGapInWindow, countOneToOnes, findSlot, reserve, subjectFor,
+  dateStr, isWorkingDay, toMinutes,
   PM_WINDOW, AM_WINDOW, MAX_PER_DAY,
 } = _internals;
 
@@ -132,6 +133,82 @@ test('an all-day event blocks the whole window', () => {
 test("another day's events are ignored", () => {
   const other = { date: '2026-08-18', start: '2026-08-18T14:00:00', end: '2026-08-18T16:30:00', showAs: 'busy' };
   assert.equal(findGapInWindow(DAY, [other], PM_WINDOW, 30).start, 14 * 60);
+});
+
+// ---------------------------------------------------------------------------
+// Batch planning — "book all outstanding"
+// ---------------------------------------------------------------------------
+
+// Mon 17 Aug 2026. findSlot searches forward from `from`, so a clear diary
+// gives PM first, then AM, then rolls to the next working day at the cap.
+const MONDAY = new Date('2026-08-17T12:00:00');
+
+/** Allocate slots for N people the way planAll does: reserve as you go. */
+function planFor(people, events = []) {
+  const out = [];
+  for (const name of people) {
+    const slot = findSlot(events, MONDAY, 30);
+    if (!slot) { out.push({ name, slot: null }); continue; }
+    reserve(events, name, slot);
+    out.push({ name, slot });
+  }
+  return out;
+}
+
+test('a batch never gives two people the same slot', () => {
+  const plan = planFor(['Heidi Power', 'Luke Scaife', 'Zoe Rees', 'Abdi Mohamed']);
+  const stamps = plan.map(p => `${p.slot.date}T${p.slot.start}`);
+  assert.equal(new Set(stamps).size, stamps.length, 'every allocation must be distinct');
+});
+
+test('a batch spreads across days because reserved slots count toward the cap', () => {
+  const plan = planFor(['A Person', 'B Person', 'C Person', 'D Person']);
+  const perDay = {};
+  for (const p of plan) perDay[p.slot.date] = (perDay[p.slot.date] || 0) + 1;
+  for (const [day, n] of Object.entries(perDay)) {
+    assert.ok(n <= MAX_PER_DAY, `${day} got ${n} 1-2-1s, cap is ${MAX_PER_DAY}`);
+  }
+  assert.ok(Object.keys(perDay).length >= 2, 'four people cannot fit in one day');
+});
+
+test('a batch skips the weekend', () => {
+  const plan = planFor(Array.from({ length: 8 }, (_, i) => `Person ${i}`));
+  for (const p of plan) {
+    const day = new Date(`${p.slot.date}T12:00:00`).getDay();
+    assert.ok(day >= 1 && day <= 5, `${p.slot.date} is a weekend`);
+  }
+});
+
+test('a batch still obeys the time-of-day rules', () => {
+  const plan = planFor(Array.from({ length: 6 }, (_, i) => `Person ${i}`));
+  for (const p of plan) {
+    const mins = toMinutes(p.slot.start);
+    const endMins = toMinutes(p.slot.end);
+    assert.ok(mins >= 10 * 60, `${p.slot.start} is before 10:00`);
+    assert.ok(!(mins < 14 * 60 && endMins > 12 * 60), `${p.slot.start} straddles lunch`);
+    assert.ok(endMins <= 16 * 60 + 30, `${p.slot.end} runs past 16:30`);
+  }
+});
+
+test('a batch works around meetings already in the diary', () => {
+  const busy = [
+    ev('14:00', '16:30'),                                  // Monday PM gone
+    ev('10:00', '12:00'),                                   // Monday AM gone
+  ];
+  const plan = planFor(['Heidi Power'], busy);
+  assert.notEqual(plan[0].slot.date, D, 'must roll past a full Monday');
+});
+
+test('reserved slots are shaped so the cap can see them', () => {
+  const events = [];
+  reserve(events, 'Heidi Power', { date: D, start: `${D}T14:00:00`, end: `${D}T14:30:00` });
+  assert.equal(countOneToOnes(DAY, events), 1, 'a reservation must count as a 1-2-1');
+  assert.equal(events[0].subject, subjectFor('Heidi Power'));
+});
+
+test('the subject names the person, so the cap recognises it later', () => {
+  assert.match(subjectFor('Heidi Power'), /1-2-1/);
+  assert.match(subjectFor('Heidi Power'), /Heidi/);
 });
 
 test('dateStr uses local getters, not UTC', () => {

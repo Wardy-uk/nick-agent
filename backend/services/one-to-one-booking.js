@@ -123,6 +123,75 @@ async function resolveAttendee(name) {
   }
 }
 
+function subjectFor(name) {
+  return `1-2-1 — Nick / ${name.split(' ')[0]}`;
+}
+
+function minutesToClock(dayStr, minutes) {
+  return `${dayStr}T${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}:00`;
+}
+
+/**
+ * The shared slot search. Pure with respect to `events` — it never fetches, so
+ * a batch can hand it one calendar read plus the slots it has already handed
+ * out, and each subsequent person is placed around them.
+ */
+function findSlot(events, from, durationMinutes) {
+  for (let i = 0; i <= SEARCH_DAYS; i++) {
+    const day = addDays(from, i);
+    if (!isWorkingDay(day)) continue;
+    if (countOneToOnes(day, events) >= MAX_PER_DAY) continue;
+    for (const window of [PM_WINDOW, AM_WINDOW]) {
+      const gap = findGapInWindow(day, events, window, durationMinutes);
+      if (!gap) continue;
+      const d = dateStr(day);
+      return {
+        date: d,
+        start: minutesToClock(d, gap.start),
+        end: minutesToClock(d, gap.end),
+        window: window === PM_WINDOW ? 'afternoon' : 'morning',
+      };
+    }
+  }
+  return null;
+}
+
+/** A held slot, shaped like a calendar event so the next search sees it. */
+function reserve(events, name, slot) {
+  events.push({
+    date: slot.date,
+    start: slot.start,
+    end: slot.end,
+    subject: subjectFor(name),
+    showAs: 'busy',
+  });
+}
+
+async function fetchWindow(from) {
+  const microsoft = require('./microsoft');
+  return microsoft.fetchCalendarEvents(dateStr(from), dateStr(addDays(from, SEARCH_DAYS)));
+}
+
+async function describe(name, slot, { durationMinutes, fmDue, latest }) {
+  const attendee = await resolveAttendee(name);
+  return {
+    ok: true,
+    person: name,
+    start: slot.start,
+    end: slot.end,
+    date: slot.date,
+    durationMinutes,
+    window: slot.window,
+    subject: subjectFor(name),
+    attendee,
+    dueDate: fmDue || null,
+    lastOneToOne: latest ? { date: latest.date, title: latest.title } : null,
+    note: attendee.email
+      ? null
+      : 'No email resolved — the event can be created without an invite, or add the address manually.',
+  };
+}
+
 /**
  * Propose a slot. Reads only — creates nothing.
  */
@@ -137,45 +206,79 @@ async function propose(name, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
   const fmDue = readNextDue(name);
   const from = earliestDate({ nextDue: fmDue });
 
-  const microsoft = require('./microsoft');
-  const searchEnd = addDays(from, SEARCH_DAYS);
   let events = [];
   try {
-    events = await microsoft.fetchCalendarEvents(dateStr(from), dateStr(searchEnd));
+    events = await fetchWindow(from);
   } catch (e) {
     return { ok: false, error: `Could not read the calendar: ${e.message}` };
   }
 
-  for (let i = 0; i <= SEARCH_DAYS; i++) {
-    const day = addDays(from, i);
-    if (!isWorkingDay(day)) continue;
-    if (countOneToOnes(day, events) >= MAX_PER_DAY) continue;
-    for (const window of [PM_WINDOW, AM_WINDOW]) {
-      const gap = findGapInWindow(day, events, window, durationMinutes);
-      if (!gap) continue;
-      const d = dateStr(day);
-      const start = `${d}T${pad(Math.floor(gap.start / 60))}:${pad(gap.start % 60)}:00`;
-      const end = `${d}T${pad(Math.floor(gap.end / 60))}:${pad(gap.end % 60)}:00`;
-      const attendee = await resolveAttendee(name);
-      return {
-        ok: true,
-        person: name,
-        start,
-        end,
-        date: d,
-        durationMinutes,
-        window: window === PM_WINDOW ? 'afternoon' : 'morning',
-        subject: `1-2-1 — Nick / ${name.split(' ')[0]}`,
-        attendee,
-        dueDate: fmDue || null,
-        lastOneToOne: latest ? { date: latest.date, title: latest.title } : null,
-        note: attendee.email
-          ? null
-          : 'No email resolved — the event can be created without an invite, or add the address manually.',
-      };
-    }
+  const slot = findSlot(events, from, durationMinutes);
+  if (!slot) {
+    return { ok: false, error: `No free ${durationMinutes}-minute slot in the next ${SEARCH_DAYS} days` };
   }
-  return { ok: false, error: `No free ${durationMinutes}-minute slot in the next ${SEARCH_DAYS} days` };
+  return describe(name, slot, { durationMinutes, fmDue, latest });
+}
+
+/**
+ * Plan a slot for several people in one pass. Reads only — creates nothing.
+ *
+ * The calendar is fetched ONCE and each allocation is reserved back into that
+ * working set, which is the whole point: proposing people one at a time returns
+ * the same free slot to everybody, so booking the lot would stack them all on
+ * top of each other. Reserving as we go also lets MAX_PER_DAY count the
+ * 1-2-1s this plan is itself creating, so a batch spreads across days.
+ *
+ * Most overdue first, so if the diary runs out it's the longest-neglected who
+ * got the slots.
+ */
+async function planAll(names, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
+  const index = detect.getIndex();
+  const active = new Set((index.people || []).map(p => p.name));
+
+  const wanted = [...new Set(names || [])].filter(Boolean);
+  const unknown = wanted.filter(n => !active.has(n));
+  const candidates = wanted
+    .filter(n => active.has(n))
+    .map(n => ({ name: n, fmDue: readNextDue(n), latest: index.byPerson?.[n]?.[0] || null }))
+    // No due date at all is the most neglected case, so it sorts first.
+    .sort((a, b) => String(a.fmDue || '0000-00-00').localeCompare(String(b.fmDue || '0000-00-00')));
+
+  if (!candidates.length) {
+    return { ok: false, error: 'No active direct reports in that list', unknown };
+  }
+
+  // One read covers everyone: the earliest possible start is the same for all.
+  const from = earliestDate({ nextDue: null });
+  let events;
+  try {
+    events = await fetchWindow(from);
+  } catch (e) {
+    return { ok: false, error: `Could not read the calendar: ${e.message}` };
+  }
+
+  const planned = [];
+  const skipped = [];
+  for (const c of candidates) {
+    // Honour each person's own due date — someone not due yet is not pulled forward.
+    const earliest = earliestDate({ nextDue: c.fmDue });
+    const slot = findSlot(events, earliest, durationMinutes);
+    if (!slot) {
+      skipped.push({ person: c.name, reason: `no free slot in the next ${SEARCH_DAYS} days` });
+      continue;
+    }
+    reserve(events, c.name, slot);
+    planned.push(await describe(c.name, slot, { durationMinutes, fmDue: c.fmDue, latest: c.latest }));
+  }
+
+  return {
+    ok: true,
+    planned,
+    skipped,
+    unknown,
+    totalRequested: wanted.length,
+    withoutInvite: planned.filter(p => !p.attendee?.email).map(p => p.person),
+  };
 }
 
 function readNextDue(name) {
@@ -227,12 +330,86 @@ async function book({ person, start, end, email, subject, durationMinutes }) {
   };
 }
 
+/**
+ * Book a whole plan. Sequential and fault-isolated on purpose: these are real
+ * invites to real people, so a Graph failure on the fourth must not silently
+ * abandon the remaining seven, and it must never retry one that already went
+ * out. Every entry comes back with its own outcome.
+ *
+ * Each slot is re-checked for a clash immediately before it is created — the
+ * plan may have been sitting on Nick's screen for a while, and something else
+ * could have taken the slot in the meantime.
+ */
+async function bookAll(items = []) {
+  if (!Array.isArray(items) || !items.length) {
+    return { ok: false, error: 'nothing to book' };
+  }
+
+  let events = null;
+  try {
+    events = await fetchWindow(earliestDate({ nextDue: null }));
+  } catch {
+    events = null; // clash re-check is best-effort; never blocks the booking
+  }
+
+  const results = [];
+  for (const item of items) {
+    const { person, start, end, email, subject, durationMinutes } = item || {};
+    if (!person || !start || !end) {
+      results.push({ person: person || '(unknown)', ok: false, error: 'missing person, start or end' });
+      continue;
+    }
+
+    if (events) {
+      const day = new Date(`${start.split('T')[0]}T12:00:00`);
+      const from = toMinutes(start);
+      const to = toMinutes(end);
+      const taken = events
+        .filter(e => e.date === start.split('T')[0])
+        .filter(e => !['free', 'cancelled'].includes(String(e.showAs || 'busy').toLowerCase()))
+        .some(e => (e.isAllDay ? true : from < toMinutes(e.end) && to > toMinutes(e.start)));
+      if (taken) {
+        results.push({ person, ok: false, error: 'slot was taken since the plan was made — re-plan' });
+        continue;
+      }
+      if (countOneToOnes(day, events) >= MAX_PER_DAY) {
+        results.push({ person, ok: false, error: `already ${MAX_PER_DAY} 1-2-1s that day — re-plan` });
+        continue;
+      }
+    }
+
+    let outcome;
+    try {
+      outcome = await book({ person, start, end, email, subject, durationMinutes });
+    } catch (e) {
+      outcome = { ok: false, error: e.message };
+    }
+    results.push({ person, start, end, ...outcome });
+
+    // Reserve it locally too, so two plan entries on the same day still respect
+    // the cap even if the calendar read above was unavailable.
+    if (outcome.ok && events) reserve(events, person, { date: start.split('T')[0], start, end });
+  }
+
+  const booked = results.filter(r => r.ok);
+  return {
+    ok: booked.length > 0,
+    booked: booked.length,
+    failed: results.length - booked.length,
+    invited: booked.filter(r => r.invited).length,
+    results,
+  };
+}
+
 module.exports = {
   propose,
+  planAll,
   book,
+  bookAll,
   // exported for tests
   _internals: {
-    findGapInWindow, countOneToOnes, dateStr, isWorkingDay, earliestDate, toMinutes,
-    PM_WINDOW, AM_WINDOW, MAX_PER_DAY,
+    findGapInWindow, countOneToOnes, findSlot, reserve, subjectFor,
+    dateStr, isWorkingDay, earliestDate, toMinutes,
+    PM_WINDOW, AM_WINDOW, MAX_PER_DAY, SEARCH_DAYS,
   },
 };
