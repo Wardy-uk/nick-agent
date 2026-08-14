@@ -194,7 +194,15 @@ function _recordOpenRouterUsage(usage) {
 
 const HEALTH_MAX = 200;
 const _outcomes = [];              // { t, taskType, provider, ok, ms, fallback, errorClass }
-const _providerErrors = new Map(); // provider -> { count, message, errorClass, at }
+const _providerErrors = new Map();  // provider -> { count, message, errorClass, at }
+const _providerSuccess = new Map(); // provider -> timestamp of last success
+
+// The worker reports itself as pi4-<engine> on success but errors are recorded
+// against 'pi4Worker', so without this the two never line up and a recovered
+// worker keeps wearing its old failure badge.
+function _normaliseProvider(name) {
+  return String(name || '').startsWith('pi4-') ? 'pi4Worker' : name;
+}
 
 // Different classes need different fixes — a 401 is a key problem, a 429 is a
 // budget problem, ECONNREFUSED is a box problem. One "failed" count hides that.
@@ -211,6 +219,9 @@ function _classifyError(message) {
 function _recordOutcome(o) {
   _outcomes.push({ t: Date.now(), ...o });
   while (_outcomes.length > HEALTH_MAX) _outcomes.shift();
+  if (o.ok && o.provider && o.provider !== 'none') {
+    _providerSuccess.set(_normaliseProvider(o.provider), Date.now());
+  }
 }
 
 function _recordProviderError(provider, message) {
@@ -240,7 +251,11 @@ function getHealth() {
     const p = (byProvider[o.provider] ||= { calls: 0, ok: 0, failed: 0, ms: [] });
     p.calls++;
     o.ok ? p.ok++ : p.failed++;
-    if (o.ok && o.ms != null) p.ms.push(o.ms);
+    // providerMs is the serving provider's own time. o.ms is end-to-end and
+    // includes any failed attempts before it — charging a 60s dead-worker
+    // timeout to OpenRouter made a fast provider look broken.
+    const attemptMs = o.providerMs != null ? o.providerMs : o.ms;
+    if (o.ok && attemptMs != null) p.ms.push(attemptMs);
 
     const t = (byTask[o.taskType] ||= { calls: 0, providers: {} });
     t.calls++;
@@ -269,13 +284,22 @@ function getHealth() {
     fallbackRate: calls ? Math.round((fallbacks / calls) * 100) : 0,
     byProvider,
     byTask,
-    errors: Object.fromEntries(_providerErrors),
+    // An error older than that provider's last success is history, not a fault.
+    // Reporting it forever made a recovered Pi 4 worker look permanently broken,
+    // which is exactly the false signal that teaches you to ignore the panel.
+    errors: Object.fromEntries(
+      [..._providerErrors.entries()].filter(([provider, err]) => {
+        const lastOk = _providerSuccess.get(provider);
+        return !lastOk || Date.parse(err.at) > lastOk;
+      })
+    ),
     recent: _outcomes.slice(-12).reverse().map(o => ({
       at: new Date(o.t).toISOString(),
       taskType: o.taskType,
       provider: o.provider,
       ok: o.ok,
       ms: o.ms,
+      providerMs: o.providerMs ?? null,
       fallback: o.fallback,
       errorClass: o.errorClass || null,
     })),
@@ -319,7 +343,10 @@ async function runTask(taskType, payload, options = {}) {
       // provider 'none' here means every tier declined or failed — not a
       // success, even though nothing threw.
       ok: provider !== 'none' && Boolean(result?.text),
+      // ms = what the caller actually waited; providerMs = what the serving
+      // provider itself took. They differ whenever something failed first.
       ms: Date.now() - started,
+      providerMs: result?.providerMs ?? null,
       fallback: Boolean(result?.fallback),
       errorClass: provider === 'none' ? _classifyError(result?.reason) : null,
     });
@@ -360,7 +387,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
         const workerResult = await pi4Worker.runTask(taskType, payload);
         if (workerResult.ok && workerResult.result) {
           console.log(`[AIRouting] ${taskType}: Pi 4 worker (${workerResult.duration}ms)`);
-          return { text: workerResult.result, provider: workerResult.provider, fallback: false };
+          return { text: workerResult.result, provider: workerResult.provider, fallback: false, providerMs: workerResult.duration };
         }
         console.warn(`[AIRouting] Pi 4 worker failed for ${taskType}: ${workerResult.error}`);
         // Recorded so the panel shows evidence of the worker being down, rather
@@ -388,6 +415,9 @@ async function _runTaskInner(taskType, payload, options = {}) {
   let attempted = workerFellBack ? 1 : 0;
 
   for (const provider of order) {
+    // Reset per attempt: what we want to know is how long the provider that
+    // ANSWERED took, not how long the whole waterfall took.
+    const attemptStart = Date.now();
     try {
       if (provider === 'ollama') {
         if (forceCloud) continue;
@@ -398,7 +428,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
         attempted++;
         if (text && text.trim().length > 0) {
           console.log(`[AIRouting] ${taskType}: ollama (${model})${attempted > 1 ? ' [fallback]' : ''}`);
-          return { text, provider: 'ollama', fallback: attempted > 1, model };
+          return { text, provider: 'ollama', fallback: attempted > 1, model , providerMs: Date.now() - attemptStart };
         }
         continue;
       }
@@ -410,7 +440,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
         if (result.text && result.text.trim().length > 0) {
           _recordOpenRouterUsage(result.usage);
           console.log(`[AIRouting] ${taskType}: openrouter${attempted > 1 ? ' [fallback]' : ''}`);
-          return { text: result.text, provider: 'openrouter', fallback: attempted > 1 };
+          return { text: result.text, provider: 'openrouter', fallback: attempted > 1 , providerMs: Date.now() - attemptStart };
         }
         continue;
       }
@@ -422,7 +452,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
         if (result.text && result.text.trim().length > 0) {
           _recordOpenRouterUsage(result.usage);
           console.log(`[AIRouting] ${taskType}: anthropic${attempted > 1 ? ' [fallback]' : ''}`);
-          return { text: result.text, provider: 'anthropic', fallback: attempted > 1 };
+          return { text: result.text, provider: 'anthropic', fallback: attempted > 1 , providerMs: Date.now() - attemptStart };
         }
         continue;
       }
@@ -434,7 +464,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
         if (result.text && result.text.trim().length > 0) {
           _recordOpenRouterUsage(result.usage);
           console.log(`[AIRouting] ${taskType}: openai${attempted > 1 ? ' [fallback]' : ''}`);
-          return { text: result.text, provider: 'openai', fallback: attempted > 1 };
+          return { text: result.text, provider: 'openai', fallback: attempted > 1 , providerMs: Date.now() - attemptStart };
         }
       }
     } catch (err) {
