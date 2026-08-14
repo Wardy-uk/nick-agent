@@ -87,10 +87,15 @@ async function runTask(task, payload) {
       duration: data.duration || 0,
     };
   } catch (e) {
-    // Equally, a failed call is evidence the worker is down — record that too
-    // rather than leaving the panel to guess.
-    _healthCache = { ok: false, at: Date.now() };
-    return { ok: false, error: e.message };
+    // A timeout means the worker was too SLOW for this task, not that it is
+    // unreachable: /health answers in 0.12s while a 32-email triage through
+    // qwen2.5:1.5b on a Pi 4 runs past 60s. Conflating the two put "Pi 4 worker
+    // unreachable" on the panel while the worker was demonstrably up and
+    // answering. Health here means reachability — let the timeout govern
+    // routing, and leave reachability to say what is actually true.
+    const timedOut = /abort|timeout/i.test(e.message || '');
+    if (!timedOut) _healthCache = { ok: false, at: Date.now() };
+    return { ok: false, error: e.message, timedOut };
   } finally {
     clearTimeout(timer);
   }
