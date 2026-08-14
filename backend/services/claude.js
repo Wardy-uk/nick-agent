@@ -597,11 +597,11 @@ function _getChatMode() {
  */
 function _toolsAvailable() {
   if (process.env.CHAT_TOOLS_ENABLED === 'false') return false;
-  // Same gate the routing tiers use: honours AI_MODE plus the daily call/token
-  // budgets, so a tool-using turn can't quietly blow through the cost controls.
-  if (!require('./ai-routing').isCloudAllowed('chat_sync')) return false;
-  return process.env.ANTHROPIC_ENABLED !== 'false' &&
-    require('./providers/anthropic-provider').isConfigured();
+  // ai-routing owns the choice: it honours AI_MODE and the daily call/token
+  // budgets (a tools turn can be several API calls) and follows the same
+  // OpenRouter-first preference as everything else. Null means no provider can
+  // call tools, so chat runs as plain conversation.
+  return Boolean(require('./ai-routing').getToolProvider('chat_sync'));
 }
 
 // Appended when tools are live. The bracket markers stay in the base prompt for
@@ -634,11 +634,12 @@ async function _buildChatPrompt(userMessage, mode, withTools = false) {
  */
 async function _runWithTools(systemPrompt, messages, mode) {
   const chatTools = require('./chat-tools');
-  const anthropic = require('./providers/anthropic-provider');
+  const picked = require('./ai-routing').getToolProvider('chat_sync');
+  if (!picked) return null;
   const policy = getChatPolicy(mode);
 
   const t0 = Date.now();
-  const result = await anthropic.chatWithTools(
+  const result = await picked.provider.chatWithTools(
     systemPrompt,
     messages,
     chatTools.toolDefinitions(),
@@ -649,7 +650,7 @@ async function _runWithTools(systemPrompt, messages, mode) {
   try { require('./ai-routing').recordUsage(result.usage); } catch {}
 
   const ran = (result.toolCalls || []).map(c => c.name).join(', ');
-  console.log(`[Chat] Tools: ${result.toolCalls?.length || 0} call(s)${ran ? ` (${ran})` : ''} in ${Date.now() - t0}ms`);
+  console.log(`[Chat] Tools via ${picked.name}: ${result.toolCalls?.length || 0} call(s)${ran ? ` (${ran})` : ''} in ${Date.now() - t0}ms`);
   return result.text ? result : null;
 }
 

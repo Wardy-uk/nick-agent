@@ -38,13 +38,44 @@ function _cfg() {
 const LIGHTWEIGHT_MODEL = 'qwen2.5:1.5b';
 const HEAVY_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:1.5b';
 
-// Tasks that should go to OpenRouter when available (heavy/interactive)
-const CLOUD_PREFERRED_TASKS = new Set([
+/**
+ * Latency-sensitive tasks — Nick is sitting there waiting for the reply.
+ * These go to OpenRouter first: the Pi's local models are fine for background
+ * work but too slow to hold a conversation with.
+ *
+ * Everything NOT in this set is treated as light or scheduled work and runs on
+ * local Ollama first, only reaching for cloud if the local model fails. That is
+ * the policy: Ollama for the cheap and the scheduled, OpenRouter for the fast.
+ */
+const LATENCY_SENSITIVE_TASKS = new Set([
   'chat_stream',
   'chat_sync',
   'standup_interactive',
   'eod_interactive',
+  'standup_questions',
+  'eod_questions',
+  'email_draft',
+  'email_summary',
+  'briefing_synthesis',
 ]);
+
+// Kept as an alias — _isOpenRouterAllowed and older callers still reference it.
+const CLOUD_PREFERRED_TASKS = LATENCY_SENSITIVE_TASKS;
+
+/**
+ * Provider order for a task.
+ *
+ * Anthropic and OpenAI are deliberately NOT the default any more. They stay in
+ * the list so an explicitly configured key still gets used as a backstop, but
+ * they sit behind OpenRouter — the Anthropic key ran out of credit on 14 Aug
+ * and, being tier 1 at the time, took chat and the standup down with it.
+ */
+function _providerOrder(taskType) {
+  if (LATENCY_SENSITIVE_TASKS.has(taskType)) {
+    return ['openrouter', 'anthropic', 'openai', 'ollama'];
+  }
+  return ['ollama', 'openrouter', 'anthropic', 'openai'];
+}
 
 // Local model selection for tasks that stay on Pi
 const TASK_MODELS = {
@@ -195,66 +226,64 @@ async function runTask(taskType, payload, options = {}) {
   }
 
   const cloudOk = !forceLocal && _isCloudAllowed(taskType);
+  const order = _providerOrder(taskType);
+  // Whichever provider the policy puts first is the intended one; anything after
+  // it is a fallback, and the caller is told so via `fallback`.
+  let attempted = 0;
 
-  // ── Tier 1: Anthropic ──
-  if (cloudOk && _cfg().anthropicEnabled && anthropicProvider.isConfigured()) {
+  for (const provider of order) {
     try {
-      const result = await _runAnthropic(taskType, payload, options);
-      if (result.text && result.text.trim().length > 0) {
-        _recordOpenRouterUsage(result.usage);
-        console.log(`[AIRouting] ${taskType}: anthropic`);
-        return { text: result.text, provider: 'anthropic', fallback: false };
+      if (provider === 'ollama') {
+        if (forceCloud) continue;
+        const model = TASK_MODELS[taskType] || HEAVY_MODEL;
+        const text = await _queueOllamaRequest(_getTaskPriority(taskType), () =>
+          _runOllama(taskType, { ...payload, model }, options)
+        );
+        attempted++;
+        if (text && text.trim().length > 0) {
+          console.log(`[AIRouting] ${taskType}: ollama (${model})${attempted > 1 ? ' [fallback]' : ''}`);
+          return { text, provider: 'ollama', fallback: attempted > 1, model };
+        }
+        continue;
+      }
+
+      if (provider === 'openrouter') {
+        if (forceLocal || !_isOpenRouterAllowed(taskType)) continue;
+        attempted++;
+        const result = await _runOpenRouter(taskType, payload, options);
+        if (result.text && result.text.trim().length > 0) {
+          _recordOpenRouterUsage(result.usage);
+          console.log(`[AIRouting] ${taskType}: openrouter${attempted > 1 ? ' [fallback]' : ''}`);
+          return { text: result.text, provider: 'openrouter', fallback: attempted > 1 };
+        }
+        continue;
+      }
+
+      if (provider === 'anthropic') {
+        if (!cloudOk || !_cfg().anthropicEnabled || !anthropicProvider.isConfigured()) continue;
+        attempted++;
+        const result = await _runAnthropic(taskType, payload, options);
+        if (result.text && result.text.trim().length > 0) {
+          _recordOpenRouterUsage(result.usage);
+          console.log(`[AIRouting] ${taskType}: anthropic${attempted > 1 ? ' [fallback]' : ''}`);
+          return { text: result.text, provider: 'anthropic', fallback: attempted > 1 };
+        }
+        continue;
+      }
+
+      if (provider === 'openai') {
+        if (!cloudOk || !openaiProvider.isConfigured()) continue;
+        attempted++;
+        const result = await _runOpenAI(taskType, payload, options);
+        if (result.text && result.text.trim().length > 0) {
+          _recordOpenRouterUsage(result.usage);
+          console.log(`[AIRouting] ${taskType}: openai${attempted > 1 ? ' [fallback]' : ''}`);
+          return { text: result.text, provider: 'openai', fallback: attempted > 1 };
+        }
       }
     } catch (err) {
-      console.warn(`[AIRouting] Anthropic failed for ${taskType}: ${err.message}`);
-      _usage.lastFallbackReason = `Anthropic: ${err.message.substring(0, 100)}`;
-    }
-  }
-
-  // ── Tier 2: OpenAI ──
-  if (cloudOk && openaiProvider.isConfigured()) {
-    try {
-      const result = await _runOpenAI(taskType, payload, options);
-      if (result.text && result.text.trim().length > 0) {
-        _recordOpenRouterUsage(result.usage);
-        console.log(`[AIRouting] ${taskType}: openai`);
-        return { text: result.text, provider: 'openai', fallback: false };
-      }
-    } catch (err) {
-      console.warn(`[AIRouting] OpenAI failed for ${taskType}: ${err.message}`);
-      _usage.lastFallbackReason = `OpenAI: ${err.message.substring(0, 100)}`;
-    }
-  }
-
-  // ── Tier 3: OpenRouter ──
-  if (!forceLocal && _isOpenRouterAllowed(taskType)) {
-    try {
-      const result = await _runOpenRouter(taskType, payload, options);
-      if (result.text && result.text.trim().length > 0) {
-        _recordOpenRouterUsage(result.usage);
-        console.log(`[AIRouting] ${taskType}: openrouter`);
-        return { text: result.text, provider: 'openrouter', fallback: false };
-      }
-    } catch (err) {
-      console.warn(`[AIRouting] OpenRouter failed for ${taskType}: ${err.message}`);
-      _usage.lastFallbackReason = `OpenRouter: ${err.message.substring(0, 100)}`;
-    }
-  }
-
-  // ── Tier 4: Ollama (local, always last resort) ──
-  if (!forceCloud) {
-    const model = TASK_MODELS[taskType] || HEAVY_MODEL;
-    const priority = _getTaskPriority(taskType);
-    try {
-      const text = await _queueOllamaRequest(priority, () =>
-        _runOllama(taskType, { ...payload, model }, options)
-      );
-      if (text && text.trim().length > 0) {
-        console.log(`[AIRouting] ${taskType}: ollama (${model})`);
-        return { text, provider: 'ollama', fallback: true, model };
-      }
-    } catch (err) {
-      console.warn(`[AIRouting] Ollama failed for ${taskType}: ${err.message}`);
+      console.warn(`[AIRouting] ${provider} failed for ${taskType}: ${err.message}`);
+      _usage.lastFallbackReason = `${provider}: ${err.message.substring(0, 100)}`;
     }
   }
 
@@ -272,54 +301,52 @@ async function runStreamingChat(systemPrompt, messages, res, options = {}) {
   const model = TASK_MODELS[taskType] || HEAVY_MODEL;
   const cloudOk = _isCloudAllowed(taskType);
 
-  // Tier 1: Anthropic
-  if (cloudOk && _cfg().anthropicEnabled && anthropicProvider.isConfigured()) {
+  // Same policy as runTask: OpenRouter leads for anything Nick is waiting on,
+  // Ollama leads for the rest, Anthropic/OpenAI are backstops.
+  let attempted = 0;
+  for (const provider of _providerOrder(taskType)) {
+    if (res.writableEnded) break;
     try {
-      const result = await anthropicProvider.streamChat(systemPrompt, messages, res, options);
-      if (result.fullText) {
-        _recordOpenRouterUsage(result.usage);
-        return { text: result.fullText, provider: 'anthropic', fallback: false };
+      if (provider === 'openrouter') {
+        if (!_isOpenRouterAllowed(taskType)) continue;
+        attempted++;
+        const result = await openrouterProvider.streamChat(systemPrompt, messages, res, options);
+        if (result.fullText) {
+          _recordOpenRouterUsage(result.usage);
+          return { text: result.fullText, provider: 'openrouter', fallback: attempted > 1 };
+        }
+        continue;
+      }
+      if (provider === 'anthropic') {
+        if (!cloudOk || !_cfg().anthropicEnabled || !anthropicProvider.isConfigured()) continue;
+        attempted++;
+        const result = await anthropicProvider.streamChat(systemPrompt, messages, res, options);
+        if (result.fullText) {
+          _recordOpenRouterUsage(result.usage);
+          return { text: result.fullText, provider: 'anthropic', fallback: attempted > 1 };
+        }
+        continue;
+      }
+      if (provider === 'openai') {
+        if (!cloudOk || !openaiProvider.isConfigured()) continue;
+        attempted++;
+        const result = await openaiProvider.streamChat(systemPrompt, messages, res, options);
+        if (result.fullText) {
+          _recordOpenRouterUsage(result.usage);
+          return { text: result.fullText, provider: 'openai', fallback: attempted > 1 };
+        }
+        continue;
+      }
+      if (provider === 'ollama') {
+        if (forceCloud) continue;
+        attempted++;
+        const text = await ollamaProvider.streamChat(systemPrompt, messages, res, { ...options, model });
+        if (text && text.trim().length > 0) {
+          return { text, provider: 'ollama', fallback: attempted > 1 };
+        }
       }
     } catch (err) {
-      console.warn(`[AIRouting] Anthropic stream failed: ${err.message}`);
-    }
-  }
-
-  // Tier 2: OpenAI
-  if (cloudOk && openaiProvider.isConfigured() && !res.writableEnded) {
-    try {
-      const result = await openaiProvider.streamChat(systemPrompt, messages, res, options);
-      if (result.fullText) {
-        _recordOpenRouterUsage(result.usage);
-        return { text: result.fullText, provider: 'openai', fallback: false };
-      }
-    } catch (err) {
-      console.warn(`[AIRouting] OpenAI stream failed: ${err.message}`);
-    }
-  }
-
-  // Tier 3: OpenRouter
-  if (_isOpenRouterAllowed(taskType) && !res.writableEnded) {
-    try {
-      const result = await openrouterProvider.streamChat(systemPrompt, messages, res, options);
-      if (result.fullText) {
-        _recordOpenRouterUsage(result.usage);
-        return { text: result.fullText, provider: 'openrouter', fallback: false };
-      }
-    } catch (err) {
-      console.warn(`[AIRouting] OpenRouter stream failed: ${err.message}`);
-    }
-  }
-
-  // Tier 4: Ollama
-  if (!forceCloud) {
-    try {
-      const text = await ollamaProvider.streamChat(systemPrompt, messages, res, { ...options, model });
-      if (text && text.trim().length > 0) {
-        return { text, provider: 'ollama', fallback: true };
-      }
-    } catch (err) {
-      console.warn(`[AIRouting] Ollama stream failed: ${err.message}`);
+      console.warn(`[AIRouting] ${provider} stream failed: ${err.message}`);
     }
   }
 
@@ -399,6 +426,27 @@ async function _runOpenRouter(taskType, payload, options) {
 // Status
 // ═══════════════════════════════════════════════════════
 
+/**
+ * The provider to use for a tool-calling turn, or null if none can.
+ *
+ * Tool use needs a provider with a function-calling API — Ollama has none, so a
+ * tools turn either gets a cloud provider or degrades to plain conversation.
+ * Follows the same preference order as everything else: OpenRouter first.
+ *
+ * Returns `{ name, provider }` so callers can log which one answered.
+ */
+function getToolProvider(taskType = 'chat_sync') {
+  if (!_isCloudAllowed(taskType)) return null;
+
+  if (_isOpenRouterAllowed(taskType) && typeof openrouterProvider.chatWithTools === 'function') {
+    return { name: 'openrouter', provider: openrouterProvider };
+  }
+  if (_cfg().anthropicEnabled && anthropicProvider.isConfigured()) {
+    return { name: 'anthropic', provider: anthropicProvider };
+  }
+  return null;
+}
+
 function getStatus() {
   _resetIfNewDay();
   return {
@@ -452,6 +500,9 @@ module.exports = {
   // rather than re-deriving it from getStatus() and missing the budget caps —
   // one tool-using turn can be several API calls.
   isCloudAllowed: _isCloudAllowed,
+  getToolProvider,
+  _providerOrder,
+  LATENCY_SENSITIVE_TASKS,
   // Tool-using chat calls the Anthropic provider directly (the loop has to see
   // each response before it can run anything), so it has to report its own usage
   // or the daily budget silently under-counts every turn that used tools.

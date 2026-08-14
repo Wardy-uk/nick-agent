@@ -141,4 +141,109 @@ async function streamChat(systemPrompt, messages, res, options = {}) {
   }
 }
 
-module.exports = { isConfigured, chat, generate, streamChat };
+/**
+ * Chat with tool use — the OpenAI-compatible function-calling loop.
+ *
+ * Mirrors anthropic-provider.chatWithTools exactly: same arguments, same
+ * `{ text, usage, toolCalls }` return, same bounded rounds. That symmetry is the
+ * point — the caller picks a provider and otherwise does not care which one it
+ * got, so chat tools keep working when the routing policy changes underneath.
+ *
+ * Note the model must actually support tools. The default
+ * (anthropic/claude-haiku-4.5) does; a model that doesn't will simply never
+ * return tool_calls, and the loop returns its prose on the first round.
+ */
+async function chatWithTools(systemPrompt, messages, tools, runTool, options = {}) {
+  if (!_key()) throw new Error('OpenRouter API key not configured');
+
+  const model = options.model || _model();
+  const maxRounds = options.maxRounds || 5;
+  const timeout = options.timeout || 60000;
+
+  // OpenAI wraps each tool in a `function` envelope; Anthropic passes them flat.
+  const openaiTools = tools.map(t => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: t.input_schema },
+  }));
+
+  const convo = [{ role: 'system', content: systemPrompt }, ...messages];
+  const toolCalls = [];
+  const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  let text = '';
+
+  for (let round = 0; round < maxRounds; round++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+
+    let data;
+    try {
+      const res = await fetch(OPENROUTER_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${_key()}`,
+          'HTTP-Referer': 'https://neuro.nurtur.tech',
+          'X-Title': 'NEURO',
+        },
+        body: JSON.stringify({
+          model,
+          messages: convo,
+          tools: openaiTools,
+          temperature: options.temperature ?? 0.5,
+          max_tokens: options.maxTokens || 1024,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`OpenRouter tool call failed: HTTP ${res.status} — ${body.substring(0, 200)}`);
+      }
+      data = await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const message = data.choices?.[0]?.message;
+    if (data.usage) {
+      usage.prompt_tokens += data.usage.prompt_tokens || 0;
+      usage.completion_tokens += data.usage.completion_tokens || 0;
+      usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+    }
+
+    if (message?.content) text = text ? `${text}\n${message.content}` : message.content;
+
+    const calls = message?.tool_calls || [];
+    if (!calls.length) return { text, usage, toolCalls };
+
+    convo.push(message);
+
+    for (const call of calls) {
+      let args = {};
+      try {
+        args = JSON.parse(call.function?.arguments || '{}');
+      } catch {
+        // A model that emits unparseable arguments should be told so and given
+        // the chance to correct itself, not crash the turn.
+        convo.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: JSON.stringify({ ok: false, error: 'Arguments were not valid JSON' }),
+        });
+        continue;
+      }
+
+      const result = await runTool(call.function.name, args);
+      toolCalls.push({ name: call.function.name, input: args, result });
+      convo.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: JSON.stringify(result),
+      });
+    }
+  }
+
+  console.warn(`[OpenRouter] Tool loop hit maxRounds (${maxRounds}) — returning partial reply`);
+  return { text, usage, toolCalls, truncated: true };
+}
+
+module.exports = { isConfigured, chat, generate, streamChat, chatWithTools };

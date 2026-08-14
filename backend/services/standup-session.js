@@ -366,18 +366,19 @@ function _emptySession(kind, ctx) {
 async function _turn(session) {
   const prompt = `${session.kind === KIND_EOD ? EOD_PROMPT : STANDUP_PROMPT}\n\n---\nCONTEXT (${session.dateKey}):\n${_renderContext(session.context)}`;
 
-  const anthropic = require('./providers/anthropic-provider');
   const aiRouting = require('./ai-routing');
   let reply = '';
 
-  // Tool path first. `isConfigured()` only proves a key exists — it can still
+  // Tool path first, on whichever provider the routing policy picks (OpenRouter
+  // by preference). Being configured only proves a key exists — it can still
   // fail at call time (expired key, no credit, rate limit), and when it does the
   // ritual must degrade, not die. A standup without tools is worth far more than
   // no standup; it simply cannot record decisions itself, so finish() writes
   // whatever was agreed in the transcript.
-  if (anthropic.isConfigured() && aiRouting.isCloudAllowed('standup_interactive')) {
+  const picked = aiRouting.getToolProvider('standup_interactive');
+  if (picked) {
     try {
-      const result = await anthropic.chatWithTools(
+      const result = await picked.provider.chatWithTools(
         prompt,
         session.messages,
         toolDefinitions(),
@@ -388,7 +389,7 @@ async function _turn(session) {
       session.degraded = false;
       try { aiRouting.recordUsage(result.usage); } catch {}
     } catch (e) {
-      console.warn('[StandupSession] Tool path failed, degrading:', e.message);
+      console.warn(`[StandupSession] Tool path (${picked.name}) failed, degrading:`, e.message);
       session.degradedReason = e.message.slice(0, 120);
     }
   }
