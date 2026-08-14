@@ -302,11 +302,38 @@ function readNextDue(name) {
   } catch { return null; }
 }
 
+/** The subject of the first busy event overlapping this slot, or null. */
+async function findClash(start, end) {
+  const day = start.split('T')[0];
+  let events;
+  try {
+    const microsoft = require('./microsoft');
+    events = await microsoft.fetchCalendarEvents(day, day);
+  } catch {
+    return null; // best-effort: never block a booking on a failed read
+  }
+  const from = toMinutes(start);
+  const to = toMinutes(end);
+  const hit = (events || [])
+    .filter(e => e.date === day)
+    .filter(e => !['free', 'cancelled'].includes(String(e.showAs || 'busy').toLowerCase()))
+    .find(e => (e.isAllDay ? true : from < toMinutes(e.end) && to > toMinutes(e.start)));
+  return hit ? (hit.subject || 'an existing meeting') : null;
+}
+
 /**
  * Create the event. Only ever called after Nick has seen the proposal.
  */
-async function book({ person, start, end, email, subject, durationMinutes }) {
+async function book({ person, start, end, email, subject, durationMinutes, skipClashCheck = false }) {
   if (!person || !start || !end) return { ok: false, error: 'person, start and end are required' };
+
+  // A hand-picked date/time bypasses the planner, so re-check the one rule that
+  // matters most here: never onto an existing meeting. Cheap, and it turns a
+  // silent double-booking into a message Nick can act on.
+  if (!skipClashCheck) {
+    const clash = await findClash(start, end);
+    if (clash) return { ok: false, error: `That slot clashes with "${clash}"` };
+  }
 
   const microsoft = require('./microsoft');
   const result = await microsoft.createCalendarEvent({
@@ -390,7 +417,9 @@ async function bookAll(items = []) {
 
     let outcome;
     try {
-      outcome = await book({ person, start, end, email, subject, durationMinutes });
+      // bookAll has already clash-checked this slot against one calendar read;
+      // re-checking per person would be a Graph round-trip each.
+      outcome = await book({ person, start, end, email, subject, durationMinutes, skipClashCheck: Boolean(events) });
     } catch (e) {
       outcome = { ok: false, error: e.message };
     }

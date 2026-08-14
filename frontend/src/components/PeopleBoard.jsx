@@ -289,6 +289,67 @@ function RecentOneToOnes({ meetings }) {
   );
 }
 
+// Nick's booking rules, mirrored client-side so an overridden slot can be
+// flagged as it is typed. The backend still owns clash detection — that needs
+// the calendar — but weekends and time-of-day are pure arithmetic.
+const AM = [10 * 60, 12 * 60];
+const PM = [14 * 60, 16 * 60 + 30];
+
+function mins(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function slotWarning(date, time, durationMinutes = 30) {
+  if (!date || !time) return null;
+  const day = new Date(`${date}T12:00:00`).getDay();
+  if (day === 0 || day === 6) return 'That is a weekend.';
+  const from = mins(time);
+  const to = from + durationMinutes;
+  const inAm = from >= AM[0] && to <= AM[1];
+  const inPm = from >= PM[0] && to <= PM[1];
+  if (inAm || inPm) return null;
+  if (from < AM[0]) return 'Before 10:00 — your rule is never at 9am.';
+  if (from < PM[0] && to > AM[1]) return 'Runs into 12:00–14:00 — your rule is never over lunch.';
+  if (to > PM[1]) return 'Ends after 16:30 — your rule is never after 4.30pm.';
+  return 'Outside your usual 10:00–12:00 / 14:00–16:30 windows.';
+}
+
+/** Date + time override, shared by both booking dialogs. */
+function SlotEditor({ date, time, durationMinutes, onChange, compact }) {
+  const warning = slotWarning(date, time, durationMinutes);
+  return (
+    <div className={`slot-editor${compact ? ' slot-editor-compact' : ''}`}>
+      <label>
+        {!compact && <span>Set new date</span>}
+        <input
+          type="date"
+          value={date}
+          onChange={e => onChange({ date: e.target.value, time })}
+        />
+      </label>
+      <label>
+        {!compact && <span>Set new time</span>}
+        <input
+          type="time"
+          step="900"
+          value={time}
+          onChange={e => onChange({ date, time: e.target.value })}
+        />
+      </label>
+      {warning && <span className="slot-warning" title={warning}>⚠ {warning}</span>}
+    </div>
+  );
+}
+
+/** Recompute the ISO start/end pair from an edited date + time. */
+function slotToIso(date, time, durationMinutes) {
+  const from = mins(time);
+  const to = from + durationMinutes;
+  const hhmm = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  return { start: `${date}T${time}:00`, end: `${date}T${hhmm(to)}:00`, date };
+}
+
 /**
  * Batch booking for everyone whose 1-2-1 is overdue.
  *
@@ -298,6 +359,7 @@ function RecentOneToOnes({ meetings }) {
  */
 function BookAllDialog({ names, onClose, onBooked }) {
   const [plan, setPlan] = useState(null);
+  const [edits, setEdits] = useState({}); // person -> { date, time } overrides
   const [error, setError] = useState('');
   const [booking, setBooking] = useState(false);
   const [result, setResult] = useState(null);
@@ -321,13 +383,19 @@ function BookAllDialog({ names, onClose, onBooked }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          items: plan.planned.map(p => ({
-            person: p.person,
-            start: p.start,
-            end: p.end,
-            email: p.attendee?.email || undefined,
-            subject: p.subject,
-          })),
+          items: plan.planned.map(p => {
+            const e = edits[p.person];
+            const iso = e
+              ? slotToIso(e.date, e.time, p.durationMinutes)
+              : { start: p.start, end: p.end };
+            return {
+              person: p.person,
+              start: iso.start,
+              end: iso.end,
+              email: p.attendee?.email || undefined,
+              subject: p.subject,
+            };
+          }),
         }),
       });
       const d = await res.json();
@@ -384,7 +452,15 @@ function BookAllDialog({ names, onClose, onBooked }) {
                 {plan.planned.map(p => (
                   <tr key={p.person}>
                     <td>{p.person}</td>
-                    <td className="book-plan-when">{formatDate(p.date)} · {hhmm(p.start)}–{hhmm(p.end)}</td>
+                    <td>
+                      <SlotEditor
+                        compact
+                        date={edits[p.person]?.date ?? p.date}
+                        time={edits[p.person]?.time ?? hhmm(p.start)}
+                        durationMinutes={p.durationMinutes}
+                        onChange={next => setEdits(prev => ({ ...prev, [p.person]: next }))}
+                      />
+                    </td>
                     <td className={p.attendee?.email ? 'book-plan-email' : 'book-plan-noemail'}>
                       {p.attendee?.email || 'no address — no invite'}
                     </td>
@@ -436,6 +512,7 @@ function BookAllDialog({ names, onClose, onBooked }) {
  */
 function BookDialog({ name, onClose, onBooked }) {
   const [proposal, setProposal] = useState(null);
+  const [slot, setSlot] = useState(null); // { date, time } — Nick's override
   const [error, setError] = useState('');
   const [booking, setBooking] = useState(false);
   const [booked, setBooked] = useState(null);
@@ -447,7 +524,12 @@ function BookDialog({ name, onClose, onBooked }) {
       body: JSON.stringify({ person: name }),
     })
       .then(r => r.json())
-      .then(d => { if (d.ok) setProposal(d); else setError(d.error || 'Could not find a slot'); })
+      .then(d => {
+        if (d.ok) {
+          setProposal(d);
+          setSlot({ date: d.date, time: d.start.split('T')[1].slice(0, 5) });
+        } else setError(d.error || 'Could not find a slot');
+      })
       .catch(e => setError(e.message));
   }, [name]);
 
@@ -455,13 +537,14 @@ function BookDialog({ name, onClose, onBooked }) {
     setBooking(true);
     setError('');
     try {
+      const iso = slotToIso(slot.date, slot.time, proposal.durationMinutes);
       const res = await fetch(apiUrl('/api/1to1/book'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           person: name,
-          start: proposal.start,
-          end: proposal.end,
+          start: iso.start,
+          end: iso.end,
           email: proposal.attendee?.email || undefined,
           subject: proposal.subject,
         }),
@@ -473,8 +556,9 @@ function BookDialog({ name, onClose, onBooked }) {
     setBooking(false);
   };
 
-  const time = proposal ? proposal.start.split('T')[1].slice(0, 5) : '';
-  const endTime = proposal ? proposal.end.split('T')[1].slice(0, 5) : '';
+  // The booked-confirmation reads back from the response, not the proposal —
+  // Nick may have overridden the slot before confirming.
+  const bookedTime = booked?.event?.start?.split('T')[1]?.slice(0, 5) || slot?.time || '';
 
   return (
     <div className="note-editor-overlay" onClick={onClose}>
@@ -487,7 +571,7 @@ function BookDialog({ name, onClose, onBooked }) {
         {booked ? (
           <div className="book-dialog-body">
             <div className="book-ok">
-              Booked for {formatDate(booked.event?.start?.split('T')[0])} at {time}.
+              Booked for {formatDate(booked.event?.start?.split('T')[0])} at {bookedTime}.
               {booked.invited ? ' Invite sent.' : ' No invite — no email address resolved.'}
             </div>
             <div className="book-actions">
@@ -504,9 +588,17 @@ function BookDialog({ name, onClose, onBooked }) {
         ) : (
           <div className="book-dialog-body">
             <div className="book-slot">
-              <span className="book-slot-date">{formatDate(proposal.date)}</span>
-              <span className="book-slot-time">{time}–{endTime}</span>
+              <span className="book-slot-date">{formatDate(slot.date)}</span>
+              <span className="book-slot-time">
+                {slot.time}–{slotToIso(slot.date, slot.time, proposal.durationMinutes).end.split('T')[1].slice(0, 5)}
+              </span>
             </div>
+            <SlotEditor
+              date={slot.date}
+              time={slot.time}
+              durationMinutes={proposal.durationMinutes}
+              onChange={setSlot}
+            />
             <dl className="book-meta">
               <dt>Invite</dt>
               <dd>{proposal.attendee?.email || <em>not resolved — will book without an invite</em>}</dd>
