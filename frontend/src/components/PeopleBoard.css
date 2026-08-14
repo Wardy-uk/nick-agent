@@ -352,8 +352,8 @@
   color: var(--success);
 }
 
-/* View 1-1 Prep button */
-.person-prep-btn {
+/* Book now button — replaced the prep buttons when NOVA took over 1-2-1 prep */
+.person-book-btn {
   font-family: var(--font-mono);
   font-size: 10px;
   background: var(--bg-tertiary);
@@ -364,8 +364,185 @@
   cursor: pointer;
 }
 
-.person-prep-btn:hover {
+.person-book-btn:hover {
   background: rgba(167, 139, 250, 0.1);
+}
+
+/* Recent 1-2-1s — what actually happened, detected from meeting notes */
+.person-121-recent {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--bg-tertiary);
+  border-left: 2px solid var(--border);
+  border-radius: 3px;
+}
+
+.person-121-recent-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.person-121-recent-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.person-121-recent-date {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.person-121-recent-title {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.person-121-highlights {
+  margin: 6px 0 0;
+  padding-left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.person-121-highlights li {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.person-121-none {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.person-121-more {
+  margin-top: 6px;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.person-121-older {
+  margin: 6px 0 0;
+  padding-left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.person-121-older li {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.person-121-older-date {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+/* Book dialog */
+.book-dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: min(440px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.book-dialog-body {
+  padding: 14px;
+}
+
+.book-slot {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.book-slot-date {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.book-slot-time {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--success);
+}
+
+.book-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 12px 0;
+  font-size: 11px;
+}
+
+.book-meta dt {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding-top: 2px;
+}
+
+.book-meta dd {
+  margin: 0;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.book-caveat {
+  margin: 0 0 12px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.book-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.book-error {
+  margin-bottom: 10px;
+  padding: 8px;
+  font-size: 11px;
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 3px;
+}
+
+.book-ok {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--success);
+  margin-bottom: 14px;
 }
 
 /* Edit Note button */

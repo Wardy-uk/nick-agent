@@ -3,14 +3,15 @@ import { apiUrl } from '../api';
 import PersonDetail from './PersonDetail';
 import './PeopleBoard.css';
 
+// Current direct reports, grouped for display. Leavers and people who move to
+// another manager come out of here AND get `archived: true` in their People note
+// — the note is what the backend scan reads, this list is what the board draws.
 const TEAMS = {
   '2nd Line Technical Support': [
     { name: 'Abdi Mohamed', id: 'D2V00471', role: '2nd Line Support Analyst' },
-    { name: 'Arman Shazad', id: 'D2V00451', role: '2nd Line Support Analyst' },
     { name: 'Luke Scaife', id: 'D2V00506', role: '2nd Line Support Analyst' },
     { name: 'Stephen Mitchell', id: 'D2V00391', role: 'Support Analyst', note: 'Trialling queue hygiene lead' },
-    { name: 'Willem Kruger', id: 'D2V00255', role: '2nd Line Support Analyst' },
-    { name: 'Nathan Rutland', id: 'D2V00269', role: 'Senior Service Desk Analyst' },
+    { name: 'Sebastian Broome', id: 'D2V00500', role: '2nd Line Support Analyst' },
   ],
   '1st Line Customer Care': [
     { name: 'Adele Norman-Swift', id: 'D2V00427', role: 'Customer Service Agent' },
@@ -18,7 +19,7 @@ const TEAMS = {
     { name: 'Hope Goodall', id: '520', role: 'Customer Service Agent', note: 'Transitioning to call-taking' },
     { name: 'Maria Pappa', id: 'D2V00403', role: 'Customer Service Agent' },
     { name: 'Naomi Wentworth', id: 'D2V00509', role: 'Customer Service Agent', note: 'Confluence triage guide owner' },
-    { name: 'Sebastian Broome', id: 'D2V00500', role: '1st Line Support Analyst' },
+    { name: 'Nathan Rutland', id: 'D2V00269', role: 'Senior Customer Service Agent' },
     { name: 'Zoe Rees', id: '517', role: 'Customer Service Agent' },
   ],
   'Digital Design': [
@@ -225,41 +226,169 @@ function ApprovalPanel({ approvals, onRefresh }) {
   );
 }
 
-function PrepViewer({ name, onClose }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+// 1-2-1 prep used to live here (PrepViewer + a Generate Prep button). NOVA owns
+// prep now — the card shows what actually happened instead of what was prepped.
+
+function formatDate(iso) {
+  if (!iso) return '';
+  const d = new Date(`${iso}T12:00:00`);
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function daysAgo(iso) {
+  if (!iso) return null;
+  const then = new Date(`${iso}T12:00:00`);
+  const now = new Date();
+  now.setHours(12, 0, 0, 0);
+  return Math.round((now - then) / 86400000);
+}
+
+/** The most recent 1-2-1s NEURO can prove happened, newest first. */
+function RecentOneToOnes({ meetings }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!meetings) return null;
+
+  if (!meetings.length) {
+    return <div className="person-121-none">No 1-2-1 found in the vault</div>;
+  }
+
+  const [latest, ...older] = meetings;
+  const ago = daysAgo(latest.date);
+
+  return (
+    <div className="person-121-recent">
+      <div className="person-121-recent-head">
+        <span className="person-121-recent-label">Last 1-2-1</span>
+        <span className="person-121-recent-date">
+          {formatDate(latest.date)}{ago !== null && ` · ${ago}d ago`}
+        </span>
+      </div>
+      <div className="person-121-recent-title">{latest.title}</div>
+      {latest.highlights?.length > 0 && (
+        <ul className="person-121-highlights">
+          {latest.highlights.map((h, i) => <li key={i}>{h}</li>)}
+        </ul>
+      )}
+      {older.length > 0 && (
+        <>
+          <button className="person-121-more" onClick={() => setExpanded(!expanded)}>
+            {expanded ? 'Hide' : `${older.length} earlier`}
+          </button>
+          {expanded && (
+            <ul className="person-121-older">
+              {older.map((m, i) => (
+                <li key={i}>
+                  <span className="person-121-older-date">{formatDate(m.date)}</span> {m.title}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Two-step booking. Propose reads the calendar and shows a draft; nothing is
+ * created until Confirm, because attendees mean Graph emails a real invite.
+ */
+function BookDialog({ name, onClose, onBooked }) {
+  const [proposal, setProposal] = useState(null);
+  const [error, setError] = useState('');
+  const [booking, setBooking] = useState(false);
+  const [booked, setBooked] = useState(null);
 
   useEffect(() => {
-    fetch(apiUrl(`/api/obsidian/people/${encodeURIComponent(name)}/121-prep/latest`))
+    fetch(apiUrl('/api/1to1/propose'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ person: name }),
+    })
       .then(r => r.json())
-      .then(d => { setData(d); setLoading(false); })
-      .catch(() => { setData({ found: false, error: 'Failed to load' }); setLoading(false); });
+      .then(d => { if (d.ok) setProposal(d); else setError(d.error || 'Could not find a slot'); })
+      .catch(e => setError(e.message));
   }, [name]);
+
+  const confirm = async () => {
+    setBooking(true);
+    setError('');
+    try {
+      const res = await fetch(apiUrl('/api/1to1/book'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          person: name,
+          start: proposal.start,
+          end: proposal.end,
+          email: proposal.attendee?.email || undefined,
+          subject: proposal.subject,
+        }),
+      });
+      const d = await res.json();
+      if (d.ok) { setBooked(d); onBooked?.(); }
+      else setError(d.error || 'Booking failed');
+    } catch (e) { setError(e.message); }
+    setBooking(false);
+  };
+
+  const time = proposal ? proposal.start.split('T')[1].slice(0, 5) : '';
+  const endTime = proposal ? proposal.end.split('T')[1].slice(0, 5) : '';
 
   return (
     <div className="note-editor-overlay" onClick={onClose}>
-      <div className="note-editor" onClick={e => e.stopPropagation()}>
+      <div className="book-dialog" onClick={e => e.stopPropagation()}>
         <div className="note-editor-header">
-          <span className="note-editor-title">
-            {data?.found ? `${data.filename}` : `Latest 1-1 Prep — ${name}`}
-          </span>
+          <span className="note-editor-title">Book 1-2-1 — {name}</span>
           <button className="note-editor-close" onClick={onClose}>x</button>
         </div>
-        {loading ? (
-          <div className="note-editor-loading">Loading...</div>
-        ) : data?.found ? (
-          <textarea
-            className="note-editor-textarea"
-            value={data.content}
-            readOnly
-            spellCheck={false}
-          />
+
+        {booked ? (
+          <div className="book-dialog-body">
+            <div className="book-ok">
+              Booked for {formatDate(booked.event?.start?.split('T')[0])} at {time}.
+              {booked.invited ? ' Invite sent.' : ' No invite — no email address resolved.'}
+            </div>
+            <div className="book-actions">
+              <button className="btn btn-primary" onClick={onClose}>Done</button>
+            </div>
+          </div>
+        ) : !proposal && !error ? (
+          <div className="note-editor-loading">Finding a slot...</div>
+        ) : error && !proposal ? (
+          <div className="book-dialog-body">
+            <div className="book-error">{error}</div>
+            <div className="book-actions"><button className="btn" onClick={onClose}>Close</button></div>
+          </div>
         ) : (
-          <div className="note-editor-loading">No 1-1 prep note found for {name}.</div>
+          <div className="book-dialog-body">
+            <div className="book-slot">
+              <span className="book-slot-date">{formatDate(proposal.date)}</span>
+              <span className="book-slot-time">{time}–{endTime}</span>
+            </div>
+            <dl className="book-meta">
+              <dt>Invite</dt>
+              <dd>{proposal.attendee?.email || <em>not resolved — will book without an invite</em>}</dd>
+              <dt>Subject</dt>
+              <dd>{proposal.subject}</dd>
+              {proposal.dueDate && (<><dt>Was due</dt><dd>{formatDate(proposal.dueDate)}</dd></>)}
+              {proposal.lastOneToOne && (
+                <><dt>Last 1-2-1</dt><dd>{formatDate(proposal.lastOneToOne.date)}</dd></>
+              )}
+            </dl>
+            <p className="book-caveat">
+              Slot is free in your calendar; {name.split(' ')[0]}'s availability isn't visible to
+              NEURO, so this goes out as a normal invite they can decline.
+            </p>
+            {error && <div className="book-error">{error}</div>}
+            <div className="book-actions">
+              <button className="btn" onClick={onClose} disabled={booking}>Cancel</button>
+              <button className="btn btn-primary" onClick={confirm} disabled={booking}>
+                {booking ? 'Booking...' : 'Confirm & send invite'}
+              </button>
+            </div>
+          </div>
         )}
-        <div className="note-editor-actions">
-          {data?.found && <span className="update-msg">{data.path}</span>}
-        </div>
       </div>
     </div>
   );
@@ -404,9 +533,8 @@ export default function PeopleBoard() {
   const [snapshotResult, setSnapshotResult] = useState(null); // { name, data }
   const [editingPerson, setEditingPerson] = useState(null); // person name being updated
   const [editingNote, setEditingNote] = useState(null); // person name whose raw note is being edited
-  const [viewingPrep, setViewingPrep] = useState(null); // person name whose latest 1-1 prep is being viewed
-  const [generatingPrep, setGeneratingPrep] = useState(null); // person name currently generating prep
-  const [prepResult, setPrepResult] = useState(null); // { name, path, status, changes[] }
+  const [bookingFor, setBookingFor] = useState(null); // person name being booked
+  const [oneToOnes, setOneToOnes] = useState(null); // { [name]: [{date,title,highlights}] }
   const [autoExpanded, setAutoExpanded] = useState(() => sessionStorage.getItem('people-auto-expanded') === 'true');
   const [pendingApprovals, setPendingApprovals] = useState([]);
   const [selectedPerson, setSelectedPerson] = useState(null);
@@ -433,6 +561,9 @@ export default function PeopleBoard() {
       .then(d => setPersonSummaries(d.people || {}))
       .catch(() => {});
 
+    // Detected 1-2-1 history — what actually happened, read from meeting notes
+    fetchOneToOnes();
+
     // Check n8n status + pending approvals
     fetch(apiUrl('/api/n8n/status'))
       .then(r => r.json())
@@ -443,6 +574,13 @@ export default function PeopleBoard() {
     const approvalTimer = setInterval(fetchApprovals, 10000);
     return () => clearInterval(approvalTimer);
   }, []);
+
+  const fetchOneToOnes = (refresh = false) => {
+    fetch(apiUrl(`/api/1to1/recent${refresh ? '?refresh=1' : ''}`))
+      .then(r => r.json())
+      .then(d => setOneToOnes(d.byPerson || {}))
+      .catch(() => setOneToOnes({}));
+  };
 
   const fetchApprovals = () => {
     fetch(apiUrl('/api/n8n/121/pending'))
@@ -519,8 +657,17 @@ export default function PeopleBoard() {
 
       {viewMode === 'reports' && <ApprovalPanel approvals={pendingApprovals} onRefresh={fetchApprovals} />}
 
-      {viewingPrep && (
-        <PrepViewer name={viewingPrep} onClose={() => setViewingPrep(null)} />
+      {bookingFor && (
+        <BookDialog
+          name={bookingFor}
+          onClose={() => setBookingFor(null)}
+          onBooked={() => {
+            fetch(apiUrl(`/api/obsidian/people/${encodeURIComponent(bookingFor)}`))
+              .then(r => r.json())
+              .then(data => setPeopleData(prev => ({ ...prev, [bookingFor]: data })))
+              .catch(() => {});
+          }}
+        />
       )}
 
       {editingNote && (
@@ -589,6 +736,7 @@ export default function PeopleBoard() {
                     );
                   })()}
                   {person.note && <span className="person-note">{person.note}</span>}
+                  <RecentOneToOnes meetings={oneToOnes?.[person.name]} />
                   {tags.length > 0 && (
                     <div className="person-tags">
                       {tags.map(tag => (
@@ -670,49 +818,11 @@ export default function PeopleBoard() {
                       </button>
                     )}
                     <button
-                      className="person-prep-btn"
-                      onClick={() => setViewingPrep(person.name)}
-                      title="View the most recent 1-1 prep note"
+                      className="person-book-btn"
+                      onClick={() => setBookingFor(person.name)}
+                      title="Find the next free slot and send an invite"
                     >
-                      View 1-1 Prep
-                    </button>
-                    <button
-                      className={`person-generate-prep-btn ${generatingPrep === person.name ? 'running' : ''}`}
-                      onClick={async () => {
-                        if (generatingPrep) return;
-                        setGeneratingPrep(person.name);
-                        setPrepResult(null);
-                        try {
-                          let res = await fetch(apiUrl('/api/1to1/prep'), {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ person: person.name }),
-                          });
-                          let data = await res.json();
-                          if (!data.ok && /already exists/i.test(data.error || '')) {
-                            if (window.confirm(`Prep file already exists for ${person.name} today. Overwrite?`)) {
-                              res = await fetch(apiUrl('/api/1to1/prep'), {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ person: person.name, force: true }),
-                              });
-                              data = await res.json();
-                            } else {
-                              setGeneratingPrep(null);
-                              return;
-                            }
-                          }
-                          setPrepResult({ name: person.name, ...data });
-                        } catch (e) {
-                          setPrepResult({ name: person.name, ok: false, error: e.message });
-                        } finally {
-                          setGeneratingPrep(null);
-                        }
-                      }}
-                      disabled={!!generatingPrep}
-                      title="Generate a new 1-1 prep doc (NEURO)"
-                    >
-                      {generatingPrep === person.name ? 'Generating...' : 'Generate Prep'}
+                      Book now
                     </button>
                     {n8nConfigured && (
                       <button
@@ -756,33 +866,6 @@ export default function PeopleBoard() {
       {/* Person detail overlay */}
       {selectedPerson && (
         <PersonDetail name={selectedPerson} onClose={() => setSelectedPerson(null)} />
-      )}
-      {prepResult && (
-        <div
-          style={{
-            position: 'fixed', bottom: 24, right: 24, zIndex: 10000,
-            background: prepResult.ok ? '#1e3a2f' : '#3a1e1e',
-            color: '#fff', padding: '14px 18px', borderRadius: 8,
-            maxWidth: 420, boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-            fontSize: 13, lineHeight: 1.5,
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-            <strong>{prepResult.name}</strong>
-            <button
-              onClick={() => setPrepResult(null)}
-              style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 16 }}
-            >×</button>
-          </div>
-          {prepResult.ok ? (
-            <>
-              <div>{prepResult.status === 'created' ? '✅ Created' : '✅ Updated'}: <code>{prepResult.path}</code></div>
-              {(prepResult.changes || []).map((c, i) => <div key={i} style={{ opacity: 0.85 }}>• {c}</div>)}
-            </>
-          ) : (
-            <div>❌ {prepResult.error || 'Failed'}</div>
-          )}
-        </div>
       )}
     </div>
   );

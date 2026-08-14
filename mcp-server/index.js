@@ -705,25 +705,24 @@ server.tool('create_task', 'Create a task in NEURO (the source of truth for task
 // Tools: 1:1 Meeting Workflow
 // ═══════════════════════════════════════════════════════
 
-server.tool('generate_1to1_prep',
-  'Generate a 1:1 meeting prep document for a direct report and save it to the vault (Meetings/YYYY/MM/...). Pulls latest performance review, development plan, open actions, and recent meetings.',
+// generate_1to1_prep was removed on 14 Aug 2026 — NOVA owns 1-2-1 prep now.
+
+server.tool('list_recent_1to1s',
+  'List the most recent 1-2-1s that actually took place with each direct report, detected from meeting notes in the vault. Use this to answer "when did I last have a 1-2-1 with X" — it reads held meetings, not prep documents or calendar bookings.',
   {
-    person: z.string().describe('Person name, must match People/{name}.md (e.g. "Heidi Power")'),
-    date: z.string().optional().describe('ISO date (YYYY-MM-DD). Default: today'),
-    force: z.boolean().optional().describe('Overwrite existing prep file if it exists'),
+    person: z.string().optional().describe('Limit to one person, e.g. "Heidi Power". Omit for everyone.'),
   },
-  async ({ person, date, force }) => {
-    const data = await neuroApi('/api/1to1/prep', {
-      method: 'POST',
-      body: JSON.stringify({ person, date, force }),
+  async ({ person }) => {
+    const data = await neuroApi('/api/1to1/recent');
+    const byPerson = data.byPerson || {};
+    const names = person ? [person] : Object.keys(byPerson).sort();
+    const lines = names.map((name) => {
+      const list = byPerson[name] || [];
+      if (!list.length) return `**${name}** — no 1-2-1 found in the vault`;
+      const history = list.map(m => `  - ${m.date} — ${m.title}`).join('\n');
+      return `**${name}** — last ${list[0].date}\n${history}`;
     });
-    const changes = (data.changes || []).map(c => `- ${c}`).join('\n');
-    return {
-      content: [{
-        type: 'text',
-        text: `**${data.status}** — ${data.path}\n\n${changes}\n\nSections included: review=${data.sections?.hasReview}, plan=${data.sections?.hasPlan}, actions=${data.sections?.actionCount}, meetings=${data.sections?.meetingCount}`,
-      }],
-    };
+    return { content: [{ type: 'text', text: lines.join('\n\n') || 'No 1-2-1s detected.' }] };
   });
 
 server.tool('manage_meeting_note',

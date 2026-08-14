@@ -46,17 +46,10 @@ router.get('/people/:name', (req, res) => {
   res.json({ name: req.params.name, exists: true, content, frontmatter, tags });
 });
 
-// GET /api/obsidian/people/:name/121-prep/latest — find the most recent 1-1 prep note for a person
-router.get('/people/:name/121-prep/latest', (req, res) => {
-  try {
-    const result = obsidianService.findLatest121Prep(req.params.name);
-    if (!result) return res.json({ found: false });
-    res.json({ found: true, ...result });
-  } catch (err) {
-    console.error('[obsidian] findLatest121Prep error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+// The 121-prep/latest endpoint was removed on 14 Aug 2026 — NOVA owns 1-2-1 prep.
+// The Team board now shows the most recent 1-2-1 that actually happened
+// (GET /api/1to1/recent) rather than the most recent prep doc, which had been
+// generated five times for Heidi without a single meeting following it.
 
 // PUT /api/obsidian/people/:name/raw — overwrite the full person note (markdown body + frontmatter)
 router.put('/people/:name/raw', (req, res) => {

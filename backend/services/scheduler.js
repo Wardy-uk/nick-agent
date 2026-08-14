@@ -184,6 +184,20 @@ function start() {
     } catch (e) {
       console.error('[Scheduler] Entity extraction failed:', e.message);
     }
+    // Re-detect 1-2-1s from the meeting notes Syncthing delivered today and stamp
+    // People frontmatter. Before this, `last-1-2-1` was hand-maintained and froze
+    // in March while 1-2-1s carried on happening, so the Team board showed people
+    // 100+ days overdue who had been seen in July.
+    try {
+      const sync = require('./one-to-one-detect').syncPeopleNotes({ apply: true });
+      const updated = (sync.changes || []).filter(c => c.action === 'updated');
+      if (updated.length) {
+        console.log(`[Scheduler] 1-2-1 sync: ${updated.length} person note(s) updated — ` +
+          updated.map(c => `${c.person} → ${c.to}`).join(', '));
+      }
+    } catch (e) {
+      console.error('[Scheduler] 1-2-1 sync failed:', e.message);
+    }
     // People gap — nothing else in NEURO ever proposed a People note, so the
     // roster only grew when Nick typed one in and every consumer keyed off it
     // stayed capped. READ-ONLY: reports to Vault Audit, creation is an explicit
