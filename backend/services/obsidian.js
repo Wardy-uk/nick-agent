@@ -103,7 +103,7 @@ function updatePersonNote(name, updates) {
   let content = fs.readFileSync(notePath, 'utf-8');
 
   // Update frontmatter fields
-  if (updates.last121 || updates.next121Due || updates.employmentStatus) {
+  if (updates.last121 || updates.next121Due !== undefined || updates.employmentStatus || updates.cadence) {
     if (!content.startsWith('---')) {
       content = `---\n---\n` + content;
     }
@@ -120,8 +120,16 @@ function updatePersonNote(name, updates) {
         }
       };
       if (updates.last121) setField('last-1-2-1', updates.last121);
-      if (updates.next121Due) setField('next-1-2-1-due', updates.next121Due);
+      // An empty string CLEARS the due date — taking someone off cadence has to
+      // remove it, or a stale date keeps them reading as overdue forever.
+      if (updates.next121Due !== undefined && updates.next121Due !== null) {
+        setField('next-1-2-1-due', updates.next121Due);
+      }
       if (updates.employmentStatus) setField('employment-status', updates.employmentStatus);
+      // `cadence` is what decides whether someone is scheduled at all — `n/a`
+      // takes them out of the rota (maternity, long-term sick), so it must be
+      // settable, not just the recurring values.
+      if (updates.cadence) setField('cadence', updates.cadence);
       content = fm + rest;
     }
   }

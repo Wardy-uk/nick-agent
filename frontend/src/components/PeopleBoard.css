@@ -571,6 +571,28 @@
   margin-bottom: 14px;
 }
 
+.update-hint {
+  display: block;
+  margin: -4px 0 8px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.person-cadence {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+
+.person-cadence.off {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
 /* ── Set new date / time override ── */
 .slot-editor {
   display: flex;

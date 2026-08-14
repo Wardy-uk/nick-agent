@@ -221,6 +221,35 @@ test('a missing due date is NOT backfilled for someone on leave', () => {
   assert.equal(change.action, 'already-current', 'nothing to schedule against');
 });
 
+test('every offered cadence maps to the right interval', () => {
+  const { cadenceDays } = load(makeVault());
+  assert.equal(cadenceDays('weekly'), 7);
+  assert.equal(cadenceDays('bi-weekly'), 14);
+  assert.equal(cadenceDays('monthly'), 28);
+  // The old order tested /month/ first, so bi-monthly came out as 28 — the same
+  // as monthly, which made the option meaningless.
+  assert.equal(cadenceDays('bi-monthly'), 56);
+});
+
+test('legacy cadence wording still resolves', () => {
+  const { cadenceDays } = load(makeVault());
+  assert.equal(cadenceDays('fortnightly'), 14, 'what every existing note says');
+  assert.equal(cadenceDays('Bi Monthly'), 56);
+  assert.equal(cadenceDays('two-weekly'), 14);
+  assert.equal(cadenceDays(''), 14, 'unknown falls back to the team default');
+});
+
+test('a bi-monthly person is due 8 weeks after their last 1-2-1', () => {
+  const root = makeVault();
+  person(root, 'Luke Scaife', 'cadence: bi-monthly\n');
+  meeting(root, '2026-06-01 – 1-2-1 Luke.md',
+    'type: meeting\ndate: 2026-06-01\nmeeting-type: "1-1"', 'Luke '.repeat(20));
+
+  const change = load(root).syncPeopleNotes({ apply: false })
+    .changes.find(c => c.person === 'Luke Scaife');
+  assert.equal(change.nextDue, '2026-07-27', '1 Jun + 56 days');
+});
+
 test('archived people drop off the roster', () => {
   const root = makeVault();
   person(root, 'Arman Shazad', 'archived: true\n');

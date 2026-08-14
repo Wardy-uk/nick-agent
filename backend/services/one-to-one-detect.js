@@ -456,10 +456,21 @@ function addDays(dateStr, days) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// The cadences NEURO offers, longest name first so "bi-weekly" is matched before
+// "weekly" and "bi-monthly" before "monthly" — the old version tested /month/
+// first and gave bi-monthly 28 days, i.e. exactly monthly.
+const CADENCES = [
+  { value: 'bi-monthly', label: 'Bi-monthly (8 weeks)', days: 56, match: /bi[-\s]?month|two[-\s]month/i },
+  { value: 'monthly', label: 'Monthly (4 weeks)', days: 28, match: /month/i },
+  { value: 'bi-weekly', label: 'Bi-weekly (2 weeks)', days: 14, match: /bi[-\s]?week|fortnight|two[-\s]week/i },
+  { value: 'weekly', label: 'Weekly', days: 7, match: /week/i },
+];
+
+const DEFAULT_CADENCE_DAYS = 14;
+
 function cadenceDays(cadence) {
-  if (/week/i.test(cadence) && !/fort|bi/i.test(cadence)) return 7;
-  if (/month/i.test(cadence)) return 28;
-  return 14;
+  const hit = CADENCES.find(c => c.match.test(String(cadence || '')));
+  return hit ? hit.days : DEFAULT_CADENCE_DAYS;
 }
 
 /**
@@ -522,6 +533,8 @@ function syncPeopleNotes({ apply = false } = {}) {
 }
 
 module.exports = {
+  CADENCES,
+  cadenceDays,
   scan,
   refresh,
   getIndex,

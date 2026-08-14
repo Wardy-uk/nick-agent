@@ -692,17 +692,42 @@ function NoteEditor({ name, onClose, onSaved }) {
   );
 }
 
+// Mirrors CADENCES in services/one-to-one-detect.js. `n/a` is what takes someone
+// out of the rota entirely (maternity, long-term sick) — it has to be reachable
+// from the UI or the only way back off cadence is editing the note by hand.
+const CADENCE_OPTIONS = [
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'bi-weekly', label: 'Bi-weekly (2 weeks)' },
+  { value: 'monthly', label: 'Monthly (4 weeks)' },
+  { value: 'bi-monthly', label: 'Bi-monthly (8 weeks)' },
+  { value: 'n/a', label: 'Not scheduled (n/a)' },
+];
+
+/** Existing notes say "fortnightly"; show that as bi-weekly rather than blank. */
+function normaliseCadence(raw) {
+  const v = String(raw || '').toLowerCase().trim();
+  if (!v || /^(n\/?a|none|-)$/.test(v)) return 'n/a';
+  if (/bi[-\s]?month|two[-\s]month/.test(v)) return 'bi-monthly';
+  if (/month/.test(v)) return 'monthly';
+  if (/bi[-\s]?week|fortnight|two[-\s]week/.test(v)) return 'bi-weekly';
+  if (/week/.test(v)) return 'weekly';
+  return 'bi-weekly';
+}
+
 function UpdateForm({ name, frontmatter, onClose, onSaved }) {
   const fm = frontmatter || {};
   const [last121, setLast121] = useState(fm['last-1-2-1'] || '');
   const [next121, setNext121] = useState(fm['next-1-2-1-due'] || '');
+  const [cadence, setCadence] = useState(normaliseCadence(fm.cadence));
   const [employmentStatus, setEmploymentStatus] = useState(fm['employment-status'] || 'Permanent');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
 
+  const cadenceChanged = cadence !== normaliseCadence(fm.cadence);
+
   const handleSave = async () => {
-    if (!last121 && !next121 && !notes.trim() && !employmentStatus) { setMsg('Fill in at least one field'); return; }
+    if (!last121 && !next121 && !notes.trim() && !employmentStatus && !cadenceChanged) { setMsg('Fill in at least one field'); return; }
     setSaving(true);
     try {
       const res = await fetch(apiUrl(`/api/obsidian/people/${encodeURIComponent(name)}/update`), {
@@ -710,7 +735,10 @@ function UpdateForm({ name, frontmatter, onClose, onSaved }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           last121: last121 || undefined,
-          next121Due: next121 || undefined,
+          // Only send the date when it was edited — otherwise the backend can't
+          // tell "leave it alone" from "recompute it from the new cadence".
+          next121Due: next121 && next121 !== (fm['next-1-2-1-due'] || '') ? next121 : undefined,
+          cadence: cadenceChanged ? cadence : undefined,
           employmentStatus: employmentStatus || undefined,
           notes: notes.trim() || undefined
         })
@@ -739,6 +767,18 @@ function UpdateForm({ name, frontmatter, onClose, onSaved }) {
       <label className="update-label">Next 1-2-1 due
         <input type="date" className="update-input" value={next121} onChange={e => setNext121(e.target.value)} />
       </label>
+      <label className="update-label">Cadence
+        <select className="update-input" value={cadence} onChange={e => setCadence(e.target.value)}>
+          {CADENCE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </label>
+      {cadenceChanged && (
+        <span className="update-hint">
+          {cadence === 'n/a'
+            ? 'Takes them out of the rota — no due date, never booked.'
+            : 'The next due date will be recalculated from the last 1-2-1.'}
+        </span>
+      )}
       <label className="update-label">Employment Status
         <select className="update-input" value={employmentStatus} onChange={e => setEmploymentStatus(e.target.value)}>
           <option value="Permanent">Permanent</option>
@@ -1064,6 +1104,9 @@ export default function PeopleBoard() {
                         {empStatus && (
                           <span className={`person-emp-status${isProb ? ' probation' : ''}`}>{empStatus}</span>
                         )}
+                        <span className={`person-cadence${normaliseCadence(fm.cadence) === 'n/a' ? ' off' : ''}`}>
+                          {CADENCE_OPTIONS.find(o => o.value === normaliseCadence(fm.cadence))?.label}
+                        </span>
                       </div>
                     );
                   })()}

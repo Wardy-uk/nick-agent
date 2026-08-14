@@ -68,11 +68,34 @@ router.put('/people/:name/raw', (req, res) => {
 
 // POST /api/obsidian/people/:name/update — update person note frontmatter and append notes
 router.post('/people/:name/update', (req, res) => {
-  const { last121, next121Due, notes, employmentStatus } = req.body;
-  if (!last121 && !next121Due && !notes && !employmentStatus) {
-    return res.status(400).json({ error: 'At least one field required (last121, next121Due, notes, employmentStatus)' });
+  const { last121, next121Due, notes, employmentStatus, cadence } = req.body;
+  if (!last121 && !next121Due && !notes && !employmentStatus && !cadence) {
+    return res.status(400).json({ error: 'At least one field required (last121, next121Due, notes, employmentStatus, cadence)' });
   }
-  const result = obsidianService.updatePersonNote(req.params.name, { last121, next121Due, notes, employmentStatus });
+
+  // Changing the cadence should move the due date with it — otherwise switching
+  // someone from weekly to monthly leaves them reading overdue against the old
+  // interval. Only when the caller hasn't set a date explicitly.
+  let derivedNextDue = next121Due;
+  if (cadence && !next121Due) {
+    const detect = require('../services/one-to-one-detect');
+    const offCadence = /^(n\/?a|none|-)$/i.test(String(cadence).trim());
+    if (offCadence) {
+      derivedNextDue = ''; // clear it — nothing to schedule against any more
+    } else {
+      const existing = obsidianService.readPersonNote(req.params.name);
+      const last = last121 || obsidianService.parseFrontmatter(existing || '')['last-1-2-1'];
+      if (last && /^\d{4}-\d{2}-\d{2}$/.test(last)) {
+        const d = new Date(`${last}T12:00:00`);
+        d.setDate(d.getDate() + detect.cadenceDays(cadence));
+        derivedNextDue = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      }
+    }
+  }
+
+  const result = obsidianService.updatePersonNote(req.params.name, {
+    last121, next121Due: derivedNextDue, notes, employmentStatus, cadence,
+  });
   if (result === null) {
     return res.status(404).json({ error: `Person note not found: ${req.params.name}` });
   }
