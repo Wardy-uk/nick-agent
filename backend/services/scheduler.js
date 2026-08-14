@@ -483,10 +483,11 @@ function start() {
       console.error('[Scheduler] Startup calendar sync failed:', e.message));
   }, 20 * 1000);
 
-  // 8:20am weekdays — check the week ahead for meetings with no stated purpose
-  // and QUEUE a chaser for each. Queued, never sent: these are emails to real
-  // colleagues. Once a day is deliberate — this looks at the same fortnight
-  // repeatedly, and anything already pending is skipped.
+  // 8:20am weekdays — safety net, not the main path. Invites are caught on
+  // arrival: the calendar sync reports which events are new and checks those
+  // immediately, and email triage triggers a sync because an invite arrives as
+  // an email. This sweep exists for what slipped through — a failed sync, a
+  // restart mid-delivery, a meeting whose body was filled in after it was sent.
   cron.schedule('20 8 * * 1-5', async () => {
     try {
       const result = await require('./meeting-triage').scanUpcoming({ days: 7 });

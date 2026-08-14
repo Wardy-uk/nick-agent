@@ -156,6 +156,19 @@ async function runTriage() {
     const urgentCount = classified.filter(e => e.lane === 'urgent').length;
     const replyCount = classified.filter(e => e.lane === 'reply').length;
     console.log(`[EmailTriage] Classified ${classified.length} emails, ${urgentCount} urgent, ${replyCount} need reply`);
+
+    // Meeting invites arrive as email, so triage is the earliest point we know
+    // one landed. Sync the calendar here rather than waiting for the next timer
+    // — sync reports which events are new and checks those for a missing agenda,
+    // so the ask reaches the organiser while they are still thinking about the
+    // meeting they just sent. Awaited but never allowed to fail the triage:
+    // classifying the inbox is the job, this is a passenger.
+    try {
+      await require('./calendar-sync').sync({ days: 14 });
+    } catch (e) {
+      console.warn('[EmailTriage] Calendar sync after triage failed:', e.message);
+    }
+
     return {
       ok: true,
       count: classified.length,

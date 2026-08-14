@@ -32,7 +32,7 @@ function _dateStr(d) {
  * Pull the next `days` of calendar into the cache.
  * Returns { synced, from, to } or { synced: 0, reason } when unavailable.
  */
-async function sync({ days = 14 } = {}) {
+async function sync({ days = 14, checkArrivals = true } = {}) {
   const microsoft = require('./microsoft');
 
   const now = new Date();
@@ -57,13 +57,26 @@ async function sync({ days = 14 } = {}) {
     return { synced: 0, from, to, reason: 'empty response' };
   }
 
+  // Which ids we already knew about, so the caller can act on just the new
+  // ones. Checking every event on every pass would mean a Graph detail fetch
+  // per meeting per cycle — the arrival of an invite is the interesting moment,
+  // not its continued existence.
+  let known = new Set();
+  try {
+    known = new Set(
+      db.getCalendarEvents(from, to).map(e => e.event_id).filter(Boolean)
+    );
+  } catch {}
+
   let synced = 0;
+  const newEventIds = [];
   try {
     db.batchSaves(() => {
       db.clearCalendarCache();
       for (const event of events) {
         if (!event?.id || !event.start) continue;
         db.upsertCalendarEvent(event);
+        if (!known.has(event.id)) newEventIds.push(event.id);
         synced++;
       }
     });
@@ -74,8 +87,28 @@ async function sync({ days = 14 } = {}) {
 
   try { require('./working-memory').invalidate('calendar synced'); } catch {}
 
-  console.log(`[CalendarSync] ${synced} event(s) cached for ${from} → ${to}`);
-  return { synced, from, to };
+  // First run has no history, so everything looks new. Reporting 50 "new"
+  // meetings would queue a chaser for each — treat a cold cache as a baseline.
+  const coldStart = known.size === 0;
+  if (coldStart && newEventIds.length) {
+    console.log(`[CalendarSync] ${synced} event(s) cached (cold start — treated as baseline, no arrivals reported)`);
+    return { synced, from, to, newEventIds: [], coldStart: true };
+  }
+
+  console.log(`[CalendarSync] ${synced} event(s) cached for ${from} → ${to}${newEventIds.length ? `, ${newEventIds.length} new` : ''}`);
+
+  // A new invite is the moment worth acting on — check it now rather than
+  // waiting for the daily sweep, so the ask reaches the organiser while they
+  // are still thinking about the meeting they just sent.
+  if (newEventIds.length && checkArrivals) {
+    try {
+      await require('./meeting-triage').checkEvents(newEventIds);
+    } catch (e) {
+      console.warn('[CalendarSync] Agenda check on arrivals failed:', e.message);
+    }
+  }
+
+  return { synced, from, to, newEventIds, coldStart: false };
 }
 
 module.exports = { sync };

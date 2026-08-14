@@ -128,33 +128,28 @@ function buildChaser(event) {
 }
 
 /**
- * Scan upcoming meetings and queue a chaser for each that needs one.
+ * Check a specific set of events and queue a chaser for each that needs one.
  *
  * Queued, never sent: these are emails to real colleagues, several of them
  * senior. Everything here waits for approval.
  */
-async function scanUpcoming({ days = 7, limit = 20, dryRun = false } = {}) {
+async function checkEvents(eventIds, { dryRun = false, now = new Date() } = {}) {
   const db = require('../db/database');
   const microsoft = require('./microsoft');
   const suggestionEngine = require('./suggestion-engine');
 
-  const now = new Date();
-  const from = now.toISOString().split('T')[0];
-  const to = new Date(now.getTime() + days * 86400000).toISOString().split('T')[0];
+  const ids = [...new Set((eventIds || []).filter(Boolean))];
+  if (!ids.length) return { scanned: 0, queued: 0, skipped: [] };
 
-  let events = [];
-  try { events = db.getCalendarEvents(from, to); } catch (e) {
-    console.warn('[MeetingTriage] Calendar read failed:', e.message);
-    return { scanned: 0, queued: 0, skipped: [] };
-  }
-
-  // Don't re-queue something already waiting on approval.
-  let pendingIds = new Set();
+  // Never queue the same meeting twice. Also covers a chaser already approved
+  // and sent — a second ask is worse than none.
+  let seen = new Set();
   try {
-    pendingIds = new Set(
-      db.getPendingSaraActions(100)
-        .filter(a => a.type === 'chase_agenda')
+    seen = new Set(
+      db.getRecentSaraActions(200)
+        .filter(a => a.type === 'chase_agenda' && a.status !== 'rejected')
         .map(a => a.payload?.eventId)
+        .filter(Boolean)
     );
   } catch {}
 
@@ -162,10 +157,8 @@ async function scanUpcoming({ days = 7, limit = 20, dryRun = false } = {}) {
   let queued = 0;
   let scanned = 0;
 
-  for (const cached of events.slice(0, limit)) {
-    const eventId = cached.event_id || cached.id;
-    if (!eventId || cached.is_all_day) continue;
-    if (pendingIds.has(eventId)) { skipped.push({ eventId, reason: 'already queued' }); continue; }
+  for (const eventId of ids) {
+    if (seen.has(eventId)) { skipped.push({ eventId, reason: 'already asked' }); continue; }
 
     const event = await microsoft.fetchEventById(eventId);
     if (!event) { skipped.push({ eventId, reason: 'could not fetch detail' }); continue; }
@@ -192,8 +185,37 @@ async function scanUpcoming({ days = 7, limit = 20, dryRun = false } = {}) {
     queued++;
   }
 
-  console.log(`[MeetingTriage] Scanned ${scanned}, queued ${queued} agenda chaser(s)`);
+  if (queued || scanned) {
+    console.log(`[MeetingTriage] Checked ${scanned}, queued ${queued} agenda chaser(s)`);
+  }
   return { scanned, queued, skipped };
 }
 
-module.exports = { assess, buildChaser, scanUpcoming, stripBoilerplate };
+/**
+ * Sweep everything in the cache for the next `days`. The safety net, not the
+ * main path: invites are caught on arrival by checkEvents, and this exists to
+ * pick up anything that slipped through — a sync that failed, a restart during
+ * a delivery, a meeting whose body was filled in later.
+ */
+async function scanUpcoming({ days = 7, limit = 30, dryRun = false } = {}) {
+  const db = require('../db/database');
+  const now = new Date();
+  const from = now.toISOString().split('T')[0];
+  const to = new Date(now.getTime() + days * 86400000).toISOString().split('T')[0];
+
+  let events = [];
+  try { events = db.getCalendarEvents(from, to); } catch (e) {
+    console.warn('[MeetingTriage] Calendar read failed:', e.message);
+    return { scanned: 0, queued: 0, skipped: [] };
+  }
+
+  const ids = events
+    .filter(e => !e.is_all_day)
+    .map(e => e.event_id || e.id)
+    .filter(Boolean)
+    .slice(0, limit);
+
+  return checkEvents(ids, { dryRun, now });
+}
+
+module.exports = { assess, buildChaser, checkEvents, scanUpcoming, stripBoilerplate };
