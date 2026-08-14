@@ -193,7 +193,7 @@ export default function PiHealthPanel() {
     );
   }
 
-  const { host, cpu, memory, disks = [], smart, power, pm2 = [], top = [], services = [], issues: hostIssues = [], history = [] } = data;
+  const { host, cpu, memory, disks = [], smart, power, pm2 = [], top = [], services = [], issues: hostIssues = [], history = [], router } = data;
 
   // AI problems belong in the same ranked list as host problems — a dead worker
   // matters more than a warm CPU, and splitting them buries one of the two.
@@ -292,6 +292,66 @@ export default function PiHealthPanel() {
               <div className="ph-trend-head"><span>Memory</span><b>{memory?.usedPct}%</b></div>
               <Spark points={history.map(h => h.memPct)} band={memBand} max={100} />
             </div>
+          </div>
+        </section>
+      )}
+
+      {/* ---- ROUTER: the box everything else depends on ---- */}
+      {router && (
+        <section className="ph-card">
+          <h2 className="ph-card-title">
+            Router <span className="ph-card-hint">
+              ASUS RT-AC68U{router.stale ? ' · monitor stale' : router.ageMs != null ? ` · checked ${Math.round(router.ageMs / 1000)}s ago` : ''}
+            </span>
+          </h2>
+
+          <div className="ph-router-grid">
+            <div>
+              <span>Reachable</span>
+              <b className={router.routerUp ? 'good' : 'bad'}>{router.routerUp ? 'yes' : 'NO'}</b>
+            </div>
+            <div>
+              <span>Internet</span>
+              <b className={router.netUp ? 'good' : 'bad'}>{router.netUp ? 'flowing' : 'DOWN'}</b>
+            </div>
+            <div>
+              <span>Temperature</span>
+              {/* This box gets unstable near 80°C, so the threshold is lower than the Pi's */}
+              <b className={router.tempC >= 82 ? 'bad' : router.tempC >= 78 ? 'warn' : 'good'}>
+                {router.tempC != null ? `${router.tempC}°C` : '—'}
+              </b>
+            </div>
+            <div>
+              <span>Free memory</span>
+              <b>{router.memFreeKb != null ? fmtBytes(router.memFreeKb * 1024) : '—'}</b>
+            </div>
+            <div>
+              {/* The number that matters now the scheduled reboot is off: how long
+                  it survives on its own. Every previous outage reset this. */}
+              <span>Uptime</span>
+              <b>{router.uptimeSec != null ? fmtDuration(router.uptimeSec) : '—'}</b>
+            </div>
+            <div>
+              <span>Link drops 24h</span>
+              <b className={router.linkDrops24h >= 3 ? 'bad' : router.linkDrops24h > 0 ? 'warn' : 'good'}>
+                {router.linkDrops24h ?? '—'}
+              </b>
+            </div>
+          </div>
+
+          <div className="ph-router-foot">
+            {router.rebootsToday > 0 && (
+              <span className="ph-router-flag">recovered {router.rebootsToday}× today by router-watch</span>
+            )}
+            {router.consecutiveFailures > 0 && (
+              <span className="ph-router-flag">{router.consecutiveFailures} consecutive failed checks</span>
+            )}
+            {router.lastLinkDrop && (
+              <span>last link drop {new Date(router.lastLinkDrop).toLocaleString()}</span>
+            )}
+            {router.linkDropsTotal != null && (
+              <span>· {router.linkDropsTotal} since the Pi booted</span>
+            )}
           </div>
         </section>
       )}

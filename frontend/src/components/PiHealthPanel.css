@@ -383,6 +383,36 @@
 .ph-svc-failed   { color: var(--danger);  border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 .ph-svc-inactive { opacity: 0.5; }
 
+/* ---------------------------------------------------------------- router */
+
+.ph-router-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+}
+.ph-router-grid div { display: flex; flex-direction: column; gap: 3px; }
+.ph-router-grid span { font-size: 10px; color: var(--text-muted); }
+.ph-router-grid b { font-size: 14px; color: var(--text-primary); font-weight: 600; }
+.ph-router-grid b.good { color: var(--success); }
+.ph-router-grid b.warn { color: var(--warning); }
+.ph-router-grid b.bad  { color: var(--danger); }
+
+.ph-router-foot {
+  margin-top: 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.ph-router-flag {
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+
 /* -------------------------------------------------------------- AI stack */
 
 /* Provider mix: the share bars are the point of this card — they answer

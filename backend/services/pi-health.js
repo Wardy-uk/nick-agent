@@ -282,6 +282,55 @@ async function getTopProcesses(limit = 6) {
   });
 }
 
+// ------------------------------------------------------------------- router
+
+// The ASUS RT-AC68U the Pi hangs off. NEURO does not talk to the router itself —
+// router-watch.sh (cron, every 2 min) polls it and drops a status file here.
+// Keeping the SSH out of the backend means a wedged router cannot stall a page
+// load, and pi-health stays a read-only local collector.
+const ROUTER_STATUS = '/mnt/data/logs/router-status.json';
+const ROUTER_STALE_MS = 10 * 60 * 1000;
+
+async function getRouter() {
+  if (!IS_LINUX) return null;
+
+  let status = null;
+  try {
+    const raw = readFile(ROUTER_STATUS);
+    if (raw) status = JSON.parse(raw);
+  } catch { /* treated as missing below */ }
+  if (!status) return null;
+
+  const checkedMs = Date.parse(status.checkedAt);
+  const ageMs = Number.isFinite(checkedMs) ? Date.now() - checkedMs : null;
+
+  // Every time the router reboots or drops the link, the Pi's kernel logs it.
+  // That makes the Pi an independent witness to the router's stability — it is
+  // how the Mon/Thu 04:00 reboot pattern was found in the first place.
+  let linkDrops24h = null;
+  let lastLinkDrop = null;
+  const r = await run('sudo', ['-n', 'dmesg', '-T'], 8000);
+  if (r.ok && r.out) {
+    const downs = r.out.split('\n').filter(l => /eth0: Link is Down/.test(l));
+    const cutoff = Date.now() - 24 * 3600 * 1000;
+    let recent = 0;
+    for (const line of downs) {
+      const m = line.match(/^\[(.+?)\]/);
+      const t = m ? Date.parse(m[1]) : NaN;
+      if (Number.isFinite(t) && t >= cutoff) recent++;
+    }
+    linkDrops24h = recent;
+    if (downs.length) {
+      const m = downs[downs.length - 1].match(/^\[(.+?)\]/);
+      lastLinkDrop = m ? new Date(m[1]).toISOString() : null;
+    }
+    // Total across the whole boot, for context on how chronic this is.
+    status.linkDropsTotal = downs.length;
+  }
+
+  return { ...status, ageMs, stale: ageMs != null && ageMs > ROUTER_STALE_MS, linkDrops24h, lastLinkDrop };
+}
+
 const WATCHED_SERVICES = [
   'pm2-nickw', 'syncthing@nickw', 'ollama', 'docker',
   'nginx', 'tailscaled', 'ssh', 'hdd-apm'
@@ -375,6 +424,22 @@ function assess(s) {
     }
   }
 
+  // Router. The Pi lives behind a 13-year-old RT-AC68U that wedges; these are
+  // the states worth interrupting someone for.
+  const rt = s.router;
+  if (rt) {
+    if (rt.stale) {
+      add('warn', 'Router monitor not reporting', `last check ${Math.round((rt.ageMs || 0) / 60000)}m ago \u2014 is router-watch.sh still running?`);
+    } else {
+      if (!rt.routerUp) add('critical', 'Router unreachable', 'the Pi cannot ping the router \u2014 it may have wedged');
+      else if (!rt.netUp) add('critical', 'No internet through the router', 'router answers but traffic is not flowing');
+      if (rt.tempC != null && rt.tempC >= 85) add('critical', `Router ${rt.tempC}\u00b0C`, 'this model becomes unstable above ~80\u00b0C');
+      else if (rt.tempC != null && rt.tempC >= 82) add('warn', `Router ${rt.tempC}\u00b0C`, 'running hot for an RT-AC68U');
+      if (rt.rebootsToday > 0) add('warn', `Router rebooted ${rt.rebootsToday}\u00d7 today`, 'router-watch had to recover it');
+      if (rt.linkDrops24h >= 3) add('warn', `${rt.linkDrops24h} router link drops in 24h`, 'the link between Pi and router keeps flapping');
+    }
+  }
+
   for (const svc of s.services || []) {
     if (svc.state === 'failed') add('critical', `${svc.name} failed`, 'systemd unit is in a failed state');
   }
@@ -411,13 +476,13 @@ async function collect() {
 
   const host = getHost();
   const memory = getMemory();
-  const [cpu, power, disks, pm2, top, services] = await Promise.all([
-    getCpu(), getPower(), getDisks(), getPm2(), getTopProcesses(), getServices()
+  const [cpu, power, disks, pm2, top, services, router] = await Promise.all([
+    getCpu(), getPower(), getDisks(), getPm2(), getTopProcesses(), getServices(), getRouter()
   ]);
   // SMART needs the disk list to work out which device to probe
   const smart = await getSmart(disks);
 
-  const snapshot = { host, cpu, power, memory, disks, smart, pm2, top, services };
+  const snapshot = { host, cpu, power, memory, disks, smart, pm2, top, services, router };
   pushHistory(snapshot);
 
   const { status, issues } = assess(snapshot);
