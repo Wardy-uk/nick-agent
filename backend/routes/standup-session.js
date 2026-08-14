@@ -79,6 +79,11 @@ router.post('/:kind/reply', async (req, res) => {
     const s = await session.reply(kind, req.body?.message);
     res.json({ session: present(s) });
   } catch (e) {
+    // A turn already running is not an error worth a scary banner — it is a
+    // double-tap. 409 so the client can quietly ignore it rather than retry.
+    if (e.code === 'TURN_IN_FLIGHT') {
+      return res.status(409).json({ error: e.message, inFlight: true, session: present(session.resume(kind)) });
+    }
     console.error('[StandupSession] Reply failed:', e.message);
     // The message is already persisted server-side even though the turn failed,
     // so the client can retry without Nick retyping anything.

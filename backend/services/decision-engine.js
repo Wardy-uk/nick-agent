@@ -30,12 +30,25 @@ const SUPPRESSION_STATE_KEY = 'focus_item_suppressions';
 
 // ── Category suppression (entire types hidden temporarily) ──
 // { [type]: { until: timestamp, reason: string } }
+//
+// Persisted, like per-item suppression. These were in-memory only, so every
+// backend restart handed back a clean slate — and the backend restarts several
+// times a day (32 on 14 Aug alone, mostly concurrent deploys). The effect was
+// that "you have dismissed four todos, stop showing me todos for 45 minutes"
+// survived until the next deploy and then forgot, which reads as the system
+// ignoring you. Learned quiet has to outlive the process that learned it.
 const _categorySuppression = new Map();
+const CATEGORY_STATE_KEY = 'focus_category_suppressions';
 
 // ── Dismiss tracking: per-type with timestamps ──
 // { [type]: [timestamp, timestamp, ...] }
+// Persisted for the same reason: this is the evidence category suppression is
+// derived from, so losing it loses the ability to notice the pattern at all.
 const _typeDismissHistory = new Map();
+const DISMISS_STATE_KEY = 'focus_dismiss_history';
+
 let _suppressionStateLoaded = false;
+let _behaviourStateLoaded = false;
 
 // ── Confidence gap ──
 const CONFIDENCE_GAP = 15;
@@ -569,8 +582,10 @@ function _applyOverrides(items, ctx) {
 // ═══════════════════════════════════════════════════════
 
 function _checkCategorySuppression() {
+  _loadBehaviourState();
   const now = Date.now();
   const WINDOW_MS = 60 * 60 * 1000; // 60 min lookback for dismiss history
+  let changed = false;
 
   // Email: dismissed ≥3 in 60 min → suppress emails for 60 min
   const emailDismisses = _getRecentDismisses('email', WINDOW_MS);
@@ -580,6 +595,7 @@ function _checkCategorySuppression() {
       reason: `Dismissed ${emailDismisses} emails in 60 min`,
     });
     console.log(`[DecisionEngine] Category suppressed: email (${emailDismisses} dismissals)`);
+    changed = true;
   }
 
   // Todo: dismissed ≥4 → suppress todos for 45 min
@@ -590,17 +606,72 @@ function _checkCategorySuppression() {
       reason: `Dismissed ${todoDismisses} todos in 60 min`,
     });
     console.log(`[DecisionEngine] Category suppressed: todo (${todoDismisses} dismissals)`);
+    changed = true;
   }
+
+  if (changed) _persistBehaviourState();
 }
 
 function _isCategorySuppressed(type) {
+  _loadBehaviourState();
   const entry = _categorySuppression.get(type);
   if (!entry) return false;
   if (Date.now() > entry.until) {
     _categorySuppression.delete(type);
+    _persistBehaviourState();
     return false;
   }
   return true;
+}
+
+// ── Behaviour state persistence ──────────────────────────────────────────────
+// Both maps ride in one KV row: they are written together on every dismiss and
+// read together on every evaluate, so splitting them would double the I/O for
+// no benefit. Expired entries are dropped on load rather than stored forever.
+
+function _loadBehaviourState() {
+  if (_behaviourStateLoaded) return;
+  _behaviourStateLoaded = true;
+  try {
+    const parsed = JSON.parse(db.getState(CATEGORY_STATE_KEY) || '{}');
+    const now = Date.now();
+    for (const [type, entry] of Object.entries(parsed)) {
+      if (entry?.until > now) _categorySuppression.set(type, entry);
+    }
+  } catch (e) {
+    console.warn('[DecisionEngine] Failed to load category suppressions:', e.message);
+  }
+  try {
+    const parsed = JSON.parse(db.getState(DISMISS_STATE_KEY) || '{}');
+    // Same 2h horizon _trackDismiss prunes to — anything older cannot influence
+    // a decision, so there is no point carrying it across a restart.
+    const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+    for (const [type, stamps] of Object.entries(parsed)) {
+      const fresh = (Array.isArray(stamps) ? stamps : []).filter(t => t > cutoff);
+      if (fresh.length) _typeDismissHistory.set(type, fresh);
+    }
+  } catch (e) {
+    console.warn('[DecisionEngine] Failed to load dismiss history:', e.message);
+  }
+}
+
+function _persistBehaviourState() {
+  try {
+    const cats = {};
+    const now = Date.now();
+    for (const [type, entry] of _categorySuppression) {
+      if (entry?.until > now) cats[type] = entry;
+    }
+    db.setState(CATEGORY_STATE_KEY, JSON.stringify(cats));
+
+    const dismisses = {};
+    for (const [type, stamps] of _typeDismissHistory) {
+      if (stamps.length) dismisses[type] = stamps;
+    }
+    db.setState(DISMISS_STATE_KEY, JSON.stringify(dismisses));
+  } catch (e) {
+    console.warn('[DecisionEngine] Failed to persist behaviour state:', e.message);
+  }
 }
 
 // NEVER suppress these types regardless of category suppression
@@ -613,6 +684,7 @@ const UNSUPPRESSABLE_TYPES = new Set(['escalation']);
 
 function _trackDismiss(type) {
   if (!type) return;
+  _loadBehaviourState();
   const now = Date.now();
   if (!_typeDismissHistory.has(type)) {
     _typeDismissHistory.set(type, []);
@@ -624,9 +696,11 @@ function _trackDismiss(type) {
   _typeDismissHistory.set(type,
     _typeDismissHistory.get(type).filter(t => t > cutoff)
   );
+  _persistBehaviourState();
 }
 
 function _getRecentDismisses(type, windowMs) {
+  _loadBehaviourState();
   const history = _typeDismissHistory.get(type);
   if (!history) return 0;
   const cutoff = Date.now() - windowMs;
@@ -634,6 +708,7 @@ function _getRecentDismisses(type, windowMs) {
 }
 
 function _getTypeDismissCountToday(type) {
+  _loadBehaviourState();
   const history = _typeDismissHistory.get(type);
   if (!history) return 0;
   const todayStart = new Date(new Date().toDateString()).getTime();

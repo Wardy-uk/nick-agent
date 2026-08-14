@@ -439,6 +439,13 @@ async function start(kind, { restart = false } = {}) {
   return _turn(session);
 }
 
+// One turn at a time per (kind, date). Two tabs open, or a double-tap on send,
+// and both requests would read the session, both append, and the slower write
+// would clobber the faster one — losing a message in a flow whose entire point
+// is that nothing typed gets lost. Held in memory deliberately: it guards a
+// single process against itself, and only one backend serves this.
+const _turnsInFlight = new Set();
+
 /** Add Nick's reply and run the next turn. */
 async function reply(kind, message) {
   const session = load(kind);
@@ -448,12 +455,24 @@ async function reply(kind, message) {
   const text = String(message || '').trim();
   if (!text) throw new Error('message is required');
 
-  // Saved before the model is called, so a failed turn keeps what he typed.
-  session.messages.push({ role: 'user', content: text });
-  session.updatedAt = new Date().toISOString();
-  save(session);
+  const lock = `${kind}:${session.dateKey}`;
+  if (_turnsInFlight.has(lock)) {
+    const err = new Error('Still thinking about your last message — give it a second');
+    err.code = 'TURN_IN_FLIGHT';
+    throw err;
+  }
+  _turnsInFlight.add(lock);
 
-  return _turn(session);
+  try {
+    // Saved before the model is called, so a failed turn keeps what he typed.
+    session.messages.push({ role: 'user', content: text });
+    session.updatedAt = new Date().toISOString();
+    save(session);
+
+    return await _turn(session);
+  } finally {
+    _turnsInFlight.delete(lock);
+  }
 }
 
 /** Resume today's session, if there is one. */
