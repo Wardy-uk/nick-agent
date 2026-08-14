@@ -87,8 +87,13 @@ function start() {
   // it fetches NOVA /api/public/training-export and POSTs to NEURO
   // /api/training/apply-matrix. No NEURO-side cron needed.
 
-  // Friday 4:30pm — generate weekly review
+  // Friday 4:30pm — snapshot the week's outcomes, then generate the review.
+  // Snapshot FIRST so the review can read a stored week rather than recomputing
+  // one, and so the number is fixed at the moment it was taken.
   cron.schedule('30 16 * * 5', () => {
+    try {
+      require('./outcomes').snapshot();
+    } catch (e) { console.error('[Scheduler] Outcomes snapshot failed:', e.message); }
     try {
       const obsidian = require('./obsidian');
       const result = obsidian.generateWeeklyReview();

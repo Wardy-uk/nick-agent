@@ -1402,6 +1402,14 @@ function generateWeeklyReview() {
     }
   } catch {}
 
+  // Did the system help? Facts, above the reflective sections, because they
+  // should inform the reflection rather than be coloured by it.
+  try {
+    sections.push(require('./outcomes-report').buildSection());
+  } catch (e) {
+    console.warn('[Obsidian] Outcomes section failed:', e.message);
+  }
+
   // Energy / reflection (always manual)
   sections.push(`## Energy & Wellbeing\n*(How were your energy levels this week? Any patterns?)*`);
   sections.push(`## Looking Ahead — Next Week\n*(Top 3 priorities for next week)*\n1. \n2. \n3. `);

@@ -165,6 +165,7 @@ app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/calendar', require('./routes/calendar'));
 app.use('/api/adhd', require('./routes/adhd'));
 app.use('/api/standup-session', require('./routes/standup-session'));
+app.use('/api/outcomes', require('./routes/outcomes'));
 
 // Health / status endpoint
 app.get('/api/status', async (req, res) => {
