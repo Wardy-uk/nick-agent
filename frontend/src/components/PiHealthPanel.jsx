@@ -89,8 +89,54 @@ function Bar({ pct, band }) {
   );
 }
 
+// Rolls the AI stack up into the same {level, issues} shape the host checks use,
+// so the focus band can rank an unreachable worker next to a hot CPU.
+function assessAi(ai, ollamaReachable) {
+  if (!ai) return null;
+  const health = ai.health || {};
+  const byProvider = health.byProvider || {};
+  const issues = [];
+
+  if (ollamaReachable === false) issues.push({ level: 'critical', title: 'Ollama unreachable', detail: ai.ollama?.url || 'local model server is down' });
+  else if ((ai.ollama?.queueDepth || 0) > 2) issues.push({ level: 'warn', title: `Ollama queue ${ai.ollama.queueDepth}`, detail: 'requests are backing up' });
+
+  if (ai.pi4Worker?.enabled && ai.pi4Worker?.lastHealthy === false) {
+    issues.push({
+      level: 'critical',
+      title: 'Pi 4 worker unreachable',
+      detail: `${ai.pi4Worker.url} — background AI tasks are being skipped${ai.pi4Worker.healthCheckedAt ? `, last checked ${new Date(ai.pi4Worker.healthCheckedAt).toLocaleString()}` : ''}`,
+    });
+  }
+
+  if (ai.openrouter?.throttled) {
+    issues.push({ level: 'warn', title: 'OpenRouter throttled', detail: `${ai.openrouter.callsToday}/${ai.openrouter.dailyCallLimit} calls, ${ai.openrouter.tokensToday}/${ai.openrouter.dailyTokenLimit} tokens today` });
+  }
+
+  for (const [provider, err] of Object.entries(health.errors || {})) {
+    if (err.errorClass === 'auth') issues.push({ level: 'critical', title: `${provider}: authentication failed`, detail: err.message });
+    else if (err.errorClass === 'rate_limit') issues.push({ level: 'warn', title: `${provider}: rate limited`, detail: err.message });
+    else if (err.errorClass === 'unreachable') issues.push({ level: 'warn', title: `${provider}: unreachable`, detail: err.message });
+  }
+
+  // Configured, enabled, and yet serving nothing — the silent-degradation case.
+  if (ai.anthropic?.configured && ai.anthropic?.enabled && health.calls > 5 && !byProvider.anthropic) {
+    issues.push({ level: 'warn', title: 'Anthropic serving 0 of the last calls', detail: 'configured and enabled but never selected — answers are coming from elsewhere' });
+  }
+  if (health.calls > 5 && health.fallbackRate >= 30) {
+    issues.push({ level: 'warn', title: `${health.fallbackRate}% of calls fell back`, detail: ai.openrouter?.lastFallbackReason || 'intended provider is not serving' });
+  }
+  if (health.calls > 5 && health.failureRate >= 20) {
+    issues.push({ level: 'critical', title: `${health.failureRate}% of AI calls failed`, detail: `${health.failures} of ${health.calls} in the window` });
+  }
+
+  const level = issues.some(i => i.level === 'critical') ? 'critical' : issues.length ? 'warn' : 'ok';
+  return { level, issues, health, byProvider };
+}
+
 export default function PiHealthPanel() {
   const [data, setData] = useState(null);
+  const [ai, setAi] = useState(null);
+  const [ollamaReachable, setOllamaReachable] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [live, setLive] = useState(true);
@@ -106,6 +152,16 @@ export default function PiHealthPanel() {
     } catch (e) {
       setError(e.message);
     }
+
+    // AI health rides on /api/status, which already returns aiRouting.getStatus().
+    // Kept as a separate, non-fatal fetch: the host panel must still render if
+    // the AI stack is the thing that is broken.
+    try {
+      const s = await (await fetch(apiUrl('/api/status'))).json();
+      setAi(s.ai || null);
+      setOllamaReachable(s.ollamaReachable ?? null);
+    } catch { /* leave the AI section out rather than failing the panel */ }
+
     setLoading(false);
   }, []);
 
@@ -130,7 +186,16 @@ export default function PiHealthPanel() {
     );
   }
 
-  const { host, cpu, memory, disks = [], smart, power, pm2 = [], top = [], services = [], issues = [], history = [] } = data;
+  const { host, cpu, memory, disks = [], smart, power, pm2 = [], top = [], services = [], issues: hostIssues = [], history = [] } = data;
+
+  // AI problems belong in the same ranked list as host problems — a dead worker
+  // matters more than a warm CPU, and splitting them buries one of the two.
+  const aiState = assessAi(ai, ollamaReachable);
+  const issues = [...hostIssues, ...(aiState?.issues || [])]
+    .sort((a, b) => (a.level === 'critical' ? 0 : 1) - (b.level === 'critical' ? 0 : 1));
+  const overallStatus = aiState?.level === 'critical' ? 'critical'
+    : (data.status === 'healthy' && aiState?.level === 'warn') ? 'warn'
+    : data.status;
 
   const memBand = bandFor(memory?.usedPct, 80, 90);
   const cpuBand = bandFor(cpu?.loadPct, 75, 90);
@@ -142,13 +207,13 @@ export default function PiHealthPanel() {
     healthy: 'All systems nominal',
     warn: 'Needs a look',
     critical: 'Action required'
-  }[data.status] || 'Unknown';
+  }[overallStatus] || 'Unknown';
 
   return (
     <div className="ph-panel">
 
       {/* ---- FOCUS BAND: the verdict, then only what needs attention ---- */}
-      <section className={`ph-focus ph-status-${data.status}`}>
+      <section className={`ph-focus ph-status-${overallStatus}`}>
         <div className="ph-focus-main">
           <div className="ph-focus-verdict">
             <span className="ph-pulse" />
@@ -221,6 +286,82 @@ export default function PiHealthPanel() {
               <Spark points={history.map(h => h.memPct)} band={memBand} max={100} />
             </div>
           </div>
+        </section>
+      )}
+
+      {/* ---- AI STACK: what is actually serving, not what is configured ---- */}
+      {aiState && (
+        <section className="ph-card">
+          <h2 className="ph-card-title">
+            AI stack
+            <span className="ph-card-hint">
+              {aiState.health.calls
+                ? `last ${aiState.health.calls} calls · ${aiState.health.fallbackRate}% fell back`
+                : 'no calls recorded yet'}
+            </span>
+          </h2>
+
+          {/* Provider mix — the honest answer to "who is answering my questions" */}
+          {aiState.health.calls > 0 && (
+            <div className="ph-mix">
+              {Object.entries(aiState.byProvider)
+                .sort((a, b) => b[1].calls - a[1].calls)
+                .map(([name, p]) => (
+                  <div key={name} className="ph-mix-row">
+                    <span className={`ph-mix-name ${name === 'none' ? 'bad' : ''}`}>{name}</span>
+                    <div className="ph-mix-bar">
+                      <div
+                        className={`ph-mix-fill ${name === 'none' ? 'bad' : ''}`}
+                        style={{ width: `${Math.max(2, p.share)}%` }}
+                      />
+                    </div>
+                    <span className="ph-mix-share">{p.share}%</span>
+                    <span className="ph-mix-lat">
+                      {p.p50 != null ? `p50 ${p.p50 < 1000 ? `${p.p50}ms` : `${(p.p50 / 1000).toFixed(1)}s`}` : '—'}
+                      {p.p95 != null && p.p95 !== p.p50 ? ` · p95 ${p.p95 < 1000 ? `${p.p95}ms` : `${(p.p95 / 1000).toFixed(1)}s`}` : ''}
+                    </span>
+                    {p.failed > 0 && <span className="ph-mix-fail">{p.failed} failed</span>}
+                  </div>
+                ))}
+            </div>
+          )}
+
+          <div className="ph-sub-title">Providers</div>
+          <div className="ph-providers">
+            {[
+              { key: 'ollama', label: 'Ollama (local)', up: ollamaReachable !== false, detail: `${ai.ollama?.model || '—'}${ai.ollama?.queueDepth ? ` · queue ${ai.ollama.queueDepth}` : ''}${ai.ollama?.inUse ? ' · busy' : ''}` },
+              { key: 'pi4Worker', label: 'Pi 4 worker', up: !ai.pi4Worker?.enabled ? null : ai.pi4Worker?.lastHealthy !== false, detail: ai.pi4Worker?.enabled ? (ai.pi4Worker.url || '') : 'disabled' },
+              { key: 'anthropic', label: 'Anthropic', up: ai.anthropic?.configured ? (ai.anthropic?.enabled ? true : null) : null, detail: ai.anthropic?.configured ? `${ai.anthropic.model}${ai.anthropic.enabled ? '' : ' · disabled'}` : 'not configured' },
+              { key: 'openai', label: 'OpenAI', up: ai.openai?.configured ? true : null, detail: ai.openai?.configured ? ai.openai.model : 'not configured' },
+              { key: 'openrouter', label: 'OpenRouter', up: ai.openrouter?.configured && ai.openrouter?.enabled ? !ai.openrouter.throttled : null, detail: ai.openrouter?.configured ? `${ai.openrouter.callsToday}/${ai.openrouter.dailyCallLimit} calls · ${ai.openrouter.tokensToday}/${ai.openrouter.dailyTokenLimit} tokens${ai.openrouter.throttled ? ' · THROTTLED' : ''}` : 'not configured' },
+            ].map(p => {
+              const err = aiState.health.errors?.[p.key];
+              return (
+                <div key={p.key} className="ph-provider">
+                  <span className={`ph-proc-dot ${p.up === null ? '' : p.up ? 'ok' : 'bad'}`} />
+                  <span className="ph-provider-name">{p.label}</span>
+                  <span className="ph-provider-detail">{p.detail}</span>
+                  {err && <span className={`ph-provider-err ${err.errorClass}`}>{err.errorClass}</span>}
+                </div>
+              );
+            })}
+          </div>
+
+          {aiState.health.recent?.length > 0 && (
+            <>
+              <div className="ph-sub-title">Recent calls</div>
+              <div className="ph-recent">
+                {aiState.health.recent.slice(0, 8).map((r, i) => (
+                  <div key={i} className={`ph-recent-row ${r.ok ? '' : 'bad'}`}>
+                    <span className="ph-recent-task">{r.taskType}</span>
+                    <span className="ph-recent-provider">{r.provider}{r.fallback && r.ok ? ' ↩' : ''}</span>
+                    <span className="ph-recent-ms">{r.ms < 1000 ? `${r.ms}ms` : `${(r.ms / 1000).toFixed(1)}s`}</span>
+                    <span className="ph-recent-when">{new Date(r.at).toLocaleTimeString()}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </section>
       )}
 

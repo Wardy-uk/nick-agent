@@ -383,6 +383,71 @@
 .ph-svc-failed   { color: var(--danger);  border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 .ph-svc-inactive { opacity: 0.5; }
 
+/* -------------------------------------------------------------- AI stack */
+
+/* Provider mix: the share bars are the point of this card — they answer
+   "who is actually answering my questions", which config alone cannot. */
+.ph-mix { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+
+.ph-mix-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 38px auto auto;
+  gap: 10px;
+  align-items: center;
+  font-size: 11px;
+}
+.ph-mix-name { color: var(--text-primary); font-weight: 600; }
+.ph-mix-name.bad { color: var(--danger); }
+.ph-mix-bar { height: 6px; border-radius: 3px; background: var(--bg-primary); overflow: hidden; }
+.ph-mix-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.6s ease; }
+.ph-mix-fill.bad { background: var(--danger); }
+.ph-mix-share { color: var(--text-secondary); text-align: right; }
+.ph-mix-lat { color: var(--text-muted); font-size: 10px; }
+.ph-mix-fail { color: var(--danger); font-size: 10px; }
+
+.ph-providers { display: flex; flex-direction: column; gap: 4px; }
+
+.ph-provider {
+  display: grid;
+  grid-template-columns: 10px 120px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  font-size: 11px;
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+.ph-provider-name { color: var(--text-primary); }
+.ph-provider-detail { color: var(--text-muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.ph-provider-err {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+.ph-provider-err.auth,
+.ph-provider-err.unreachable {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.ph-recent { display: flex; flex-direction: column; }
+.ph-recent-row {
+  display: grid;
+  grid-template-columns: 1fr auto 54px 74px;
+  gap: 10px;
+  font-size: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--bg-tertiary);
+}
+.ph-recent-row.bad .ph-recent-provider { color: var(--danger); }
+.ph-recent-task { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-recent-provider { color: var(--accent); }
+.ph-recent-ms { color: var(--text-muted); text-align: right; }
+.ph-recent-when { color: var(--text-muted); text-align: right; }
+
 /* ------------------------------------------------------------------ foot */
 
 .ph-foot {

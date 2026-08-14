@@ -64,6 +64,23 @@
   color: var(--text-secondary);
 }
 
+/* Which provider is actually serving — the point of the AI indicator is that
+   this is observed, not configured, so it needs to be readable at a glance. */
+.topbar-sublabel {
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.topbar-issue-count {
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--warning);
+  color: #1a1e2a;
+  font-size: 10px;
+  font-weight: 600;
+}
+
 .status-dot {
   width: 8px;
   height: 8px;

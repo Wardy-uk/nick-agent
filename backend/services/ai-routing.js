@@ -183,6 +183,105 @@ function _recordOpenRouterUsage(usage) {
   _usage.hourlyEscalations.set(hk, (_usage.hourlyEscalations.get(hk) || 0) + 1);
 }
 
+// ═══════════════════════════════════════════════════════
+// Health telemetry
+// ═══════════════════════════════════════════════════════
+// Config tells you what SHOULD happen; this records what DID. The failure that
+// matters here is silent: when a cloud provider dies, nobody sees an error —
+// the answer just quietly comes from a 1.5B local model instead. Provider mix
+// is what exposes that, so keep the last N outcomes in memory (no DB writes;
+// this is on the hot path of every AI call).
+
+const HEALTH_MAX = 200;
+const _outcomes = [];              // { t, taskType, provider, ok, ms, fallback, errorClass }
+const _providerErrors = new Map(); // provider -> { count, message, errorClass, at }
+
+// Different classes need different fixes — a 401 is a key problem, a 429 is a
+// budget problem, ECONNREFUSED is a box problem. One "failed" count hides that.
+function _classifyError(message) {
+  const m = String(message || '').toLowerCase();
+  if (/\b401\b|\b403\b|unauthor|invalid api key|invalid_api_key|forbidden/.test(m)) return 'auth';
+  if (/\b429\b|rate.?limit|quota|too many requests|insufficient.?credit/.test(m)) return 'rate_limit';
+  if (/timeout|timed out|aborted|abort/.test(m)) return 'timeout';
+  if (/econnrefused|enotfound|ehostunreach|fetch failed|network|socket hang up/.test(m)) return 'unreachable';
+  if (/\b5\d\d\b|internal server error|overloaded/.test(m)) return 'upstream';
+  return 'other';
+}
+
+function _recordOutcome(o) {
+  _outcomes.push({ t: Date.now(), ...o });
+  while (_outcomes.length > HEALTH_MAX) _outcomes.shift();
+}
+
+function _recordProviderError(provider, message) {
+  const errorClass = _classifyError(message);
+  const prev = _providerErrors.get(provider);
+  _providerErrors.set(provider, {
+    count: (prev?.count || 0) + 1,
+    message: String(message || '').substring(0, 160),
+    errorClass,
+    at: new Date().toISOString(),
+  });
+  return errorClass;
+}
+
+function _pct(sorted, p) {
+  if (!sorted.length) return null;
+  const i = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+  return sorted[i];
+}
+
+function getHealth() {
+  const calls = _outcomes.length;
+  const byProvider = {};
+  const byTask = {};
+
+  for (const o of _outcomes) {
+    const p = (byProvider[o.provider] ||= { calls: 0, ok: 0, failed: 0, ms: [] });
+    p.calls++;
+    o.ok ? p.ok++ : p.failed++;
+    if (o.ok && o.ms != null) p.ms.push(o.ms);
+
+    const t = (byTask[o.taskType] ||= { calls: 0, providers: {} });
+    t.calls++;
+    t.providers[o.provider] = (t.providers[o.provider] || 0) + 1;
+  }
+
+  for (const p of Object.values(byProvider)) {
+    const sorted = p.ms.sort((a, b) => a - b);
+    p.p50 = _pct(sorted, 50);
+    p.p95 = _pct(sorted, 95);
+    p.share = calls ? Math.round((p.calls / calls) * 100) : 0;
+    delete p.ms;
+  }
+
+  const failures = _outcomes.filter(o => !o.ok).length;
+  const fallbacks = _outcomes.filter(o => o.fallback).length;
+
+  return {
+    windowSize: HEALTH_MAX,
+    calls,
+    since: calls ? new Date(_outcomes[0].t).toISOString() : null,
+    failures,
+    failureRate: calls ? Math.round((failures / calls) * 100) : 0,
+    // The headline number: how often the intended provider did NOT serve it.
+    fallbacks,
+    fallbackRate: calls ? Math.round((fallbacks / calls) * 100) : 0,
+    byProvider,
+    byTask,
+    errors: Object.fromEntries(_providerErrors),
+    recent: _outcomes.slice(-12).reverse().map(o => ({
+      at: new Date(o.t).toISOString(),
+      taskType: o.taskType,
+      provider: o.provider,
+      ok: o.ok,
+      ms: o.ms,
+      fallback: o.fallback,
+      errorClass: o.errorClass || null,
+    })),
+  };
+}
+
 
 // ═══════════════════════════════════════════════════════
 // Main API
@@ -198,7 +297,47 @@ function _recordOpenRouterUsage(usage) {
  *   4. OpenRouter         → if OPENROUTER_API_KEY + OPENROUTER_ENABLED + cloud allowed
  *   5. Ollama             → local Pi 5 fallback (always)
  */
+// Thin timing/telemetry wrapper. The routing logic lives in _runTaskInner
+// untouched — instrumenting from the outside keeps this out of the way of
+// anyone editing the routing rules themselves.
 async function runTask(taskType, payload, options = {}) {
+  const started = Date.now();
+  try {
+    const result = await _runTaskInner(taskType, payload, options);
+    const provider = result?.provider || 'none';
+
+    // A deliberate switch-off is not a fault. Recording "AI mode is off" or a
+    // disabled worker as a failure would put a 100% failure rate on the panel
+    // for a setting the user chose — noise that trains you to ignore it.
+    if (provider === 'none' && /mode is off|not enabled/i.test(result?.reason || '')) {
+      return result;
+    }
+
+    _recordOutcome({
+      taskType,
+      provider,
+      // provider 'none' here means every tier declined or failed — not a
+      // success, even though nothing threw.
+      ok: provider !== 'none' && Boolean(result?.text),
+      ms: Date.now() - started,
+      fallback: Boolean(result?.fallback),
+      errorClass: provider === 'none' ? _classifyError(result?.reason) : null,
+    });
+    return result;
+  } catch (e) {
+    _recordOutcome({
+      taskType,
+      provider: 'none',
+      ok: false,
+      ms: Date.now() - started,
+      fallback: true,
+      errorClass: _recordProviderError('routing', e.message),
+    });
+    throw e;
+  }
+}
+
+async function _runTaskInner(taskType, payload, options = {}) {
   _resetIfNewDay();
   const { forceLocal = false, forceCloud = false } = options;
 
@@ -284,6 +423,7 @@ async function runTask(taskType, payload, options = {}) {
     } catch (err) {
       console.warn(`[AIRouting] ${provider} failed for ${taskType}: ${err.message}`);
       _usage.lastFallbackReason = `${provider}: ${err.message.substring(0, 100)}`;
+      _recordProviderError(provider, err.message);
     }
   }
 
@@ -480,6 +620,8 @@ function getStatus() {
       inUse: _ollamaInUse,
     },
     pi4Worker: pi4Worker.getStatus(),
+    // What actually happened, as opposed to what is configured above.
+    health: getHealth(),
     taskModels: TASK_MODELS,
     cloudPreferredTasks: [...CLOUD_PREFERRED_TASKS],
     backgroundTasks: [...BACKGROUND_TASKS],
@@ -494,6 +636,7 @@ module.exports = {
   runTask,
   runStreamingChat,
   getStatus,
+  getHealth,
   checkOllama,
   getAIMode: () => _cfg().aiMode,
   // Exposed so chat tool-use can ask the same question the routing tiers ask,

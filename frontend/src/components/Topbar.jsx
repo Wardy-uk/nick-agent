@@ -119,6 +119,49 @@ export default function Topbar({ status, onMenuToggle, onChatToggle, chatOpen, w
     ollamaOk ? 'Ollama' : 'Offline';
   const chatOk = chatProvider !== 'Offline';
 
+  // ── Whole-stack AI health ──
+  // The indicator used to watch Ollama only, so a dead cloud provider or a
+  // six-week-dead Pi 4 worker showed nothing: answers just quietly got worse.
+  // This widens it to every tier and leads on who is ACTUALLY serving calls.
+  const aiHealth = ai.health || {};
+  const byProvider = aiHealth.byProvider || {};
+  const aiIssues = [];
+
+  // Whoever served the most calls in the window is the honest "current" provider,
+  // regardless of what the configured priority order claims.
+  const dominant = Object.entries(byProvider)
+    .filter(([name]) => name !== 'none')
+    .sort((a, b) => b[1].calls - a[1].calls)[0];
+  const servingLabel = dominant ? dominant[0] : (ollamaOk ? 'idle' : 'offline');
+
+  if (!ollamaOk) aiIssues.push('Ollama unreachable');
+  else if (ollamaQueue > 2) aiIssues.push(`Ollama queue ${ollamaQueue}`);
+
+  if (ai.pi4Worker?.enabled && ai.pi4Worker?.lastHealthy === false) {
+    aiIssues.push('Pi 4 worker unreachable');
+  }
+  if (openrouterThrottled) aiIssues.push('OpenRouter throttled (daily limit)');
+
+  // A configured cloud provider serving nothing is the silent-degradation case.
+  if (ai.anthropic?.configured && ai.anthropic?.enabled && aiHealth.calls > 5 && !byProvider.anthropic) {
+    aiIssues.push('Anthropic configured but serving 0 calls');
+  }
+  for (const [provider, err] of Object.entries(aiHealth.errors || {})) {
+    if (err.errorClass === 'auth') aiIssues.push(`${provider}: auth failed`);
+    else if (err.errorClass === 'rate_limit') aiIssues.push(`${provider}: rate limited`);
+  }
+  if (aiHealth.fallbackRate >= 30) aiIssues.push(`${aiHealth.fallbackRate}% falling back`);
+  if (aiHealth.failureRate >= 20) aiIssues.push(`${aiHealth.failureRate}% failing`);
+
+  const aiLevel = (!ollamaOk && !openrouterEnabled && !ai.anthropic?.configured) ? 'dead'
+    : aiIssues.some(i => /unreachable|auth failed|failing/.test(i)) ? 'red'
+    : aiIssues.length ? 'amber'
+    : 'green';
+
+  const aiTitle = aiIssues.length
+    ? `AI: ${aiIssues.join(' · ')}`
+    : `AI healthy — serving via ${servingLabel}${aiHealth.calls ? ` (${aiHealth.calls} recent calls)` : ''}`;
+
   const statusDot = (ok) => (
     <span className={`status-dot ${ok ? 'ok' : 'warn'}`} />
   );
@@ -143,16 +186,14 @@ export default function Topbar({ status, onMenuToggle, onChatToggle, chatOpen, w
             💼 Work mode
           </button>
         )}
-        <div className="topbar-indicator">
-          <span className={`status-dot ollama-${ollamaHealth}`} title={`Ollama: ${ollamaHealth}${ollamaQueue > 0 ? ` (${ollamaQueue} queued)` : ''}`} />
-          <span className="topbar-label">Ollama</span>
+        <div className="topbar-indicator" title={aiTitle}>
+          <span className={`status-dot ollama-${aiLevel}`} />
+          <span className="topbar-label">
+            AI
+            <span className="topbar-sublabel">{servingLabel}</span>
+            {aiIssues.length > 0 && <span className="topbar-issue-count">{aiIssues.length}</span>}
+          </span>
         </div>
-        {chatProvider !== 'Ollama' && (
-          <div className="topbar-indicator">
-            {statusDot(chatOk)}
-            <span className="topbar-label">{chatProvider}</span>
-          </div>
-        )}
         <div className="topbar-indicator">
           {statusDot(status?.obsidian?.configured)}
           <span className="topbar-label">Vault</span>
