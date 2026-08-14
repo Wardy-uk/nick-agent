@@ -16,12 +16,22 @@
 
 const detect = require('./one-to-one-detect');
 
-// Nick's 1-2-1s have historically been booked in the afternoon — every entry in
-// the vault's 1-2-1 Tracker reads "✅ 9 Apr PM". Try PM first, fall back to AM.
-const PM_WINDOW = { from: 14, to: 17 };
-const AM_WINDOW = { from: 9, to: 12 };
+// Nick's booking rules (14 Aug 2026), expressed as the only two windows a 1-2-1
+// may sit in. Everything outside them is off-limits by construction rather than
+// by a pile of exclusions:
+//   - never at 9am        → the morning window opens at 10:00
+//   - never 12-2          → the gap between the two windows IS lunch
+//   - never after 4.30pm  → the afternoon window CLOSES at 16:30, and a slot has
+//                           to finish inside its window, so a 30-min 1-2-1 can
+//                           start no later than 16:00
+//   - never when a meeting already exists → findGapInWindow clash detection
+// PM is tried first: every entry in the vault's 1-2-1 Tracker reads "✅ 9 Apr PM".
+// Bounds are in MINUTES from midnight so 16:30 is expressible.
+const PM_WINDOW = { from: 14 * 60, to: 16 * 60 + 30 };
+const AM_WINDOW = { from: 10 * 60, to: 12 * 60 };
 const DEFAULT_DURATION_MIN = 30;
 const SEARCH_DAYS = 21;
+const MAX_PER_DAY = 2;
 
 function pad(n) { return String(n).padStart(2, '0'); }
 
@@ -59,9 +69,25 @@ function isWorkingDay(d) {
   return day >= 1 && day <= 5;
 }
 
+// Anything that reads as an existing 1-2-1 in the calendar, however it was named.
+const ONE_TO_ONE_SUBJECT = /1-2-1|1:1|(^|[^\d-])1-1([^\d-]|$)|one[- ]to[- ]one|one[- ]on[- ]one/i;
+
+/**
+ * How many 1-2-1s are already in the diary on this day. Nick's cap is 2 — back
+ * to back 1-2-1s all day is how the cadence gets abandoned.
+ */
+function countOneToOnes(day, events) {
+  return events.filter(e =>
+    e.date === dateStr(day) &&
+    !['cancelled'].includes(String(e.showAs || 'busy').toLowerCase()) &&
+    ONE_TO_ONE_SUBJECT.test(String(e.subject || ''))
+  ).length;
+}
+
 /**
  * First gap of `duration` minutes inside `window` on `day` that doesn't collide
- * with a busy event. Events marked free or cancelled don't block.
+ * with a busy event. Events marked free or cancelled don't block. The slot must
+ * finish inside the window, which is what enforces "never after 4.30pm".
  */
 function findGapInWindow(day, events, window, duration) {
   const busy = events
@@ -72,8 +98,7 @@ function findGapInWindow(day, events, window, duration) {
       : { start: toMinutes(e.start), end: toMinutes(e.end) }))
     .sort((a, b) => a.start - b.start);
 
-  const windowEnd = window.to * 60;
-  for (let start = window.from * 60; start + duration <= windowEnd; start += 15) {
+  for (let start = window.from; start + duration <= window.to; start += 15) {
     const end = start + duration;
     const clash = busy.some(b => start < b.end && end > b.start);
     if (!clash) return { start, end };
@@ -124,6 +149,7 @@ async function propose(name, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
   for (let i = 0; i <= SEARCH_DAYS; i++) {
     const day = addDays(from, i);
     if (!isWorkingDay(day)) continue;
+    if (countOneToOnes(day, events) >= MAX_PER_DAY) continue;
     for (const window of [PM_WINDOW, AM_WINDOW]) {
       const gap = findGapInWindow(day, events, window, durationMinutes);
       if (!gap) continue;
@@ -205,5 +231,8 @@ module.exports = {
   propose,
   book,
   // exported for tests
-  _internals: { findGapInWindow, dateStr, isWorkingDay, earliestDate, toMinutes, PM_WINDOW, AM_WINDOW },
+  _internals: {
+    findGapInWindow, countOneToOnes, dateStr, isWorkingDay, earliestDate, toMinutes,
+    PM_WINDOW, AM_WINDOW, MAX_PER_DAY,
+  },
 };
