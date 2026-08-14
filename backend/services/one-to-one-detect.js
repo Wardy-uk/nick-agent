@@ -404,10 +404,25 @@ function refresh(opts = {}) {
   return index;
 }
 
-/** Cached index, rebuilding on a cold cache. */
+// A full scan is ~40ms on the Pi, so the cache exists to avoid re-walking
+// Meetings/ on every board render, NOT because the scan is expensive. Hold it
+// for five minutes: notes arrive by Syncthing, and vault-hooks deliberately do
+// not fire for those (see the scheduler's 10pm comment), so a stale-until-2200
+// cache would mean a 1-2-1 recorded this morning still showed yesterday's date
+// all day. Nightly sync remains the thing that writes People frontmatter.
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+function isStale(index) {
+  if (!index?.scannedAt) return true;
+  const age = Date.now() - new Date(index.scannedAt).getTime();
+  return !Number.isFinite(age) || age < 0 || age > CACHE_TTL_MS;
+}
+
+/** Cached index, rebuilding on a cold or stale cache. */
 function getIndex({ force = false } = {}) {
   if (force) return refresh();
-  return readCache() || refresh();
+  const cached = readCache();
+  return cached && !isStale(cached) ? cached : refresh();
 }
 
 /** The card's payload: the most recent 1-2-1s NEURO can prove happened. */
@@ -484,4 +499,5 @@ module.exports = {
   // exported for tests
   attribute,
   parseListField,
+  _isStale: isStale,
 };

@@ -164,6 +164,16 @@ test('archived people drop off the roster', () => {
   assert.deepEqual(roster.people.map(p => p.name), ['Abdi Mohamed']);
 });
 
+test('a stale cache is not served — a 1-2-1 recorded today must not wait until 2200', () => {
+  const detect = load(makeVault());
+  const fresh = { scannedAt: new Date().toISOString() };
+  const old = { scannedAt: new Date(Date.now() - 6 * 60 * 1000).toISOString() };
+  assert.equal(detect._isStale(fresh), false);
+  assert.equal(detect._isStale(old), true, '6 minutes old must be refetched');
+  assert.equal(detect._isStale({}), true, 'no timestamp = stale');
+  assert.equal(detect._isStale({ scannedAt: 'not a date' }), true);
+});
+
 test('syncPeopleNotes never moves a recorded date backwards', () => {
   const root = makeVault();
   // Note already records a LATER 1-2-1 than anything on disk — a meeting held
