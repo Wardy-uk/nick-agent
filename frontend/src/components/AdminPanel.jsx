@@ -502,11 +502,30 @@ export default function AdminPanel({ pushState = {} }) {
 
   const integrations = [
     {
+      // Ollama handles the light and scheduled work under the 14 Aug routing
+      // policy, so its tile says so rather than implying it serves everything.
       name: 'AI (Ollama)',
       status: status.ollamaReachable ? 'connected' : 'disconnected',
       detail: status.ollamaReachable
-        ? `Mode: ${status.ai?.mode || '?'} · Model: ${status.ai?.ollama?.model || '?'}`
+        ? `Local · ${status.ai?.ollama?.model || '?'} · scheduled + light tasks`
         : 'Ollama not reachable'
+    },
+    {
+      // OpenRouter is the default for anything Nick waits on (chat, standup,
+      // drafts). The key is stored in the DB via the AI settings panel, NOT in
+      // .env — a blank .env line here means nothing.
+      name: 'AI (OpenRouter)',
+      status: !status.ai?.openrouter?.configured ? 'unconfigured'
+        : !status.ai?.openrouter?.enabled ? 'disconnected'
+        : status.ai?.openrouter?.throttled ? 'disconnected'
+        : 'connected',
+      detail: !status.ai?.openrouter?.configured
+        ? 'No API key — set it in AI Settings below'
+        : !status.ai?.openrouter?.enabled
+          ? 'Key set but disabled — enable in AI Settings'
+          : status.ai?.openrouter?.throttled
+            ? `Daily limit reached (${status.ai.openrouter.callsToday}/${status.ai.openrouter.dailyCallLimit} calls)`
+            : `${status.ai.openrouter.model} · chat + rituals · ${status.ai.openrouter.callsToday}/${status.ai.openrouter.dailyCallLimit} calls today`
     },
     {
       name: 'Jira',
