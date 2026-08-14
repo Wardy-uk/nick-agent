@@ -39,6 +39,33 @@ were right; nothing read them.
   (`archived: true`) and `TEAMS`; Nathan moved to Customer Care, Sebastian to 2nd Line.
 - Tests: 23 new (11 detect, 12 booking). Full backend suite 87/87.
 
+## Follow-ups done in the same session
+
+- **Booking rules (Nick, 14 Aug)** — never at 9am, never 12–2, never after 4.30pm,
+  never onto an existing meeting, never more than 2 a day. Implemented as two
+  windows (10:00–12:00, 14:00–16:30) so the first three are true by construction;
+  the daily cap is `countOneToOnes()`, which matches existing 1-2-1s by subject
+  however they were named. Verified live: Mon 17 Aug is now correctly rejected
+  (a *tentative* 13:00–17:30 blankets the PM window) where it previously proposed
+  09:00.
+- **Every People note now carries `email:`** (15 of them, promoted from the body
+  text the 30 Jun team-note merge left behind, each cross-checked against Graph).
+  This was not cosmetic: **Naomi, Adele and Maria each have a personal
+  gmail/yahoo address sitting beside their work one in Nick's Graph contacts**, so
+  all three resolved `ambiguous` — which the booking path treats as unresolved and
+  would have booked with nobody invited. `contact-directory` matches local
+  contacts before Graph, so frontmatter short-circuits it. All 13 active reports
+  now resolve `source: vault`. Keep `email:` populated for new people.
+- **Nathan's 22 Apr 1-2-1 recovered.** He appeared to have none on record because
+  the 2026-06-23 Plaud reset archived it. Restored the summary to
+  `Meetings/2026/04/` and the transcript to `Plaud/Transcripts/`. Plaud had filed
+  it against Nick Ward with Nathan as "Unknown Speaker 1", so the `people:` link
+  was corrected on restore. He now reads 2026-04-22 (114-day gap).
+  A holding note sits at `Meetings/1-2-1/Nathan Rutland/2026-08-14 – …Holding Note.md`
+  — deliberately `type: note` with NO `meeting-type`, or the detector would count
+  it as a held 1-2-1. It carries the never-closed commitment from April: a
+  structured career-progression follow-up that was due 2026-05-06.
+
 ## What's still pending
 
 - **NOTHING IS DEPLOYED.** All of this is uncommitted on Windows. The Pi has not
