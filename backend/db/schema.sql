@@ -308,3 +308,48 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_moscow ON tasks(moscow);
 CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
+
+-- Apple Health time series. One row per (metric, sample time), because a stress
+-- score is only meaningful against a rolling PERSONAL baseline — an absolute HRV
+-- of 45ms is good for one person and poor for another. The daily KV rows in
+-- agent_state (health_data_<date>) are left alone and still back /today and
+-- /history; this table is additive.
+-- UNIQUE(metric, recorded_at) makes ingest idempotent: a 30-minute poll that
+-- re-sends the same watch sample folds instead of duplicating and skewing the
+-- baseline.
+CREATE TABLE IF NOT EXISTS health_samples (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  metric TEXT NOT NULL,
+  value REAL NOT NULL,
+  -- When the WATCH took the reading, not when we received it. At a 30-minute
+  -- poll these differ by up to half an hour, which matters for ordering.
+  recorded_at DATETIME NOT NULL,
+  source TEXT NOT NULL DEFAULT 'ingest',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(metric, recorded_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_health_samples_metric_time ON health_samples(metric, recorded_at DESC);
+
+-- Host/infrastructure metrics: Pi 5, Pi 4, router, broadband.
+--
+-- Deliberately NOT health_samples: that table is Apple Health data, and its
+-- UNIQUE(metric, recorded_at) has no source column — pi5's temp_c and pi4's
+-- temp_c at the same second would collide and silently drop one.
+--
+-- Collection stays in cron-written CSVs so it survives the backend being down
+-- (which is exactly when a wedged router needs recording). This table is the
+-- queryable, retained, backed-up copy the panel reads.
+CREATE TABLE IF NOT EXISTS host_metrics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,        -- pi5 | pi4 | router | broadband
+  metric TEXT NOT NULL,        -- load_pct | temp_c | down_mbps | ...
+  value REAL,
+  recorded_at DATETIME NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  -- Makes imports idempotent: re-running the importer over the same CSV rows
+  -- cannot duplicate them, which is what allows a safe watermark trim.
+  UNIQUE(source, metric, recorded_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_host_metrics_lookup ON host_metrics(source, metric, recorded_at DESC);

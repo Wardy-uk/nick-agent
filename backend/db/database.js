@@ -651,6 +651,45 @@ function saveLocationVisit(dateKey, placeName, lat, lng, arrival, departure, dur
   );
 }
 
+// ── Host metrics (Pi 5, Pi 4, router, broadband) ──
+
+// INSERT OR IGNORE + the UNIQUE constraint make this idempotent, so the
+// importer can safely re-read rows it may already have taken.
+function insertHostMetrics(rows) {
+  if (!rows || !rows.length) return 0;
+  let inserted = 0;
+  batchSaves(() => {
+    for (const r of rows) {
+      if (r.value == null || !Number.isFinite(r.value)) continue;
+      const info = run(
+        'INSERT OR IGNORE INTO host_metrics (source, metric, value, recorded_at) VALUES (?, ?, ?, ?)',
+        [r.source, r.metric, r.value, r.recordedAt]
+      );
+      inserted += info.changes;
+    }
+  });
+  return inserted;
+}
+
+function getHostMetrics(source, metric, sinceIso, limit = 500) {
+  return all(
+    'SELECT value, recorded_at FROM host_metrics WHERE source = ? AND metric = ? AND recorded_at >= ? ORDER BY recorded_at ASC LIMIT ?',
+    [source, metric, sinceIso, limit]
+  );
+}
+
+function getHostMetricLatest(source, metric) {
+  return get(
+    'SELECT value, recorded_at FROM host_metrics WHERE source = ? AND metric = ? ORDER BY recorded_at DESC LIMIT 1',
+    [source, metric]
+  );
+}
+
+function pruneHostMetrics(days = 90) {
+  const info = run('DELETE FROM host_metrics WHERE recorded_at < datetime(\'now\', ?)', ['-' + days + ' days']);
+  return info.changes;
+}
+
 function getLocationVisits(dateFrom, dateTo, limit = 100) {
   return all(
     'SELECT * FROM location_visits WHERE date_key >= ? AND date_key <= ? ORDER BY date_key DESC, arrival DESC LIMIT ?',
@@ -921,6 +960,10 @@ module.exports = {
   getLatestHealthSample,
   // Location visits
   saveLocationVisit,
+  insertHostMetrics,
+  getHostMetrics,
+  getHostMetricLatest,
+  pruneHostMetrics,
   getLocationVisits,
   getLocationVisitsByPlace,
   getFrequentLocations,

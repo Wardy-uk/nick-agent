@@ -598,7 +598,7 @@ function fmtDuration(sec) {
 
 // -------------------------------------------------------------------- public
 
-async function collect() {
+async function collect({ skipHistory = false } = {}) {
   startSampler();
 
   const host = getHost();
@@ -616,6 +616,16 @@ async function collect() {
 
   const { status, issues } = assess(snapshot);
 
+  // History now comes from SQL, not the in-memory ring buffer — the buffer
+  // emptied on every restart, so the Trend card kept resetting to a handful of
+  // samples. skipHistory avoids recursion when metrics-store calls collect()
+  // purely to take a sample.
+  let persisted = [];
+  if (!skipHistory) {
+    try { persisted = require('./metrics-store').getHistory('pi5', 24); }
+    catch { /* fall back to the in-memory buffer below */ }
+  }
+
   return {
     ok: true,
     collectedAt: new Date().toISOString(),
@@ -623,7 +633,11 @@ async function collect() {
     status,
     issues,
     ...snapshot,
-    history: history.slice(-60)
+    // Prefer the durable series; fall back to the in-memory buffer if the
+    // table is empty (first run after deploy, before the importer has fired).
+    history: persisted.length
+      ? persisted.slice(-120).map(h => ({ t: Date.parse(h.t), loadPct: h.load_pct ?? null, tempC: h.temp_c ?? null, memPct: h.mem_used_pct ?? null }))
+      : history.slice(-60)
   };
 }
 

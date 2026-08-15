@@ -123,6 +123,19 @@ function start() {
     } catch (e) { console.error('[Scheduler] Weekly hygiene failed:', e.message); }
   });
 
+  // Every 5 min — move host metrics from the cron CSVs into SQL, sample the
+  // Pi 5 straight in, and prune anything past retention. The CSVs stay as the
+  // collection layer because they keep working when this process does not.
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const r = await require('./metrics-store').run();
+      const imported = r.results.reduce((a, x) => a + (x.imported || 0), 0);
+      if (imported || r.pruned) {
+        console.log(`[Scheduler] Metrics: ${imported} imported, ${r.pi5Rows} pi5 samples, ${r.pruned} pruned`);
+      }
+    } catch (e) { console.error('[Scheduler] Metrics store failed:', e.message); }
+  });
+
   // Every 30 min — watchdog. Pairs with the healthchecks.io dead man's switch:
   // that one catches a Pi that cannot speak, this one catches a healthy Pi with
   // something broken on it (dead worker, stopped backups, failing AI provider).
