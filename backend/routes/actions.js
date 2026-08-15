@@ -31,7 +31,18 @@ const PENDING_LIMIT = 120;
 // things that leave the building are never what gets cut. Confidence — the old
 // order — is meaningless here; a 0.8 chase and a 0.8 capture_todo need very
 // different amounts of attention.
-const KIND_RANK = { outbound: 0, write: 1, navigate: 2 };
+const KIND_RANK = { outbound: 0, write: 1, navigate: 3 };
+
+// capture_todo sits below every other write. It is bulk-generated in hundreds
+// by the nightly meeting sweep (926 of the 930 pending), it already has a home
+// on the Tasks screen, and without this the ONE drafted reply — gate 1 of the
+// two-gate outbound path, and the reason this screen exists — ranks below all
+// 926 of them purely because it is also a write and happens to be older.
+const TYPE_RANK = { capture_todo: 2 };
+
+function rank(action) {
+  return TYPE_RANK[action.type] ?? KIND_RANK[action.presentation.kind] ?? 1;
+}
 
 // GET /api/actions — list pending actions + recent history
 //
@@ -49,8 +60,8 @@ router.get('/', (req, res) => {
 
     const all = db.getPendingSaraActions(READ_ALL).map(decorate);
     all.sort((a, b) => {
-      const ka = KIND_RANK[a.presentation.kind] ?? 1;
-      const kb = KIND_RANK[b.presentation.kind] ?? 1;
+      const ka = rank(a);
+      const kb = rank(b);
       if (ka !== kb) return ka - kb;
       // Newest first within a kind: a stale promotion candidate is the least
       // useful thing on the screen.
