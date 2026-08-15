@@ -6,13 +6,23 @@ const crypto = require('crypto');
 const db = require('../db/database');
 
 const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
-const SKIP_DIRS = new Set(['Daily', 'Scripts', 'Templates', '.obsidian', '.git', '.trash', 'Imports']);
+const exclusions = require('./vault-exclusions');
 const MAX_CHUNK_CHARS = 1500; // keep well within token limits
-const BATCH_SIZE = 8; // files per Voyage API call
+// A Plaud transcript can run to tens of thousands of characters. Indexing all
+// of it is right; letting one three-hour meeting own 60 rows of the index is
+// not. Truncation past this point is logged, never silent.
+const MAX_CHUNKS_PER_FILE = 20;
+const BATCH_SIZE = 16; // chunks per Voyage API call
 const BATCH_DELAY_MS = 21000; // 21s between batches (free tier = 3 RPM)
 
+// Embedding calls authenticate with VOYAGE_API_KEY. This used to read
+// ANTHROPIC_API_KEY, which is a different vendor entirely — both happen to be
+// set on the Pi, so it worked, and would have stopped working silently the day
+// the (out-of-credit) Anthropic key was removed from .env: `vault-hooks` gates
+// on-write re-embedding on this, so live indexing would have died while the
+// nightly rebuild carried on and nothing looked broken.
 function isConfigured() {
-  return !!process.env.ANTHROPIC_API_KEY;
+  return !!process.env.VOYAGE_API_KEY;
 }
 
 function contentHash(text) {
@@ -170,7 +180,14 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(magA) * Math.sqrt(magB) || 1);
 }
 
-// Prepare a file for embedding — returns { relativePath, hash, chunk, modified } or null
+// Prepare a file for embedding — returns { relativePath, hash, chunks[], modified } or null.
+//
+// This used to compute every chunk and then return `chunks[0]`, throwing the
+// rest away — 3,216 rows in the DB, every one chunk_index 0. So semantic search,
+// chat RAG, related_notes and the MCP tools only ever saw the first ~1,500
+// characters of a note: for a meeting transcript that is the frontmatter and the
+// opening exchange, and everything DECIDED in the back half was unreachable.
+// It was invisible because search always returns something.
 function prepareFile(relativePath, fullPath) {
   let content;
   try { content = fs.readFileSync(fullPath, 'utf-8'); }
@@ -180,27 +197,41 @@ function prepareFile(relativePath, fullPath) {
   if (body.trim().length < 20) return null;
 
   const hash = contentHash(body);
-  const stats = fs.statSync(fullPath);
-  const modified = stats.mtime.toISOString();
+  let modified;
+  try { modified = fs.statSync(fullPath).mtime.toISOString(); }
+  catch { return null; }
 
-  // Check if already embedded with same content
+  // Unchanged only if the content matches AND every chunk of it is stored —
+  // otherwise a file indexed under the old chunk-0-only code would look done
+  // forever and never pick up its remaining chunks.
   const existing = db.getEmbedding(relativePath);
-  if (existing && existing.content_hash === hash) return null; // unchanged
-
-  const chunks = chunkText(body);
+  let chunks = chunkText(body);
   if (chunks.length === 0) return null;
+  if (chunks.length > MAX_CHUNKS_PER_FILE) {
+    console.warn(`[Embeddings] ${relativePath}: ${chunks.length} chunks, indexing first ${MAX_CHUNKS_PER_FILE}`);
+    chunks = chunks.slice(0, MAX_CHUNKS_PER_FILE);
+  }
+  if (existing && existing.content_hash === hash
+      && db.getEmbeddingChunkCount(relativePath) === chunks.length) {
+    return null; // unchanged and fully indexed
+  }
 
-  return { relativePath, hash, chunk: chunks[0], modified };
+  return { relativePath, hash, chunks, modified };
 }
 
 async function embedVaultFile(relativePath, fullPath) {
   const prepared = prepareFile(relativePath, fullPath);
   if (!prepared) return false;
 
-  const embedding = await getEmbedding(prepared.chunk);
-  if (!embedding) return false;
+  const embeddings = await getBatchEmbeddings(prepared.chunks)
+    || prepared.chunks.map(c => computeSimpleVector(c));
 
-  db.saveEmbedding(prepared.relativePath, prepared.hash, embedding, prepared.chunk, prepared.modified);
+  // Clear first: a shortened note has fewer chunks than last time, and
+  // INSERT OR REPLACE alone would leave the tail behind as orphan rows.
+  db.deleteEmbedding(prepared.relativePath);
+  prepared.chunks.forEach((chunk, i) => {
+    db.saveEmbedding(prepared.relativePath, prepared.hash, embeddings[i], chunk, prepared.modified, i);
+  });
   return true;
 }
 
@@ -219,10 +250,11 @@ function listVaultFiles() {
       if (entry.name.startsWith('.')) continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) continue;
+        if (exclusions.isExcludedDir(entry.name, { forEmbeddings: true })) continue;
         walk(fullPath, depth + 1);
       } else if (entry.name.endsWith('.md')) {
         const relativePath = path.relative(VAULT_PATH, fullPath).replace(/\\/g, '/');
+        if (exclusions.isExcludedPath(relativePath, { forEmbeddings: true })) continue;
         results.push({ relativePath, fullPath });
       }
     }
@@ -240,6 +272,19 @@ async function rebuildEmbeddings(onProgress) {
   const files = listVaultFiles();
   console.log(`[Embeddings] Rebuilding — ${files.length} files to check`);
 
+  // Drop rows for anything no longer indexable — deleted notes, and everything
+  // the exclude list now keeps out (Archive, _toDelete, NEURO's own reports).
+  // Without this the bin stays in the index forever and only new writes improve.
+  const indexable = new Set(files.map(f => f.relativePath));
+  let pruned = 0;
+  for (const row of db.getAllEmbeddings()) {
+    if (indexable.has(row.relative_path)) continue;
+    db.deleteEmbedding(row.relative_path);
+    indexable.add(row.relative_path); // deleteEmbedding clears every chunk — only do it once
+    pruned++;
+  }
+  if (pruned) console.log(`[Embeddings] Pruned ${pruned} files no longer indexable`);
+
   // Prepare all files first (fast, no API calls)
   const needsEmbedding = [];
   let skipped = 0;
@@ -252,14 +297,25 @@ async function rebuildEmbeddings(onProgress) {
     }
   }
 
-  console.log(`[Embeddings] ${needsEmbedding.length} need embedding, ${skipped} unchanged`);
+  // Flatten to one work item per CHUNK — batching by file would make a batch
+  // size mean wildly different amounts of text depending on note length.
+  const work = [];
+  for (const f of needsEmbedding) {
+    f.chunks.forEach((chunk, chunkIndex) => {
+      work.push({ relativePath: f.relativePath, hash: f.hash, modified: f.modified, chunk, chunkIndex });
+    });
+  }
+
+  console.log(`[Embeddings] ${needsEmbedding.length} files / ${work.length} chunks need embedding, ${skipped} unchanged`);
 
   const hasVoyage = !!process.env.VOYAGE_API_KEY;
   let updated = 0, errors = 0, rateLimitRetries = 0;
+  // A file's stale rows are cleared once, on the first chunk of it we save.
+  const cleared = new Set();
 
   // Process in batches
-  for (let i = 0; i < needsEmbedding.length; i += BATCH_SIZE) {
-    const batch = needsEmbedding.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < work.length; i += BATCH_SIZE) {
+    const batch = work.slice(i, i + BATCH_SIZE);
     const texts = batch.map(b => b.chunk);
 
     try {
@@ -280,8 +336,12 @@ async function rebuildEmbeddings(onProgress) {
 
       // Save each embedding
       for (let j = 0; j < batch.length; j++) {
-        const { relativePath, hash, chunk, modified } = batch[j];
-        db.saveEmbedding(relativePath, hash, embeddings[j], chunk, modified);
+        const { relativePath, hash, chunk, modified, chunkIndex } = batch[j];
+        if (!cleared.has(relativePath)) {
+          db.deleteEmbedding(relativePath);
+          cleared.add(relativePath);
+        }
+        db.saveEmbedding(relativePath, hash, embeddings[j], chunk, modified, chunkIndex);
         updated++;
       }
     } catch (e) {
@@ -289,16 +349,16 @@ async function rebuildEmbeddings(onProgress) {
       errors += batch.length;
     }
 
-    if (onProgress) onProgress({ i: Math.min(i + BATCH_SIZE, needsEmbedding.length), total: needsEmbedding.length, updated, skipped });
+    if (onProgress) onProgress({ i: Math.min(i + BATCH_SIZE, work.length), total: work.length, updated, skipped });
 
     // Rate limit pause between batches (only if using Voyage and more batches remain)
-    if (hasVoyage && i + BATCH_SIZE < needsEmbedding.length) {
+    if (hasVoyage && i + BATCH_SIZE < work.length) {
       await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
     }
   }
 
-  console.log(`[Embeddings] Done — ${updated} updated, ${skipped} unchanged, ${errors} errors, ${rateLimitRetries} rate-limit retries`);
-  return { updated, skipped, errors };
+  console.log(`[Embeddings] Done — ${updated} chunks across ${needsEmbedding.length} files, ${skipped} unchanged, ${pruned} pruned, ${errors} errors, ${rateLimitRetries} rate-limit retries`);
+  return { updated, skipped, errors, pruned, files: needsEmbedding.length };
 }
 
 async function semanticSearch(query, maxResults = 5) {
@@ -313,16 +373,22 @@ async function semanticSearch(query, maxResults = 5) {
   const queryEmbedding = await getQueryEmbedding(query);
   if (!queryEmbedding) return null;
 
-  // Score all embeddings
-  const scored = allEmbeddings
-    .map(row => {
-      let embedding;
-      try { embedding = JSON.parse(row.embedding); }
-      catch { return null; }
-      const score = cosineSimilarity(queryEmbedding, embedding);
-      return { relativePath: row.relative_path, chunkText: row.chunk_text, score };
-    })
-    .filter(Boolean)
+  // Score every chunk, then keep the best chunk PER FILE. Without the fold,
+  // maxResults counts chunks rather than notes and one long transcript can fill
+  // the entire result set with five passages of itself.
+  const best = new Map();
+  for (const row of allEmbeddings) {
+    let embedding;
+    try { embedding = JSON.parse(row.embedding); }
+    catch { continue; }
+    const score = cosineSimilarity(queryEmbedding, embedding);
+    const current = best.get(row.relative_path);
+    if (!current || score > current.score) {
+      best.set(row.relative_path, { relativePath: row.relative_path, chunkText: row.chunk_text, score });
+    }
+  }
+
+  const scored = [...best.values()]
     .sort((a, b) => b.score - a.score)
     .slice(0, maxResults)
     .filter(r => r.score > 0.1); // minimum relevance threshold
@@ -340,5 +406,10 @@ module.exports = {
   rebuildEmbeddings,
   semanticSearch,
   embedVaultFile,
-  listVaultFiles
+  listVaultFiles,
+  // exported for tests — the chunker is the thing that was silently discarding
+  // 90% of every note, so it is worth being able to assert on directly.
+  chunkText,
+  prepareFile,
+  MAX_CHUNKS_PER_FILE,
 };

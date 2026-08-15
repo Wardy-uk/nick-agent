@@ -256,7 +256,7 @@ async function startDeviceCodeFlow() {
   });
 }
 
-// Graph API fetch helper
+// Graph API fetch helper — GET only (built on https.get). Writes go via graphWrite.
 function graphFetch(urlPath, token, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const url = new URL(`https://graph.microsoft.com/v1.0${urlPath}`);
@@ -279,6 +279,44 @@ function graphFetch(urlPath, token, extraHeaders = {}) {
   });
 }
 
+// Graph pages every collection. `graphFetch` returns one page and nothing here
+// ever followed `@odata.nextLink`, so a busy range was cut off with no error and
+// no signal: 17–26 Aug returned exactly 50 events and showed 8 of the 12 booked
+// 1-2-1s. That matters most where it is least visible — `one-to-one-booking`
+// reads a 21-day window, so past roughly nine days its clash detection could not
+// see meetings and its 2-a-day cap could not count 1-2-1s, while it went on
+// sending REAL invites to real people.
+//
+// Raising $top just moves the cliff. This follows the links instead, with a page
+// cap so a runaway query is bounded — and a bound that is HIT is logged, because
+// a silent cap is the bug being fixed.
+async function graphFetchAll(urlPath, token, extraHeaders = {}, maxPages = 20) {
+  const items = [];
+  let page = await graphFetch(urlPath, token, extraHeaders);
+  // graphFetch answers null on 401. Callers read that as "Graph is unavailable"
+  // and fall through to the NOVA bridge — so it must stay null here rather than
+  // becoming an empty collection, which would read as "you have no meetings".
+  if (!page) return null;
+  let pages = 0;
+  while (page && Array.isArray(page.value)) {
+    items.push(...page.value);
+    pages++;
+    const next = page['@odata.nextLink'];
+    if (!next) return { value: items, pages, truncated: false };
+    if (pages >= maxPages) {
+      console.warn(`[Microsoft] graphFetchAll hit the ${maxPages}-page cap on ${urlPath.split('?')[0]} — ${items.length} items, more available`);
+      return { value: items, pages, truncated: true };
+    }
+    // nextLink is absolute; graphFetch prefixes the v1.0 root, so strip it.
+    const rel = next.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, '');
+    page = await graphFetch(rel, token, extraHeaders);
+  }
+  // Fell out mid-collection: a later page came back null (401) or malformed.
+  // Say so rather than handing back a short list that looks complete.
+  console.warn(`[Microsoft] graphFetchAll stopped after ${pages} page(s) on ${urlPath.split('?')[0]} — a follow-on page failed; ${items.length} items may be incomplete`);
+  return { value: items, pages, truncated: true };
+}
+
 // Fetch calendar events for a date range (YYYY-MM-DD strings)
 async function fetchCalendarEvents(startDate, endDate) {
   // Priority 1 — MSAL/Graph direct
@@ -291,8 +329,9 @@ async function fetchCalendarEvents(startDate, endDate) {
       // back an hour early — the frontend slices the time out of the string and
       // does no conversion. It also makes Graph read the day window below as
       // local, which is what "events on the 14th" is supposed to mean.
-      const data = await graphFetch(
-        `/me/calendarView?startDateTime=${start}&endDateTime=${end}&$top=50&$orderby=start/dateTime&$select=id,subject,start,end,location,isAllDay,showAs,isCancelled,attendees,organizer`,
+      // Paged — see graphFetchAll. $top is the PAGE size now, not the answer.
+      const data = await graphFetchAll(
+        `/me/calendarView?startDateTime=${start}&endDateTime=${end}&$top=100&$orderby=start/dateTime&$select=id,subject,start,end,location,isAllDay,showAs,isCancelled,attendees,organizer`,
         token,
         { Prefer: `outlook.timezone="${EVENT_TIMEZONE}"` }
       );
@@ -561,7 +600,7 @@ async function fetchTodoTasks(listId) {
   const token = await getAccessToken();
   if (token) {
     try {
-      const data = await graphFetch(`/me/todo/lists/${listId}/tasks?$top=100&$filter=status ne 'completed'`, token);
+      const data = await graphFetchAll(`/me/todo/lists/${listId}/tasks?$top=100&$filter=status ne 'completed'`, token);
       if (data && data.value) {
         data.value.forEach(t => { if (t.id) _todoListByTask.set(t.id, listId); });
         return data.value;
@@ -586,7 +625,9 @@ async function fetchPlannerTasks() {
   const token = await getAccessToken();
   if (token) {
     try {
-      const data = await graphFetch('/me/planner/tasks?$top=200', token);
+      // 275 Planner tasks were readable against a $top of 200 — the same silent
+      // truncation as the calendar, one endpoint over.
+      const data = await graphFetchAll('/me/planner/tasks?$top=200', token);
       if (data && data.value) return data.value;
     } catch (err) {
       console.error('[Microsoft] Planner fetch error:', err.message);

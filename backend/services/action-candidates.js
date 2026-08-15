@@ -338,10 +338,25 @@ function syncNoteActionCandidates(relativePath) {
 
   const contentHash = hashKey(stripFrontmatter(content));
   const reviewState = readReviewState(relativePath);
-  const candidates = candidatesFor(content, relativePath);
-  if (reviewState.contentHash === contentHash && candidates.length === 0) {
-    return { created: 0, autoPromoted: 0, pending: 0, superseded: 0, candidates: [] };
+
+  // Gate on CONTENT, not mtime. `scanRecentNotes` selects notes by file mtime
+  // inside a 7-day window, so on 14 Aug the restamp-people backfill rewrote
+  // `people:` frontmatter across ~229 meeting notes, every mtime jumped into the
+  // window, and the nightly sweep re-read the entire meetings corpus and
+  // extracted every historical `- [ ]` checkbox: 911 candidates in one night.
+  // One automation's bulk rewrite triggering another's flood is why this recurs
+  // on every clean-up pass, and why reviewing the queue once was never going to
+  // hold. If the BODY has not changed the candidate set cannot have changed
+  // either — nothing to create, nothing to supersede. The hash is taken after
+  // stripping frontmatter, so a restamp is invisible here by construction.
+  //
+  // The embeddings pipeline has gated on content_hash all along; this is the
+  // same pattern, applied where it was missing.
+  if (reviewState.contentHash === contentHash) {
+    return { created: 0, autoPromoted: 0, pending: 0, superseded: 0, candidates: [], unchanged: true };
   }
+
+  const candidates = candidatesFor(content, relativePath);
   const activeIds = new Set(candidates.map((candidate) => candidate.focusItemId));
   // Every capture_todo ever raised FOR THIS NOTE, not the newest 500 rows in
   // the table filtered down to it. That filter was the whole duplication bug:
@@ -632,12 +647,15 @@ function scanRecentNotes(options = {}) {
   // measured proposing 258 items from a single PIP meeting-actions record and 61
   // from the NOVA backlog — both of which Tasks/Task System Boundary.md routes
   // away from Master Todo. Widen to 'all' only with a dry run in hand.
-  const { days = 7, dryRun = true, limit = 500, scope = 'meetings' } = options;
+  // maxCreate bounds what ONE run may add to the review queue. 911 candidates
+  // landed in a single night on 14 Aug and nothing stopped it.
+  const { days = 7, dryRun = true, limit = 500, scope = 'meetings', maxCreate = 60 } = options;
   const started = Date.now();
   const result = {
-    dryRun, days, scope, scanned: 0, skipped: 0,
+    dryRun, days, scope, scanned: 0, skipped: 0, unchanged: 0,
     created: 0, autoPromoted: 0, pending: 0, superseded: 0,
     wouldCreate: 0, wouldAutoPromote: 0,
+    capped: false, maxCreate, notScanned: 0,
     files: [],
   };
   if (!VAULT_PATH) return result;
@@ -690,16 +708,31 @@ function scanRecentNotes(options = {}) {
       continue;
     }
 
+    if (result.created >= maxCreate) {
+      result.capped = true;
+      result.notScanned += 1;
+      continue;
+    }
+
     try {
       const r = syncNoteActionCandidates(rel);
       result.created += r.created;
       result.autoPromoted += r.autoPromoted;
       result.pending += r.pending;
       result.superseded += r.superseded;
+      if (r.unchanged) result.unchanged += 1;
       if (r.created || r.superseded) result.files.push({ path: rel, created: r.created, pending: r.pending });
     } catch (e) {
       console.warn('[ActionCandidates] scan failed for', rel, e.message);
     }
+  }
+
+  // A run that proposes hundreds of things has failed regardless of whether each
+  // one is individually defensible — a review queue that arrives faster than it
+  // can be read is just a second backlog. Say so in the log rather than stopping
+  // quietly: an unannounced cap is the failure mode this whole item is about.
+  if (result.capped) {
+    console.warn(`[ActionCandidates] Hit the ${maxCreate}-candidate cap for one run — ${result.notScanned} notes left unscanned. Something is re-writing notes in bulk; check before raising this.`);
   }
 
   result.ms = Date.now() - started;

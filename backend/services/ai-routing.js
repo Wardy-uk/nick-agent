@@ -166,13 +166,54 @@ function _getTaskPriority(taskType) {
 
 
 // ── Usage tracking ──
-let _usage = { date: _todayStr(), calls: 0, tokens: 0, hourlyEscalations: new Map(), lastFallbackReason: null };
+//
+// Persisted, because a module-level counter makes the "1000 calls / 100k tokens
+// per day" cap really mean per UPTIME. It is what stopped Friday's runaway at
+// 104k tokens, and it only worked because the process happened to stay up — a
+// crash loop or a few deploys (two or three Claude sessions deploy a day) hands
+// the loop a fresh budget each time. A budget that resets on restart is a
+// suggestion, not a cap.
+const USAGE_STATE_KEY = 'ai_routing_usage';
 
 function _todayStr() { return new Date().toISOString().split('T')[0]; }
+
+function _loadUsage() {
+  const blank = { date: _todayStr(), calls: 0, tokens: 0, hourlyEscalations: new Map(), lastFallbackReason: null };
+  try {
+    const raw = require('../db/database').getState(USAGE_STATE_KEY);
+    if (!raw) return blank;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.date !== blank.date) return blank; // yesterday's spend is not today's
+    return {
+      date: parsed.date,
+      calls: parsed.calls || 0,
+      tokens: parsed.tokens || 0,
+      hourlyEscalations: new Map(Object.entries(parsed.hourlyEscalations || {})),
+      lastFallbackReason: parsed.lastFallbackReason || null,
+    };
+  } catch { return blank; }
+}
+
+function _saveUsage() {
+  try {
+    // setState takes a primitive — objects must be stringified (see mistakes.md).
+    require('../db/database').setState(USAGE_STATE_KEY, JSON.stringify({
+      date: _usage.date,
+      calls: _usage.calls,
+      tokens: _usage.tokens,
+      hourlyEscalations: Object.fromEntries(_usage.hourlyEscalations),
+      lastFallbackReason: _usage.lastFallbackReason,
+    }));
+  } catch { /* never let bookkeeping break a call */ }
+}
+
+let _usage = _loadUsage();
+
 function _resetIfNewDay() {
   const today = _todayStr();
   if (_usage.date !== today) {
     _usage = { date: today, calls: 0, tokens: 0, hourlyEscalations: new Map(), lastFallbackReason: null };
+    _saveUsage();
   }
 }
 function _currentHourKey() { return new Date().getHours().toString(); }
@@ -204,6 +245,7 @@ function _recordOpenRouterUsage(usage) {
   _usage.tokens += usage?.total_tokens || 0;
   const hk = _currentHourKey();
   _usage.hourlyEscalations.set(hk, (_usage.hourlyEscalations.get(hk) || 0) + 1);
+  _saveUsage();
 }
 
 // ═══════════════════════════════════════════════════════

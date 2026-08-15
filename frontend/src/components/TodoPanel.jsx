@@ -408,9 +408,19 @@ function MustMoveLane({ items }) {
           <div key={item.id} className="todo-suggestion-card">
             <div className="todo-suggestion-main">
               <div className="todo-suggestion-text">{item.text}</div>
+              {/* buildTodayLane returns a `why` per row and this rendered none
+                  of it — so the one card claiming to "protect your day" never
+                  said which of five reasons put a task here. That matters more
+                  than it looks: a task joins this lane for containing the word
+                  "customer", and stating the reason is what makes a bad
+                  classification visible instead of merely plausible. */}
+              {item.why && <div className="todo-suggestion-why">{item.why}</div>}
               <div className="todo-suggestion-meta">
-                <span className="todo-source">{item.moscow}</span>
-                {item.context && <span className="todo-source">{item.context}</span>}
+                <span className="todo-tag">{item.moscow}</span>
+                {item.context && <span className="todo-tag">{item.context}</span>}
+                {typeof item.ageDays === 'number' && item.ageDays > 0 && (
+                  <span className="todo-tag todo-tag-age">{item.ageDays}d old</span>
+                )}
                 {item.due_date && <span className="todo-due">{formatDue(item.due_date)}</span>}
               </div>
             </div>

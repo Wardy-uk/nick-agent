@@ -207,7 +207,9 @@ function getOrphans(daysBack = 7) {
       if (entry.isDirectory()) {
         walk(fullPath, depth + 1);
       } else if (entry.name.endsWith('.md')) {
-        const stat = fs.statSync(fullPath);
+        let stat;
+        try { stat = fs.statSync(fullPath); }
+        catch { continue; }
         if (stat.mtime < cutoff) continue; // older than window
 
         const relativePath = path.relative(VAULT_PATH, fullPath).replace(/\\/g, '/');
@@ -235,12 +237,34 @@ function getOrphans(daysBack = 7) {
 }
 
 /**
+ * Drop entity rows for paths the exclude list now keeps out.
+ *
+ * Skipping them on the walk stops NEW rows; it does nothing about the ones
+ * already stored, and nothing else ever deletes them — so without this the
+ * export note and the MoSCoW worksheets would keep out-ranking real meetings on
+ * every person page indefinitely. Runs at the head of the nightly sweep.
+ */
+function pruneExcludedEntities() {
+  const exclusions = require('./vault-exclusions');
+  let pruned = 0;
+  const rows = db.all('SELECT DISTINCT source_path FROM extracted_entities');
+  for (const row of rows) {
+    if (!exclusions.isExcludedPath(row.source_path)) continue;
+    db.deleteEntitiesForPath(row.source_path);
+    pruned++;
+  }
+  if (pruned) console.log(`[Entities] Pruned ${pruned} generated/archived files from mentions`);
+  return { pruned };
+}
+
+/**
  * Batch process — run entity extraction on all recent notes.
  */
 function processRecentNotes(daysBack = 7) {
   if (!VAULT_PATH) return { processed: 0 };
+  const { pruned } = pruneExcludedEntities();
   const cutoff = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
-  const SKIP = new Set(['.obsidian', '.git', '.trash', 'Scripts', 'Templates']);
+  const exclusions = require('./vault-exclusions');
   let processed = 0;
 
   function walk(dir, depth) {
@@ -254,13 +278,22 @@ function processRecentNotes(daysBack = 7) {
       if (entry.name.startsWith('.')) continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (SKIP.has(entry.name)) continue;
+        if (exclusions.isExcludedDir(entry.name)) continue;
         walk(fullPath, depth + 1);
       } else if (entry.name.endsWith('.md')) {
-        const stat = fs.statSync(fullPath);
+        // Unguarded, this threw ENOENT on a note moved by another automation
+        // mid-walk and aborted the WHOLE nightly extraction — one moved file
+        // cost a full run. Skip the file, keep the run.
+        let stat;
+        try { stat = fs.statSync(fullPath); }
+        catch { continue; }
         if (stat.mtime < cutoff) continue;
 
         const relativePath = path.relative(VAULT_PATH, fullPath).replace(/\\/g, '/');
+        // Generated files name everyone — the task export, Master Todo and the
+        // MoSCoW worksheets between them put four rows above every real meeting
+        // on a person's page, because mentions rank by extracted_at.
+        if (exclusions.isExcludedPath(relativePath)) continue;
         const result = processNote(relativePath);
         if (result && result.total > 0) processed++;
       }
@@ -268,7 +301,7 @@ function processRecentNotes(daysBack = 7) {
   }
 
   walk(VAULT_PATH, 0);
-  return { processed };
+  return { processed, pruned };
 }
 
-module.exports = { extractEntities, processNote, getMentionsOf, getOrphans, processRecentNotes, getRoster };
+module.exports = { extractEntities, processNote, getMentionsOf, getOrphans, processRecentNotes, pruneExcludedEntities, getRoster };

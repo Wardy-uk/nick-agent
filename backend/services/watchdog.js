@@ -133,6 +133,57 @@ async function checkAi() {
   return out;
 }
 
+// The export note is the ENTIRE offline safety net. The 13 Aug migration
+// deliberately traded "tasks are markdown" for "tasks are read-only when the Pi
+// is down", on the basis that the vault copy stays current — and if the exporter
+// throws, the failure is caught, logged, and nothing else happens: the file
+// quietly ages while its header still says what it said yesterday. Nobody would
+// find out until they needed it, which is during an outage.
+//
+// verifyExport() already returns everything an alert needs; it was only ever
+// called by hand.
+const EXPORT_STALE_HOURS = 6; // hourly job — six misses is a real failure
+
+function checkTaskExport() {
+  const out = [];
+  let result;
+  try { result = require('./task-export').verifyExport(); }
+  catch (e) {
+    return [{ key: 'tasks:export-check-failed', level: 'warn', title: 'Task export check failed', detail: e.message }];
+  }
+
+  if (result.error) {
+    return [{ key: 'tasks:export-missing', level: 'critical', title: 'Task export is missing', detail: `${result.path} — the offline copy of your tasks does not exist` }];
+  }
+
+  const age = result.exportedAt ? _hoursSince(new Date(result.exportedAt).getTime()) : null;
+  if (age === null || Number.isNaN(age)) {
+    out.push({ key: 'tasks:export-stale', level: 'warn', title: 'Task export has no timestamp', detail: `cannot tell how old ${result.path} is` });
+  } else if (age >= EXPORT_STALE_HOURS) {
+    out.push({
+      key: 'tasks:export-stale',
+      level: 'critical',
+      title: 'Task export has stopped',
+      detail: `${result.path} last written ${Math.round(age)}h ago — the offline copy is going stale`,
+    });
+  }
+
+  if (!result.ok) {
+    const parts = [];
+    if (result.missing?.length) parts.push(`${result.missing.length} missing`);
+    if (result.extra?.length) parts.push(`${result.extra.length} extra`);
+    if (result.mismatched?.length) parts.push(`${result.mismatched.length} reworded`);
+    out.push({
+      key: 'tasks:export-mismatch',
+      level: 'critical',
+      title: 'Task export does not match the database',
+      detail: `${parts.join(', ')} — ${result.dbCount} in NEURO, ${result.fileCount} in the vault copy`,
+    });
+  }
+
+  return out;
+}
+
 async function checkHost() {
   const out = [];
   try {
@@ -158,6 +209,7 @@ async function checkHost() {
 async function run({ notify = true } = {}) {
   const issues = [
     ...checkBackups(),
+    ...checkTaskExport(),
     ...(await checkAi()),
     ...(await checkHost()),
   ];
@@ -196,4 +248,4 @@ async function run({ notify = true } = {}) {
   };
 }
 
-module.exports = { run, checkBackups, checkAi, checkHost };
+module.exports = { run, checkBackups, checkTaskExport, checkAi, checkHost };
