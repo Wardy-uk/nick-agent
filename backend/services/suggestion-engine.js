@@ -384,6 +384,47 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
     // Ask someone where a commitment got to. Goes to a direct report, so it is
     // approval-only by design: an automated chase to someone who works for you
     // reads as surveillance, however politely it is worded.
+    // Escalate a support ticket in NOVA. NOVA owns every rule here — the comment
+    // is internal-only, the due date only tightens, the priority only rises — so
+    // this executor deliberately does no judging of its own. It reports back what
+    // NOVA actually changed rather than what was asked for, because a due date
+    // that was left alone (already tighter) still reads as a success otherwise.
+    case 'escalate_ticket': {
+      const nova = require('./nova-client');
+      if (!nova.isConfigured()) return { ok: false, detail: 'NOVA is not configured — cannot escalate' };
+      if (!payload.ticketKey) return { ok: false, detail: 'escalate_ticket needs a ticketKey' };
+
+      let result;
+      try {
+        result = await nova.escalate({
+          ticketKey: payload.ticketKey,
+          reasonCode: payload.reasonCode,
+          neededBy: payload.neededBy,
+          notes: payload.notes,
+        });
+      } catch (e) {
+        return { ok: false, detail: `NOVA refused the escalation: ${e.message}` };
+      }
+
+      const changed = [];
+      if (result.priority?.changed) changed.push(`priority ${result.priority.from || 'unset'} → ${result.priority.to}`);
+      if (result.duedate?.changed) changed.push(`due ${result.duedate.to}`);
+      if (result.comment_posted) changed.push('internal comment posted');
+
+      // A partial escalation must not read as a clean one.
+      const warned = (result.warnings || []).length
+        ? ` — but ${result.warnings.join(' ')}`
+        : '';
+
+      return {
+        ok: true,
+        detail: `Escalated ${result.ticket_key} (${result.reason_label})`
+          + (changed.length ? `: ${changed.join(', ')}` : ': logged, nothing on the ticket needed changing')
+          + warned,
+        navigate: 'queue',
+      };
+    }
+
     case 'chase_commitment': {
       const waitingOn = require('./waiting-on');
       const item = waitingOn.list({ status: 'all' }).find(i => i.key === payload.waitingKey);

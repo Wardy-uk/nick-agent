@@ -101,6 +101,36 @@ test('outward-facing tools queue for approval and send nothing', async () => {
   assert.ok(pending.some(a => a.id === booking.queued_action_id && a.type === 'schedule_focus_block'));
 });
 
+// escalate_ticket reaches into NOVA and changes a real customer ticket, so the
+// thing worth pinning is that chat NEVER does it directly — it only ever queues.
+test('escalate_ticket queues and escalates nothing', async () => {
+  process.env.NOVA_URL = 'http://nova.invalid';
+  process.env.NOVA_USERNAME = 'neuro-test';
+  process.env.NOVA_PASSWORD = 'unused-because-nothing-is-sent';
+
+  const res = await chatTools.execute('escalate_ticket', {
+    ticket_key: 'nt-28061',
+    reason_code: 'commercial',
+    needed_by: '2026-08-19',
+    notes: 'AM says they are at renewal',
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.escalated, false, 'chat must never escalate directly');
+  assert.ok(res.queued_action_id);
+
+  const queued = db.getPendingSaraActions(20).find(a => a.id === res.queued_action_id);
+  assert.equal(queued.type, 'escalate_ticket');
+  const payload = typeof queued.payload === 'string' ? JSON.parse(queued.payload) : queued.payload;
+  assert.equal(payload.ticketKey, 'NT-28061', 'ticket key is normalised to upper case');
+  assert.equal(payload.reasonCode, 'commercial');
+
+  // A malformed date must be caught here, not by Jira on approval.
+  const bad = await chatTools.execute('escalate_ticket', {
+    ticket_key: 'NT-1', reason_code: 'commercial', needed_by: '19/08/2026',
+  });
+  assert.equal(bad.ok, false);
+});
+
 test('history normaliser produces a shape the tool API will accept', () => {
   // Opens on assistant, repeats roles, has an empty turn, ends on assistant.
   const messy = [

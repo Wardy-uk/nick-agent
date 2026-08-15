@@ -176,6 +176,24 @@ const TOOLS = [
       required: ['subject', 'start', 'attendees'],
     },
   },
+  {
+    name: 'escalate_ticket',
+    tier: 'queued',
+    description: 'Queue an escalation of a Jira support ticket for Nick\'s approval. This does NOT escalate: it puts the escalation in the approval queue. Use when a ticket needs to jump the queue for a business reason — a renewal at risk, a customer blocked, an external deadline — NOT when the agent is technically stuck (that is the support team\'s own SOP). On approval NOVA raises the priority, tightens the due date and posts an INTERNAL comment; the customer never sees the reason.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ticket_key: { type: 'string', description: 'Jira key, e.g. "NT-28061".' },
+        reason_code: {
+          type: 'string',
+          description: 'Why it must jump the queue. One of: commercial (renewal, upsell, contract), customer_impact (blocking their operation), reputational (complaint risk), deadline (external date), exec_ask (SLT or AM request), customer_request (the customer asked), sla_risk (internal SLA clock), security. Pick the closest — do not invent a code.',
+        },
+        needed_by: { type: 'string', description: 'Optional date it is needed by, "YYYY-MM-DD". Only ever brings a due date forward, never pushes one out.' },
+        notes: { type: 'string', description: 'The context in Nick\'s words — who asked and why. Goes in the internal comment, so the assignee reads it.' },
+      },
+      required: ['ticket_key', 'reason_code'],
+    },
+  },
 ];
 
 /** Anthropic wants name/description/input_schema only — `tier` is ours. */
@@ -378,6 +396,32 @@ const HANDLERS = {
       queued_action_id: id,
       sent: false,
       note: 'Queued for approval. Nothing has been sent — Nick approves it in the actions queue, reads the draft, then approves the send.',
+    };
+  },
+
+  // Queued, not write: this reaches into NOVA, changes a real ticket and puts a
+  // comment in front of the assignee. Reversible in principle, awkward in practice.
+  escalate_ticket({ ticket_key, reason_code, needed_by, notes }) {
+    const key = String(ticket_key || '').trim().toUpperCase();
+    if (!key) return { ok: false, error: 'ticket_key is required' };
+    if (!reason_code) return { ok: false, error: 'reason_code is required' };
+    if (needed_by && !/^\d{4}-\d{2}-\d{2}$/.test(needed_by)) {
+      return { ok: false, error: 'needed_by must be YYYY-MM-DD' };
+    }
+    if (!require('./nova-client').isConfigured()) {
+      return { ok: false, error: 'NOVA is not configured here, so escalations cannot be raised from chat.' };
+    }
+    const id = require('./suggestion-engine').queueAction(
+      'escalate_ticket',
+      { ticketKey: key, reasonCode: String(reason_code), neededBy: needed_by || null, notes: notes || null },
+      `Escalate ${key} — ${reason_code}${needed_by ? `, needed by ${needed_by}` : ''}`,
+      0.85
+    );
+    return {
+      ok: true,
+      queued_action_id: id,
+      escalated: false,
+      note: `Queued for approval. ${key} is unchanged — no comment, no priority change — until Nick approves it.`,
     };
   },
 
