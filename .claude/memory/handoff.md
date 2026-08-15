@@ -1,37 +1,50 @@
-# Session Handoff — 2026-08-15 16:20
+# Session Handoff — 2026-08-15 16:35
 
-The escalation/chasing/Teams workstream. **BA is answered — `.claude/memory/workstream-escalation-and-chasing.md` holds the decisions. Do not re-derive them.** Build order steps 1–3 shipped; step 4 is half done.
+**Task: give the SARA phone app a voice.** Tracker **#90**. Code is DONE and builds clean.
+**NOT committed, NOT deployed — see "still pending".**
 
 ## What was done
 
-- **BA: all 18 questions answered**, written back into the workstream brief as decisions. Escalation first-drafts was dropped mid-BA then reinstated by Nick — it is IN, as steps 6–7.
-- **Manual escalation, live and verified end to end on NT-28075**: `Unset → Critical`, due date set, internal-only comment signed *"Escalated by Nick Ward"*, `escalation_log` row 5018, no warnings.
-- Azure SQL migration ran (`reason_kind` + 5 urgency codes + 3 reclassified + `resolved_at`/`minutes_to_resolve`/`disputes_escalation_id`). Verified: 8 urgency reasons returned.
-- **NEURO Escalations view** (sidebar) — key → ticket detail → reason → confirm → escalate. Plus `escalate_ticket` chat/voice tool (queued for approval).
-- **waiting-on KV → `waiting_on` table**, with `snooze`. **287 items / 29 people / oldest 107d migrated and verified intact.**
+- `sara/app/src/voiceUtils.js` — verbatim copy of `frontend/src/voiceUtils.js`, verified
+  byte-identical with `diff`. Do not let the two drift.
+- `views/Chat.jsx` — 🔊/🔇 toggle in `chat__head` (persisted, OFF by default) and a
+  speak-on-complete effect keyed on **`busy`**.
+- `views/Chat.jsx` — ALSO a 🎤 composer button (ported from `Capture.jsx:62-84`). This was
+  NOT in the original plan; see decisions.
+- `Chat.css` — toggle + mic styles. `CLAUDE.md` — SARA mobile section records the traps.
+- `npm run build` in `sara/app` passes.
 
 ## What's still pending
 
-- **Step 4b — the chasing UI.** Backend is done and deployed; there is still NO UI. Per Q10–Q12: per-person card on the People board + surfaced in 1-2-1 prep, grouped by person oldest-first, actions chase / done / drop / snooze. Pull-only, no nudge (Q14).
-- **Step 5 — Teams.** Build BOTH paths, fail-soft, config-gated (Q8/Q9). Raise the `ChatMessage.Send` admin consent request early.
-- **Steps 6–7 — escalation first-drafts.** Phase A internal draft first, Phase B customer-facing only after the closed-ticket prototype passes zero-wrong (Q17).
-- **Tracker #77** (new): escalated tickets have no acknowledgement — one-way today.
+- **Commit + push.** `main` moved during this session (HEAD is now `0a0118b`, a concurrent
+  session's escalation work). Rebase/check before pushing. Working tree also carries that
+  session's `backend/routes/health.js`, `stress-score.js` + test, and
+  `workstream-escalation-and-chasing.md` — **NOT mine, do not commit them with #90.**
+- **Deploy.** `sara/app` is its own **Netlify** site `sara-nickward` →
+  https://sara.nickward.co.uk (branch URL `main--sara-nickward.netlify.app`, so it looks
+  git-linked to `main`). I could not confirm the build config — the Netlify API 502'd.
+  There is NO Pi deploy for this: `sara/app` talks straight to the NEURO backend.
+- **On-device test.** Nick has not tried it yet. Watch the iPhone console for
+  `[SARA Voice] Selected: …`; the `No suitable voice found` warning dumps the full list.
 
 ## Key decisions made
 
-- **Escalation goes over the NEURO bridge, not a NOVA service account.** The `@sara` account's password did not exist anywhere. The bridge (`/api/neuro-bridge/*`, `x-neuro-bridge-secret`) was already there for Microsoft, needs no password, and is hardcoded to Nick — so attribution is a property of the route, not a config map.
-- Nick overruled two recommendations, both stand: escalation **also raises Priority** (to `Critical`, raise-only) because it is the field assignees filter on; and **all 8 urgency codes stay active** despite `exec_ask`≈`customer_request` and `deadline`≈`sla_risk` being near-synonyms — `by_reason` stats will split across the pairs.
-- The Escalations **form does not queue for approval**; the confirm step is the gate. Chat/voice still queues, because SARA acts on inferred intent.
-
-## Files changed
-
-- NOVA `7a6655a`: `db/schema.ts` (migration), `services/manual-escalation-service.ts` (new), `routes/escalation.ts`, `routes/neuro-bridge.ts` (escalate/ticket/reasons), `services/jira-sync-service.ts` (closure stamping), `index.ts`.
-- NEURO `006ca71`: `routes/escalation.js` + `services/nova-client.js` (new), `components/EscalationPanel.{jsx,css}` (new), `services/waiting-on.js` (SQL), `db/schema.sql`, `db/database.js` (exports `all/get/run`), `chat-tools.js`, `suggestion-engine.js`, `server.js`, `Sidebar.jsx`, `App.jsx`.
+- **Mic added to Chat, on Nick's call.** The plan said chat-only speech OUT, but the done
+  criterion was "talk and hear the reply" — and `App.jsx:28` maps the **Voice tab to
+  Capture**, not Chat, so no tab could do both. Nick chose adding the mic over remapping
+  the tab (which would have cost the one-tap voice capture).
+- Off by default, persisted (`sara_voice_out`). A PWA that talks unprompted on a train
+  gets disabled forever.
+- Dictation is `continuous` — the **stop tap sends**, so a mid-thought pause doesn't fire
+  early. No wake word (#11 stays parked).
 
 ## Gotchas for next session
 
-- **Jira priority IDs are NOT in rank order** — `Normal` is 10100, `Minor` is 4. Rank via the explicit list in `manual-escalation-service.ts`, never the id.
-- **Jira reads lag writes by seconds.** An immediate read-back after escalating shows pre-write values; it is not a bug. Verify from a second source before believing it.
-- **Another Claude session works in this repo on `main` at the same time.** Its commits interleave with ours and its pushes carry our work. Stage explicitly; never `git add -A`.
-- NOVA deploys with `.\deploy.ps1 -Branch nova-codex` (Nick runs it) and **pulls a branch it never checks out**. Push to `origin` AND `azdo`.
-- `deploy.ps1` reported "Already up to date" on a run that did have new commits — treat its output as untrustworthy; verify with `git -C C:\Nurtur\NOVA log -1`.
+- **`busy` gates the speaking, never `messages`** — keying on `messages` speaks every
+  streamed token. Both reply paths (SSE + `/api/chat/sync`) clear `busy` in one `finally`.
+- **`rec.onend` fires from a stale closure** — hence `dictatedRef` (text) and `busyRef`
+  (in-flight guard) instead of state. `send(e)` is now a thin wrapper over `submit(text)`.
+- The Voice tab still mounts Capture. The talk→hear loop lives on **Chat**. If Nick finds
+  that confusing in use, remapping the tab is the follow-up.
+- Briefings/nudges are still silent on the phone — NEURO's `speakIfEnabled` is not wired
+  into `sara/app`. That's the next increment, once #90 is judged.

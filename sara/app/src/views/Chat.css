@@ -9,6 +9,23 @@
   align-items: flex-start;
   justify-content: space-between;
 }
+.chat__head-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.chat__voice-toggle {
+  background: none;
+  border: none;
+  padding: 0.25rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  opacity: 0.5;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.chat__voice-toggle.is-on { opacity: 1; }
+
 .chat__mode {
   font-size: 0.7rem;
   padding: 0.15rem 0.5rem;
@@ -80,3 +97,21 @@
   cursor: pointer;
 }
 .chat__send:disabled { opacity: 0.45; cursor: default; }
+
+.chat__mic {
+  flex: 0 0 auto;
+  width: 2.8rem;
+  height: 2.8rem;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.chat__mic--on {
+  background: #5a1f1f;
+  border-color: #ff8a8a;
+  animation: chat-pulse 1.2s ease-in-out infinite;
+}
+@keyframes chat-pulse { 50% { opacity: 0.55; } }
