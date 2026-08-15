@@ -485,6 +485,8 @@ function classifyAction(text) {
         owner: mine ? 'mine' : 'others',
         // Nick's own name is not a person he is waiting on.
         actors: mine ? [] : known.filter((a) => !NICK_RE.test(a)),
+        // Matched the People/ index, so this is a real colleague.
+        actorsKnown: true,
       };
     }
     // Not in People/ — but "Catherine will process…" is still plainly someone
@@ -492,12 +494,18 @@ function classifyAction(text) {
     // an owner UNLESS it is an action verb, which is what stops "Reclassify
     // Lomond to low risk" and "Remind Taus to deliver…" being read as people.
     const lead = actors[0] ? actors[0].split(/\s+/)[0].toLowerCase() : '';
-    if (lead && !ACTION_VERBS.includes(lead)) return { owner: 'others', actors: [actors[0]] };
+    // Still "not Nick's", which is all the task extractor needs — but NOT a
+    // named colleague. A backfill over 232 notes produced "HR", "Explore Access"
+    // and other org names this way, so actorsKnown stays false and waiting-on
+    // ignores it. Chasing needs an email, which needs a People note anyway.
+    if (lead && !ACTION_VERBS.includes(lead)) {
+      return { owner: 'others', actors: [actors[0]], actorsKnown: false };
+    }
   }
   // Only a LEADING "Nick…" counts as ownership. A bare mention anywhere used to
   // claim the line, so "Naomi Wentworth: … (agreed with Nick)" read as yours.
-  if (/^nick(\s+ward)?(?:’s|'s)?\b/i.test(value)) return { owner: 'mine', actors: [] };
-  return { owner: 'unowned', actors: [] };
+  if (/^nick(\s+ward)?(?:’s|'s)?\b/i.test(value)) return { owner: 'mine', actors: [], actorsKnown: false };
+  return { owner: 'unowned', actors: [], actorsKnown: false };
 }
 
 function extractMeetingActions(text, relativePath) {
@@ -524,14 +532,15 @@ function extractMeetingActions(text, relativePath) {
     const raw = cleanCandidateText(bullet[1]);
     if (!raw || raw.length < 8 || raw.length > 220) continue;
 
-    const { owner, actors } = classifyAction(raw);
+    const { owner, actors, actorsKnown } = classifyAction(raw);
 
     // B — someone else's. Not a task for Nick, but it IS something he is waiting
     // on, and this used to be thrown away with the name attached. Recorded
     // rather than promoted: it never reaches the task list or the approval
     // queue, it just stops being forgotten.
     if (owner === 'others') {
-      for (const person of actors) {
+      // Named colleagues only. Without this the list fills with org names.
+      for (const person of (actorsKnown ? actors : [])) {
         try {
           require('./waiting-on').record({
             person,

@@ -17,6 +17,27 @@ const waitingOn = require('./waiting-on');
 test.before(async () => { await db.init(); });
 test.beforeEach(() => { db.setState('waiting_on_items', '[]'); });
 
+test('age is measured from the meeting, not from when the row was written', () => {
+  // A backfill over months of notes otherwise stamps everything with today and
+  // reports a June commitment as nought days old, breaking both the sort and
+  // the stale flag — the only two things this list is read by.
+  waitingOn.record({
+    person: 'Abdi',
+    text: 'Send the SLA figures',
+    sourcePath: 'Meetings/2026/06/2026-06-30 – Ops.md',
+    sourceDate: '2026-06-30',
+  });
+  const item = waitingOn.list()[0];
+  assert.ok(item.ageDays > 30, `expected a real age, got ${item.ageDays}`);
+  assert.equal(item.stale, true);
+});
+
+test('a future-dated note does not become a negative age', () => {
+  const future = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+  waitingOn.record({ person: 'Abdi', text: 'Something', sourceDate: future });
+  assert.ok(waitingOn.list()[0].ageDays >= 0);
+});
+
 test('a commitment someone else made is recorded with who owes it', () => {
   const item = waitingOn.record({
     person: 'Abdi',

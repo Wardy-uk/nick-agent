@@ -53,6 +53,17 @@ function _key(person, text) {
   return `${String(person || '').toLowerCase()}::${norm}`;
 }
 
+/** "2026-06-30" → an ISO timestamp, or null if it is not a usable date. */
+function _sourceDateToIso(sourceDate) {
+  if (!sourceDate) return null;
+  const m = String(sourceDate).match(/^(\d{4}-\d{2}-\d{2})/);
+  if (!m) return null;
+  const d = new Date(`${m[1]}T09:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  // A note dated in the future is a typo, not a commitment made tomorrow.
+  return d.getTime() > Date.now() ? null : d.toISOString();
+}
+
 function _ageDays(iso) {
   if (!iso) return 0;
   const then = new Date(iso).getTime();
@@ -85,6 +96,7 @@ function record({ person, text, sourcePath = null, sourceDate = null }) {
     return existing;
   }
 
+  const now = new Date().toISOString();
   const item = {
     key,
     person: String(person).trim(),
@@ -93,8 +105,12 @@ function record({ person, text, sourcePath = null, sourceDate = null }) {
     sourceDate,
     status: 'open',
     askedAt: null,
-    firstSeen: new Date().toISOString(),
-    lastSeen: new Date().toISOString(),
+    // Dated from the MEETING, not from when this row was written. A backfill
+    // over four months of notes otherwise stamps everything with today and
+    // reports a commitment made in June as nought days old — which breaks the
+    // only two things this list is sorted and filtered by.
+    firstSeen: _sourceDateToIso(sourceDate) || now,
+    lastSeen: now,
     sightings: 1,
   };
   items.push(item);
