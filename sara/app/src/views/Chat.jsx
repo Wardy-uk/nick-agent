@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { apiFetch, chatStream } from '../api';
+import { apiFetch, apiFetchBlob, chatStream } from '../api';
 import { speakSara, isVoiceOutEnabled, setVoiceOutEnabled, unlockAudio } from '../voiceUtils';
 import './Chat.css';
 
@@ -9,6 +9,10 @@ import './Chat.css';
 // Web Speech errors are terse codes. On a phone there is no console to read, so the
 // reason has to reach the screen — a mic that fails silently is indistinguishable from
 // a mic that isn't wired up at all.
+// 50ms of silence. Played on the speaker tap purely to unlock <audio> playback for the
+// server-TTS fallback, which arrives long after any gesture has passed.
+const SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
 const VOICE_ERRORS = {
   'not-allowed': 'Microphone blocked. Allow it in Settings → Safari → Microphone, then reload.',
   'service-not-allowed': 'iOS refused speech recognition here. Try opening SARA in Safari rather than the installed app.',
@@ -32,6 +36,8 @@ export default function Chat() {
   const recognitionRef = useRef(null);
   const dictatedRef = useRef('');   // onend fires from a stale closure — read the text from here
   const busyRef = useRef(false);    // ditto for the in-flight guard
+  const audioRef = useRef(null);
+  const serverSpeakingRef = useRef(false);
 
   const SpeechRecognition = typeof window !== 'undefined'
     && (window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -64,18 +70,47 @@ export default function Chat() {
       console.warn('[SARA Voice] utterance error', evt?.error, evt);
     };
     // Nothing fired at all — the call was accepted and silently dropped. That is the
-    // signature of speechSynthesis in an installed iOS PWA.
+    // signature of speechSynthesis in an installed iOS PWA, so fall back to audio the
+    // backend speaks for us, which <audio> will play where the speech API won't.
     setTimeout(() => {
-      if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
-        setVoiceErr((e) => e || 'Speech was accepted but never played. On iPhone this usually means the installed app — try SARA in Safari to confirm.');
-      }
+      if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) speakViaServer(text);
     }, 1200);
+  }
+
+  // Backend TTS: /api/tts/speak returns a WAV. Costs a fraction of a penny per reply,
+  // so it is the fallback rather than the default — browser speech is free where it works.
+  async function speakViaServer(text) {
+    if (serverSpeakingRef.current) return;
+    serverSpeakingRef.current = true;
+    setSpeaking(true);
+    try {
+      const blob = await apiFetchBlob('/api/tts/speak', {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      });
+      const el = audioRef.current;
+      if (!el) throw new Error('no audio element');
+      if (el.src) URL.revokeObjectURL(el.src);
+      el.src = URL.createObjectURL(blob);
+      await el.play();
+      setVoiceErr('');
+    } catch (err) {
+      setSpeaking(false);
+      setVoiceErr(`Couldn’t speak: ${err.message}`);
+      console.warn('[SARA Voice] server TTS failed', err);
+    } finally {
+      serverSpeakingRef.current = false;
+    }
   }
 
   const toggleVoiceOut = () => {
     // This tap is a guaranteed user gesture — the one moment iOS will accept an unlock.
     // Waiting for the generic first-touch listener is a coin flip on which tap wins.
     unlockAudio();
+    // The <audio> element needs its own gesture unlock, separate from speechSynthesis —
+    // play a silent clip now so the server-TTS fallback can play later without one.
+    const el = audioRef.current;
+    if (el) { el.src = SILENT_WAV; el.play().catch(() => {}); }
     setVoiceErr('');
     setVoiceOut((v) => {
       const next = !v;
@@ -239,6 +274,14 @@ export default function Chat() {
           means the installed app rather than Safari.
         </div>
       )}
+
+      <audio
+        ref={audioRef}
+        playsInline
+        onEnded={() => setSpeaking(false)}
+        onError={() => setSpeaking(false)}
+        style={{ display: 'none' }}
+      />
 
       <form className="chat__composer" onSubmit={send}>
         {SpeechRecognition && (

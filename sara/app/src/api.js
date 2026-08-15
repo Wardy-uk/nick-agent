@@ -45,6 +45,20 @@ export async function apiFetch(path, options = {}) {
   return ct.includes('application/json') ? res.json() : res.text();
 }
 
+// Same auth, but hands back the raw bytes — apiFetch always parses, and audio must not be.
+export async function apiFetchBlob(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const pin = getPin();
+  if (pin) headers['X-Neuro-Pin'] = pin;
+
+  const res = await fetch(apiUrl(path), { ...options, headers });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`);
+  }
+  return res.blob();
+}
+
 // Streaming chat over the brain's SSE endpoint (POST /api/chat). Parses the
 // `data: {...}` event stream and fans out to callbacks. Falls back is the caller's
 // job — if this throws, call /api/chat/sync instead.
