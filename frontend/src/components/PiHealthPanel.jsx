@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { apiUrl } from '../api';
+import { assessWorker } from '../../../shared/worker-health.cjs';
 import './PiHealthPanel.css';
 
 const REFRESH_MS = 10000;
@@ -100,19 +101,12 @@ function assessAi(ai, ollamaReachable) {
   if (ollamaReachable === false) issues.push({ level: 'critical', title: 'Ollama unreachable', detail: ai.ollama?.url || 'local model server is down' });
   else if ((ai.ollama?.queueDepth || 0) > 2) issues.push({ level: 'warn', title: `Ollama queue ${ai.ollama.queueDepth}`, detail: 'requests are backing up' });
 
-  // lastHealthy is null until something actually calls the worker, so "not
-  // false" is not "fine" — unknown has to be visible or a worker that has been
-  // dead for weeks reads as healthy, which is the blind spot this panel exists
-  // to close.
-  if (ai.pi4Worker?.enabled && ai.pi4Worker?.lastHealthy !== true) {
-    const neverChecked = ai.pi4Worker.lastHealthy == null;
-    issues.push({
-      level: neverChecked ? 'warn' : 'critical',
-      title: neverChecked ? 'Pi 4 worker status unknown' : 'Pi 4 worker unreachable',
-      detail: neverChecked
-        ? `${ai.pi4Worker.url} — no health check since restart; background AI tasks have not run`
-        : `${ai.pi4Worker.url} — background AI tasks are being skipped${ai.pi4Worker.healthCheckedAt ? `, last checked ${new Date(ai.pi4Worker.healthCheckedAt).toLocaleString()}` : ''}`,
-    });
+  // A worker that has been dead for weeks reading as healthy is the blind spot
+  // this panel exists to close — but so is a worker that is up and merely too
+  // slow reading as "never checked". assessWorker owns that distinction.
+  const worker = assessWorker(ai.pi4Worker);
+  if (worker.level !== 'ok') {
+    issues.push({ level: worker.level, title: worker.title, detail: worker.detail });
   }
 
   if (ai.openrouter?.throttled) {
@@ -198,6 +192,7 @@ export default function PiHealthPanel() {
   // AI problems belong in the same ranked list as host problems — a dead worker
   // matters more than a warm CPU, and splitting them buries one of the two.
   const aiState = assessAi(ai, ollamaReachable);
+  const workerVerdict = assessWorker(ai?.pi4Worker);
   const issues = [...hostIssues, ...(aiState?.issues || [])]
     .sort((a, b) => (a.level === 'critical' ? 0 : 1) - (b.level === 'critical' ? 0 : 1));
   const overallStatus = aiState?.level === 'critical' ? 'critical'
@@ -397,10 +392,9 @@ export default function PiHealthPanel() {
           <div className="ph-providers">
             {[
               { key: 'ollama', label: 'Ollama (local)', up: ollamaReachable !== false, detail: `${ai.ollama?.model || '—'}${ai.ollama?.queueDepth ? ` · queue ${ai.ollama.queueDepth}` : ''}${ai.ollama?.inUse ? ' · busy' : ''}` },
-              // lastHealthy is null until an explicit health check runs, which may
-              // never happen. Showing "not false" as green painted a dead worker
-              // green while calls to it were failing — unknown must read as unknown.
-              { key: 'pi4Worker', label: 'Pi 4 worker', up: !ai.pi4Worker?.enabled ? null : (ai.pi4Worker?.lastHealthy === true ? true : ai.pi4Worker?.lastHealthy === false ? false : null), detail: ai.pi4Worker?.enabled ? `${ai.pi4Worker.url || ''}${ai.pi4Worker.lastHealthy == null ? ' · unverified' : ''}` : 'disabled' },
+              // Same verdict as the focus band above and the Topbar dot — they
+              // disagreed while each derived it from lastHealthy on its own.
+              { key: 'pi4Worker', label: 'Pi 4 worker', up: workerVerdict.up, detail: workerVerdict.detail },
               { key: 'anthropic', label: 'Anthropic', up: ai.anthropic?.configured ? (ai.anthropic?.enabled ? true : null) : null, detail: ai.anthropic?.configured ? `${ai.anthropic.model}${ai.anthropic.enabled ? '' : ' · disabled'}` : 'not configured' },
               { key: 'openai', label: 'OpenAI', up: ai.openai?.configured ? true : null, detail: ai.openai?.configured ? ai.openai.model : 'not configured' },
               { key: 'openrouter', label: 'OpenRouter', up: ai.openrouter?.configured && ai.openrouter?.enabled ? !ai.openrouter.throttled : null, detail: ai.openrouter?.configured ? `${ai.openrouter.callsToday}/${ai.openrouter.dailyCallLimit} calls · ${ai.openrouter.tokensToday}/${ai.openrouter.dailyTokenLimit} tokens${ai.openrouter.throttled ? ' · THROTTLED' : ''}` : 'not configured' },

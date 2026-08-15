@@ -1,5 +1,6 @@
 import React from 'react';
 import { apiUrl } from '../api';
+import { assessWorker } from '../../../shared/worker-health.cjs';
 import './Topbar.css';
 
 function QuickAdd({ apiUrl: apiUrlFn }) {
@@ -137,10 +138,10 @@ export default function Topbar({ status, onMenuToggle, onChatToggle, chatOpen, w
   if (!ollamaOk) aiIssues.push('Ollama unreachable');
   else if (ollamaQueue > 2) aiIssues.push(`Ollama queue ${ollamaQueue}`);
 
-  if (ai.pi4Worker?.enabled && ai.pi4Worker?.lastHealthy !== true) {
-    // null = never checked, which is not the same as healthy.
-    aiIssues.push(ai.pi4Worker.lastHealthy == null ? 'Pi 4 worker unverified' : 'Pi 4 worker unreachable');
-  }
+  // Same verdict the Pi Health panel shows, so the dot and the panel cannot
+  // tell Nick two different stories about the same worker.
+  const workerVerdict = assessWorker(ai.pi4Worker);
+  if (workerVerdict.level !== 'ok') aiIssues.push(workerVerdict.short);
   if (openrouterThrottled) aiIssues.push('OpenRouter throttled (daily limit)');
 
   // A configured cloud provider serving nothing is the silent-degradation case.
@@ -154,8 +155,10 @@ export default function Topbar({ status, onMenuToggle, onChatToggle, chatOpen, w
   if (aiHealth.fallbackRate >= 30) aiIssues.push(`${aiHealth.fallbackRate}% falling back`);
   if (aiHealth.failureRate >= 20) aiIssues.push(`${aiHealth.failureRate}% failing`);
 
+  // The worker contributes its own level rather than being matched out of the
+  // string list — "in cooldown" is critical but contains none of these words.
   const aiLevel = (!ollamaOk && !openrouterEnabled && !ai.anthropic?.configured) ? 'dead'
-    : aiIssues.some(i => /unreachable|auth failed|failing/.test(i)) ? 'red'
+    : workerVerdict.level === 'critical' || aiIssues.some(i => /unreachable|auth failed|failing/.test(i)) ? 'red'
     : aiIssues.length ? 'amber'
     : 'green';
 

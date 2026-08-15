@@ -25,6 +25,7 @@ const HEALTH_CACHE_TTL = 60000; // 1 minute
 // behind. Backing off is not just faster, it stops us making it worse.
 let _consecutiveFailures = 0;
 let _skipUntil = 0;
+let _lastFailure = null;   // { at, message, timedOut }
 const SKIP_AFTER_FAILURES = 3;
 const SKIP_FOR_MS = 15 * 60 * 1000;
 
@@ -35,11 +36,18 @@ function shouldSkip() {
   return Date.now() < _skipUntil;
 }
 
+// `lastFailure` and `skipAfter` are here for the health panel's benefit. Since a
+// timeout deliberately no longer marks the worker unreachable, `lastHealthy`
+// alone cannot tell "up but too slow to finish anything" from "never asked" —
+// and those want different responses. Exporting the threshold too keeps the
+// panel from hardcoding a 3 that only lives here.
 function skipState() {
   return {
     skipping: shouldSkip(),
     consecutiveFailures: _consecutiveFailures,
+    skipAfter: SKIP_AFTER_FAILURES,
     skipUntil: _skipUntil ? new Date(_skipUntil).toISOString() : null,
+    lastFailure: _lastFailure,
   };
 }
 
@@ -108,6 +116,7 @@ async function runTask(task, payload) {
     _healthCache = { ok: true, at: Date.now() };
     _consecutiveFailures = 0;
     _skipUntil = 0;
+    _lastFailure = null;
     return {
       ok: data.ok,
       result: data.result || '',
@@ -126,6 +135,7 @@ async function runTask(task, payload) {
     if (!timedOut) _healthCache = { ok: false, at: Date.now() };
 
     _consecutiveFailures += 1;
+    _lastFailure = { at: new Date().toISOString(), message: String(e.message || '').substring(0, 160), timedOut };
     if (_consecutiveFailures >= SKIP_AFTER_FAILURES && !shouldSkip()) {
       _skipUntil = Date.now() + SKIP_FOR_MS;
       console.warn(`[Pi4Worker] ${_consecutiveFailures} consecutive failures — skipping the worker for ${SKIP_FOR_MS / 60000} minutes`);
