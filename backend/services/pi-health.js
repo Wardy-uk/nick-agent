@@ -331,6 +331,53 @@ async function getRouter() {
   return { ...status, ageMs, stale: ageMs != null && ageMs > ROUTER_STALE_MS, linkDrops24h, lastLinkDrop };
 }
 
+// --------------------------------------------------------------- broadband
+
+// Written by speedtest-log.sh (cron, 4x/day). Reading the file rather than
+// running a test on demand: a speed test pulls real data down the line, so it
+// must never be triggered by someone opening a dashboard.
+const BROADBAND_LATEST = '/mnt/data/logs/broadband-latest.json';
+const BROADBAND_CSV = '/mnt/data/logs/broadband.csv';
+
+function getBroadband() {
+  if (!IS_LINUX) return null;
+
+  let latest = null;
+  try {
+    const raw = readFile(BROADBAND_LATEST);
+    if (raw) latest = JSON.parse(raw);
+  } catch { /* fall through to null */ }
+  if (!latest) return null;
+
+  // Trend matters more than any single reading — one sample on a home line is
+  // noise, the useful signal is the week evening speeds halve.
+  const history = [];
+  const csv = readFile(BROADBAND_CSV);
+  if (csv) {
+    const lines = csv.trim().split('\n').slice(1);
+    for (const line of lines.slice(-40)) {
+      const [t, down, up, ping] = line.split(',');
+      if (!down) continue; // failed sample, kept in the file so the gap is visible
+      history.push({ t, down: parseFloat(down), up: parseFloat(up), ping: parseFloat(ping) });
+    }
+  }
+
+  const downs = history.map(h => h.down).filter(Number.isFinite);
+  const avg = downs.length ? Math.round(downs.reduce((a, b) => a + b, 0) / downs.length) : null;
+  const checkedMs = Date.parse(latest.checkedAt);
+
+  return {
+    ...latest,
+    ageMs: Number.isFinite(checkedMs) ? Date.now() - checkedMs : null,
+    samples: history.length,
+    avgDownMbps: avg,
+    // Judged against this line's own history, not a headline figure — what
+    // matters is a drop from what it normally does.
+    downVsAvgPct: avg && latest.downMbps ? Math.round((latest.downMbps / avg) * 100) : null,
+    history,
+  };
+}
+
 const WATCHED_SERVICES = [
   'pm2-nickw', 'syncthing@nickw', 'ollama', 'docker',
   'nginx', 'tailscaled', 'ssh', 'hdd-apm'
@@ -440,6 +487,19 @@ function assess(s) {
     }
   }
 
+  const bb = s.broadband;
+  if (bb && bb.ok) {
+    // Only meaningful once there is a baseline to compare against.
+    if (bb.samples >= 4 && bb.downVsAvgPct != null && bb.downVsAvgPct < 50) {
+      add('warn', `Broadband at ${bb.downVsAvgPct}% of normal`, `${bb.downMbps} Mbps against a ${bb.avgDownMbps} Mbps average`);
+    }
+    if (bb.ageMs != null && bb.ageMs > 26 * 3600 * 1000) {
+      add('warn', 'Broadband speed not sampled recently', `last test ${Math.round(bb.ageMs / 3600000)}h ago`);
+    }
+  } else if (bb && bb.ok === false) {
+    add('warn', 'Last broadband test failed', bb.error || 'speedtest did not complete');
+  }
+
   for (const svc of s.services || []) {
     if (svc.state === 'failed') add('critical', `${svc.name} failed`, 'systemd unit is in a failed state');
   }
@@ -482,7 +542,8 @@ async function collect() {
   // SMART needs the disk list to work out which device to probe
   const smart = await getSmart(disks);
 
-  const snapshot = { host, cpu, power, memory, disks, smart, pm2, top, services, router };
+  const broadband = getBroadband();
+  const snapshot = { host, cpu, power, memory, disks, smart, pm2, top, services, router, broadband };
   pushHistory(snapshot);
 
   const { status, issues } = assess(snapshot);

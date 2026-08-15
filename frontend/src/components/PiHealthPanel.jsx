@@ -187,7 +187,7 @@ export default function PiHealthPanel() {
     );
   }
 
-  const { host, cpu, memory, disks = [], smart, power, pm2 = [], top = [], services = [], issues: hostIssues = [], history = [], router } = data;
+  const { host, cpu, memory, disks = [], smart, power, pm2 = [], top = [], services = [], issues: hostIssues = [], history = [], router, broadband } = data;
 
   // AI problems belong in the same ranked list as host problems — a dead worker
   // matters more than a warm CPU, and splitting them buries one of the two.
@@ -288,6 +288,72 @@ export default function PiHealthPanel() {
               <Spark points={history.map(h => h.memPct)} band={memBand} max={100} />
             </div>
           </div>
+        </section>
+      )}
+
+      {/* ---- BROADBAND: sampled 4x/day by cron, never on page load ---- */}
+      {broadband && (
+        <section className="ph-card">
+          <h2 className="ph-card-title">
+            Broadband <span className="ph-card-hint">
+              {broadband.ok
+                ? `${(broadband.sponsor || '').replace(/_/g, ' ')} ${broadband.server || ''} · tested ${broadband.ageMs != null ? Math.round(broadband.ageMs / 3600000) + 'h ago' : 'recently'}`
+                : 'last test failed'}
+            </span>
+          </h2>
+
+          {broadband.ok ? (
+            <>
+              <div className="ph-router-grid">
+                <div>
+                  <span>Download</span>
+                  {/* Judged against this line's own history, not a headline number —
+                      what matters is a drop from what it normally does. */}
+                  <b className={broadband.downVsAvgPct != null && broadband.downVsAvgPct < 50 ? 'bad'
+                    : broadband.downVsAvgPct != null && broadband.downVsAvgPct < 75 ? 'warn' : 'good'}>
+                    {broadband.downMbps} Mbps
+                  </b>
+                </div>
+                <div><span>Upload</span><b>{broadband.upMbps} Mbps</b></div>
+                <div>
+                  <span>Ping</span>
+                  <b className={broadband.pingMs > 100 ? 'warn' : 'good'}>{broadband.pingMs} ms</b>
+                </div>
+                <div>
+                  <span>Average down</span>
+                  <b>{broadband.avgDownMbps != null ? `${broadband.avgDownMbps} Mbps` : '—'}</b>
+                </div>
+                <div>
+                  <span>vs average</span>
+                  <b className={broadband.downVsAvgPct != null && broadband.downVsAvgPct < 50 ? 'bad' : 'good'}>
+                    {broadband.downVsAvgPct != null ? `${broadband.downVsAvgPct}%` : '—'}
+                  </b>
+                </div>
+                <div><span>Samples</span><b>{broadband.samples}</b></div>
+              </div>
+
+              {broadband.history?.length > 1 && (
+                <div className="ph-trend-grid" style={{ marginTop: 14 }}>
+                  <div className="ph-trend">
+                    <div className="ph-trend-head"><span>Download</span><b>{broadband.downMbps} Mbps</b></div>
+                    <Spark points={broadband.history.map(h => h.down)} band="ok" />
+                  </div>
+                  <div className="ph-trend">
+                    <div className="ph-trend-head"><span>Upload</span><b>{broadband.upMbps} Mbps</b></div>
+                    <Spark points={broadband.history.map(h => h.up)} band="ok" />
+                  </div>
+                  <div className="ph-trend">
+                    <div className="ph-trend-head"><span>Ping</span><b>{broadband.pingMs} ms</b></div>
+                    <Spark points={broadband.history.map(h => h.ping)} band="warn" />
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="ph-smart-missing">
+              Last speed test failed — {broadband.error || 'no result'}
+            </div>
+          )}
         </section>
       )}
 
