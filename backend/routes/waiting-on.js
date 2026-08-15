@@ -91,4 +91,16 @@ router.post('/:key/resolve', (req, res) => {
   }
 });
 
+// POST /api/waiting-on/chase/:actionId/channel — email or a Teams DM.
+// The UI only offers this once ChatMessage.Send is consented; until then every
+// chase goes by email, which is the Q9 order regardless.
+router.post('/chase/:actionId/channel', (req, res) => {
+  try {
+    const result = waitingOn.setChaseChannel(req.params.actionId, req.body?.channel);
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

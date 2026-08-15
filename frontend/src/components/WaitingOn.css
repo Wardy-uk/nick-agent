@@ -129,6 +129,21 @@
 }
 .wo-queued-input:focus { outline: none; border-color: var(--accent); }
 
+.wo-queued-channel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.wo-queued-channel .wo-btn.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .wo-queued-err {
   font-family: var(--font-mono);
   font-size: 10px;

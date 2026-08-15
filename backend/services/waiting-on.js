@@ -367,6 +367,28 @@ function setChaseRecipient(actionId, email) {
 }
 
 /**
+ * Choose email or a Teams DM for a queued chase (Q9 — email ships, Teams is a
+ * preference layered on). Only ever a preference: if Teams cannot deliver at
+ * approval time the executor falls back to email and says so, because the point
+ * is that the person gets asked.
+ */
+function setChaseChannel(actionId, channel) {
+  const want = String(channel || '').toLowerCase();
+  if (!['email', 'teams'].includes(want)) return { ok: false, error: 'channel must be email or teams' };
+
+  const action = db.getSaraAction(parseInt(actionId, 10));
+  if (!action) return { ok: false, error: 'No such action' };
+  if (action.type !== 'chase_commitment') return { ok: false, error: `That is a ${action.type}, not a chase` };
+  if (action.status !== 'pending') return { ok: false, error: `Already ${action.status}` };
+
+  const payload = { ...action.payload, channel: want };
+  if (!db.updateSaraActionPayload(action.id, payload)) {
+    return { ok: false, error: 'Could not update — it may have just been approved' };
+  }
+  return { ok: true, channel: want };
+}
+
+/**
  * The words. Asks rather than demands, gives the out, and never implies the
  * person has failed — same rule as the nudges and the agenda chaser. A chase
  * that lands as an accusation costs more than the update is worth.
@@ -450,6 +472,6 @@ function backfill({ days = 120, limit = 500 } = {}) {
 }
 
 module.exports = {
-  record, list, byPerson, resolve, snooze, markChased, queueChase, setChaseRecipient,
+  record, list, byPerson, resolve, snooze, markChased, queueChase, setChaseRecipient, setChaseChannel,
   buildChaseMessage, backfill, migrateFromState, STALE_DAYS, _key,
 };

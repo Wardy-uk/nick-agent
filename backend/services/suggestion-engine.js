@@ -454,23 +454,57 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
         email = resolved.email;
       }
 
-      const result = await require('./email-sender').sendMail({
-        to: [{ name: item.person, email }],
-        subject: `Quick one — ${item.text.slice(0, 60)}`,
-        body: payload.body || waitingOn.buildChaseMessage(item),
-      });
-      if (!result.sent) {
-        const reasons = {
-          auth: 'Not signed in to Microsoft — reconnect 365.',
-          scope: 'Mail.Send not granted — re-consent to Microsoft.',
-        };
-        return { ok: false, detail: reasons[result.reason] || `Send failed (${result.reason})` };
+      const body = payload.body || waitingOn.buildChaseMessage(item);
+
+      // Q9: email is what ships, Teams is a preference layered on top. So the
+      // channel is a preference and email is the floor — a Teams DM that cannot
+      // be delivered falls back rather than failing, because the point of the
+      // chase is that the person is asked, not that Teams was used.
+      const channel = payload.channel === 'teams' ? 'teams' : 'email';
+      let via = 'email';
+      let fellBackFrom = null;
+
+      if (channel === 'teams') {
+        const dm = await require('./teams').sendDm({ email, text: body });
+        if (dm.sent) {
+          via = 'teams';
+        } else {
+          // Recorded, not swallowed: "it went by email" without saying why is
+          // how you fail to notice that Teams has never once worked.
+          fellBackFrom = dm.reason;
+          console.log(`[Chase] Teams unavailable (${dm.reason}) — falling back to email for ${item.person}`);
+        }
+      }
+
+      if (via === 'email') {
+        const result = await require('./email-sender').sendMail({
+          to: [{ name: item.person, email }],
+          subject: `Quick one — ${item.text.slice(0, 60)}`,
+          body,
+        });
+        if (!result.sent) {
+          const reasons = {
+            auth: 'Not signed in to Microsoft — reconnect 365.',
+            scope: 'Mail.Send not granted — re-consent to Microsoft.',
+          };
+          const why = reasons[result.reason] || `Send failed (${result.reason})`;
+          return {
+            ok: false,
+            detail: fellBackFrom ? `${why} (Teams also unavailable: ${fellBackFrom})` : why,
+          };
+        }
       }
 
       waitingOn.markChased(item.key);
-      // Name the address in the result — "sent" without saying where is not a
-      // useful confirmation when the address was editable.
-      return { ok: true, detail: `Asked ${item.person} (${email}) about "${item.text.slice(0, 50)}"`, navigate: 'people' };
+      // Name the channel AND the address. "Sent" without saying where is not a
+      // useful confirmation when both were choosable.
+      const where = via === 'teams' ? `Teams DM to ${email}` : email;
+      const note = fellBackFrom ? ` — Teams unavailable (${fellBackFrom}), sent by email` : '';
+      return {
+        ok: true,
+        detail: `Asked ${item.person} (${where}) about "${item.text.slice(0, 50)}"${note}`,
+        navigate: 'people',
+      };
     }
 
     // Ask the organiser what a meeting is for. An email to a real colleague —

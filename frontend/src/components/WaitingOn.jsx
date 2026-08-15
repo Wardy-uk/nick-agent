@@ -114,8 +114,9 @@ function WaitingRow({ item, onAct, busy }) {
  * and can be wrong or ambiguous ("Chris" comes back ambiguous), and the only one
  * who knows which Chris is which is Nick.
  */
-function QueuedChase({ action, busy, onResolve, onRetarget }) {
+function QueuedChase({ action, busy, teamsAvailable, onResolve, onRetarget, onChannel }) {
   const to = action.payload?.to || {};
+  const channel = action.payload?.channel === 'teams' ? 'teams' : 'email';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(to.email || '');
   const [err, setErr] = useState(null);
@@ -163,6 +164,26 @@ function QueuedChase({ action, busy, onResolve, onRetarget }) {
       )}
       {err && <div className="wo-queued-err">{err}</div>}
 
+      {/* Only offered once ChatMessage.Send is consented. A picker whose only
+          working option is the default is noise, and it would imply Teams works
+          when it does not. Until then every chase goes by email — the Q9 order
+          regardless. */}
+      {teamsAvailable && (
+        <div className="wo-queued-channel">
+          <span>Send via</span>
+          {['email', 'teams'].map(c => (
+            <button
+              key={c}
+              className={`wo-btn${channel === c ? ' is-on' : ''}`}
+              disabled={busy}
+              onClick={() => onChannel(c)}
+            >
+              {c === 'teams' ? 'Teams DM' : 'Email'}
+            </button>
+          ))}
+        </div>
+      )}
+
       <pre className="wo-queued-body">{action.payload?.body || '(no draft stored — approving will build one)'}</pre>
 
       <div className="wo-row-actions">
@@ -172,7 +193,11 @@ function QueuedChase({ action, busy, onResolve, onRetarget }) {
           title={!to.email ? 'Set an address first' : `Sends to ${to.email}`}
           onClick={() => onResolve('approve')}
         >
-          {busy ? 'Sending…' : to.email ? `Approve & send to ${to.email}` : 'Approve & send'}
+          {busy
+            ? 'Sending…'
+            : to.email
+              ? `Approve & send ${channel === 'teams' ? 'as a Teams DM' : 'to'} ${to.email}`
+              : 'Approve & send'}
         </button>
         <button className="wo-btn wo-btn-ghost" disabled={busy} onClick={() => onResolve('reject')}>
           Discard
@@ -199,6 +224,7 @@ export default function WaitingOn({ person = null, embedded = false }) {
   const [queued, setQueued] = useState([]);       // pending chase_commitment actions
   const [actingId, setActingId] = useState(null);
   const [queuedFlash, setQueuedFlash] = useState(null);   // outcome of the last approve
+  const [teamsAvailable, setTeamsAvailable] = useState(false);
 
   const load = useCallback(() => {
     fetch(apiUrl('/api/waiting-on/by-person'))
@@ -213,6 +239,14 @@ export default function WaitingOn({ person = null, embedded = false }) {
       .then(r => r.json())
       .then(d => setQueued((d.pending || []).filter(a => a.type === 'chase_commitment')))
       .catch(() => setQueued([]));
+
+    // Teams DM needs ChatMessage.Send, which is awaiting tenant admin approval.
+    // Asking rather than assuming is what makes the choice appear on its own the
+    // day consent lands — no code change, no redeploy.
+    fetch(apiUrl('/api/microsoft/teams-send-status'))
+      .then(r => r.json())
+      .then(d => setTeamsAvailable(Boolean(d.available)))
+      .catch(() => setTeamsAvailable(false));
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -230,6 +264,17 @@ export default function WaitingOn({ person = null, embedded = false }) {
     } catch (e) {
       return { ok: false, error: e.message };
     }
+  };
+
+  const setChannel = async (id, channel) => {
+    try {
+      await fetch(apiUrl(`/api/waiting-on/chase/${id}/channel`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel }),
+      });
+    } catch { /* the reload tells the truth */ }
+    load();
   };
 
   const resolveQueued = async (id, verb) => {
@@ -370,8 +415,10 @@ export default function WaitingOn({ person = null, embedded = false }) {
               key={a.id}
               action={a}
               busy={actingId === a.id}
+              teamsAvailable={teamsAvailable}
               onResolve={verb => resolveQueued(a.id, verb)}
               onRetarget={email => retarget(a.id, email)}
+              onChannel={c => setChannel(a.id, c)}
             />
           ))}
         </div>
