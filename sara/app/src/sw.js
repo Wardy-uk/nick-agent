@@ -4,6 +4,15 @@ import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
+// Take over as soon as a new build lands. `registerType: 'autoUpdate'` does NOT do this
+// for us under injectManifest — that's only wired up for generateSW, so without these two
+// lines a new service worker installs and then WAITS for every existing client to close.
+// A swiped-away iOS PWA doesn't reliably count as closed, so the phone kept serving the
+// previous bundle after a deploy: voice arrived one build late, the voice picker didn't
+// arrive at all, and "fully close and reopen" was never a dependable fix.
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+
 // ── Push notifications ────────────────────────────────────────────────────────
 self.addEventListener('push', (event) => {
   let payload = {};
