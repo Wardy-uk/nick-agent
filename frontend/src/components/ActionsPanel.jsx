@@ -241,9 +241,10 @@ export default function ActionsPanel({ onNavigate }) {
             queue of 10 for two days. */}
         {notSent > 0 && (
           <p className="ap-capped">
-            Showing {pending.length}. {notSent} more not shown — everything outbound is here,
+            Showing {pending.length}. {notSent} more not shown — everything outbound is here;
             the rest are task promotions
-            {promotions > 0 && <> ({promotions} of them), reviewed on the Tasks screen</>}.
+            {promotions > 0 && <> ({promotions} pending, reviewed on the Tasks screen)</>} and
+            navigation shortcuts, neither of which sends anything.
           </p>
         )}
       </div>
@@ -265,11 +266,14 @@ export default function ActionsPanel({ onNavigate }) {
         const open = expanded[g.kind];
         const shown = open ? g.items : g.items.slice(0, GROUP_CAP);
         const hidden = g.items.length - shown.length;
+        // The true count for the kind, not the number that survived the cap —
+        // a header counting only what fits is the cap's lie one level down.
+        const kindTotal = data.pendingByKind?.[g.kind] ?? g.items.length;
         return (
           <section className="ap-group" key={g.kind}>
             <h3 className={`ap-group-title ap-group-${g.kind}`}>
               {KIND_META[g.kind].title}
-              <span className="ap-count">{g.items.length}</span>
+              <span className="ap-count">{kindTotal}</span>
             </h3>
             <p className="ap-group-blurb">{KIND_META[g.kind].blurb}</p>
             {shown.map(a => (
@@ -285,7 +289,9 @@ export default function ActionsPanel({ onNavigate }) {
                 className="ap-more"
                 onClick={() => setExpanded(p => ({ ...p, [g.kind]: !p[g.kind] }))}
               >
-                {hidden > 0 ? `Show ${hidden} more` : 'Show fewer'}
+                {hidden > 0
+                  ? `Show ${hidden} more`
+                  : `Show fewer${kindTotal > g.items.length ? ` (${kindTotal - g.items.length} still not loaded)` : ''}`}
               </button>
             )}
           </section>

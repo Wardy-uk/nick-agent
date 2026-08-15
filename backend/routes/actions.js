@@ -68,8 +68,16 @@ router.get('/', (req, res) => {
       return String(b.created_at).localeCompare(String(a.created_at));
     });
 
+    // Both breakdowns are over ALL pending, not the capped slice — a group
+    // header counting only what fits on screen is the same quiet lie one level
+    // down from the cap itself.
     const pendingByType = {};
-    for (const a of all) pendingByType[a.type] = (pendingByType[a.type] || 0) + 1;
+    const pendingByKind = {};
+    for (const a of all) {
+      pendingByType[a.type] = (pendingByType[a.type] || 0) + 1;
+      const k = a.presentation.kind;
+      pendingByKind[k] = (pendingByKind[k] || 0) + 1;
+    }
 
     // getRecentSaraActions is every status, so it re-lists everything pending.
     // History means resolved: an executed or failed action is the outcome the
@@ -82,6 +90,7 @@ router.get('/', (req, res) => {
       pending: all.slice(0, PENDING_LIMIT),
       pendingTotal: all.length,
       pendingByType,
+      pendingByKind,
       recent,
     });
   } catch (e) {
