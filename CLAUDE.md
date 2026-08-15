@@ -10,7 +10,7 @@ Personal AI-powered productivity system. Aggregates Jira queue, Obsidian vault, 
 - **AI:** Anthropic SDK (Claude) + Ollama (local models on Pi) with AI routing layer
 - **External:** Jira REST, Microsoft Graph (MSAL device code), Strava OAuth, OwnTracks, Obsidian vault filesystem, n8n webhooks, web-push notifications
 - **Monorepo:** npm workspaces — `backend/`, `frontend/`, `worker/`
-- **Worker:** Separate Express app (port 3002) on Pi 4 for background AI tasks (email triage, import classification, journal prompts, transcript processing). Uses Ollama locally. Worker is stateless — it only processes, never decides.
+- **Worker:** RETIRED 2026-08-15 (`PI4_WORKER_ENABLED=false`). The Pi 4 managed 12 tokens/sec prompt processing on the SMALLEST model available, so a ~3,700-token triage payload needed five minutes just to read the prompt. Not a model-sizing problem — a hardware ceiling. Code and config are left in place so re-enabling is one env var. Background tasks now route: heavy prose work (email_triage, transcript_processing) to cloud, light work (import_classification, journal_prompts) to Pi 5 Ollama.
 
 ## Project Commands
 ```bash

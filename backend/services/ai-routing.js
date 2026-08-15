@@ -85,8 +85,14 @@ const TASK_MODELS = {
   knowledge_consolidation: 'qwen2.5:1.5b',
   chat_stream: 'qwen2.5:1.5b',
   chat_sync: 'qwen2.5:1.5b',
-  standup_interactive: 'gemma3:4b',
-  eod_interactive: 'gemma3:4b',
+  // gemma3:4b was never installed on the Pi 5 — these two would have failed on
+  // any call that reached Ollama. They are cloud-first so it only bit when
+  // cloud was unavailable, which is exactly when the local fallback matters:
+  // during yesterday's token-cap throttle, standup and EOD had no working
+  // local model at all. qwen2.5:3b is installed and is the largest model small
+  // enough to stay responsive for an interactive back-and-forth.
+  standup_interactive: 'qwen2.5:3b',
+  eod_interactive: 'qwen2.5:3b',
 };
 
 // Where background work goes when the Pi 4 worker cannot take it.
