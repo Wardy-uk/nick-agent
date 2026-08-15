@@ -93,10 +93,11 @@ export default function Sidebar({ activeView, onNavigate, open }) {
         .catch(() => {});
 
       // The badge is the discovery mechanism: a queued draft reply is invisible
-      // otherwise, and it was for a day.
+      // otherwise, and it was for a day. pendingTotal, not pending.length —
+      // the list itself is capped and the badge must not inherit that cap.
       fetch(apiUrl('/api/actions'))
         .then(res => res.json())
-        .then(data => setActionsCount((data.pending || []).length))
+        .then(data => setActionsCount(data.pendingTotal ?? (data.pending || []).length))
         .catch(() => {});
     }
 
@@ -125,7 +126,9 @@ export default function Sidebar({ activeView, onNavigate, open }) {
           <span className="sidebar-badge">{importsCount}</span>
         )}
         {item.id === 'actions' && actionsCount > 0 && (
-          <span className="sidebar-badge">{actionsCount}</span>
+          /* 930 does not fit a badge and 930 is the real number, so say "lots"
+             rather than either lying or breaking the row. */
+          <span className="sidebar-badge">{actionsCount > 99 ? '99+' : actionsCount}</span>
         )}
 
       </span>

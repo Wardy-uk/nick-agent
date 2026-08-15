@@ -52,6 +52,12 @@ const KIND_META = {
   },
 };
 
+// Rows per group before "N more". The live queue is ~930 deep and 926 of it is
+// meeting-promotion candidates; unbounded, they bury the one drafted reply and
+// the one chase completely — the same way one person's 13 commitments buried
+// the roster on the People board.
+const GROUP_CAP = 8;
+
 function when(iso) {
   if (!iso) return '';
   // SQLite hands back "YYYY-MM-DD HH:MM:SS" in UTC with no zone marker, which
@@ -158,6 +164,7 @@ export default function ActionsPanel({ onNavigate }) {
   const [busyId, setBusyId] = useState(null);
   const [outcomes, setOutcomes] = useState([]);   // newest first, survives the reload
   const [showHistory, setShowHistory] = useState(false);
+  const [expanded, setExpanded] = useState({});   // kind -> show everything sent
 
   const load = useCallback(() => {
     fetch(apiUrl('/api/actions'))
@@ -207,23 +214,38 @@ export default function ActionsPanel({ onNavigate }) {
 
   const pending = data.pending || [];
   const recent = data.recent || [];
+  const total = data.pendingTotal ?? pending.length;
   const grouped = KIND_ORDER
     .map(kind => ({ kind, items: pending.filter(a => (a.presentation?.kind || 'write') === kind) }))
     .filter(g => g.items.length > 0);
 
   const outboundCount = pending.filter(a => a.presentation?.kind === 'outbound').length;
+  // The backend sorts outbound first and caps what it sends, so anything
+  // dropped is a promotion candidate — never something that would have sent.
+  const notSent = total - pending.length;
+  const promotions = data.pendingByType?.capture_todo || 0;
 
   return (
     <div className="actions-panel">
       <div className="ap-header">
         <h2>Pending actions</h2>
         <p className="ap-sub">
-          {pending.length === 0
+          {total === 0
             ? 'Nothing waiting on you.'
-            : `${pending.length} waiting on you`
+            : `${total} waiting on you`
               + (outboundCount ? ` · ${outboundCount} would leave the building` : '')
               + '. Nothing here has happened yet.'}
         </p>
+        {/* Say what was left out. A cap that stays quiet reads as "that's
+            everything" — which is precisely how a queue of 930 looked like a
+            queue of 10 for two days. */}
+        {notSent > 0 && (
+          <p className="ap-capped">
+            Showing {pending.length}. {notSent} more not shown — everything outbound is here,
+            the rest are task promotions
+            {promotions > 0 && <> ({promotions} of them), reviewed on the Tasks screen</>}.
+          </p>
+        )}
       </div>
 
       {outcomes.length > 0 && (
@@ -239,25 +261,38 @@ export default function ActionsPanel({ onNavigate }) {
         </div>
       )}
 
-      {grouped.map(g => (
-        <section className="ap-group" key={g.kind}>
-          <h3 className={`ap-group-title ap-group-${g.kind}`}>
-            {KIND_META[g.kind].title}
-            <span className="ap-count">{g.items.length}</span>
-          </h3>
-          <p className="ap-group-blurb">{KIND_META[g.kind].blurb}</p>
-          {g.items.map(a => (
-            <ActionCard
-              key={a.id}
-              action={a}
-              busy={busyId === a.id}
-              onResolve={verb => resolve(a, verb)}
-            />
-          ))}
-        </section>
-      ))}
+      {grouped.map(g => {
+        const open = expanded[g.kind];
+        const shown = open ? g.items : g.items.slice(0, GROUP_CAP);
+        const hidden = g.items.length - shown.length;
+        return (
+          <section className="ap-group" key={g.kind}>
+            <h3 className={`ap-group-title ap-group-${g.kind}`}>
+              {KIND_META[g.kind].title}
+              <span className="ap-count">{g.items.length}</span>
+            </h3>
+            <p className="ap-group-blurb">{KIND_META[g.kind].blurb}</p>
+            {shown.map(a => (
+              <ActionCard
+                key={a.id}
+                action={a}
+                busy={busyId === a.id}
+                onResolve={verb => resolve(a, verb)}
+              />
+            ))}
+            {(hidden > 0 || open) && (
+              <button
+                className="ap-more"
+                onClick={() => setExpanded(p => ({ ...p, [g.kind]: !p[g.kind] }))}
+              >
+                {hidden > 0 ? `Show ${hidden} more` : 'Show fewer'}
+              </button>
+            )}
+          </section>
+        );
+      })}
 
-      {pending.length === 0 && outcomes.length === 0 && (
+      {total === 0 && outcomes.length === 0 && (
         <p className="ap-empty">
           Queued actions land here — drafted replies, chases, bookings, escalations.
           They wait until you approve them.

@@ -16,12 +16,22 @@ const workingMemory = require('../services/working-memory');
 const actionCandidates = require('../services/action-candidates');
 const actionPresenter = require('../services/action-presenter');
 
-// getPendingSaraActions defaults to 10 and orders by confidence DESC — on an
-// approval list that is a silent cliff, not a page: the 11th action simply is
-// not there, and the ones cut are the LEAST confident, which is exactly the set
-// most worth a human look. Explicit and large.
-const PENDING_LIMIT = 500;
+// getPendingSaraActions defaults to 10 and orders by confidence DESC. On an
+// approval list that is a silent cliff, not a page — and it was actively
+// lying: the queue reads 10 and is 930. Read all of them, then decide what to
+// send with the totals attached.
+const READ_ALL = 100000;
 const RECENT_LIMIT = 40;
+
+// How many decorated actions go over the wire. The queue is 930 deep, almost
+// all of it meeting-promotion candidates, and this is a phone screen.
+const PENDING_LIMIT = 120;
+
+// Sort order, and the reason the cap is safe: outbound sorts first, so the
+// things that leave the building are never what gets cut. Confidence — the old
+// order — is meaningless here; a 0.8 chase and a 0.8 capture_todo need very
+// different amounts of attention.
+const KIND_RANK = { outbound: 0, write: 1, navigate: 2 };
 
 // GET /api/actions — list pending actions + recent history
 //
@@ -29,17 +39,40 @@ const RECENT_LIMIT = 40;
 // payload (see action-presenter). The approval screen renders that rather than
 // reconstructing a summary client-side, so what is on screen cannot drift from
 // what executeAction will read.
+//
+// `pendingTotal` and `pendingByType` are always the true numbers even when
+// `pending` is capped. A cap that does not say what it dropped reads as
+// "that's everything", which is how a queue of 930 looked like a queue of 10.
 router.get('/', (req, res) => {
   try {
     const decorate = (a) => ({ ...a, presentation: actionPresenter.describe(a) });
-    const pending = db.getPendingSaraActions(PENDING_LIMIT).map(decorate);
+
+    const all = db.getPendingSaraActions(READ_ALL).map(decorate);
+    all.sort((a, b) => {
+      const ka = KIND_RANK[a.presentation.kind] ?? 1;
+      const kb = KIND_RANK[b.presentation.kind] ?? 1;
+      if (ka !== kb) return ka - kb;
+      // Newest first within a kind: a stale promotion candidate is the least
+      // useful thing on the screen.
+      return String(b.created_at).localeCompare(String(a.created_at));
+    });
+
+    const pendingByType = {};
+    for (const a of all) pendingByType[a.type] = (pendingByType[a.type] || 0) + 1;
+
     // getRecentSaraActions is every status, so it re-lists everything pending.
     // History means resolved: an executed or failed action is the outcome the
     // caller came here for, and a pending one is already above.
     const recent = db.getRecentSaraActions(RECENT_LIMIT)
       .filter(a => a.status !== 'pending')
       .map(decorate);
-    res.json({ pending, recent });
+
+    res.json({
+      pending: all.slice(0, PENDING_LIMIT),
+      pendingTotal: all.length,
+      pendingByType,
+      recent,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
