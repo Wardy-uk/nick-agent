@@ -49,6 +49,39 @@
 
 .esc-empty { margin: 0; font-size: 12px; color: var(--text-muted); }
 
+.esc-group { margin-bottom: 18px; }
+.esc-group > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 7px 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text);
+  /* The row separators are top borders, so without this the first row's border
+     sits flush against the summary and reads as an underline on the heading. */
+  border-bottom: 1px solid var(--border);
+}
+.esc-group > summary::-webkit-details-marker { display: none; }
+.esc-group > summary::before {
+  content: '▸';
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 0.12s ease;
+}
+.esc-group[open] > summary::before { transform: rotate(90deg); }
+.esc-group-title { flex: 1; }
+
+.esc-group-blurb {
+  margin: 8px 0 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .esc-row {
   display: flex;
   flex-direction: column;

@@ -19,8 +19,69 @@ function ageDays(iso) {
   return Math.floor((Date.now() - new Date(iso)) / 86400000);
 }
 
-/** The escalated queue. Read-only — acting on a row means opening it. */
+function EscalationRow({ t, onPick }) {
+  const age = ageDays(t.created);
+  return (
+    <div className="esc-row">
+      <div className="esc-row-main">
+        <a href={t.url || '#'} target="_blank" rel="noreferrer" className="esc-row-key">{t.key}</a>
+        <span className="esc-row-summary">{t.summary}</span>
+      </div>
+      <div className="esc-row-meta">
+        {/* Kept even though the groups now say most of this: a ticket can be
+            more than one at once, and only the badges show the overlap. */}
+        {t.viaRequestType && <span className="esc-tag esc-tag-req">customer-raised</span>}
+        {t.viaTier && <span className="esc-tag esc-tag-tier">tier</span>}
+        {t.viaUrgency && (
+          <span className="esc-tag esc-tag-urgency" title={
+            [t.urgencyReason, t.escalatedBy && `by ${t.escalatedBy}`].filter(Boolean).join(' — ')
+          }>urgency</span>
+        )}
+        <span>{t.status || '—'}</span>
+        <span>{t.priority || 'No priority'}</span>
+        <span>{t.assignee || 'Unassigned'}</span>
+        {age != null && <span>{age}d old</span>}
+        <button type="button" className="esc-row-action" onClick={() => onPick(t.key)}>
+          Escalate again
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** One collapsible group. Open by default — a closed section hides a count. */
+function EscalationGroup({ title, blurb, items, onPick }) {
+  return (
+    <details className="esc-group" open>
+      <summary>
+        <span className="esc-group-title">{title}</span>
+        <span className="esc-count">{items.length}</span>
+      </summary>
+      <p className="esc-group-blurb">{blurb}</p>
+      {items.length === 0
+        ? <p className="esc-empty">None.</p>
+        : items.map(t => <EscalationRow key={t.key} t={t} onPick={onPick} />)}
+    </details>
+  );
+}
+
+/**
+ * The escalated queue, split by how a ticket got here.
+ *
+ * Three groups rather than two, because the two named ones do not cover the
+ * queue: most escalated tickets were moved into the Escalations tier by the
+ * team without a portal escalation or a pass through this tool. Folding those
+ * into either named group would be a lie, and dropping them would put the tab
+ * back to under-reporting, which is what it was built to stop.
+ *
+ * Membership is exclusive and most-specific-first, so the counts sum to the
+ * total and nothing appears twice. The per-row badges still show overlap.
+ */
 function ActiveEscalations({ items, loading, error, warning, onPick, onRefresh }) {
+  const functional = items.filter(t => t.viaUrgency);
+  const customer = items.filter(t => !t.viaUrgency && t.viaRequestType);
+  const tier = items.filter(t => !t.viaUrgency && !t.viaRequestType);
+
   return (
     <section className="esc-active">
       <div className="esc-active-head">
@@ -42,36 +103,28 @@ function ActiveEscalations({ items, loading, error, warning, onPick, onRefresh }
         <p className="esc-empty">Nothing is escalated. That is the good outcome, not a broken query.</p>
       )}
 
-      {items.map((t) => {
-        const age = ageDays(t.created);
-        return (
-          <div key={t.key} className="esc-row">
-            <div className="esc-row-main">
-              <a href={t.url || '#'} target="_blank" rel="noreferrer" className="esc-row-key">{t.key}</a>
-              <span className="esc-row-summary">{t.summary}</span>
-            </div>
-            <div className="esc-row-meta">
-              {/* Why it's here. The three routes in mean different things — the
-                  customer raised it, we moved it, or someone escalated it for
-                  urgency — so they read differently. A row can carry several. */}
-              {t.viaRequestType && <span className="esc-tag esc-tag-req">customer-raised</span>}
-              {t.viaTier && <span className="esc-tag esc-tag-tier">tier</span>}
-              {t.viaUrgency && (
-                <span className="esc-tag esc-tag-urgency" title={
-                  [t.urgencyReason, t.escalatedBy && `by ${t.escalatedBy}`].filter(Boolean).join(' — ')
-                }>urgency</span>
-              )}
-              <span>{t.status || '—'}</span>
-              <span>{t.priority || 'No priority'}</span>
-              <span>{t.assignee || 'Unassigned'}</span>
-              {age != null && <span>{age}d old</span>}
-              <button type="button" className="esc-row-action" onClick={() => onPick(t.key)}>
-                Escalate again
-              </button>
-            </div>
-          </div>
-        );
-      })}
+      {items.length > 0 && (
+        <>
+          <EscalationGroup
+            title="Functional escalations"
+            blurb="Escalated with this tool — priority raised and an internal comment posted. Recorded in NOVA's escalation log, not on the ticket."
+            items={functional}
+            onPick={onPick}
+          />
+          <EscalationGroup
+            title="Customer escalations"
+            blurb="Raised as an escalation through the portal — the customer asked for this one."
+            items={customer}
+            onPick={onPick}
+          />
+          <EscalationGroup
+            title="In the escalations tier"
+            blurb="Moved into the Escalations tier by the team. Neither raised as an escalation by the customer nor put through this tool."
+            items={tier}
+            onPick={onPick}
+          />
+        </>
+      )}
     </section>
   );
 }
