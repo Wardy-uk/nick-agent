@@ -68,13 +68,18 @@ export default function TimeFitCard() {
 
   const { gap, items = [], assumedCount = 0, calendarKnown, coverage } = data;
 
-  // "I can't see the calendar" and "you're free" must not look the same. One of
-  // them means calendar-sync has stopped.
+  // "I can't see the calendar" and "your diary is clear" must not look the
+  // same — one of them means calendar-sync has stopped. The backend decides
+  // which it is from the cache as a whole, NOT from today's event count: a
+  // Saturday with nothing on it is not a broken sync.
   if (!calendarKnown) {
     return (
       <section className="tf-card tf-unknown">
-        <div className="tf-head">Time</div>
-        <p className="tf-blurb">No calendar data cached, so I can't tell you what's ahead.</p>
+        <div className="tf-head">Can't see your diary</div>
+        <p className="tf-blurb">
+          The calendar cache is empty or stale, so I don't know what's ahead —
+          this isn't the same as a clear afternoon.
+        </p>
       </section>
     );
   }
@@ -82,7 +87,7 @@ export default function TimeFitCard() {
   if (gap?.openEnded && !override) {
     return (
       <section className="tf-card">
-        <div className="tf-head">Nothing in the diary for the rest of today</div>
+        <div className="tf-head">Nothing left in the diary today</div>
         <p className="tf-blurb">
           So nothing here has to fit around anything.
           {' '}

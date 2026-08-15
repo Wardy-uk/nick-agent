@@ -20,6 +20,28 @@ const timeFit = require('../services/time-fit');
 const taskStore = require('../services/task-store');
 const taskScoring = require('../services/task-scoring');
 
+/**
+ * Is the cache actually populated, and how recently?
+ *
+ * This must NOT be inferred from "how many events today" — the first cut did
+ * exactly that and reported "no calendar data" on a Saturday with an empty
+ * diary, which is the precise confusion the flag exists to prevent. An empty
+ * day and a broken sync look identical from today's rows alone; they are
+ * distinguishable from the cache as a whole.
+ */
+function calendarKnown() {
+  try {
+    const row = require('../db/database').get('SELECT COUNT(*) AS n, MAX(fetched_at) AS fetched FROM calendar_cache');
+    if (!row || !row.n) return { known: false, fetchedAt: null };
+    // A cache nobody has refreshed in a day is a stopped sync wearing the
+    // clothes of a quiet week.
+    const ageH = row.fetched ? (Date.now() - new Date(`${String(row.fetched).replace(' ', 'T')}Z`).getTime()) / 3600000 : null;
+    return { known: ageH == null || ageH < 24, fetchedAt: row.fetched, ageHours: ageH == null ? null : Math.round(ageH) };
+  } catch {
+    return { known: false, fetchedAt: null };
+  }
+}
+
 /** calendar_cache rows -> the shape time-fit reads. */
 function todaysEvents(now = new Date()) {
   const today = timeFit.dateStr(now);
@@ -41,12 +63,14 @@ router.get('/gap', (req, res) => {
   try {
     const events = todaysEvents();
     const gap = timeFit.nextGap(events, new Date());
+    const cal = calendarKnown();
     res.json({
       ...gap,
-      // Say when the answer is "I don't know" rather than "you are free" — an
-      // empty cache and a clear afternoon look identical otherwise, and one of
-      // them is a broken sync.
-      calendarKnown: events.length > 0,
+      // "I can't see your diary" and "your diary is clear" are different
+      // answers, and one of them means calendar-sync has stopped.
+      calendarKnown: cal.known,
+      calendarFetchedAt: cal.fetchedAt,
+      eventsToday: events.length,
       bufferMinutes: timeFit.BUFFER_MINUTES,
     });
   } catch (e) {
@@ -70,10 +94,13 @@ router.get('/what-fits', (req, res) => {
 
     const fit = timeFit.whatFits(ranked, minutes, { limit: parseInt(req.query.limit) || 5 });
 
+    const cal = calendarKnown();
     res.json({
       ...fit,
       gap,
-      calendarKnown: events.length > 0,
+      calendarKnown: cal.known,
+      calendarFetchedAt: cal.fetchedAt,
+      eventsToday: events.length,
       coverage: timeFit.estimateCoverage(),
     });
   } catch (e) {
