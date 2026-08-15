@@ -228,3 +228,83 @@
   font-size: 0.88rem;
 }
 .adhd__logwin-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* ── The way back in (#89) ──
+   Sits above the one thing, and is the only element allowed to outrank it. It
+   is also the only time-critical thing on the page: the cost of an interruption
+   is not the interruption, it's the failure to return, and that window closes. */
+.adhd__recovery {
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  box-shadow: var(--shadow-card);
+}
+/* A session left open overnight is a loose end, not an emergency — softer, so
+   it can't read as another thing shouting. */
+.adhd__recovery--settle { border-color: var(--border); border-left-color: var(--warning); }
+.adhd__recovery-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+.adhd__recovery-prompt {
+  font-size: 1.15rem;
+  line-height: 1.35;
+  color: var(--text-primary);
+  margin: 0.4rem 0 0;
+}
+.adhd__recovery-question {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  margin: 0.35rem 0 0;
+}
+.adhd__recovery-actions { display: flex; gap: 0.6rem; margin-top: 1.1rem; flex-wrap: wrap; }
+
+/* ── The session container (#88) ── */
+.adhd__session {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--success);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+}
+/* Over the estimate is information, not an alarm. The bar stops filling; the
+   card does not turn red and start telling him off. */
+.adhd__session--over { border-left-color: var(--warning); }
+.adhd__session-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+.adhd__session-title {
+  font-size: 1.3rem;
+  line-height: 1.3;
+  margin: 0.35rem 0 0.9rem;
+  color: var(--text-primary);
+}
+.adhd__session-bar {
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.adhd__session-fill {
+  height: 100%;
+  background: var(--success);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+.adhd__session--over .adhd__session-fill { background: var(--warning); }
+.adhd__session-time {
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  margin: 0.55rem 0 0;
+}
+/* An assumed number has to look assumed, not just say so. */
+.adhd__assumed { color: var(--text-muted); font-style: italic; }
+.adhd__session-int { color: var(--text-muted); font-size: 0.8rem; margin: 0.35rem 0 0; }
+.adhd__session-actions { display: flex; gap: 0.6rem; margin-top: 1.1rem; flex-wrap: wrap; }

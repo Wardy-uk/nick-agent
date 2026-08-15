@@ -325,11 +325,24 @@ async function build() {
 
   const rightNow = await _rightNow();
 
+  // The session container (#88) and the return prompt (#89). This panel named
+  // activation energy as the blocker and then only ever answered it with a
+  // SMALLER task; a started session is the other answer, and the one that keeps
+  // an interrupted thing from silently rejoining the pile of 128.
+  let session = { session: null, recovery: null };
+  try {
+    session = require('./focus-session').status();
+  } catch (e) {
+    console.warn('[ADHD] Session state unavailable:', e.message);
+  }
+
   const payload = {
     generatedAt: now.toISOString(),
     dateKey,
     shape: _shape(hour, isWeekend),
     rightNow,
+    session: session.session,
+    recovery: session.recovery,
     momentum: _momentum(dateKey),
     winsToday: _winsToday(dateKey),
     avoidance: _avoidance(dateKey),
@@ -337,7 +350,7 @@ async function build() {
     openTasks: todos.length,
   };
 
-  console.log(`[ADHD] Built in ${Date.now() - t0}ms — done:${payload.momentum.doneToday} wins:${payload.winsToday.length} avoid:${payload.avoidance.signals.length} quick:${payload.quickWins.length}`);
+  console.log(`[ADHD] Built in ${Date.now() - t0}ms — done:${payload.momentum.doneToday} wins:${payload.winsToday.length} avoid:${payload.avoidance.signals.length} quick:${payload.quickWins.length} session:${payload.session ? payload.session.status : 'none'}`);
   return payload;
 }
 

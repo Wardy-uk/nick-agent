@@ -142,6 +142,7 @@ app.use('/api/jira', jiraRoutes);
 app.use('/api/queue', queueRoutes);
 app.use('/api/escalation', escalationRoutes);
 app.use('/api/focus', focusRoutes);
+app.use('/api/session', require('./routes/focus-session'));
 app.use('/api/time', timeRoutes);
 app.use('/api/briefing', briefingRoutes);
 app.use('/api/actions', actionsRoutes);

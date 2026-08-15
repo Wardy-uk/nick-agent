@@ -208,6 +208,16 @@ async function syncEscalations() {
         if (!hasComment) {
           newUnseen++;
           console.log(`[Jira] New escalation without Nick comment: ${key}`);
+          // Stamp the arrival against whatever Nick is mid-way through (#89).
+          // It does NOT pause — an escalation landing is not proof he switched
+          // to it, and guessing would corrupt the one number the return prompt
+          // rests on. It only means the prompt can later say what interrupted.
+          try {
+            require('./focus-session').noteInterruption({
+              source: 'escalation',
+              detail: `${key} arrived`,
+            });
+          } catch { /* no session running, which is the usual case */ }
         }
       } else {
         Object.assign(updated[key], details, { hasComment });

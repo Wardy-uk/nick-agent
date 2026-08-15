@@ -39,6 +39,48 @@ export default function AdhdPanel({ onNavigate }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // A running session has a clock on it, so the card has to move. One minute is
+  // the right granularity: a second-by-second timer on a page for low executive
+  // function is a distraction wearing the clothes of feedback.
+  useEffect(() => {
+    if (!state.data?.session || state.data.session.status !== 'active') return undefined;
+    const t = setInterval(load, 60000);
+    return () => clearInterval(t);
+  }, [state.data?.session?.id, state.data?.session?.status, load]);
+
+  async function sessionPost(path, body) {
+    try {
+      const res = await apiFetch(`/api/session/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      });
+      const json = await res.json().catch(() => ({}));
+      // 409 is "you're already on something" — not an error, a question. The
+      // running session comes back with it so it can be named rather than
+      // silently replaced.
+      if (res.status === 409 && json.session) {
+        const ok = window.confirm(
+          `You're ${json.session.elapsedMinutes} minutes into "${json.session.text}".\n\nPark it and start this instead?`
+        );
+        if (!ok) return;
+        return sessionPost(path, { ...(body || {}), force: true });
+      }
+      if (!res.ok) throw new Error(json.error || `${res.status} ${res.statusText}`);
+      load();
+    } catch (e) {
+      setState((s) => ({ ...s, error: e.message }));
+    }
+    return undefined;
+  }
+
+  function startOnThing(title) {
+    // Text only. A decision-engine item's `id` is a slug (`todo-overdue-top`),
+    // never a task row, so the link back to the task is made server-side on the
+    // normalised text — and left unmade when it genuinely isn't a task.
+    return sessionPost('start', { text: title });
+  }
+
   async function completeQuickWin(item, index) {
     if (busy[index]) return;
     setBusy((b) => ({ ...b, [index]: true }));
@@ -82,7 +124,7 @@ export default function AdhdPanel({ onNavigate }) {
   if (error) return <div className="adhd"><div className="adhd__card adhd__card--err">{error}</div></div>;
   if (!data) return null;
 
-  const { shape, rightNow, momentum, winsToday, avoidance, quickWins } = data;
+  const { shape, rightNow, momentum, winsToday, avoidance, quickWins, session, recovery } = data;
 
   return (
     <div className="adhd">
@@ -92,6 +134,72 @@ export default function AdhdPanel({ onNavigate }) {
         <button className="adhd__refresh" type="button" onClick={load} title="Refresh">↻</button>
       </div>
 
+      {/* ── The way back in (#89) ──
+          Above everything, because it is the only thing on this page that is
+          time-critical: the cost of an interruption is not the interruption,
+          it's the failure to return. Pull-only — nothing pushed this. */}
+      {recovery && (
+        <section className={`adhd__recovery adhd__recovery--${recovery.kind}`}>
+          <div className="adhd__recovery-label">
+            {recovery.kind === 'resume' ? 'Where you were' : 'Left open'}
+          </div>
+          <p className="adhd__recovery-prompt">{recovery.prompt}</p>
+          <p className="adhd__recovery-question">{recovery.question}</p>
+          <div className="adhd__recovery-actions">
+            {recovery.options.includes('resume') && (
+              <button className="adhd__do" type="button" onClick={() => sessionPost('resume')}>Back to it</button>
+            )}
+            {recovery.options.includes('restart') && (
+              <button className="adhd__do" type="button" onClick={() => sessionPost('start', { text: recovery.session.text, force: true })}>Start it again</button>
+            )}
+            <button className="adhd__later" type="button" onClick={() => sessionPost('finish', { completeTask: true })}>It's done</button>
+            {/* Dropping it is a legitimate answer, and saying so out loud is
+                the difference between a prompt and a nag. */}
+            <button className="adhd__later" type="button" onClick={() => sessionPost('abandon')}>Let it go</button>
+          </div>
+        </section>
+      )}
+
+      {/* ── The session container (#88) ──
+          The other answer to activation energy. Quick wins offer a SMALLER
+          thing; this holds the thing you actually picked. */}
+      {session && !recovery && (
+        <section className={`adhd__session${session.overrun ? ' adhd__session--over' : ''}`}>
+          <div className="adhd__session-label">
+            {session.status === 'active' ? 'In progress' : 'Paused'} · started {session.startedTime}
+          </div>
+          <h2 className="adhd__session-title">{session.text}</h2>
+          <div className="adhd__session-bar" role="img" aria-label={`${session.elapsedMinutes} of about ${session.plannedMinutes} minutes`}>
+            <div
+              className="adhd__session-fill"
+              style={{ width: `${Math.min(100, (session.elapsedMinutes / session.plannedMinutes) * 100)}%` }}
+            />
+          </div>
+          <p className="adhd__session-time">
+            {session.elapsedMinutes} min in
+            {session.overrun
+              ? ` · ${session.overrunMinutes} over the ${session.plannedMinutes} you gave it`
+              : ` · about ${session.remainingMinutes} left`}
+            {/* The #87 rule, carried all the way to the screen: a number resting
+                on an assumption has to say so, every single time. */}
+            {session.plannedAssumed && <span className="adhd__assumed"> · assuming 30 min, nobody estimated it</span>}
+          </p>
+          {session.interruptions > 0 && (
+            <p className="adhd__session-int">
+              {session.interruptions} interruption{session.interruptions === 1 ? '' : 's'} since you started
+              {session.lastInterruption?.detail ? ` — last: ${session.lastInterruption.detail}` : ''}
+            </p>
+          )}
+          <div className="adhd__session-actions">
+            {session.status === 'active'
+              ? <button className="adhd__later" type="button" onClick={() => sessionPost('pause')}>Pause</button>
+              : <button className="adhd__do" type="button" onClick={() => sessionPost('resume')}>Resume</button>}
+            <button className="adhd__do" type="button" onClick={() => sessionPost('finish', { completeTask: true })}>Done</button>
+            <button className="adhd__later" type="button" onClick={() => sessionPost('abandon')}>Stop</button>
+          </div>
+        </section>
+      )}
+
       {/* ── The one thing ── */}
       <section className={`adhd__now adhd__now--${rightNow.item?.urgency || 'none'}`}>
         <div className="adhd__now-label">Right now</div>
@@ -100,6 +208,14 @@ export default function AdhdPanel({ onNavigate }) {
             <h2 className="adhd__now-title">{rightNow.item.title}</h2>
             {rightNow.item.reason && <p className="adhd__now-reason">{rightNow.item.reason}</p>}
             <div className="adhd__now-actions">
+              {/* The scaffolded start (#88), next to the navigate-there button.
+                  Hidden while a session is live — offering to start a second
+                  "one thing" is how you end up with none. */}
+              {!session && !recovery && (
+                <button className="adhd__do" type="button" onClick={() => startOnThing(rightNow.item.title)}>
+                  Start on this
+                </button>
+              )}
               {rightNow.action && (
                 <button
                   className="adhd__do"
