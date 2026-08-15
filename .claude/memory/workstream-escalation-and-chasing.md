@@ -215,11 +215,17 @@ PersonDetail, plus read-only enrichment in `_buildPrep` rendered by `sara/app`
 MeetingPrep. Verified on the running Pi at 390×844: 287/29/107d, no horizontal
 overflow, every 1-2-1 in the week carries the right person's list.
 
-**One thing is still untested and it is the important one: the chase executor
-has never actually run.** `queueChase` → pending `sara_action` → approve →
-`contact-directory.resolveName` (must return `resolved`, nothing weaker) →
-`email-sender.sendMail`. Every step is built; none has fired. Approving one real
-chase is the test.
+**The chase executor RAN and the email arrived — verified live 15 Aug**, on a
+chase queued against Naomi's 107-day item and retargeted to Nick's own address.
+Full chain proven: `queueChase` (resolves + stores the address and the words) →
+pending `sara_action` → manual recipient override → approve →
+`email-sender.sendMail` over Graph → `markChased`. Nothing in this workstream is
+now built-but-unproven.
+
+Note for whoever extends it: `contact-directory.resolveName` takes the canonical
+FIRST name, and `resolved` is a real gate — "Chris" comes back `ambiguous` and is
+refused. That is why the recipient is editable; an override is stamped
+`source: 'manual'` and skips the gate, because a choice is not a guess.
 
 1. ~~**`reason_kind` migration**~~ — DONE, verified: 8 urgency reasons live. (NOVA, **needs Nick's explicit OK before running** per the
    Azure SQL rule) — column on `escalation_reasons` + seed the five urgency codes with
