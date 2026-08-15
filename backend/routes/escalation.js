@@ -22,6 +22,7 @@
 const express = require('express');
 const router = express.Router();
 const nova = require('../services/nova-client');
+const jira = require('../services/jira');
 
 function requireNova(req, res, next) {
   if (!nova.isConfigured()) {
@@ -42,6 +43,26 @@ function adfText(node, depth = 0) {
   // Block-level nodes need a break after them or the whole thing runs together.
   return ['paragraph', 'heading', 'listItem', 'codeBlock'].includes(node.type) ? `${inner}\n` : inner;
 }
+
+/**
+ * GET /api/escalation/active — what is escalated right now.
+ *
+ * Reads Jira directly rather than going through NOVA: this is a question about
+ * the state of the queue, and NEURO already holds Jira credentials for the
+ * escalation poll. It deliberately does NOT sit behind `requireNova` — the list
+ * is the useful half of this screen and should still render when the bridge is
+ * down, even though escalating would then fail.
+ */
+router.get('/active', async (req, res) => {
+  if (!jira.isConfigured()) {
+    return res.status(503).json({ error: 'Jira is not configured' });
+  }
+  try {
+    res.json({ escalations: await jira.fetchActiveEscalations() });
+  } catch (e) {
+    res.status(502).json({ error: `Could not reach Jira: ${e.message}` });
+  }
+});
 
 // GET /api/escalation/reasons — the urgency vocabulary, for the picker.
 router.get('/reasons', requireNova, async (req, res) => {

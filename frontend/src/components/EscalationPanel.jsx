@@ -3,14 +3,69 @@ import { apiUrl } from '../api';
 import './EscalationPanel.css';
 
 /**
- * Escalations — type a ticket key, check it's the right ticket, say why, escalate.
+ * Escalations — what is escalated right now, and the form to escalate something.
  *
- * The lookup step exists because escalating the wrong ticket is a real risk when
- * someone reads a number to you over Teams. Nothing is written until the confirm
- * step, and the confirm names exactly what will change on the ticket.
+ * The list comes first because that is the question this screen is usually
+ * opened with. The form's lookup step exists because escalating the wrong
+ * ticket is a real risk when someone reads a number to you over Teams. Nothing
+ * is written until the confirm step, and the confirm names exactly what will
+ * change on the ticket.
  */
 
 const PRIORITY_TARGET = 'Critical';
+
+function ageDays(iso) {
+  if (!iso) return null;
+  return Math.floor((Date.now() - new Date(iso)) / 86400000);
+}
+
+/** The escalated queue. Read-only — acting on a row means opening it. */
+function ActiveEscalations({ items, loading, error, onPick, onRefresh }) {
+  return (
+    <section className="esc-active">
+      <div className="esc-active-head">
+        <h3>
+          Currently escalated
+          {!loading && !error && <span className="esc-count">{items.length}</span>}
+        </h3>
+        <button type="button" className="esc-btn esc-btn-ghost esc-btn-sm" onClick={onRefresh} disabled={loading}>
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </div>
+
+      {error && <div className="esc-error">{error}</div>}
+
+      {!error && !loading && items.length === 0 && (
+        <p className="esc-empty">Nothing is escalated. That is the good outcome, not a broken query.</p>
+      )}
+
+      {items.map((t) => {
+        const age = ageDays(t.created);
+        return (
+          <div key={t.key} className="esc-row">
+            <div className="esc-row-main">
+              <a href={t.url || '#'} target="_blank" rel="noreferrer" className="esc-row-key">{t.key}</a>
+              <span className="esc-row-summary">{t.summary}</span>
+            </div>
+            <div className="esc-row-meta">
+              {/* Why it's here. The two routes in mean different things — the
+                  customer raised it, or we moved it — so they read differently. */}
+              {t.viaRequestType && <span className="esc-tag esc-tag-req">customer-raised</span>}
+              {t.viaTier && <span className="esc-tag esc-tag-tier">tier</span>}
+              <span>{t.status || '—'}</span>
+              <span>{t.priority || 'No priority'}</span>
+              <span>{t.assignee || 'Unassigned'}</span>
+              {age != null && <span>{age}d old</span>}
+              <button type="button" className="esc-row-action" onClick={() => onPick(t.key)}>
+                Escalate again
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
 
 export default function EscalationPanel() {
   const [key, setKey] = useState('');
@@ -23,6 +78,9 @@ export default function EscalationPanel() {
   const [error, setError] = useState(null);
   const [confirming, setConfirming] = useState(false);
   const [result, setResult] = useState(null);
+  const [active, setActive] = useState([]);
+  const [activeLoading, setActiveLoading] = useState(true);
+  const [activeError, setActiveError] = useState(null);
   const keyInput = useRef(null);
 
   useEffect(() => { keyInput.current?.focus(); }, []);
@@ -34,10 +92,27 @@ export default function EscalationPanel() {
       .catch(() => setReasons([]));
   }, []);
 
-  const lookup = async (e) => {
+  const loadActive = async () => {
+    setActiveLoading(true); setActiveError(null);
+    try {
+      const res = await fetch(apiUrl('/api/escalation/active'));
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not load escalations');
+      setActive(data.escalations || []);
+    } catch (err) {
+      setActiveError(err.message);
+    } finally {
+      setActiveLoading(false);
+    }
+  };
+
+  useEffect(() => { loadActive(); }, []);
+
+  const lookup = async (e, presetKey) => {
     e?.preventDefault();
-    const k = key.trim().toUpperCase();
+    const k = String(presetKey ?? key).trim().toUpperCase();
     if (!k) return;
+    if (presetKey) setKey(k);
     setLoading(true); setError(null); setTicket(null); setResult(null); setConfirming(false);
     try {
       const res = await fetch(apiUrl(`/api/escalation/ticket/${encodeURIComponent(k)}`));
@@ -69,6 +144,9 @@ export default function EscalationPanel() {
       if (!res.ok) throw new Error(data.error || 'Escalation failed');
       setResult(data.result);
       setConfirming(false);
+      // Priority and due date have just moved on that ticket — if it's in the
+      // list, the list is now wrong.
+      loadActive();
     } catch (err) {
       setError(err.message);
       setConfirming(false);
@@ -94,6 +172,14 @@ export default function EscalationPanel() {
         <h2>Escalations</h2>
         <p className="esc-sub">Make a ticket jump the queue, and record why.</p>
       </header>
+
+      <ActiveEscalations
+        items={active}
+        loading={activeLoading}
+        error={activeError}
+        onRefresh={loadActive}
+        onPick={(k) => lookup(null, k)}
+      />
 
       <form className="esc-lookup" onSubmit={lookup}>
         <input

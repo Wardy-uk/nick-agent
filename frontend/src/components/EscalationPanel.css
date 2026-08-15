@@ -16,6 +16,80 @@
 .esc-header h2 { margin: 0; font-size: 18px; }
 .esc-sub { margin: 4px 0 20px; color: var(--text-muted); font-size: 13px; }
 
+/* ------------------------------------------------------- currently escalated */
+
+.esc-active { margin-bottom: 28px; }
+
+.esc-active-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.esc-active-head h3 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.esc-count {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 11px;
+  letter-spacing: 0;
+  color: var(--text);
+}
+.esc-btn-sm { padding: 5px 10px; font-size: 11px; }
+
+.esc-empty { margin: 0; font-size: 12px; color: var(--text-muted); }
+
+.esc-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  /* Top rather than bottom, so the first row is closed off under the header
+     without a :first-of-type rule — the header is a div too, so it would win
+     that match and the separator would never appear. */
+  border-top: 1px solid var(--border);
+}
+
+.esc-row-main { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.esc-row-key { color: var(--accent); font-weight: 600; font-size: 13px; text-decoration: none; }
+.esc-row-key:hover { text-decoration: underline; }
+.esc-row-summary { font-size: 13px; }
+
+.esc-row-meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.esc-tag-req { color: var(--danger); }
+.esc-tag-tier { color: var(--text-muted); }
+
+.esc-row-action {
+  margin-left: auto;
+  padding: 3px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.esc-row-action:hover { border-color: var(--accent); color: var(--text); }
+
 /* ------------------------------------------------------------- lookup bar */
 
 .esc-lookup { display: flex; gap: 8px; margin-bottom: 16px; }
@@ -182,4 +256,8 @@
   .esc-comments { max-height: 220px; overflow-y: auto; }
 
   .esc-meta { grid-template-columns: repeat(2, 1fr); }
+
+  /* The action can't sit right of six wrapped meta chips at 360px — give it
+     its own line rather than letting margin-left:auto push it somewhere odd. */
+  .esc-row-action { margin-left: 0; }
 }

@@ -69,6 +69,70 @@ async function fetchEscalationTickets() {
   return result.issues || [];
 }
 
+/**
+ * Every ticket that is escalated RIGHT NOW, which is two populations, not one:
+ *
+ *  - Request Type = "Escalation (NT)" — the customer raised it as an escalation
+ *    through the portal. This is what `fetchEscalationTickets` already watches.
+ *  - Current Tier = "Escalations" — the ticket was moved into the escalations
+ *    tier internally. Nothing in NEURO looked at these, so a ticket escalated by
+ *    the team was invisible here.
+ *
+ * They overlap but neither contains the other, so it is one OR'd query rather
+ * than two calls — a ticket matching both should appear once, with both badges.
+ *
+ * `statusCategory != Done` rather than a list of status names: the queue has
+ * more done-ish statuses than anyone remembers, and NOVA uses the category form
+ * everywhere for exactly that reason.
+ */
+const TIER_FIELD = 'customfield_12981';        // Current Tier
+const REQUEST_TYPE_FIELDS = ['customfield_10020', 'customfield_12800'];
+
+async function fetchActiveEscalations() {
+  const jql = `project = ${JIRA_PROJECT_KEY} AND statusCategory != Done AND `
+    + `("Request Type" in ("Escalation (NT)") OR cf[12981] = "Escalations") `
+    + `ORDER BY created ASC`;
+
+  const result = await jiraRequest('/rest/api/3/search/jql', {
+    method: 'POST',
+    body: {
+      jql,
+      fields: ['summary', 'status', 'priority', 'assignee', 'created', 'updated', 'duedate',
+        TIER_FIELD, ...REQUEST_TYPE_FIELDS],
+      maxResults: 100,
+    },
+  });
+
+  const base = JIRA_BASE_URL ? JIRA_BASE_URL.replace(/\/$/, '') : null;
+  return (result.issues || []).map((issue) => {
+    const f = issue.fields || {};
+    // Two fields carry the request type on this instance and only one is
+    // populated per ticket — take whichever answers rather than guessing.
+    const requestType = REQUEST_TYPE_FIELDS
+      .map(id => f[id]?.requestType?.name)
+      .find(Boolean) || null;
+    const tier = f[TIER_FIELD]?.value || null;
+    return {
+      key: issue.key,
+      summary: f.summary || '',
+      status: f.status?.name || null,
+      priority: f.priority?.name || null,
+      assignee: f.assignee?.displayName || null,
+      created: f.created || null,
+      updated: f.updated || null,
+      duedate: f.duedate || null,
+      tier,
+      requestType,
+      // Why this ticket is in the list. Without it a row is unexplained, and the
+      // two routes in mean different things: one is the customer shouting, the
+      // other is us having moved it.
+      viaRequestType: /escalation/i.test(requestType || ''),
+      viaTier: tier === 'Escalations',
+      url: base ? `${base}/browse/${issue.key}` : null,
+    };
+  });
+}
+
 function nickHasCommented(issue) {
   const comments = issue.fields?.comment?.comments || [];
   const nickEmail = (JIRA_EMAIL || '').toLowerCase();
@@ -217,6 +281,7 @@ function stopPolling() {
 module.exports = {
   isConfigured,
   fetchEscalationTickets,
+  fetchActiveEscalations,
   syncEscalations,
   markEscalationsSeen,
   getUnseenEscalationCount,
