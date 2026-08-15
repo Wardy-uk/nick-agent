@@ -296,9 +296,20 @@ function queueChase(key) {
   if (!item) return { ok: false, error: 'No such item' };
   if (item.status !== 'open') return { ok: false, error: `Already ${item.status}` };
 
+  // The words are built HERE, at queue time, and stored on the action — the
+  // executor already prefers `payload.body` over rebuilding. That means the
+  // approval screen can show the exact text that will be sent rather than a
+  // client-side reconstruction of it, which would be free to drift from the
+  // template. You approve what you read.
   const id = require('./suggestion-engine').queueAction(
     'chase_commitment',
-    { waitingKey: key, person: item.person, text: item.text, sourcePath: item.sourcePath },
+    {
+      waitingKey: key,
+      person: item.person,
+      text: item.text,
+      sourcePath: item.sourcePath,
+      body: buildChaseMessage(item),
+    },
     `Ask ${item.person} about "${item.text.slice(0, 60)}" (${_ageDays(item.firstSeen)}d)`,
     0.8
   );

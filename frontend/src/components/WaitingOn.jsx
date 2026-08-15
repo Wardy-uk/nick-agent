@@ -119,14 +119,34 @@ export default function WaitingOn({ person = null, embedded = false }) {
   const [busyKey, setBusyKey] = useState(null);
   const [flash, setFlash] = useState(null);       // { key, text }
 
+  const [queued, setQueued] = useState([]);       // pending chase_commitment actions
+  const [actingId, setActingId] = useState(null);
+
   const load = useCallback(() => {
     fetch(apiUrl('/api/waiting-on/by-person'))
       .then(r => r.json())
       .then(d => setGroups(d.people || []))
       .catch(e => setError(e.message));
+
+    // A queued chase had nowhere to be approved — nothing in the app read
+    // /api/actions, so pressing Chase dropped the action into a hole. The
+    // approval belongs beside the thing being approved anyway.
+    fetch(apiUrl('/api/actions'))
+      .then(r => r.json())
+      .then(d => setQueued((d.pending || []).filter(a => a.type === 'chase_commitment')))
+      .catch(() => setQueued([]));
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const resolveQueued = async (id, verb) => {
+    setActingId(id);
+    try {
+      await fetch(apiUrl(`/api/actions/${id}/${verb}`), { method: 'POST' });
+    } catch { /* the reload below tells the truth either way */ }
+    setActingId(null);
+    load();
+  };
 
   // Snoozed items still come back from the API — hiding them is the whole point
   // of snoozing, but they have to stay reachable or a mis-snooze is unrecoverable.
@@ -166,8 +186,9 @@ export default function WaitingOn({ person = null, embedded = false }) {
       if (!res.ok || data.ok === false) throw new Error(data.error || 'Failed');
 
       if (action === 'chase') {
-        // Deliberately says queued, not sent. Nothing leaves without approval.
-        setFlash({ key: item.key, text: 'Queued for your approval — nothing sent yet' });
+        // Deliberately says queued, not sent. Nothing leaves without approval,
+        // and the draft appears at the top of this panel for you to read.
+        setFlash({ key: item.key, text: 'Queued — read it at the top of this panel, then approve' });
         load();
       } else {
         // done / drop / snooze all take it off this list; re-read rather than
@@ -180,10 +201,13 @@ export default function WaitingOn({ person = null, embedded = false }) {
     setBusyKey(null);
   };
 
+  const myQueued = queued.filter(a =>
+    !person || String(a.payload?.person || '').toLowerCase() === person.toLowerCase());
+
   if (error) return <div className="waiting-on wo-error">Waiting-on unavailable: {error}</div>;
   if (!groups) return null;
 
-  if (visible.length === 0) {
+  if (visible.length === 0 && myQueued.length === 0) {
     if (person) return null;                        // person overlay: silent when clear
     if (snoozedCount > 0) {
       return (
@@ -209,7 +233,7 @@ export default function WaitingOn({ person = null, embedded = false }) {
         <span className="wo-title">Waiting on</span>
         <span className="wo-summary">
           {person
-            ? `${totalItems} outstanding · oldest ${ageLabel(visible[0].oldestDays)}`
+            ? `${totalItems} outstanding${visible[0] ? ` · oldest ${ageLabel(visible[0].oldestDays)}` : ''}`
             : `${totalItems} outstanding across ${visible.length} ${visible.length === 1 ? 'person' : 'people'}`
               + (visible[0] ? ` · oldest ${ageLabel(visible[0].oldestDays)}` : '')}
         </span>
@@ -219,6 +243,32 @@ export default function WaitingOn({ person = null, embedded = false }) {
           </button>
         )}
       </div>
+
+      {/* Queued chases, awaiting approval. Shown in full: this sends a real
+          email to a direct report, so the exact words are on screen before the
+          approve button, not a summary of them. The body was built and stored
+          when the chase was queued, so this IS what goes out. */}
+      {myQueued.length > 0 && (
+        <div className="wo-queued">
+          <div className="wo-queued-h">
+            {myQueued.length} chase{myQueued.length === 1 ? '' : 's'} waiting for you — nothing has been sent
+          </div>
+          {myQueued.map(a => (
+            <div key={a.id} className="wo-queued-item">
+              <div className="wo-queued-to">To {a.payload?.person}</div>
+              <pre className="wo-queued-body">{a.payload?.body || '(no draft stored — approving will build one)'}</pre>
+              <div className="wo-row-actions">
+                <button className="wo-btn wo-btn-ok" disabled={actingId === a.id} onClick={() => resolveQueued(a.id, 'approve')}>
+                  {actingId === a.id ? 'Sending…' : 'Approve & send'}
+                </button>
+                <button className="wo-btn wo-btn-ghost" disabled={actingId === a.id} onClick={() => resolveQueued(a.id, 'reject')}>
+                  Discard
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="wo-groups">
         {shown.map((g, gi) => {

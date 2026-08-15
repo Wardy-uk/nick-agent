@@ -65,6 +65,53 @@
 }
 .wo-toggle:hover { color: var(--accent); }
 
+/* ──────────────────────────────────────── queued chases (approval) */
+
+.wo-queued {
+  margin-bottom: 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: rgba(90, 163, 249, 0.06);
+  padding: 10px 12px;
+}
+
+.wo-queued-h {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.wo-queued-item + .wo-queued-item {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.wo-queued-to {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+/* The full text, wrapped — an email to a direct report is not something to
+   approve from a one-line summary. */
+.wo-queued-body {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.wo-queued .wo-row-actions { justify-content: flex-start; }
+
 /* ─────────────────────────────────────────────────────── per person */
 
 .wo-groups { display: flex; flex-direction: column; gap: 6px; }
