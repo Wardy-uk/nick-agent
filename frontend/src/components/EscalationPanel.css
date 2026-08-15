@@ -3,6 +3,14 @@
   max-width: 780px;
   margin: 0 auto;
   font-family: var(--font-mono);
+  /* .main-panel is display:flex, so a child stretches to the container height by
+     default — which leaves the scroll container with nothing to scroll and simply
+     clips anything taller, hiding the submit button. Sizing to content instead
+     lets .main-panel's own overflow-y do its job. */
+  align-self: flex-start;
+  width: 100%;
+  /* Clear the fixed mobile bottom nav, or the last control sits under it. */
+  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
 }
 
 .esc-header h2 { margin: 0; font-size: 18px; }
@@ -150,7 +158,28 @@
 .esc-result ul { margin: 0 0 14px; padding-left: 18px; font-size: 12px; }
 .esc-result li { margin-bottom: 4px; }
 
-@media (max-width: 600px) {
+/* 768px matches the app's own mobile breakpoint (App.css), where the bottom nav
+   appears and .main-panel gains its own bottom padding. */
+@media (max-width: 768px) {
+  .escalation-panel {
+    padding: 14px;
+    /* Bottom nav is 60px; leave room for it plus a comfortable gap so the
+       confirm buttons are reachable rather than flush against it. */
+    padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+  }
+
   .esc-lookup { flex-wrap: wrap; }
   .esc-key-input { flex: 1 1 100%; }
+  .esc-lookup .esc-btn { flex: 1; }
+
+  /* Two side-by-side buttons at ~360px leave neither readable. */
+  .esc-confirm-actions { flex-direction: column; }
+  .esc-confirm-actions .esc-btn { width: 100%; }
+
+  /* Long descriptions and comment threads must not eat the whole screen and
+     push the form out of reach — they scroll within themselves instead. */
+  .esc-desc { max-height: 90px; }
+  .esc-comments { max-height: 220px; overflow-y: auto; }
+
+  .esc-meta { grid-template-columns: repeat(2, 1fr); }
 }
