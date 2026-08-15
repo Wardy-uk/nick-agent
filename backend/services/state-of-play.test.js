@@ -65,18 +65,21 @@ test('a fresh cache inside the threshold raises nothing', () => {
 
 // ── Never-ran is not the same as long-ago ───────────────────────────────────
 
-test('a job that stopped is critical; one that never ran is only a warning', () => {
+test('a job that stopped is critical; one never yet stamped is only info', () => {
   const stopped = assess(clean({
     jobs: [{ name: 'nightly-sweep', cadence: 'daily', lastRun: '2026-08-01', ageDays: 14, state: 'stale' }],
   }));
   assert.equal(stopped[0].severity, 'critical');
   assert.match(stopped[0].title, /nightly-sweep has stopped/);
 
+  // Unknown is not broken. Run-tracking shipped after these jobs existed, so on
+  // day one embeddings-rebuild had no stamp while it was actively rebuilding —
+  // reporting that as a fault put two false warnings at the top of the board.
   const never = assess(clean({
     jobs: [{ name: 'nightly-rollup', cadence: 'daily', lastRun: null, ageDays: null, state: 'never' }],
   }));
-  assert.equal(never[0].severity, 'warn');
-  assert.match(never[0].title, /has never run/);
+  assert.equal(never[0].severity, 'info');
+  assert.match(never[0].title, /no last-run stamp yet/);
 });
 
 // ── Outbound changes the severity, not just the wording ─────────────────────

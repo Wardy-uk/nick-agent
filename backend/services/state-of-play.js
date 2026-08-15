@@ -189,8 +189,13 @@ function assess(s) {
       add('critical', `${job.name} has stopped`,
         `Last ran ${job.ageDays} days ago (${job.cadence}).`, 'admin');
     } else if (job.state === 'never') {
-      add('warn', `${job.name} has never run`,
-        'No last-run stamp recorded — it may not have fired since it was added.', 'admin');
+      // Deliberately info, not warn. Stamping arrived with the catch-up work, so
+      // a job whose slot has not come round since that deploy has no stamp and is
+      // not faulty — embeddings-rebuild read "never run" on day one while it was
+      // demonstrably mid-rebuild. Unknown is not the same as broken, and a board
+      // that opens with two false warnings is one nobody reads by week two.
+      add('info', `${job.name} has no last-run stamp yet`,
+        'Not yet seen since run-tracking was added — it becomes meaningful once its slot has passed once.', 'admin');
     }
   }
 
