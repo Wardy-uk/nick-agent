@@ -1,0 +1,156 @@
+.escalation-panel {
+  padding: 20px;
+  max-width: 780px;
+  margin: 0 auto;
+  font-family: var(--font-mono);
+}
+
+.esc-header h2 { margin: 0; font-size: 18px; }
+.esc-sub { margin: 4px 0 20px; color: var(--text-muted); font-size: 13px; }
+
+/* ------------------------------------------------------------- lookup bar */
+
+.esc-lookup { display: flex; gap: 8px; margin-bottom: 16px; }
+
+.esc-key-input {
+  flex: 0 0 180px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--bg-input, var(--bg-elevated));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  color: var(--text);
+}
+.esc-key-input:focus { outline: none; border-color: var(--accent); }
+
+.esc-btn {
+  padding: 10px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  color: var(--text);
+  cursor: pointer;
+}
+.esc-btn:hover:not(:disabled) { border-color: var(--accent); }
+.esc-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.esc-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.esc-btn-ghost { background: transparent; color: var(--text-muted); }
+
+/* ----------------------------------------------------------- ticket card */
+
+.esc-error {
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md, 6px);
+  color: var(--danger);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.esc-warn {
+  padding: 8px 12px;
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  margin: 12px 0;
+}
+
+.esc-ticket {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 10px);
+  padding: 16px;
+}
+
+.esc-ticket-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.esc-ticket-key { color: var(--accent); font-weight: 600; }
+.esc-ticket-summary { font-size: 14px; }
+
+.esc-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px 16px;
+  margin: 16px 0 0;
+}
+.esc-meta div { display: flex; flex-direction: column; gap: 2px; }
+.esc-meta dt { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+.esc-meta dd { margin: 0; font-size: 13px; }
+
+.esc-desc {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow: auto;
+}
+
+.esc-comments { margin-top: 16px; font-size: 12px; }
+.esc-comments summary { color: var(--text-muted); cursor: pointer; }
+.esc-comment { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.esc-comment-author { color: var(--text-muted); font-size: 11px; display: flex; gap: 6px; align-items: center; }
+.esc-comment-text { white-space: pre-wrap; }
+.esc-tag {
+  font-size: 10px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--warning);
+}
+
+/* ------------------------------------------------------------------ form */
+
+.esc-form { display: flex; flex-direction: column; gap: 14px; margin-top: 20px; }
+.esc-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+.esc-form label > span { color: var(--text-muted); }
+.esc-form label em { font-style: normal; opacity: 0.7; }
+
+.esc-form select,
+.esc-form input[type="date"],
+.esc-form textarea {
+  padding: 9px 11px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--bg-input, var(--bg-elevated));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  color: var(--text);
+  resize: vertical;
+}
+.esc-form select:focus,
+.esc-form input:focus,
+.esc-form textarea:focus { outline: none; border-color: var(--accent); }
+
+/* --------------------------------------------------------------- confirm */
+
+.esc-confirm {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md, 6px);
+  padding: 14px;
+}
+.esc-confirm-title { margin: 0 0 8px; font-size: 13px; }
+.esc-confirm ul { margin: 0 0 14px; padding-left: 18px; font-size: 12px; }
+.esc-confirm li { margin-bottom: 4px; }
+.esc-confirm-actions { display: flex; gap: 8px; }
+
+/* ---------------------------------------------------------------- result */
+
+.esc-result {
+  border: 1px solid var(--success, var(--border));
+  border-radius: var(--radius-lg, 10px);
+  padding: 16px;
+}
+.esc-result-title { margin: 0 0 10px; font-size: 14px; color: var(--success); }
+.esc-result ul { margin: 0 0 14px; padding-left: 18px; font-size: 12px; }
+.esc-result li { margin-bottom: 4px; }
+
+@media (max-width: 600px) {
+  .esc-lookup { flex-wrap: wrap; }
+  .esc-key-input { flex: 1 1 100%; }
+}

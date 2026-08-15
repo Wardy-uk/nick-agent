@@ -13,6 +13,7 @@ import AdminPanel from './components/AdminPanel';
 import NudgeBanner from './components/NudgeBanner';
 import ChatPanel from './components/ChatPanel';
 import QATab from './components/QATab';
+import EscalationPanel from './components/EscalationPanel';
 import ImportsPanel from './components/ImportsPanel';
 import CapturePanel from './components/CapturePanel';
 import RecentPanel from './components/RecentPanel';
@@ -278,6 +279,7 @@ function AuthenticatedApp() {
       case 'inbox': return <InboxPanel focusContext={navContext} />;
       case 'vault': return <VaultBrowser initialOpenPath={vaultOpenPath} onClearInitialPath={() => setVaultOpenPath(null)} />;
       case 'qa': return <QATab />;
+      case 'escalations': return <EscalationPanel />;
       case 'journal': return <JournalPanel />;
       case 'standups': return <StandupsPanel />;
       case 'insights': return <InsightsPanel onNavigate={handleNavigate} />;
