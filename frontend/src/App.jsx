@@ -14,6 +14,7 @@ import NudgeBanner from './components/NudgeBanner';
 import ChatPanel from './components/ChatPanel';
 import QATab from './components/QATab';
 import EscalationPanel from './components/EscalationPanel';
+import ActionsPanel from './components/ActionsPanel';
 import ImportsPanel from './components/ImportsPanel';
 import CapturePanel from './components/CapturePanel';
 import RecentPanel from './components/RecentPanel';
@@ -280,6 +281,7 @@ function AuthenticatedApp() {
       case 'vault': return <VaultBrowser initialOpenPath={vaultOpenPath} onClearInitialPath={() => setVaultOpenPath(null)} />;
       case 'qa': return <QATab />;
       case 'escalations': return <EscalationPanel />;
+      case 'actions': return <ActionsPanel onNavigate={handleNavigate} />;
       case 'journal': return <JournalPanel />;
       case 'standups': return <StandupsPanel />;
       case 'insights': return <InsightsPanel onNavigate={handleNavigate} />;
@@ -319,6 +321,13 @@ function AuthenticatedApp() {
         <button className={activeView === 'capture' ? 'active' : ''} onClick={() => handleNavigate('capture')}>
           <span className="bottom-nav-icon">+</span>
           <span>Capture</span>
+        </button>
+        {/* On mobile the sidebar is behind a hamburger, so an approval queue
+            that only lives there is two taps and a memory away. The count is on
+            the sidebar entry; this is the route to it. */}
+        <button className={activeView === 'actions' ? 'active' : ''} onClick={() => handleNavigate('actions')}>
+          <span className="bottom-nav-icon">&#x2713;</span>
+          <span>Actions</span>
         </button>
       </nav>
       {/* Dwell prompt — save this location? */}

@@ -1,0 +1,314 @@
+/* Pending actions — the approval surface. */
+
+.actions-panel {
+  padding: 20px;
+  max-width: 780px;
+  margin: 0 auto;
+  font-family: var(--font-mono);
+  /* .main-panel is display:flex, so a direct child stretches to the container
+     height and leaves the scroll container nothing to scroll — anything taller
+     is simply clipped, with the buttons at the bottom the first casualty
+     (923c3b8). Size to content and let .main-panel's overflow-y do its job. */
+  align-self: flex-start;
+  width: 100%;
+  /* Clear the fixed mobile bottom nav, or the last card sits under it. */
+  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+}
+
+.ap-header h2 { margin: 0; font-size: 18px; }
+.ap-sub { margin: 4px 0 20px; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+
+.ap-error, .ap-loading, .ap-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+.ap-error { color: var(--danger); }
+
+/* ─────────────────────────────────────────────────────────── outcomes */
+
+/* Kept on screen after the card has gone: approving marks the action executed
+   or failed, and either way it drops out of pending. A vanished card cannot
+   tell you which happened. */
+.ap-outcomes { margin-bottom: 20px; display: flex; flex-direction: column; gap: 6px; }
+
+.ap-outcome {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--success);
+  background: rgba(64, 201, 122, 0.1);
+  border: 1px solid rgba(64, 201, 122, 0.25);
+}
+.ap-outcome.bad {
+  color: var(--danger);
+  background: rgba(224, 85, 85, 0.1);
+  border-color: rgba(224, 85, 85, 0.3);
+}
+.ap-outcome-mark { flex-shrink: 0; }
+.ap-outcome-text { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.ap-outcome .ap-btn { flex-shrink: 0; }
+
+/* ───────────────────────────────────────────────────────────── groups */
+
+.ap-group { margin-bottom: 26px; }
+
+.ap-group-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.ap-group-outbound { color: var(--warning); }
+
+.ap-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 10px;
+  letter-spacing: 0;
+  color: var(--text-secondary);
+}
+
+.ap-group-blurb {
+  margin: 5px 0 12px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+/* ─────────────────────────────────────────────────────────────── card */
+
+.ap-card {
+  padding: 13px 15px;
+  margin-bottom: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+/* The left edge is the "how much care does this need" signal, read before
+   anything else on the card. */
+.ap-kind-outbound { border-left-color: var(--warning); }
+.ap-kind-write    { border-left-color: var(--accent); }
+.ap-kind-navigate { border-left-color: var(--text-muted); }
+.ap-card.is-blocked { opacity: 0.85; border-left-color: var(--danger); }
+
+.ap-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.ap-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.ap-id { font-size: 10px; color: var(--text-muted); }
+.ap-when { margin-left: auto; font-size: 10px; color: var(--text-muted); }
+
+.ap-summary {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ap-reason {
+  margin-top: 4px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.ap-note {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  background: rgba(90, 163, 249, 0.08);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--accent);
+}
+
+/* ───────────────────────────────────────────────────────────── fields */
+
+.ap-fields { margin: 10px 0 0; display: flex; flex-direction: column; gap: 3px; }
+
+.ap-field { display: flex; gap: 8px; font-size: 11px; line-height: 1.5; }
+.ap-field dt {
+  flex: 0 0 84px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 9.5px;
+  padding-top: 1px;
+}
+.ap-field dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+/* The recipient is the part worth reading twice on an outbound action. */
+.ap-field dd.mono { font-family: var(--font-mono); color: var(--text-primary); }
+
+/* ─────────────────────────────────────────────────────────────── body */
+
+.ap-body-label {
+  margin: 12px 0 5px;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+/* Full text, wrapped, never truncated or scrolled away. */
+.ap-body {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ────────────────────────────────────────────── warnings and blockers */
+
+.ap-warn, .ap-blocker {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.ap-warn    { color: var(--warning); background: rgba(230, 168, 61, 0.1); }
+.ap-blocker { color: var(--danger);  background: rgba(224, 85, 85, 0.1); }
+
+.ap-blocker-link { font-size: 10.5px; color: var(--text-muted); align-self: center; }
+
+/* ──────────────────────────────────────────────────────────── buttons */
+
+.ap-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.ap-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  display: inline-block;
+}
+.ap-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--text-primary); }
+.ap-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ap-btn-ok:hover:not(:disabled)   { border-color: var(--success); color: var(--success); }
+/* Outbound approve is deliberately not styled as a safe green tick. */
+.ap-btn-send {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+.ap-btn-send:hover:not(:disabled) { background: rgba(230, 168, 61, 0.12); color: var(--warning); }
+.ap-btn-ghost { color: var(--text-muted); }
+
+/* ──────────────────────────────────────────────────────────── history */
+
+/* Where a failed action ends up. Collapsed, because the pending list is the
+   question this screen is opened with — but reachable, because "did that send"
+   is the question asked right after. */
+.ap-history { margin-top: 26px; border-top: 1px solid var(--border); padding-top: 14px; }
+
+.ap-history-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.ap-history-toggle:hover { color: var(--accent); }
+
+.ap-history-list { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+
+.ap-hist-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 9px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.ap-hist-status {
+  flex: 0 0 auto;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+.ap-hist-executed .ap-hist-status { color: var(--success); }
+.ap-hist-failed   .ap-hist-status { color: var(--danger); }
+.ap-hist-failed   { border-left: 2px solid var(--danger); }
+
+.ap-hist-label { color: var(--text-primary); }
+.ap-hist-summary { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.ap-hist-when { margin-left: auto; flex-shrink: 0; }
+
+/* ───────────────────────────────────────────────────────────── mobile */
+
+/* 768px matches the app's own breakpoint (App.css), where the bottom nav
+   appears. Target is 390x844. */
+@media (max-width: 768px) {
+  .actions-panel { padding: 12px; padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+
+  .ap-card { padding: 12px; }
+
+  /* A label/value pair side by side leaves ~200px for an email address at
+     390px wide. Stack instead. */
+  .ap-field { flex-direction: column; gap: 1px; }
+  .ap-field dt { flex: none; }
+
+  .ap-card-head { row-gap: 2px; }
+  .ap-when { margin-left: 0; }
+
+  /* Touch targets: 11px text in a 6px-padded button is not tappable. */
+  .ap-btn { padding: 10px 14px; font-size: 11.5px; }
+  .ap-actions .ap-btn { flex: 1 1 auto; text-align: center; }
+
+  .ap-hist-when { margin-left: 0; }
+}

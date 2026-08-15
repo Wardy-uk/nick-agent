@@ -14,12 +14,31 @@ const db = require('../db/database');
 const suggestionEngine = require('../services/suggestion-engine');
 const workingMemory = require('../services/working-memory');
 const actionCandidates = require('../services/action-candidates');
+const actionPresenter = require('../services/action-presenter');
+
+// getPendingSaraActions defaults to 10 and orders by confidence DESC — on an
+// approval list that is a silent cliff, not a page: the 11th action simply is
+// not there, and the ones cut are the LEAST confident, which is exactly the set
+// most worth a human look. Explicit and large.
+const PENDING_LIMIT = 500;
+const RECENT_LIMIT = 40;
 
 // GET /api/actions — list pending actions + recent history
+//
+// Each action carries a `presentation` built on the server from its STORED
+// payload (see action-presenter). The approval screen renders that rather than
+// reconstructing a summary client-side, so what is on screen cannot drift from
+// what executeAction will read.
 router.get('/', (req, res) => {
   try {
-    const pending = db.getPendingSaraActions();
-    const recent = db.getRecentSaraActions(10);
+    const decorate = (a) => ({ ...a, presentation: actionPresenter.describe(a) });
+    const pending = db.getPendingSaraActions(PENDING_LIMIT).map(decorate);
+    // getRecentSaraActions is every status, so it re-lists everything pending.
+    // History means resolved: an executed or failed action is the outcome the
+    // caller came here for, and a pending one is already above.
+    const recent = db.getRecentSaraActions(RECENT_LIMIT)
+      .filter(a => a.status !== 'pending')
+      .map(decorate);
     res.json({ pending, recent });
   } catch (e) {
     res.status(500).json({ error: e.message });

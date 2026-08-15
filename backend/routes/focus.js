@@ -59,7 +59,11 @@ function _buildFingerprint(ctx) {
     ctx.dismissCount || 0,
     engine.getSuppressionFingerprint(),
     // SARA actions state (changes when action approved/rejected)
-    (() => { try { return require('../db/database').getPendingSaraActions().length; } catch { return 0; } })(),
+    // Explicit limit: the default is 10, so an unlimited-looking .length
+    // saturates and the fingerprint stops changing once an 11th action is
+    // queued — the focus context then goes stale exactly when there is most
+    // waiting on it.
+    (() => { try { return require('../db/database').getPendingSaraActions(1000).length; } catch { return 0; } })(),
   ];
 
   return crypto.createHash('md5').update(parts.join('|')).digest('hex').substring(0, 12);

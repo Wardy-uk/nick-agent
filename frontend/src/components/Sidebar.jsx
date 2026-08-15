@@ -6,6 +6,11 @@ const PRIMARY_ITEMS = [
   { id: 'briefing',   label: 'Briefing',  icon: '◉' },
   { id: 'chat',       label: 'Ask',       icon: '›' },
   { id: 'capture',    label: 'Capture',   icon: '+' },
+  // Primary, not under MORE: MORE is collapsed by default, so a badge there is
+  // invisible until you already know to look — and this is the queue holding
+  // outbound email waiting on a second approval. An approval surface nobody can
+  // find is the hole it was built to close.
+  { id: 'actions',    label: 'Actions',   icon: '✓' },
 ];
 
 const SECONDARY_ITEMS = [
@@ -60,6 +65,7 @@ function useTimeHighlight() {
 
 export default function Sidebar({ activeView, onNavigate, open }) {
   const [importsCount, setImportsCount] = useState(0);
+  const [actionsCount, setActionsCount] = useState(0);
 
   const [moreOpen, setMoreOpen] = useState(() => {
     try { return localStorage.getItem('sidebar_more_open') === 'true'; }
@@ -84,6 +90,13 @@ export default function Sidebar({ activeView, onNavigate, open }) {
       fetch(apiUrl('/api/imports/pending'))
         .then(res => res.json())
         .then(data => setImportsCount(data.count || 0))
+        .catch(() => {});
+
+      // The badge is the discovery mechanism: a queued draft reply is invisible
+      // otherwise, and it was for a day.
+      fetch(apiUrl('/api/actions'))
+        .then(res => res.json())
+        .then(data => setActionsCount((data.pending || []).length))
         .catch(() => {});
     }
 
@@ -110,6 +123,9 @@ export default function Sidebar({ activeView, onNavigate, open }) {
         {item.label}
         {item.id === 'imports' && importsCount > 0 && (
           <span className="sidebar-badge">{importsCount}</span>
+        )}
+        {item.id === 'actions' && actionsCount > 0 && (
+          <span className="sidebar-badge">{actionsCount}</span>
         )}
 
       </span>
