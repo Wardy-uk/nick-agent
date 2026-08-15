@@ -192,7 +192,72 @@ function buildChaseMessage(item) {
   ].join('\n');
 }
 
+/**
+ * Populate from meeting notes already on disk.
+ *
+ * Needed because the live path only fires for notes that are new or changed:
+ * `action-candidates` skips anything whose content hash it has already
+ * reviewed, so every historical note is invisible to it. Without this, the
+ * feature starts empty and only learns about commitments made from today —
+ * which is the least useful day to start.
+ *
+ * Reads only. `extractMeetingActions` records waiting-on items as a side
+ * effect; the task-candidate half is not touched, so this cannot promote
+ * anything into the task list or the approval queue.
+ */
+function backfill({ days = 120, limit = 500 } = {}) {
+  const fs = require('fs');
+  const path = require('path');
+
+  const vault = process.env.OBSIDIAN_VAULT_PATH;
+  if (!vault) return { scanned: 0, reason: 'no vault path' };
+
+  const meetingsDir = path.join(vault, 'Meetings');
+  if (!fs.existsSync(meetingsDir)) return { scanned: 0, reason: 'no Meetings directory' };
+
+  const cutoff = Date.now() - days * 86400000;
+  const files = [];
+  const walk = (dir, depth = 0) => {
+    if (depth > 4 || files.length >= limit) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (files.length >= limit) return;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full, depth + 1); continue; }
+      if (!entry.name.endsWith('.md')) continue;
+      // Transcripts are raw speech — the action extractor is tuned for the
+      // structured "## Next Arrangements" blocks in summaries, not for prose.
+      if (full.toLowerCase().includes('transcript')) continue;
+      try {
+        if (fs.statSync(full).mtimeMs < cutoff) continue;
+      } catch { continue; }
+      files.push(full);
+    }
+  };
+  try { walk(meetingsDir); } catch (e) {
+    return { scanned: 0, reason: e.message };
+  }
+
+  const before = list({ status: 'all' }).length;
+  let scanned = 0;
+  const extract = require('./action-candidates').extractMeetingActions;
+
+  for (const full of files) {
+    try {
+      const text = fs.readFileSync(full, 'utf-8');
+      const relativePath = path.relative(vault, full).replace(/\\/g, '/');
+      extract(text, relativePath);
+      scanned++;
+    } catch (e) {
+      console.warn('[WaitingOn] Backfill skipped', full, e.message);
+    }
+  }
+
+  const after = list({ status: 'all' }).length;
+  console.log(`[WaitingOn] Backfill: ${scanned} note(s), ${after - before} new item(s)`);
+  return { scanned, added: after - before, total: after };
+}
+
 module.exports = {
   record, list, byPerson, resolve, markChased, queueChase, buildChaseMessage,
-  STALE_DAYS, _key,
+  backfill, STALE_DAYS, _key,
 };

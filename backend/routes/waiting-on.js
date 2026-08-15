@@ -32,6 +32,18 @@ router.get('/by-person', (req, res) => {
   }
 });
 
+// POST /api/waiting-on/backfill — populate from meeting notes already on disk.
+// The live path only sees new or changed notes, so without this the feature
+// starts empty. Read-only over the vault; records nothing but waiting-on items.
+router.post('/backfill', (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.body?.days, 10) || 120, 1), 365);
+    res.json(require('../services/waiting-on').backfill({ days }));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/:key/chase', (req, res) => {
   try {
     const result = waitingOn.queueChase(decodeURIComponent(req.params.key));
