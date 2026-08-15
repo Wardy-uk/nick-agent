@@ -204,11 +204,22 @@ escalation and first-drafts are **the NT support queue**. They only share a word
 
 ## Build order — BA has landed, this is the plan
 
-**STATUS 15 Aug 16:20 — steps 1–3 DONE and live (NOVA `7a6655a`, NEURO `006ca71`).
-Step 4's migration is done; its UI is not.** Escalation reaches NOVA over the
+**STATUS 15 Aug 17:30 — steps 1–4 DONE and live (NOVA `7a6655a`, NEURO `006ca71`,
+`2129d7b`…`d1a79a6`). Resume at step 5, Teams.** Escalation reaches NOVA over the
 **NEURO bridge**, not the `@sara` service account — that account's password did
 not exist anywhere, and the bridge is hardcoded to Nick so attribution is honest.
-Verified end to end on NT-28075. Resume at the chasing UI (Q10–Q12).
+Verified end to end on NT-28075.
+
+Step 4's UI shipped as `components/WaitingOn.jsx` on the People board and in
+PersonDetail, plus read-only enrichment in `_buildPrep` rendered by `sara/app`
+MeetingPrep. Verified on the running Pi at 390×844: 287/29/107d, no horizontal
+overflow, every 1-2-1 in the week carries the right person's list.
+
+**One thing is still untested and it is the important one: the chase executor
+has never actually run.** `queueChase` → pending `sara_action` → approve →
+`contact-directory.resolveName` (must return `resolved`, nothing weaker) →
+`email-sender.sendMail`. Every step is built; none has fired. Approving one real
+chase is the test.
 
 1. ~~**`reason_kind` migration**~~ — DONE, verified: 8 urgency reasons live. (NOVA, **needs Nick's explicit OK before running** per the
    Azure SQL rule) — column on `escalation_reasons` + seed the five urgency codes with
@@ -219,8 +230,12 @@ Verified end to end on NT-28075. Resume at the chasing UI (Q10–Q12).
 3. **NEURO capture surface** — a chat tool and a SARA mobile route calling NOVA directly
    (decided: direct, not via n8n). NEURO needs a service identity; NOVA's routes are
    JWT-guarded by role, and `escalated_by` reads from that token.
-4. **waiting-on KV→table migration** (Q13) — then the **People board + 1-2-1 prep UI**
-   (Q10–Q12), pull-only (Q14).
+4. ~~**waiting-on KV→table migration** (Q13) — then the **People board + 1-2-1 prep UI**
+   (Q10–Q12), pull-only (Q14).~~ — DONE. Note for anyone extending it: `waiting_on`
+   stores a canonical FIRST name and nothing else, so any match against a full name
+   must go through `entities.getRoster().firstNames` (unambiguous in `People/` AND the
+   full name agrees). Matching the bare first name put one Lucy's 16 commitments on
+   four Lucys and Chris Middleton's 31 on a Chris Smith.
 5. **Teams, both paths** (Q8) — fail-soft, config-gated, no code change needed when
    consent lands. Raise the `ChatMessage.Send` admin consent request early so it's queued
    while the rest is built.
