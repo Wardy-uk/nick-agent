@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiUrl } from '../api';
 import PersonDetail from './PersonDetail';
+import WaitingOn from './WaitingOn';
 import './PeopleBoard.css';
 
 // Current direct reports, grouped for display. Leavers and people who move to
@@ -932,6 +933,11 @@ export default function PeopleBoard() {
           </button>
         )}
       </div>
+
+      {/* What the team owes Nick. Grouped by person, worst offender first — and
+          deliberately above the roster, because it is the thing you act on.
+          Covers everyone the meeting notes mention, not just direct reports. */}
+      <WaitingOn />
 
       <div className="people-header">
         <h2 className="people-title">Team</h2>

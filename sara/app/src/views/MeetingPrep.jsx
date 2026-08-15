@@ -52,6 +52,21 @@ export default function MeetingPrep() {
                 <div className="mp__person" key={i}>
                   <div className="mp__person-name">{a.name}{a.role ? <span className="mp__role"> · {a.role}</span> : ''}</div>
                   {a.recentNotes && <div className="mp__person-notes">{a.recentNotes}</div>}
+                  {/* What they owe Nick. Read-only on purpose — chasing needs an
+                      approval step, and that lives in NEURO's People board. */}
+                  {a.waitingOn?.length > 0 && (
+                    <div className="mp__owes">
+                      <div className="mp__owes-h">Owes you ({a.waitingOn.length})</div>
+                      {a.waitingOn.map((w, j) => (
+                        <div className="mp__owes-item" key={j}>
+                          <span className="mp__owes-text">{w.text}</span>
+                          <span className={`mp__owes-age${w.stale ? ' stale' : ''}`}>
+                            {w.ageDays}d{w.chaseCount > 0 ? ` · chased ${w.chaseCount}×` : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

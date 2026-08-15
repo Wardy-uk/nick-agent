@@ -338,7 +338,41 @@ function _buildPrep(meeting) {
     return true;
   }).slice(0, 5);
 
-  // 6. Generate suggested topics
+  // 6. What each attendee still owes Nick.
+  //
+  // This is the surface that matters: "what does Naomi owe me" is a 1-2-1
+  // question, not a dashboard question, and prep is the last moment it can be
+  // answered before you walk in. Read-only — chasing, resolving and snoozing
+  // live on the People board, because a chase must be approved before it sends.
+  //
+  // waiting-on canonicalises to a capitalised FIRST name, so that is what it is
+  // keyed on here; `list()` compares case-insensitively either way.
+  try {
+    const waitingOn = require('../services/waiting-on');
+    for (const att of prep.attendees) {
+      const first = String(att.name || '').trim().split(/\s+/)[0];
+      if (!first) continue;
+      // Snoozed means "they told me a date" — surfacing it before that date is
+      // exactly the nagging snooze exists to stop.
+      const open = waitingOn.list({ status: 'open', person: first }).filter(i => !i.snoozed);
+      if (!open.length) continue;
+      att.waitingOn = open.map(i => ({
+        key: i.key,
+        text: i.text,
+        ageDays: i.ageDays,
+        stale: i.stale,
+        chaseCount: i.chaseCount || 0,
+        sourceDate: i.sourceDate,
+      }));
+      prep.suggestedTopics.push(
+        `${open.length} outstanding from ${first} — oldest ${open[0].ageDays}d: "${open[0].text.slice(0, 60)}"`
+      );
+    }
+  } catch (e) {
+    console.warn('[MeetingPrep] waiting-on lookup failed:', e.message);
+  }
+
+  // 7. Generate suggested topics
   const isReview = (meeting.subject || '').toLowerCase().match(/review|probation|performance|1-2-1|121|kit/);
 
   for (const att of prep.attendees) {
@@ -366,7 +400,7 @@ function _buildPrep(meeting) {
     prep.suggestedTopics.push('Agree next actions and timeline');
   }
 
-  // 7. Checklist (context-aware)
+  // 8. Checklist (context-aware)
   prep.checklist = ['Review agenda'];
   if (prep.attendees.length > 0) prep.checklist.push('Check attendee vault notes');
   if (prep.recentDecisions.length > 0) prep.checklist.push('Review recent decisions');

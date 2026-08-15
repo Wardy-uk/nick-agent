@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiUrl } from '../api';
+import WaitingOn from './WaitingOn';
 import './PersonDetail.css';
 
 export default function PersonDetail({ name, onClose }) {
@@ -44,6 +45,10 @@ export default function PersonDetail({ name, onClose }) {
               {fm.cadence && <span className="pd-info">Cadence: {fm.cadence}</span>}
               {fm.contract && <span className="pd-info">{fm.contract}</span>}
             </div>
+
+            {/* What they owe Nick. Keyed on the first name, which is what
+                waiting-on canonicalises to — renders nothing when they're clear. */}
+            <WaitingOn person={name.split(' ')[0]} embedded />
 
             {/* Vault note sections */}
             {sections.length > 0 && (

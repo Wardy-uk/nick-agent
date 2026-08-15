@@ -20,6 +20,37 @@
 .mp__role { color: var(--muted); font-weight: 400; }
 .mp__person-notes { color: var(--muted); font-size: 0.82rem; margin-top: 0.15rem; }
 
+/* "Owes you" — the waiting-on items for this attendee. Read-only here; the
+   actions are on NEURO's People board because a chase needs approval first. */
+.mp__owes {
+  margin-top: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--panel-2);
+  border-radius: 8px;
+}
+.mp__owes-h {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #ffd08a;
+  margin-bottom: 0.3rem;
+}
+.mp__owes-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.18rem 0;
+}
+.mp__owes-text { font-size: 0.84rem; min-width: 0; }
+.mp__owes-age {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.mp__owes-age.stale { color: #ffd08a; }
+
 .mp__list { margin: 0; padding-left: 1.1rem; }
 .mp__list li { margin: 0.2rem 0; font-size: 0.9rem; }
 

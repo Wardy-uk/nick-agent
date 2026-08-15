@@ -1,0 +1,256 @@
+/* Waiting on — what other people owe Nick. Lives inside the People board and the
+   person overlay, so it never becomes a .main-panel flex child itself; the
+   height-stretch/clipping trap fixed in 923c3b8 does not apply here. */
+
+.waiting-on {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+}
+
+/* Inside the person overlay the surrounding sections already provide the frame,
+   so only the header and the rows carry over. */
+.waiting-on.wo-embedded {
+  margin-bottom: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+}
+
+.wo-error {
+  border-left-color: var(--danger);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ─────────────────────────────────────────────────────────── header */
+
+.wo-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.wo-title {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--warning);
+}
+
+.wo-summary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.wo-toggle {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.wo-toggle:hover { color: var(--accent); }
+
+/* ─────────────────────────────────────────────────────── per person */
+
+.wo-groups { display: flex; flex-direction: column; gap: 6px; }
+
+.wo-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.wo-group-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.wo-group-head:disabled { cursor: default; }
+.wo-group-head:hover:not(:disabled) { background: rgba(255, 255, 255, 0.025); }
+
+.wo-group-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.wo-caret { color: var(--text-muted); font-size: 10px; }
+
+.wo-group-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.wo-group-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-secondary);
+}
+
+/* ─────────────────────────────────────────────────────────── a row */
+
+.wo-items {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.wo-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.wo-row:last-child { border-bottom: none; }
+.wo-row.is-snoozed { opacity: 0.55; }
+
+.wo-row-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+
+.wo-row-text {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.wo-row-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-muted);
+}
+
+.wo-age { color: var(--text-secondary); }
+.wo-age.stale { color: var(--warning); }
+.wo-chased { color: var(--accent); }
+.wo-snoozed-tag { color: var(--text-muted); font-style: italic; }
+
+.wo-row-actions,
+.wo-snooze {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.wo-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 4px 9px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wo-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--text-primary); }
+.wo-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.wo-btn-ok:hover:not(:disabled) { border-color: var(--success); color: var(--success); }
+.wo-btn-ghost { color: var(--text-muted); }
+
+.wo-date {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 3px 6px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.wo-flash {
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--success);
+  background: rgba(64, 201, 122, 0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.wo-flash.bad { color: var(--danger); background: rgba(224, 85, 85, 0.07); }
+
+.wo-more {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.wo-more:hover { color: var(--accent); }
+
+/* ───────────────────────────────────────────────────────── mobile */
+
+/* 768px matches the app's own breakpoint (App.css), where the bottom nav
+   appears. Four actions plus the text will not sit side by side at ~360px, so
+   the row stacks and the buttons get a full-width strip of their own. */
+@media (max-width: 768px) {
+  .waiting-on { padding: 12px; }
+
+  .wo-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .wo-row-actions,
+  .wo-snooze {
+    justify-content: flex-start;
+  }
+
+  /* Touch targets: 10px text in a 4px-padded button is not tappable. */
+  .wo-btn { padding: 7px 12px; font-size: 11px; }
+  .wo-date { padding: 6px 8px; font-size: 11px; }
+
+  .wo-snooze { flex-wrap: wrap; }
+  .wo-date { flex: 1 1 130px; }
+
+  .wo-head { row-gap: 4px; }
+  .wo-toggle { margin-left: 0; }
+}
