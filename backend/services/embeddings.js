@@ -8,10 +8,16 @@ const db = require('../db/database');
 const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
 const exclusions = require('./vault-exclusions');
 const MAX_CHUNK_CHARS = 1500; // keep well within token limits
-// A Plaud transcript can run to tens of thousands of characters. Indexing all
-// of it is right; letting one three-hour meeting own 60 rows of the index is
-// not. Truncation past this point is logged, never silent.
-const MAX_CHUNKS_PER_FILE = 20;
+// Bounds cost on genuine outliers, nothing more. It is NOT there to stop a long
+// note dominating results — semanticSearch folds to the best chunk per file,
+// which solves that properly.
+//
+// Measured against the live vault (1,091 indexable notes, 15 Aug): median 4
+// chunks, p90 20, p99 60, max 151. A cap of 20 therefore truncated 107 files —
+// the top 10%, which is precisely the population this whole fix exists for, and
+// would have reintroduced the same bug at 30k characters instead of 1,500. At
+// 60 it catches 10 files and costs 21% more chunks. Truncation is logged.
+const MAX_CHUNKS_PER_FILE = 60;
 const BATCH_SIZE = 16; // chunks per Voyage API call
 const BATCH_DELAY_MS = 21000; // 21s between batches (free tier = 3 RPM)
 

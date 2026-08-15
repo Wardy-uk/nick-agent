@@ -39,9 +39,13 @@ test('trivial fragments are dropped rather than embedded', () => {
   assert.equal(chunkText('ok').length, 0);
 });
 
-test('there is a stated bound on chunks per file', () => {
-  // A three-hour transcript should be indexed, not allowed to own the index.
-  assert.ok(MAX_CHUNKS_PER_FILE > 1 && MAX_CHUNKS_PER_FILE <= 50);
+test('the chunk cap sits above the vault p90, not on it', () => {
+  // Measured 15 Aug: median 4 chunks, p90 20, p99 60. A cap at 20 truncated the
+  // top 10% of notes — the long meeting transcripts this fix exists for. The
+  // bound is for cost on outliers; result dominance is handled by the
+  // best-chunk-per-file fold in semanticSearch, not by this number.
+  assert.ok(MAX_CHUNKS_PER_FILE >= 60, 'a cap at or below p90 re-creates the bug it was meant to bound');
+  assert.ok(MAX_CHUNKS_PER_FILE <= 200, 'but it is still a bound');
 });
 
 test('embedding readiness is gated on the key embeddings actually use', () => {
