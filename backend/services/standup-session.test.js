@@ -144,7 +144,9 @@ test('finishing writes the note and closes the session', () => {
   s.state = 'ready';
   session.save(s);
 
-  const result = session.finish('standup');
+  // Explicit date, like every other call in this file. Without it finish()
+  // resolved today internally and this passed only on 14 Aug itself.
+  const result = session.finish('standup', '2026-08-14');
   assert.equal(result.ok, true);
   assert.equal(session.load('standup', '2026-08-14').state, 'finished');
   assert.match(require('./obsidian').readTodayDailyNote() || '', /Reply to the Abdi escalation/);

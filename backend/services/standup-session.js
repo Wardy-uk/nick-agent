@@ -535,8 +535,8 @@ async function reply(kind, message) {
 }
 
 /** Resume today's session, if there is one. */
-function resume(kind) {
-  return load(kind);
+function resume(kind, dateKey = _today()) {
+  return load(kind, dateKey);
 }
 
 // ── Finish ───────────────────────────────────────────────────────────────────
@@ -621,8 +621,12 @@ function _renderEodSection(session) {
  * calling set_focus, Nick should still be able to end the conversation and keep
  * what was agreed. A ritual you cannot exit is worse than one that ends untidily.
  */
-function finish(kind) {
-  const session = load(kind);
+// dateKey is explicit for the same reason load() and clear() take one: without
+// it this resolved "today" internally, so anything addressing a specific day
+// silently operated on a different one. A test pinned to a fixed date passed
+// only while that date happened to be today, and started failing at midnight.
+function finish(kind, dateKey = _today()) {
+  const session = load(kind, dateKey);
   if (!session) throw new Error('No session to finish');
   if (session.state === 'finished') return { ok: true, alreadyFinished: true, session };
 
