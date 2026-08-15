@@ -196,3 +196,46 @@ test('background work that is not prose falls back to LOCAL, not the cloud', asy
     }
   }
 });
+
+// Pi 5's Ollama is the interactive box. Measured on 15 Aug: triage landing there
+// ran p50 48s / p95 119s and still failed 32 of 76 calls, while blocking chat
+// behind the single-request semaphore. Skipping is strictly better, and safe now
+// that the skip is recorded and alerted rather than silent.
+test('heavy background work skips rather than grinding the interactive Ollama', async () => {
+  const pi4 = require('./pi4-worker-client');
+  const openrouter = require('./providers/openrouter-provider');
+  const ollama = require('./providers/ollama-provider');
+
+  const saved = {
+    run: pi4.runTask, enabled: pi4.isEnabled, skip: pi4.shouldSkip,
+    configured: openrouter.isConfigured, generate: openrouter.generate,
+    ollamaGen: ollama.generate,
+    env: { ...process.env },
+  };
+
+  pi4.isEnabled = () => true;
+  pi4.shouldSkip = () => false;
+  pi4.runTask = async () => { throw new Error('fetch failed'); };
+  // Cloud unavailable, local WORKING — the local model must still not be used.
+  openrouter.isConfigured = () => false;
+  let ollamaCalled = false;
+  ollama.generate = async () => { ollamaCalled = true; return 'local answer'; };
+
+  Object.assign(process.env, { AI_MODE: 'hybrid', OPENROUTER_ENABLED: 'false' });
+
+  try {
+    const result = await routing.runTask('email_triage', { prompt: 'x' });
+    assert.equal(ollamaCalled, false, 'must not fall through to the interactive box');
+    assert.equal(result.provider, 'none', 'skipping is the intended outcome');
+  } finally {
+    pi4.runTask = saved.run;
+    pi4.isEnabled = saved.enabled;
+    pi4.shouldSkip = saved.skip;
+    openrouter.isConfigured = saved.configured;
+    openrouter.generate = saved.generate;
+    ollama.generate = saved.ollamaGen;
+    for (const k of ['AI_MODE', 'OPENROUTER_ENABLED']) {
+      if (saved.env[k] === undefined) delete process.env[k]; else process.env[k] = saved.env[k];
+    }
+  }
+});

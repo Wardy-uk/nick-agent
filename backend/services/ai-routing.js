@@ -428,9 +428,20 @@ async function _runTaskInner(taskType, payload, options = {}) {
   // CLOUD_ON_WORKER_FALLBACK). Either way every tier stays in the list, so if
   // the preferred one is over budget or unreachable the work still gets done
   // rather than dropped — that dead-end is what this whole path exists to fix.
+  // Note the cloud-tier fallback deliberately ends WITHOUT ollama.
+  //
+  // Pi 5's Ollama is the interactive box: it serves chat and Focus, one request
+  // at a time behind a semaphore. Letting a triage payload land there blocked
+  // chat for up to two minutes AND still failed 32 times out of 76 — it paid
+  // the full cost of the attempt and mostly wasted it. Skipping is cheaper and
+  // self-healing: untriaged mail is still a candidate on the next pass.
+  //
+  // This reinstates a dead end, which is only acceptable because the silence
+  // that made the original one dangerous is fixed — the skip is recorded as
+  // provider "none", shown on the AI panel, and alerted on by the watchdog.
   const order = workerFellBack
     ? (CLOUD_ON_WORKER_FALLBACK.has(taskType)
-        ? ['openrouter', 'anthropic', 'openai', 'ollama']
+        ? ['openrouter', 'anthropic', 'openai']
         : ['ollama', 'openrouter', 'anthropic', 'openai'])
     : _providerOrder(taskType);
   // Whichever provider the policy puts first is the intended one; anything after
