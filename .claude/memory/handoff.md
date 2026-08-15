@@ -322,6 +322,13 @@ agenda triage + decline/propose.
    `skipAfter`/`lastFailure` in `/api/status`, frontend rebuilt and serving
    `index-8r4a6eOP.js`.
 
+### → Items 7, 10, 11 have their own brief
+
+**`.claude/memory/workstream-escalation-and-chasing.md`** — NOVA manual escalation, Teams,
+commitment-chasing UI and escalation first-drafts. BA first (18 questions, several with an
+expensive wrong answer), then a build order. All the verified ground truth is in there so
+none of it gets re-derived.
+
 ### Build queue (sequenced in the plan)
 
 7. NOVA manual escalation — `escalation_log` already exists AND already records CC→T2
