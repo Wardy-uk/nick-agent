@@ -2,6 +2,9 @@
 
 Personal AI-powered productivity system. Aggregates Jira queue, Obsidian vault, Microsoft 365 (calendar/tasks/email), Strava, location tracking, and AI chat into a single PWA. Runs on Raspberry Pi 5 (16GB) via Tailscale, installed as PWA on iPhone.
 
+## NEURO vs SARA — the division of labour (Nick, 15 Aug 2026)
+**NEURO is the brain**, and the NEURO app is Nick's *direct* access to it when he goes looking. **SARA is the J.A.R.V.I.S. layer**: she uses NEURO's brain and **comes to him** — prompts, pushes, helps — and is the visual/audio route for interacting with the brain conversationally rather than by navigating a UI. Neither replaces the other, and **nothing in `sara/` is scaffolding to retire.** Practical consequences: `sara/app` (phone PWA) already talks DIRECTLY to the NEURO backend and never touches `sara/backend` — it is a NEURO client, so there is nothing to "fold in". `sara/backend` (:3005) exists to serve the **Pi 4 desk kiosk** (`sara/frontend`), which is the *ambient* half of SARA. Judge any SARA change by whether it helps her come to Nick; judge any NEURO change by whether it makes the brain better or the direct access clearer.
+
 ## Tech Stack
 - **Backend:** Express 4 + Node.js (CommonJS, `require()` — NOT ESM)
 - **Frontend:** React 19 + CSS modules (per-component `.css` files) + Vite
