@@ -45,9 +45,23 @@ router.post('/backfill', (req, res) => {
   }
 });
 
-router.post('/:key/chase', (req, res) => {
+// Async since 15 Aug: the recipient is resolved at QUEUE time so the approval
+// screen can show it, rather than inside the executor after approval.
+router.post('/:key/chase', async (req, res) => {
   try {
-    const result = waitingOn.queueChase(decodeURIComponent(req.params.key));
+    const result = await waitingOn.queueChase(decodeURIComponent(req.params.key));
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/waiting-on/chase/:actionId/recipient — retarget a queued chase.
+// Scoped to chase_commitment deliberately; /api/actions/:id/approve stays a
+// plain approve with no general payload-editing door behind it.
+router.post('/chase/:actionId/recipient', (req, res) => {
+  try {
+    const result = waitingOn.setChaseRecipient(req.params.actionId, req.body?.email);
     res.status(result.ok ? 200 : 400).json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });

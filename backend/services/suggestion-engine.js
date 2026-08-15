@@ -431,20 +431,31 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
       if (!item) return { ok: false, detail: 'That waiting-on item no longer exists' };
       if (item.status !== 'open') return { ok: false, detail: `Already ${item.status} — nothing to chase` };
 
-      const directory = require('./contact-directory');
-      let resolved;
-      try {
-        resolved = await directory.resolveName(item.person);
-      } catch (e) {
-        return { ok: false, detail: `Could not look up ${item.person}: ${e.message}` };
-      }
-      // Never guess an address for a message that goes to a real person.
-      if (!resolved || resolved.status !== 'resolved' || !resolved.email) {
-        return { ok: false, detail: `No confident email for ${item.person} (${resolved?.status || 'unresolved'}) — add one to their People note` };
+      // The address is normally resolved and stored when the chase is QUEUED, so
+      // that the approval screen shows who it is going to. Prefer that over
+      // re-resolving here: re-resolving would silently discard a manual override
+      // and send to whoever the directory currently guesses, which is precisely
+      // the case the override exists for.
+      let email = payload.to?.email || null;
+      if (!email) {
+        // Older queued actions predate the stored address; fall back rather than
+        // stranding them.
+        const directory = require('./contact-directory');
+        let resolved;
+        try {
+          resolved = await directory.resolveName(item.person);
+        } catch (e) {
+          return { ok: false, detail: `Could not look up ${item.person}: ${e.message}` };
+        }
+        // Never guess an address for a message that goes to a real person.
+        if (!resolved || resolved.status !== 'resolved' || !resolved.email) {
+          return { ok: false, detail: `No confident email for ${item.person} (${resolved?.status || 'unresolved'}) — set one on the chase, or add it to their People note` };
+        }
+        email = resolved.email;
       }
 
       const result = await require('./email-sender').sendMail({
-        to: [{ name: item.person, email: resolved.email }],
+        to: [{ name: item.person, email }],
         subject: `Quick one — ${item.text.slice(0, 60)}`,
         body: payload.body || waitingOn.buildChaseMessage(item),
       });
@@ -457,7 +468,9 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
       }
 
       waitingOn.markChased(item.key);
-      return { ok: true, detail: `Asked ${item.person} about "${item.text.slice(0, 50)}"`, navigate: 'people' };
+      // Name the address in the result — "sent" without saying where is not a
+      // useful confirmation when the address was editable.
+      return { ok: true, detail: `Asked ${item.person} (${email}) about "${item.text.slice(0, 50)}"`, navigate: 'people' };
     }
 
     // Ask the organiser what a meeting is for. An email to a real colleague —

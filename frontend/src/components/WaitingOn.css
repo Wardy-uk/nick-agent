@@ -89,11 +89,63 @@
 }
 
 .wo-queued-to {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-muted);
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
+
+/* The address is the part worth reading twice, so it is not muted like the
+   label around it. */
+.wo-queued-email {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.wo-queued-noemail { color: var(--warning); }
+.wo-queued-manual { color: var(--accent); font-style: italic; }
+
+.wo-queued-edit {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.wo-queued-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 6px 9px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+}
+.wo-queued-input:focus { outline: none; border-color: var(--accent); }
+
+.wo-queued-err {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--danger);
+  margin-bottom: 8px;
+}
+
+.wo-queued-flash {
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--success);
+  background: rgba(64, 201, 122, 0.1);
+}
+.wo-queued-flash.bad { color: var(--danger); background: rgba(224, 85, 85, 0.1); }
 
 /* The full text, wrapped — an email to a direct report is not something to
    approve from a one-line summary. */
@@ -310,4 +362,9 @@
 
   .wo-head { row-gap: 4px; }
   .wo-toggle { margin-left: 0; }
+
+  /* "Approve & send to name@nurtur.tech" is too long for one line at 360px —
+     let it wrap rather than overflow the card. */
+  .wo-queued .wo-btn { white-space: normal; text-align: left; }
+  .wo-queued-input { flex: 1 1 100%; padding: 9px 10px; }
 }

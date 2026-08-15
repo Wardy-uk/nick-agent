@@ -124,24 +124,47 @@ test('grouping by person is ordered by who has kept you waiting longest', () => 
   assert.equal(groups[0].oldestDays, 12);
 });
 
-test('chasing queues for approval and sends nothing', () => {
+test('chasing queues for approval and sends nothing', async () => {
   waitingOn.record({ person: 'Abdi', text: 'Send the SLA figures' });
   const key = waitingOn.list()[0].key;
 
-  const result = waitingOn.queueChase(key);
+  const result = await waitingOn.queueChase(key);
   assert.equal(result.ok, true);
   assert.equal(result.sent, false);
   assert.ok(result.queuedActionId);
 
   const pending = db.getPendingSaraActions(50);
-  assert.ok(pending.some(a => a.id === result.queuedActionId && a.type === 'chase_commitment'));
+  const queued = pending.find(a => a.id === result.queuedActionId);
+  assert.ok(queued && queued.type === 'chase_commitment');
+  // The words AND the address are stored at queue time, so the approval screen
+  // shows what will actually be sent and to whom rather than reconstructing it.
+  assert.match(queued.payload.body, /Send the SLA figures/);
+  assert.ok(queued.payload.to, 'the recipient is resolved and recorded up front');
 });
 
-test('a resolved item cannot be chased', () => {
+test('a resolved item cannot be chased', async () => {
   waitingOn.record({ person: 'Abdi', text: 'Send the SLA figures' });
   const key = waitingOn.list()[0].key;
   waitingOn.resolve(key, 'done');
-  assert.equal(waitingOn.queueChase(key).ok, false);
+  assert.equal((await waitingOn.queueChase(key)).ok, false);
+});
+
+test('the recipient can be retargeted before approval, and only before', async () => {
+  waitingOn.record({ person: 'Abdi', text: 'Send the SLA figures' });
+  const { queuedActionId: id } = await waitingOn.queueChase(waitingOn.list()[0].key);
+
+  assert.equal(waitingOn.setChaseRecipient(id, 'not-an-address').ok, false);
+
+  const ok = waitingOn.setChaseRecipient(id, ' nickw@nurtur.tech ');
+  assert.equal(ok.ok, true);
+  assert.equal(ok.to.email, 'nickw@nurtur.tech');
+  // `manual` is what tells the executor this was chosen, not guessed — a guess
+  // has to clear the `resolved` gate, a choice does not.
+  assert.equal(ok.to.source, 'manual');
+  assert.equal(db.getSaraAction(id).payload.to.email, 'nickw@nurtur.tech');
+
+  db.updateSaraActionStatus(id, 'executed');
+  assert.equal(waitingOn.setChaseRecipient(id, 'someone@nurtur.tech').ok, false);
 });
 
 test('the chase asks where something got to, and never implies they failed', () => {

@@ -867,6 +867,19 @@ function getSaraAction(id) {
   return row;
 }
 
+/**
+ * Rewrite a pending action's payload. Deliberately refuses anything that is not
+ * still pending — editing an action after it has executed would rewrite history
+ * rather than the thing about to happen.
+ */
+function updateSaraActionPayload(id, payload) {
+  const info = run(
+    `UPDATE sara_actions SET payload = ? WHERE id = ? AND status = 'pending'`,
+    [JSON.stringify(payload), id]
+  );
+  return info.changes > 0;
+}
+
 function updateSaraActionStatus(id, status) {
   run(`UPDATE sara_actions SET status = ?, resolved_at = datetime('now') WHERE id = ?`, [status, id]);
 }
@@ -990,5 +1003,6 @@ module.exports = {
   getPendingSaraActions,
   getSaraAction,
   updateSaraActionStatus,
+  updateSaraActionPayload,
   getRecentSaraActions,
 };

@@ -106,6 +106,83 @@ function WaitingRow({ item, onAct, busy }) {
 }
 
 /**
+ * A chase waiting to be approved. Shows the exact words and the exact address —
+ * both were resolved and stored when the chase was queued, so this is what will
+ * actually go out, not a reconstruction of it.
+ *
+ * The address is editable because the directory resolves a canonical FIRST name
+ * and can be wrong or ambiguous ("Chris" comes back ambiguous), and the only one
+ * who knows which Chris is which is Nick.
+ */
+function QueuedChase({ action, busy, onResolve, onRetarget }) {
+  const to = action.payload?.to || {};
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(to.email || '');
+  const [err, setErr] = useState(null);
+
+  const save = async () => {
+    setErr(null);
+    const result = await onRetarget(draft);
+    if (result?.ok) setEditing(false);
+    else setErr(result?.error || 'Could not update the address');
+  };
+
+  return (
+    <div className="wo-queued-item">
+      <div className="wo-queued-to">
+        <span>To {action.payload?.person}</span>
+        {!editing && (
+          <>
+            {to.email
+              ? <span className="wo-queued-email">{to.email}</span>
+              : <span className="wo-queued-noemail">
+                  no address ({to.status || 'unresolved'}) — set one before sending
+                </span>}
+            <button className="wo-btn wo-btn-ghost" onClick={() => { setDraft(to.email || ''); setEditing(true); }}>
+              {to.email ? 'Change' : 'Set address'}
+            </button>
+            {to.source === 'manual' && <span className="wo-queued-manual">you set this</span>}
+          </>
+        )}
+      </div>
+
+      {editing && (
+        <div className="wo-queued-edit">
+          <input
+            type="email"
+            className="wo-queued-input"
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            placeholder="name@nurtur.tech"
+            spellCheck={false}
+            autoCapitalize="none"
+          />
+          <button className="wo-btn" onClick={save} disabled={!draft.trim()}>Save</button>
+          <button className="wo-btn wo-btn-ghost" onClick={() => { setEditing(false); setErr(null); }}>Cancel</button>
+        </div>
+      )}
+      {err && <div className="wo-queued-err">{err}</div>}
+
+      <pre className="wo-queued-body">{action.payload?.body || '(no draft stored — approving will build one)'}</pre>
+
+      <div className="wo-row-actions">
+        <button
+          className="wo-btn wo-btn-ok"
+          disabled={busy || editing || !to.email}
+          title={!to.email ? 'Set an address first' : `Sends to ${to.email}`}
+          onClick={() => onResolve('approve')}
+        >
+          {busy ? 'Sending…' : to.email ? `Approve & send to ${to.email}` : 'Approve & send'}
+        </button>
+        <button className="wo-btn wo-btn-ghost" disabled={busy} onClick={() => onResolve('reject')}>
+          Discard
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * @param {string}  [person]      canonical first name — renders one person only, unexpanded
  * @param {boolean} [embedded]    drop the section header (inside a person overlay)
  */
@@ -121,6 +198,7 @@ export default function WaitingOn({ person = null, embedded = false }) {
 
   const [queued, setQueued] = useState([]);       // pending chase_commitment actions
   const [actingId, setActingId] = useState(null);
+  const [queuedFlash, setQueuedFlash] = useState(null);   // outcome of the last approve
 
   const load = useCallback(() => {
     fetch(apiUrl('/api/waiting-on/by-person'))
@@ -139,11 +217,38 @@ export default function WaitingOn({ person = null, embedded = false }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const retarget = async (id, email) => {
+    try {
+      const res = await fetch(apiUrl(`/api/waiting-on/chase/${id}/recipient`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (data.ok) load();
+      return data;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  };
+
   const resolveQueued = async (id, verb) => {
     setActingId(id);
+    setQueuedFlash(null);
     try {
-      await fetch(apiUrl(`/api/actions/${id}/${verb}`), { method: 'POST' });
-    } catch { /* the reload below tells the truth either way */ }
+      const res = await fetch(apiUrl(`/api/actions/${id}/${verb}`), { method: 'POST' });
+      const data = await res.json();
+      // A failed send marks the action `failed`, so it drops straight out of
+      // pending and the card just vanishes. Say what happened, or "it didn't
+      // send" is indistinguishable from "it sent".
+      if (verb === 'approve') {
+        setQueuedFlash(data.ok
+          ? { ok: true, text: data.detail || 'Sent' }
+          : { ok: false, text: data.detail || data.error || 'Send failed' });
+      }
+    } catch (e) {
+      setQueuedFlash({ ok: false, text: e.message });
+    }
     setActingId(null);
     load();
   };
@@ -207,7 +312,7 @@ export default function WaitingOn({ person = null, embedded = false }) {
   if (error) return <div className="waiting-on wo-error">Waiting-on unavailable: {error}</div>;
   if (!groups) return null;
 
-  if (visible.length === 0 && myQueued.length === 0) {
+  if (visible.length === 0 && myQueued.length === 0 && !queuedFlash) {
     if (person) return null;                        // person overlay: silent when clear
     if (snoozedCount > 0) {
       return (
@@ -248,24 +353,26 @@ export default function WaitingOn({ person = null, embedded = false }) {
           email to a direct report, so the exact words are on screen before the
           approve button, not a summary of them. The body was built and stored
           when the chase was queued, so this IS what goes out. */}
-      {myQueued.length > 0 && (
+      {(myQueued.length > 0 || queuedFlash) && (
         <div className="wo-queued">
-          <div className="wo-queued-h">
-            {myQueued.length} chase{myQueued.length === 1 ? '' : 's'} waiting for you — nothing has been sent
-          </div>
-          {myQueued.map(a => (
-            <div key={a.id} className="wo-queued-item">
-              <div className="wo-queued-to">To {a.payload?.person}</div>
-              <pre className="wo-queued-body">{a.payload?.body || '(no draft stored — approving will build one)'}</pre>
-              <div className="wo-row-actions">
-                <button className="wo-btn wo-btn-ok" disabled={actingId === a.id} onClick={() => resolveQueued(a.id, 'approve')}>
-                  {actingId === a.id ? 'Sending…' : 'Approve & send'}
-                </button>
-                <button className="wo-btn wo-btn-ghost" disabled={actingId === a.id} onClick={() => resolveQueued(a.id, 'reject')}>
-                  Discard
-                </button>
-              </div>
+          {queuedFlash && (
+            <div className={`wo-queued-flash${queuedFlash.ok ? '' : ' bad'}`}>
+              {queuedFlash.ok ? '✓ ' : '✗ '}{queuedFlash.text}
             </div>
+          )}
+          {myQueued.length > 0 && (
+            <div className="wo-queued-h">
+              {myQueued.length} chase{myQueued.length === 1 ? '' : 's'} waiting for you — nothing has been sent
+            </div>
+          )}
+          {myQueued.map(a => (
+            <QueuedChase
+              key={a.id}
+              action={a}
+              busy={actingId === a.id}
+              onResolve={verb => resolveQueued(a.id, verb)}
+              onRetarget={email => retarget(a.id, email)}
+            />
           ))}
         </div>
       )}

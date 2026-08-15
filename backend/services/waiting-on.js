@@ -291,12 +291,29 @@ function markChased(key) {
  * automated chase to someone who works for you reads as surveillance. Nick
  * approves every one.
  */
-function queueChase(key) {
+async function queueChase(key) {
   const item = _get(key);
   if (!item) return { ok: false, error: 'No such item' };
   if (item.status !== 'open') return { ok: false, error: `Already ${item.status}` };
 
-  // The words are built HERE, at queue time, and stored on the action — the
+  // Resolve the address HERE rather than at send time, so the approval screen
+  // can show who it is actually going to. An address discovered only inside the
+  // executor is an address nobody ever saw before the email left. A failure to
+  // resolve is stored too, not thrown — it becomes a visible "set an address"
+  // on the card instead of an approve that silently does nothing.
+  let to = null;
+  try {
+    const r = await require('./contact-directory').resolveName(item.person);
+    to = {
+      email: r?.status === 'resolved' ? r.email : null,
+      status: r?.status || 'unresolved',
+      source: r?.status === 'resolved' ? 'directory' : null,
+    };
+  } catch (e) {
+    to = { email: null, status: 'lookup-failed', source: null, error: e.message };
+  }
+
+  // The words are built HERE too, at queue time, and stored on the action — the
   // executor already prefers `payload.body` over rebuilding. That means the
   // approval screen can show the exact text that will be sent rather than a
   // client-side reconstruction of it, which would be free to drift from the
@@ -309,11 +326,44 @@ function queueChase(key) {
       text: item.text,
       sourcePath: item.sourcePath,
       body: buildChaseMessage(item),
+      to,
     },
     `Ask ${item.person} about "${item.text.slice(0, 60)}" (${_ageDays(item.firstSeen)}d)`,
     0.8
   );
-  return { ok: true, queuedActionId: id, sent: false };
+  return { ok: true, queuedActionId: id, sent: false, to };
+}
+
+// Deliberately loose. This is a human typing a colleague's address they already
+// know, not a signup form — the job is to catch a slip, not to adjudicate RFC
+// 5322. Graph rejects anything genuinely malformed.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Point a queued chase at a different address before it is approved.
+ *
+ * The directory resolves a first name and can be wrong or ambiguous, and the
+ * only person who knows which Chris is which is Nick. An override is recorded
+ * as `source: 'manual'` so the executor can tell a chosen address from a guessed
+ * one — a guess still has to clear the `resolved` gate, a choice does not.
+ *
+ * Scoped to chase_commitment on purpose: `/api/actions/:id/approve` stays a
+ * plain approve, with no general "edit any pending action's payload" door.
+ */
+function setChaseRecipient(actionId, email) {
+  const action = db.getSaraAction(parseInt(actionId, 10));
+  if (!action) return { ok: false, error: 'No such action' };
+  if (action.type !== 'chase_commitment') return { ok: false, error: `That is a ${action.type}, not a chase` };
+  if (action.status !== 'pending') return { ok: false, error: `Already ${action.status}` };
+
+  const clean = String(email || '').trim();
+  if (!EMAIL_RE.test(clean)) return { ok: false, error: 'That does not look like an email address' };
+
+  const payload = { ...action.payload, to: { email: clean, status: 'resolved', source: 'manual' } };
+  if (!db.updateSaraActionPayload(action.id, payload)) {
+    return { ok: false, error: 'Could not update — it may have just been approved' };
+  }
+  return { ok: true, to: payload.to };
 }
 
 /**
@@ -400,6 +450,6 @@ function backfill({ days = 120, limit = 500 } = {}) {
 }
 
 module.exports = {
-  record, list, byPerson, resolve, snooze, markChased, queueChase,
+  record, list, byPerson, resolve, snooze, markChased, queueChase, setChaseRecipient,
   buildChaseMessage, backfill, migrateFromState, STALE_DAYS, _key,
 };
