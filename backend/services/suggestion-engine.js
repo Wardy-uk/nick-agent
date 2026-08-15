@@ -381,6 +381,44 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
       return { ok: true, detail: detail.join(' · '), navigate: 'todos' };
     }
 
+    // Ask someone where a commitment got to. Goes to a direct report, so it is
+    // approval-only by design: an automated chase to someone who works for you
+    // reads as surveillance, however politely it is worded.
+    case 'chase_commitment': {
+      const waitingOn = require('./waiting-on');
+      const item = waitingOn.list({ status: 'all' }).find(i => i.key === payload.waitingKey);
+      if (!item) return { ok: false, detail: 'That waiting-on item no longer exists' };
+      if (item.status !== 'open') return { ok: false, detail: `Already ${item.status} — nothing to chase` };
+
+      const directory = require('./contact-directory');
+      let resolved;
+      try {
+        resolved = await directory.resolveName(item.person);
+      } catch (e) {
+        return { ok: false, detail: `Could not look up ${item.person}: ${e.message}` };
+      }
+      // Never guess an address for a message that goes to a real person.
+      if (!resolved || resolved.status !== 'resolved' || !resolved.email) {
+        return { ok: false, detail: `No confident email for ${item.person} (${resolved?.status || 'unresolved'}) — add one to their People note` };
+      }
+
+      const result = await require('./email-sender').sendMail({
+        to: [{ name: item.person, email: resolved.email }],
+        subject: `Quick one — ${item.text.slice(0, 60)}`,
+        body: payload.body || waitingOn.buildChaseMessage(item),
+      });
+      if (!result.sent) {
+        const reasons = {
+          auth: 'Not signed in to Microsoft — reconnect 365.',
+          scope: 'Mail.Send not granted — re-consent to Microsoft.',
+        };
+        return { ok: false, detail: reasons[result.reason] || `Send failed (${result.reason})` };
+      }
+
+      waitingOn.markChased(item.key);
+      return { ok: true, detail: `Asked ${item.person} about "${item.text.slice(0, 50)}"`, navigate: 'people' };
+    }
+
     // Ask the organiser what a meeting is for. An email to a real colleague —
     // often a senior one — so it only ever runs on approval.
     case 'chase_agenda': {

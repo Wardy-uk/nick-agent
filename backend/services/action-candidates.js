@@ -462,25 +462,42 @@ function peopleFirstNames() {
 // mine | others | unowned. "Reclassify Lomond to low risk" must NOT read as an
 // owner, so a captured actor only counts if it matches the People/ index.
 function classifyActionOwner(text) {
+  return classifyAction(text).owner;
+}
+
+/**
+ * The same judgement, but keeping WHO. classifyActionOwner threw the names away
+ * and returned a bare string, so the system could tell that Abdi owed Nick
+ * something and then immediately forgot which person it was — which is why
+ * nothing has ever been able to chase anyone.
+ *
+ * Returns { owner, actors } — actors is the matched names, empty for mine/unowned.
+ */
+function classifyAction(text) {
   const value = String(text || '').trim();
   const m = value.match(OWNER_RE);
   if (m) {
     const actors = m[1].split(/\s*(?:\/|and|&)\s*/).map((a) => a.trim()).filter(Boolean);
     const known = actors.filter((a) => peopleFirstNames().has(a.replace(/(?:’s|'s)$/, '').toLowerCase()));
     if (known.length) {
-      return known.some((a) => NICK_RE.test(a)) ? 'mine' : 'others';
+      const mine = known.some((a) => NICK_RE.test(a));
+      return {
+        owner: mine ? 'mine' : 'others',
+        // Nick's own name is not a person he is waiting on.
+        actors: mine ? [] : known.filter((a) => !NICK_RE.test(a)),
+      };
     }
     // Not in People/ — but "Catherine will process…" is still plainly someone
     // else's, and the index only holds 42 names. Treat a leading proper noun as
     // an owner UNLESS it is an action verb, which is what stops "Reclassify
     // Lomond to low risk" and "Remind Taus to deliver…" being read as people.
     const lead = actors[0] ? actors[0].split(/\s+/)[0].toLowerCase() : '';
-    if (lead && !ACTION_VERBS.includes(lead)) return 'others';
+    if (lead && !ACTION_VERBS.includes(lead)) return { owner: 'others', actors: [actors[0]] };
   }
   // Only a LEADING "Nick…" counts as ownership. A bare mention anywhere used to
   // claim the line, so "Naomi Wentworth: … (agreed with Nick)" read as yours.
-  if (/^nick(\s+ward)?(?:’s|'s)?\b/i.test(value)) return 'mine';
-  return 'unowned';
+  if (/^nick(\s+ward)?(?:’s|'s)?\b/i.test(value)) return { owner: 'mine', actors: [] };
+  return { owner: 'unowned', actors: [] };
 }
 
 function extractMeetingActions(text, relativePath) {
@@ -507,8 +524,29 @@ function extractMeetingActions(text, relativePath) {
     const raw = cleanCandidateText(bullet[1]);
     if (!raw || raw.length < 8 || raw.length > 220) continue;
 
-    const owner = classifyActionOwner(raw);
-    if (owner === 'others') continue;                       // B — not yours
+    const { owner, actors } = classifyAction(raw);
+
+    // B — someone else's. Not a task for Nick, but it IS something he is waiting
+    // on, and this used to be thrown away with the name attached. Recorded
+    // rather than promoted: it never reaches the task list or the approval
+    // queue, it just stops being forgotten.
+    if (owner === 'others') {
+      for (const person of actors) {
+        try {
+          require('./waiting-on').record({
+            person,
+            text: raw,
+            sourcePath: relativePath,
+            // Meeting notes are filed as Meetings/YYYY/MM/YYYY-MM-DD – Title.md,
+            // so the path carries the date without parsing frontmatter.
+            sourceDate: (relativePath.match(/(\d{4}-\d{2}-\d{2})/) || [])[1] || null,
+          });
+        } catch (e) {
+          console.warn('[ActionCandidates] waiting-on record failed:', e.message);
+        }
+      }
+      continue;
+    }
 
     if (owner === 'unowned') {                              // C — needs to look like an action
       if (STATEMENT_OF_FACT_RE.test(raw)) continue;
