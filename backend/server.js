@@ -262,6 +262,11 @@ async function start() {
   await db.init();
   db.setState('imports_sweep_running', 'false');
 
+  // Lift waiting-on out of the KV blob into its table. No-ops once done, and
+  // leaves the KV copy in place as the rollback path.
+  try { require('./services/waiting-on').migrateFromState(); }
+  catch (e) { console.warn('[waiting-on] migration skipped:', e.message); }
+
   // Bootstrap admin-panel AI settings from DB into process.env
   require('./routes/ai-settings').bootstrap();
 

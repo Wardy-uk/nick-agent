@@ -15,7 +15,15 @@ const db = require('../db/database');
 const waitingOn = require('./waiting-on');
 
 test.before(async () => { await db.init(); });
-test.beforeEach(() => { db.setState('waiting_on_items', '[]'); });
+// Storage is the waiting_on table since 15 Aug, not the agent_state KV blob.
+test.beforeEach(() => { db.run('DELETE FROM waiting_on', []); });
+
+/** Age an item by hand — the only way to test the sort and the stale flag
+ *  without waiting three days. */
+function ageByDays(text, days) {
+  db.run('UPDATE waiting_on SET first_seen = ? WHERE text = ?',
+    [new Date(Date.now() - days * 86400000).toISOString(), text]);
+}
 
 test('age is measured from the meeting, not from when the row was written', () => {
   // A backfill over months of notes otherwise stamps everything with today and
@@ -94,11 +102,7 @@ test('oldest first, and 3+ days is flagged stale to match the standup rule', () 
   waitingOn.record({ person: 'Recent', text: 'Something new' });
   waitingOn.record({ person: 'Old', text: 'Something ancient' });
 
-  // Age the second one by hand.
-  const items = JSON.parse(db.getState('waiting_on_items'));
-  const old = items.find(i => i.person === 'Old');
-  old.firstSeen = new Date(Date.now() - 9 * 86400000).toISOString();
-  db.setState('waiting_on_items', JSON.stringify(items));
+  ageByDays('Something ancient', 9);
 
   const listed = waitingOn.list();
   assert.equal(listed[0].person, 'Old', 'longest wait first');
@@ -112,9 +116,7 @@ test('grouping by person is ordered by who has kept you waiting longest', () => 
   waitingOn.record({ person: 'Abdi', text: 'First thing' });
   waitingOn.record({ person: 'Abdi', text: 'Second thing' });
 
-  const items = JSON.parse(db.getState('waiting_on_items'));
-  items.find(i => i.text === 'First thing').firstSeen = new Date(Date.now() - 12 * 86400000).toISOString();
-  db.setState('waiting_on_items', JSON.stringify(items));
+  ageByDays('First thing', 12);
 
   const groups = waitingOn.byPerson();
   assert.equal(groups[0].person, 'Abdi');
@@ -152,4 +154,64 @@ test('the chase asks where something got to, and never implies they failed', () 
   // works for him, so it must not read as an accusation.
   assert.match(msg, /no rush/i);
   assert.doesNotMatch(msg, /you (still )?(haven't|have not|failed|promised)|chasing you|overdue|as agreed/i);
+});
+
+
+test('snooze hides an item without resolving it, and clears again', () => {
+  waitingOn.record({ person: 'Naomi', text: 'Confirm the rota' });
+  const key = waitingOn.list()[0].key;
+
+  const soon = new Date(Date.now() + 5 * 86400000).toISOString().split('T')[0];
+  const snoozed = waitingOn.snooze(key, soon);
+  assert.ok(snoozed.snoozedUntil);
+
+  // Still open and still ageing — snoozing is not a decision, only a delay.
+  const item = waitingOn.list({ status: 'open' })[0];
+  assert.equal(item.status, 'open');
+  assert.equal(item.snoozed, true);
+
+  assert.equal(waitingOn.snooze(key, null).snoozedUntil, null);
+  assert.equal(waitingOn.list()[0].snoozed, false);
+
+  assert.throws(() => waitingOn.snooze(key, '19/08/2026'), /YYYY-MM-DD/);
+});
+
+test('a past snooze date is no longer snoozed', () => {
+  waitingOn.record({ person: 'Naomi', text: 'Something else' });
+  const key = waitingOn.list()[0].key;
+  waitingOn.snooze(key, '2020-01-01');
+  assert.equal(waitingOn.list()[0].snoozed, false, 'an expired snooze must resurface');
+});
+
+test('resurfacing in a new note clears a snooze and reopens', () => {
+  waitingOn.record({ person: 'Abdi', text: 'The thing', sourcePath: 'may.md' });
+  const key = waitingOn.list()[0].key;
+  waitingOn.resolve(key, 'done');
+  waitingOn.snooze(key, '2030-01-01');
+
+  waitingOn.record({ person: 'Abdi', text: 'The thing', sourcePath: 'june.md' });
+  const item = waitingOn.list({ status: 'open' })[0];
+  assert.equal(item.status, 'open');
+  assert.equal(item.snoozedUntil, null, 'a commitment that is back is not still snoozed');
+  assert.equal(item.resolvedAt, null);
+});
+
+test('migrateFromState lifts the KV blob in once and leaves it behind', () => {
+  db.run('DELETE FROM waiting_on', []);
+  db.setState('waiting_on_items', JSON.stringify([{
+    key: 'heidi::old thing', person: 'Heidi', text: 'Old thing',
+    status: 'open', firstSeen: '2026-05-01T09:00:00.000Z',
+    lastSeen: '2026-05-01T09:00:00.000Z', sightings: 2,
+  }]));
+
+  assert.equal(waitingOn.migrateFromState().migrated, 1);
+  assert.equal(waitingOn.list()[0].text, 'Old thing');
+  assert.equal(waitingOn.list()[0].sightings, 2);
+
+  // Idempotent: a second run must not double the rows.
+  assert.equal(waitingOn.migrateFromState().migrated, 0);
+  assert.equal(waitingOn.list().length, 1);
+
+  // The KV copy survives as the rollback path.
+  assert.ok(db.getState('waiting_on_items'));
 });

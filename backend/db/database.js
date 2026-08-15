@@ -880,6 +880,11 @@ function getRecentSaraActions(limit = 20) {
 module.exports = {
   init,
   getDb,
+  // Generic query helpers. Exported so a service owning its own table can use
+  // them instead of reaching for getDb() and re-preparing statements itself.
+  all,
+  get,
+  run,
   batchSaves,
   saveMessage,
   getConversationHistory,

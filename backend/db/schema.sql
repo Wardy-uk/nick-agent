@@ -353,3 +353,32 @@ CREATE TABLE IF NOT EXISTS host_metrics (
 );
 
 CREATE INDEX IF NOT EXISTS idx_host_metrics_lookup ON host_metrics(source, metric, recorded_at DESC);
+
+-- Commitments other people owe Nick, lifted out of meeting notes.
+--
+-- Was the agent_state KV blob until 15 Aug. Moved because the chasing UI needs
+-- to filter, sort and — the deciding one — SNOOZE, which is a per-item date the
+-- blob had nowhere to put. The key stays the dedupe key (person::normalised
+-- text) so a second sighting folds instead of duplicating, exactly as before.
+CREATE TABLE IF NOT EXISTS waiting_on (
+  key           TEXT PRIMARY KEY,
+  person        TEXT NOT NULL,
+  person_full   TEXT,
+  text          TEXT NOT NULL,
+  source_path   TEXT,
+  source_date   TEXT,
+  status        TEXT NOT NULL DEFAULT 'open',   -- open | done | dropped
+  asked_at      TEXT,
+  chase_count   INTEGER NOT NULL DEFAULT 0,
+  -- Dated from the MEETING, not from when the row was written, or a backfill
+  -- over four months reports a June commitment as nought days old.
+  first_seen    TEXT NOT NULL,
+  last_seen     TEXT NOT NULL,
+  sightings     INTEGER NOT NULL DEFAULT 1,
+  reopened_at   TEXT,
+  resolved_at   TEXT,
+  snoozed_until TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_waiting_on_status ON waiting_on(status, first_seen);
+CREATE INDEX IF NOT EXISTS idx_waiting_on_person ON waiting_on(person, status);

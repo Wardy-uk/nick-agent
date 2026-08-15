@@ -13,13 +13,12 @@
  * Support actually has to hold in their head, so this is the gap that most
  * looks like the job.
  *
- * STORAGE, honestly: this wants a table — it is queried by person and by age,
- * which is what tables are for. It is in the KV store because `schema.sql` is
- * being edited by a concurrent session and a migration collision costs more
- * than the query convenience is worth today. That is the third time the KV
- * store has absorbed something table-shaped; when schema.sql frees up, this
- * should move. The set is small and bounded (things owed by ~13 people) and is
- * read and written whole, so nothing breaks in the meantime.
+ * STORAGE: the `waiting_on` table since 15 Aug. It began in the agent_state KV
+ * blob only because `schema.sql` was held by a concurrent session; it moved as
+ * soon as that freed, because the chasing UI filters, sorts and — the deciding
+ * one — SNOOZES, which is a per-item date a single blob had nowhere to put.
+ * `migrateFromState()` lifts the KV copy in once and leaves it behind as a
+ * rollback path.
  */
 
 const db = require('../db/database');
@@ -29,19 +28,99 @@ const STATE_KEY = 'waiting_on_items';
 // Matches the standup's rule: three days is when a carry becomes a decision.
 const STALE_DAYS = 3;
 
-function _load() {
+/**
+ * Storage moved from the agent_state KV blob to a real table on 15 Aug. The KV
+ * row is deliberately LEFT IN PLACE as a rollback copy — it cost nothing to keep
+ * and it holds the 287-item backfill that took a pass over 232 meeting notes.
+ *
+ * Row shape is snake_case in SQL and camelCase in JS; _fromRow/_toRow are the
+ * only places that know, so the rest of the service reads exactly as it did.
+ */
+function _fromRow(r) {
+  if (!r) return null;
+  return {
+    key: r.key,
+    person: r.person,
+    personFull: r.person_full,
+    text: r.text,
+    sourcePath: r.source_path,
+    sourceDate: r.source_date,
+    status: r.status,
+    askedAt: r.asked_at,
+    chaseCount: r.chase_count,
+    firstSeen: r.first_seen,
+    lastSeen: r.last_seen,
+    sightings: r.sightings,
+    reopenedAt: r.reopened_at,
+    resolvedAt: r.resolved_at,
+    snoozedUntil: r.snoozed_until,
+  };
+}
+
+function _get(key) {
+  return _fromRow(db.get('SELECT * FROM waiting_on WHERE key = ?', [key]));
+}
+
+function _all() {
+  return db.all('SELECT * FROM waiting_on', []).map(_fromRow);
+}
+
+function _upsert(item) {
+  db.run(
+    `INSERT INTO waiting_on
+       (key, person, person_full, text, source_path, source_date, status, asked_at,
+        chase_count, first_seen, last_seen, sightings, reopened_at, resolved_at, snoozed_until)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(key) DO UPDATE SET
+       person = excluded.person, person_full = excluded.person_full,
+       text = excluded.text, source_path = excluded.source_path,
+       source_date = excluded.source_date, status = excluded.status,
+       asked_at = excluded.asked_at, chase_count = excluded.chase_count,
+       last_seen = excluded.last_seen, sightings = excluded.sightings,
+       reopened_at = excluded.reopened_at, resolved_at = excluded.resolved_at,
+       snoozed_until = excluded.snoozed_until`,
+    [
+      item.key, item.person, item.personFull ?? null, item.text,
+      item.sourcePath ?? null, item.sourceDate ?? null, item.status ?? 'open',
+      item.askedAt ?? null, item.chaseCount ?? 0, item.firstSeen, item.lastSeen,
+      item.sightings ?? 1, item.reopenedAt ?? null, item.resolvedAt ?? null,
+      item.snoozedUntil ?? null,
+    ],
+  );
+  return item;
+}
+
+/**
+ * One-time lift of the KV blob into the table. Idempotent by construction — it
+ * only runs when the table is empty — and it never deletes the KV copy, so a
+ * bad migration is recoverable by reverting the code alone.
+ */
+function migrateFromState() {
+  const already = db.get('SELECT COUNT(*) AS n FROM waiting_on', []);
+  if ((already?.n ?? 0) > 0) return { migrated: 0, reason: 'table already populated' };
+
+  let items = [];
   try {
     const raw = db.getState(STATE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    if (Array.isArray(parsed)) items = parsed;
   } catch {
-    return [];
+    return { migrated: 0, reason: 'KV blob unreadable' };
   }
-}
+  if (!items.length) return { migrated: 0, reason: 'nothing in KV' };
 
-function _save(items) {
-  db.setState(STATE_KEY, JSON.stringify(items));
-  return items;
+  let migrated = 0;
+  for (const i of items) {
+    if (!i?.key || !i?.person || !i?.text) continue;   // skip anything malformed
+    _upsert({
+      ...i,
+      firstSeen: i.firstSeen || i.lastSeen || new Date().toISOString(),
+      lastSeen: i.lastSeen || i.firstSeen || new Date().toISOString(),
+    });
+    migrated++;
+  }
+  console.log(`[waiting-on] migrated ${migrated} items from the KV store into waiting_on`);
+  return { migrated, reason: 'ok' };
 }
 
 /**
@@ -96,9 +175,8 @@ function record({ person, text, sourcePath = null, sourceDate = null }) {
   if (!person || !String(text || '').trim()) return null;
 
   const canonical = _canonicalPerson(person);
-  const items = _load();
   const key = _key(canonical, text);
-  const existing = items.find(i => i.key === key);
+  const existing = _get(key);
 
   if (existing) {
     existing.lastSeen = new Date().toISOString();
@@ -108,8 +186,11 @@ function record({ person, text, sourcePath = null, sourceDate = null }) {
     if (existing.status !== 'open' && sourcePath && sourcePath !== existing.sourcePath) {
       existing.status = 'open';
       existing.reopenedAt = existing.lastSeen;
+      existing.resolvedAt = null;
+      // A commitment that has resurfaced is not still snoozed.
+      existing.snoozedUntil = null;
     }
-    _save(items);
+    _upsert(existing);
     return existing;
   }
 
@@ -131,15 +212,17 @@ function record({ person, text, sourcePath = null, sourceDate = null }) {
     firstSeen: _sourceDateToIso(sourceDate) || now,
     lastSeen: now,
     sightings: 1,
+    chaseCount: 0,
+    snoozedUntil: null,
   };
-  items.push(item);
-  _save(items);
+  _upsert(item);
   return item;
 }
 
 /** Open items, oldest first — the ones that have been waiting longest matter most. */
 function list({ status = 'open', person = null } = {}) {
-  const items = _load()
+  const now = Date.now();
+  const items = _all()
     .filter(i => (status === 'all' ? true : i.status === status))
     .filter(i => (person ? i.person.toLowerCase() === person.toLowerCase() : true))
     .map(i => ({
@@ -147,6 +230,7 @@ function list({ status = 'open', person = null } = {}) {
       ageDays: _ageDays(i.firstSeen),
       stale: _ageDays(i.firstSeen) >= STALE_DAYS,
       chased: Boolean(i.askedAt),
+      snoozed: Boolean(i.snoozedUntil) && new Date(i.snoozedUntil).getTime() > now,
     }));
   items.sort((a, b) => b.ageDays - a.ageDays);
   return items;
@@ -170,23 +254,35 @@ function byPerson() {
 }
 
 function resolve(key, status = 'done') {
-  const items = _load();
-  const item = items.find(i => i.key === key);
+  const item = _get(key);
   if (!item) return null;
   item.status = status === 'dropped' ? 'dropped' : 'done';
   item.resolvedAt = new Date().toISOString();
-  _save(items);
+  _upsert(item);
+  return item;
+}
+
+/**
+ * Hide until a date — "they said next Friday". Distinct from resolving: the
+ * commitment is still outstanding and still ages, it just stops being asked
+ * about. Clearing is passing no date.
+ */
+function snooze(key, until = null) {
+  const item = _get(key);
+  if (!item) return null;
+  if (until && !/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new Error('until must be YYYY-MM-DD');
+  item.snoozedUntil = until ? new Date(`${until}T09:00:00`).toISOString() : null;
+  _upsert(item);
   return item;
 }
 
 /** Record that a chase went out, so it is not asked twice in a week. */
 function markChased(key) {
-  const items = _load();
-  const item = items.find(i => i.key === key);
+  const item = _get(key);
   if (!item) return null;
   item.askedAt = new Date().toISOString();
   item.chaseCount = (item.chaseCount || 0) + 1;
-  _save(items);
+  _upsert(item);
   return item;
 }
 
@@ -196,7 +292,7 @@ function markChased(key) {
  * approves every one.
  */
 function queueChase(key) {
-  const item = _load().find(i => i.key === key);
+  const item = _get(key);
   if (!item) return { ok: false, error: 'No such item' };
   if (item.status !== 'open') return { ok: false, error: `Already ${item.status}` };
 
@@ -293,6 +389,6 @@ function backfill({ days = 120, limit = 500 } = {}) {
 }
 
 module.exports = {
-  record, list, byPerson, resolve, markChased, queueChase, buildChaseMessage,
-  backfill, STALE_DAYS, _key,
+  record, list, byPerson, resolve, snooze, markChased, queueChase,
+  buildChaseMessage, backfill, migrateFromState, STALE_DAYS, _key,
 };
