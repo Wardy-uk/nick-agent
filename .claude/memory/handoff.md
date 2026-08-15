@@ -1,51 +1,60 @@
-# Session Handoff — 2026-08-15 19:20
+# Session Handoff — 2026-08-15 21:40
 
-**#90 give SARA a voice — DONE and in use.** Nick can dictate on the Chat tab and hear the
-reply. Chat reply quality was fixed along the way. One cosmetic item parked by choice.
+**Ten backlog items shipped, deployed and verified live.** All from the Feature Tracker,
+picked for live correctness bugs over new features. Pi is at `a309f62`, 251 tests green
+(260 local — the 9 extra are the still-uncommitted stress-score work).
 
 ## What was done
 
-- **Voice in** — 🎤 in `sara/app` Chat, ported from `Capture.jsx`. Working on the iPhone.
-- **Voice out** — browser speech first, **server TTS as fallback**. `backend/services/tts.js`
-  + `routes/tts.js`, `POST /api/tts/speak` → WAV, via the existing OpenRouter key
-  (`openai/gpt-audio-mini`, ~0.05p a reply, in-memory cache by text|voice|model).
-- **Voice picker** — five feminine voices in the Chat header, tap to audition, persisted to
-  `localStorage` (`sara_tts_voice`). Default `coral`.
-- **Chat replies** — greeting no longer pulls the status dump; at-risk count no longer
-  capped at 10; weekend prompt got its personality back.
-- **Service worker** — `sw.js` now calls `skipWaiting()` + `clients.claim()`.
+- **#29 calendar truncating at 50** — `graphFetchAll()` follows `@odata.nextLink`. Found the
+  same bug on Planner (`$top=200` vs 275 tasks) while in there.
+- **#79 embeddings only stored chunk 0** — multi-chunk now. **881 of 1,091 notes were being
+  truncated.** Cap sized against the vault (median 4, p90 20, p99 60) → 60, not the 20 I
+  first guessed.
+- **#85/#34/#86** — one `services/vault-exclusions.js`; both consumers prune existing rows.
+- **#84** wrong API key · **#55** AI budget persisted · **#45** export watchdog ·
+  **#75/#76** lane renders its `why`, chips are tags.
+- **#78(b,c)** — content-hash gate + `maxCreate` cap. The tap is shut.
+- **#80** — `scheduleDaily`/`scheduleWeekly` + `runCatchUp()`. **Found 5 missed jobs on the
+  first boot.** Watchdog now watches the scheduler.
+- **#73/#74** — WHEN-words promote, WHAT-words don't. Measured on the live 130: classifier
+  MUST **54 → 17**; 35 tasks entered the lane on `context=queue` alone, now 0.
+- **#108** — paging + filters (month/source/owner) + filtered bulk **reject** (never approve).
+- **#87** — `tasks.estimate_minutes`, `services/time-fit.js`, `/api/time/gap|what-fits`,
+  `TimeFitCard` above the lane.
 
 ## What's still pending
 
-- **Accent.** All five voices sound American. The prompt now pushes hard for RP, but these
-  are American-trained voices and it may not convince. Nick's verdict: "that will do for
-  now". Ladder if revisited: `TTS_MODEL=openai/gpt-audio` (full model follows style better,
-  ~1p a reply) → **ElevenLabs** (genuine British voices; needs an account + key). Don't
-  iterate further on the prompt, it's a model limitation.
-- **Port the voiceUtils iOS fixes back to `frontend/`** — the copies diverged and the web
-  app carries the same empty-utterance bug. Detail in CLAUDE.md.
-- **`VITE_BUILD_LABEL` is unset on Netlify.** The header already renders it when present —
-  setting it makes "which build is the phone running" readable instead of inferred.
-- Briefings/nudges still silent on the phone; no wake word (#11 parked).
-- Weekday and weekend system prompts are separate literals that drifted once already.
+- **Re-index still running** — hours on Voyage's free tier (~8,400 chunks). It resumes by
+  itself: stamped on completion, so a restart leaves no stamp and catch-up re-triggers it.
+- **Tonight's 22:00 rollup is the test of two things** — #34 (person pages should stop
+  ranking `Master Todo` above meetings) and #78 (a small `created` number means the gate
+  held; hundreds means it didn't).
+- **Watch the nudge count.** #73/#74 moves it — `nudges.js` ranks off the same builder.
+  That is the one baseline signal allowed to argue against the backlog (#17).
+- **#44** — `stress-score.js` / `health.js` still uncommitted, left where they were found.
+- Nick's own P0, unchanged and outranking all code: **#63** Tailscale key (28 Sept, fixable
+  only from home), **#2** consent request, **#106** approve the Stephen Mitchell draft.
 
 ## Key decisions made
 
-- **OpenRouter, not piper.** Nick challenged my claim that OpenRouter had no TTS — he was
-  right, four audio-output models exist. No Pi install, no new account.
-- **Browser speech stays first**, server TTS is the fallback: free where it works.
-- Mic added to Chat because the `voice` tab mounts Capture, not Chat.
+- **Chunk cap at p99, not p90.** 20 truncated the top 10% — the long transcripts #79 exists
+  for. Measure against the vault before picking a bound.
+- **Bulk reject, never bulk approve.** Rejecting is internal and reversible; approving runs
+  executors and one sends email. Refuses without a filter, refuses if anything outbound
+  matches, dry-runs first.
+- **An assumed duration is labelled.** Un-estimated tasks are assumed 30 min and say so —
+  a "this fits" that turns out to be a guess is never trusted again.
+- **Catch-up does not replay history.** A job missed yesterday is not run today.
 
 ## Gotchas for next session
 
-- **`ECHO_SHOT` in `tts.js` is load-bearing.** gpt-audio is conversational: asked plainly to
-  read text it *answers* it, once inventing a commitment SARA never made. 0/3 verbatim
-  without it, 3/3 with it. The TTS cache key does NOT include the system prompt — restart
-  the backend after changing it, or stale audio survives.
-- Audio output **requires `stream: true`** and streaming **only supports `pcm16`**.
-- `busy` gates the speaking, never `messages`. `rec.onend` fires from a stale closure.
-- `<audio>` needs its own gesture unlock, separate from `speechSynthesis`.
-- **The ↻ button in the SARA header is the update path** — `registration.update()` + reload.
-  Telling Nick to swipe-close is not reliable on iOS.
-- **iOS drops `speechSynthesis` entirely in an installed standalone PWA** — accepted, never
-  played, no error, even inside a user gesture. This was never confirmed against Safari.
+- **NEURO DB is `backend/db/agent.db`** — note the `db/`. Open `{readonly:true}` to inspect
+  while the backend runs.
+- **Deploy:** `git pull --ff-only` → `frontend && npm run build` → `backend && npm test` →
+  `pm2 restart neuro-backend --update-env`. Node 22 path, per the memory file.
+- **Verify against the live system before declaring done.** Two of this session's own bugs
+  were caught that way and only that way: the 20-chunk cap, and `calendarKnown` derived
+  from today's event count reporting "no calendar data" on a Saturday.
+- `triageTodo`/`classifyMoscow`/`priorityFromMoscow` now take `today` as a parameter. They
+  used to read the wall clock regardless of the `todayStr` passed in.
