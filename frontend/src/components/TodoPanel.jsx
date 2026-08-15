@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { apiUrl } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import { duePresets } from '../../../shared/due-dates.cjs';
+import TimeFitCard from './TimeFitCard';
 import './TodoPanel.css';
 
 function sourceClass(source) {
@@ -932,6 +933,10 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         onApprove={(item) => handleSuggestionAction(item, 'approve')}
         onReject={(item) => handleSuggestionAction(item, 'reject')}
       />
+      {/* Above the lane on purpose: "what fits in the time I have" is the
+          question that decides whether any of what follows is actionable right
+          now. The lane says what matters; this says what is possible. */}
+      <TimeFitCard />
       <MustMoveLane items={todayLane} />
 
       <div className="todo-add">

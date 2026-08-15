@@ -158,22 +158,97 @@ function ActionCard({ action, busy, onResolve }) {
   );
 }
 
+// The tail of the queue — filter it down to something a person can act on, and
+// act on the whole selection at once.
+//
+// Every option here is a real grouping from the server's facets, counted over
+// ALL pending rather than over what fitted on screen. The 463-row backfill spans
+// March to August across 104 meeting notes, so "everything from June" and
+// "everything from this one note" are the two cuts that actually make it
+// tractable — four taps a row across hundreds is its own avoidance risk.
+function TriageBar({ facets, filter, filteredTotal, onFilter, onBulkReject, busy }) {
+  const months = Object.entries(facets?.byMonth || {}).sort((a, b) => a[0].localeCompare(b[0]));
+  const owners = Object.entries(facets?.byOwner || {}).sort((a, b) => b[1] - a[1]);
+  const sources = facets?.bySource || [];
+  const active = Object.keys(filter).length > 0;
+
+  const set = (key, value) => {
+    const next = { ...filter };
+    if (!value) delete next[key]; else next[key] = value;
+    onFilter(next);
+  };
+
+  return (
+    <div className="ap-triage">
+      <div className="ap-triage-row">
+        <label>
+          Month
+          <select value={filter.month || ''} onChange={e => set('month', e.target.value)}>
+            <option value="">All</option>
+            {months.map(([m, n]) => <option key={m} value={m}>{m} ({n})</option>)}
+          </select>
+        </label>
+        <label>
+          Owner
+          <select value={filter.owner || ''} onChange={e => set('owner', e.target.value)}>
+            <option value="">All</option>
+            {owners.map(([o, n]) => <option key={o} value={o}>{o} ({n})</option>)}
+          </select>
+        </label>
+        <label className="ap-triage-source">
+          Source note
+          <select value={filter.source || ''} onChange={e => set('source', e.target.value)}>
+            <option value="">All</option>
+            {sources.map(s => (
+              <option key={s.path} value={s.path}>
+                {s.path.split('/').pop().replace(/\.md$/, '')} ({s.count})
+              </option>
+            ))}
+          </select>
+        </label>
+        {active && <button className="ap-clear" onClick={() => onFilter({})}>Clear</button>}
+      </div>
+      {active && (
+        <div className="ap-triage-act">
+          <span className="ap-triage-count">{filteredTotal} match</span>
+          {/* Reject only. There is no bulk approve and there should not be —
+              approving runs executors, one of which sends email. */}
+          <button className="ap-bulk-reject" disabled={busy || filteredTotal === 0} onClick={onBulkReject}>
+            {busy ? 'Rejecting…' : `Reject all ${filteredTotal}`}
+          </button>
+          <span className="ap-triage-note">Rejecting is internal — nothing is sent or deleted.</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ActionsPanel({ onNavigate }) {
   const [data, setData] = useState(null);
+  const [items, setItems] = useState([]);         // the pending rows on screen
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [outcomes, setOutcomes] = useState([]);   // newest first, survives the reload
   const [showHistory, setShowHistory] = useState(false);
   const [expanded, setExpanded] = useState({});   // kind -> show everything sent
+  const [filter, setFilter] = useState({});
 
-  const load = useCallback(() => {
-    fetch(apiUrl('/api/actions'))
+  const load = useCallback((f = filter, { offset = 0 } = {}) => {
+    const qs = new URLSearchParams({ ...f, offset: String(offset) });
+    fetch(apiUrl(`/api/actions?${qs}`))
       .then(r => r.json())
-      .then(d => { setData(d); setError(null); })
+      .then(d => {
+        setData(d);
+        // Append when paging, replace when (re)loading — so approving a row
+        // does not silently collapse the tail you had already pulled in.
+        setItems(prev => (offset > 0 ? [...prev, ...(d.pending || [])] : (d.pending || [])));
+        setError(null);
+      })
       .catch(e => setError(e.message));
-  }, []);
+  }, [filter]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(filter); }, [load, filter]);
 
   const resolve = async (action, verb) => {
     setBusyId(action.id);
@@ -200,7 +275,50 @@ export default function ActionsPanel({ onNavigate }) {
       setOutcomes(o => [{ id: action.id, ok: false, label, text: e.message }, ...o]);
     }
     setBusyId(null);
-    load();
+    load(filter);
+  };
+
+  const bulkReject = async () => {
+    // Ask the server how many it matches before asking Nick — the number on the
+    // button is from the last load, and a confirm dialog quoting a stale count
+    // is how you get consent for something other than what happens.
+    setBulkBusy(true);
+    try {
+      const dry = await fetch(apiUrl('/api/actions/bulk-reject'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...filter, dryRun: true }),
+      }).then(r => r.json());
+
+      if (dry.error) {
+        setOutcomes(o => [{ id: `bulk-${Date.now()}`, ok: false, label: 'Bulk reject', text: dry.error }, ...o]);
+        setBulkBusy(false);
+        return;
+      }
+
+      const sample = (dry.sample || []).map(s => `• ${s.text}`).join('\n');
+      if (!window.confirm(`Reject ${dry.matched} action${dry.matched === 1 ? '' : 's'}?\n\nFor example:\n${sample}\n\nNothing is sent or deleted — they stop being asked about.`)) {
+        setBulkBusy(false);
+        return;
+      }
+
+      const res = await fetch(apiUrl('/api/actions/bulk-reject'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(filter),
+      }).then(r => r.json());
+
+      setOutcomes(o => [{
+        id: `bulk-${Date.now()}`,
+        ok: Boolean(res.ok),
+        label: 'Bulk reject',
+        text: res.error || `Rejected ${res.rejected}`,
+      }, ...o]);
+    } catch (e) {
+      setOutcomes(o => [{ id: `bulk-${Date.now()}`, ok: false, label: 'Bulk reject', text: e.message }, ...o]);
+    }
+    setBulkBusy(false);
+    load(filter);
   };
 
   if (error) {
@@ -212,9 +330,12 @@ export default function ActionsPanel({ onNavigate }) {
   }
   if (!data) return <div className="actions-panel"><div className="ap-loading">Loading…</div></div>;
 
-  const pending = data.pending || [];
+  const pending = items;
   const recent = data.recent || [];
   const total = data.pendingTotal ?? pending.length;
+  const filtering = Object.keys(filter).length > 0;
+  const filteredTotal = data.filteredTotal ?? total;
+  const hasMore = pending.length < filteredTotal;
   const grouped = KIND_ORDER
     .map(kind => ({ kind, items: pending.filter(a => (a.presentation?.kind || 'write') === kind) }))
     .filter(g => g.items.length > 0);
@@ -222,7 +343,7 @@ export default function ActionsPanel({ onNavigate }) {
   const outboundCount = pending.filter(a => a.presentation?.kind === 'outbound').length;
   // The backend sorts outbound first and caps what it sends, so anything
   // dropped is a promotion candidate — never something that would have sent.
-  const notSent = total - pending.length;
+  const notSent = filteredTotal - pending.length;
   const promotions = data.pendingByType?.capture_todo || 0;
 
   return (
@@ -241,13 +362,27 @@ export default function ActionsPanel({ onNavigate }) {
             queue of 10 for two days. */}
         {notSent > 0 && (
           <p className="ap-capped">
-            Showing {pending.length}. {notSent} more not shown — everything outbound is here;
+            Showing {pending.length}{filtering ? ' of the matching' : ''}. {notSent} more not shown — everything outbound is here;
             the rest are task promotions
             {promotions > 0 && <> ({promotions} pending, reviewed on the Tasks screen)</>} and
             navigation shortcuts, neither of which sends anything.
+            {' '}Use the filters below to reach them.
           </p>
         )}
       </div>
+
+      {/* Only worth the space once the queue is past what one screen can hold.
+          Below that, filters are clutter in front of a list you can just read. */}
+      {total > GROUP_CAP && (
+        <TriageBar
+          facets={data.facets}
+          filter={filter}
+          filteredTotal={filteredTotal}
+          onFilter={setFilter}
+          onBulkReject={bulkReject}
+          busy={bulkBusy}
+        />
+      )}
 
       {outcomes.length > 0 && (
         <div className="ap-outcomes">
@@ -297,6 +432,15 @@ export default function ActionsPanel({ onNavigate }) {
           </section>
         );
       })}
+
+      {/* The actual fix for #108. "Show more" above only ever revealed rows the
+          server had already sent; this asks for the next page, so the tail is
+          reachable instead of merely counted. */}
+      {hasMore && (
+        <button className="ap-load-more" onClick={() => load(filter, { offset: pending.length })}>
+          Load more ({filteredTotal - pending.length} not yet loaded)
+        </button>
+      )}
 
       {total === 0 && outcomes.length === 0 && (
         <p className="ap-empty">

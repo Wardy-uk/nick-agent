@@ -296,6 +296,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   context TEXT,
   notes TEXT,
   ms_id TEXT,
+  -- Roughly how long this takes, in minutes. NULL means NOT ESTIMATED, and is
+  -- deliberately distinguishable from a small number: "what fits before my next
+  -- meeting" has to be able to say which answers it is assuming rather than
+  -- quietly treating an unknown as thirty minutes.
+  estimate_minutes INTEGER,
   -- Normalised text. UNIQUE so re-running the importer or draining the same
   -- capture line twice cannot create a duplicate.
   dedupe_key TEXT NOT NULL UNIQUE,

@@ -87,6 +87,13 @@ async function init() {
       db.exec('ALTER TABLE tasks ADD COLUMN moscow_proposed INTEGER NOT NULL DEFAULT 0');
       console.log('[DB] tasks.moscow_proposed added');
     }
+    // Migration: tasks.estimate_minutes — how long the thing takes. NULL means
+    // "not estimated", never zero, so an un-estimated task is distinguishable
+    // from an instant one and the assumption used in its place stays visible.
+    if (taskColumns.length && !taskColumns.includes('estimate_minutes')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER');
+      console.log('[DB] tasks.estimate_minutes added');
+    }
   } catch (e) {
     console.error('[DB] tasks migration check failed:', e.message);
   }
@@ -755,20 +762,22 @@ function deleteTaskMoscow(filePath, lineNumber, text) {
 
 const TASK_FIELDS = [
   'text', 'status', 'moscow', 'moscow_proposed', 'priority', 'due_date', 'source',
-  'origin_path', 'origin_line', 'context', 'notes', 'ms_id',
+  'origin_path', 'origin_line', 'context', 'notes', 'ms_id', 'estimate_minutes',
 ];
 
 function createTaskRow(task) {
   const info = run(
     `INSERT INTO tasks (text, status, moscow, moscow_proposed, priority, due_date, source,
-                        origin_path, origin_line, context, notes, ms_id, dedupe_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        origin_path, origin_line, context, notes, ms_id, estimate_minutes, dedupe_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       task.text, task.status || 'open', task.moscow || null,
       task.moscow_proposed ? 1 : 0, task.priority || null,
       task.due_date || null, task.source || 'manual', task.origin_path || null,
       task.origin_line == null ? null : task.origin_line, task.context || null,
-      task.notes || null, task.ms_id || null, task.dedupe_key,
+      task.notes || null, task.ms_id || null,
+      task.estimate_minutes == null ? null : task.estimate_minutes,
+      task.dedupe_key,
     ]
   );
   return info.lastInsertRowid;

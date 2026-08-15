@@ -48,25 +48,55 @@ function classifyContext(text, sourcePath) {
   return 'general';
 }
 
-function classifyMoscow({ text, sourcePath, dueDate, mustdo, priority }) {
+// The distinction that fixes everything-is-a-MUST: some words say WHEN a thing
+// must happen, and some say WHAT the thing is. Only the first kind is urgency.
+//
+// The old list mixed them — `review`, `approval`, `approve`, `customer`, `sla`,
+// `deadline` sat alongside `urgent` and `asap`. That first group is a fair
+// description of Head of Technical Support, so almost every task matched, became
+// `must`, and was promoted to `high` by priorityFromMoscow. A tag every row
+// shares has stopped sorting anything: arithmetically identical to no
+// priorities at all, while poisoning Focus, the Must Move Today lane AND the
+// nudge count, since nudges.js ranks off the same builder.
+//
+// Deliberately rare. If these start matching most of the list again, that is the
+// signal to cut the list, not to add to it.
+const URGENT_NOW = [
+  'urgent', 'asap', 'today', 'tonight', 'this morning', 'this afternoon',
+  'before lunch', 'before eod', 'end of day', 'by close of play', 'first thing',
+  // Severity rather than timing, but both are genuinely exceptional rather than
+  // descriptive of the job: an SLA *breach* is not the same word as an SLA.
+  'breach', 'disciplinary',
+];
+
+// Words that describe the WORK. Real signal about what a task is — they set
+// context and can carry it to `should` — but they never promote to `must` on
+// their own, because in this job they match nearly everything.
+const DOMAIN_TERMS = [
+  'review', 'approval', 'approve', 'customer', 'sla', 'escalat',
+  'payroll', 'probation', 'deadline', 'ticket', 'queue',
+];
+
+// `today` is a parameter, not a call to the clock. decorateTask/buildTodayLane
+// already took a todayStr and this ignored it, so every date test ran against
+// the wall clock regardless of what the caller asked for — invisible in
+// production, where they agree, and it made the lane untestable.
+function classifyMoscow({ text, sourcePath, dueDate, mustdo, priority }, today = todayDateString()) {
   const lower = normalize(text);
-  const today = todayDateString();
   const overdue = dueDate && dueDate < today;
   const dueToday = dueDate && dueDate === today;
-  const urgentSignal = [
-    'urgent', 'asap', 'today', 'before lunch', 'before eod', 'disciplinary',
-    'probation', 'review', 'approval', 'approve', 'breach', 'sla', 'customer',
-    'escalat', 'payroll', 'deadline'
-  ].some((token) => lower.includes(token));
+  const urgentNow = URGENT_NOW.some((token) => lower.includes(token));
 
-  if (mustdo || priority === 'high' || overdue || dueToday || urgentSignal) return 'must';
+  // MUST needs something that actually says "now": Nick said so, a date says so,
+  // or the words say so. Not merely that the task is about a customer.
+  if (mustdo || priority === 'high' || overdue || dueToday || urgentNow) return 'must';
+  if (DOMAIN_TERMS.some((token) => lower.includes(token))) return 'should';
   if (normalize(sourcePath).includes('meetings/') || lower.includes('follow up') || lower.includes('reply') || lower.includes('send')) return 'should';
   if (lower.includes('capture') || lower.includes('brainstorm') || lower.includes('idea')) return 'could';
   return 'should';
 }
 
-function priorityFromMoscow(moscow, existingPriority, dueDate) {
-  const today = todayDateString();
+function priorityFromMoscow(moscow, existingPriority, dueDate, today = todayDateString()) {
   if (existingPriority === 'high') return 'high';
   if (moscow === 'must') return 'high';
   if (dueDate && dueDate <= today) return 'high';
@@ -75,15 +105,23 @@ function priorityFromMoscow(moscow, existingPriority, dueDate) {
   return 'low';
 }
 
-function triageTodo({ text, sourcePath, dueDate, mustdo = false, priority = null, metadata = null }) {
+function triageTodo({ text, sourcePath, dueDate, mustdo = false, priority = null, metadata = null }, today = todayDateString()) {
   const meta = metadata || {};
   const context = meta.context || classifyContext(text, sourcePath);
-  const moscow = meta.moscow || classifyMoscow({ text, sourcePath, dueDate, mustdo, priority });
-  const computedPriority = priorityFromMoscow(moscow, priority, dueDate);
-  const today = todayDateString();
+  const moscow = meta.moscow || classifyMoscow({ text, sourcePath, dueDate, mustdo, priority }, today);
+  const computedPriority = priorityFromMoscow(moscow, priority, dueDate, today);
   const overdue = dueDate ? dueDate < today : false;
   const dueToday = dueDate ? dueDate === today : false;
-  const needsToday = mustdo || moscow === 'must' || overdue || dueToday || context === 'queue';
+  // `context === 'queue'` used to sit in this list on its own — no due date, no
+  // must flag, no priority. And classifyContext assigns `queue` for any of sla /
+  // ticket / queue / customer / escalat appearing anywhere in the text, so
+  // "Make amends to Customer Portal" was in *Must Move Today* because of the
+  // word "Customer". In this job that keyword set matches most of the work,
+  // which is why four of five rows in the lane carried the same tag.
+  //
+  // Queue work is still real work — it just has to earn today the same way
+  // everything else does.
+  const needsToday = mustdo || moscow === 'must' || overdue || dueToday;
   const followThroughDays = moscow === 'must' ? 0 : moscow === 'should' ? 1 : 3;
   return {
     context,
@@ -111,7 +149,7 @@ function decorateTask(task, todayStr = todayDateString()) {
     mustdo: Boolean(task.mustdo),
     priority: task.priority || null,
     metadata: meta,
-  });
+  }, todayStr);
   const ageDays = taskAgeDays({ ...task, meta }, todayStr);
   const stale = ageDays != null && ageDays >= triage.followThroughDays && !triage.needsToday;
   return {
@@ -121,10 +159,34 @@ function decorateTask(task, todayStr = todayDateString()) {
     moscow: triage.moscow,
     priority: triage.priority,
     needsToday: triage.needsToday,
+    // triageTodo has always computed these and decorateTask has never passed
+    // them on — so `buildFollowThroughCandidate`'s `|| task.overdue ||
+    // task.dueToday` arms were reading undefined and could never fire. Nothing
+    // looked broken because the ageDays arm carried the filter on its own.
+    overdue: triage.overdue,
+    dueToday: triage.dueToday,
     followThroughDays: triage.followThroughDays,
     ageDays,
     stale,
   };
+}
+
+/**
+ * Why this row is in the lane, in the order the qualifying test actually ran.
+ *
+ * The card claims these "protect your day", so it has to be able to say which
+ * of the reasons applied — a generic "Must move today" is the classifier
+ * marking its own homework. Now that a MUST needs a real signal, the reason is
+ * always nameable, so there is no honest case for a generic string.
+ */
+function laneReason(task, todayStr = todayDateString()) {
+  if (task.overdue) return `Overdue — was due ${task.due_date}`;
+  if (task.dueToday) return 'Due today';
+  if (task.mustdo) return 'You marked this a must';
+  if (task.meta?.moscow === 'must') return 'You rated this a MUST';
+  if (task.moscow === 'must') return 'Reads as urgent, not just important';
+  if (task.priority === 'high') return 'Priority 1';
+  return 'High-signal task';
 }
 
 function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5) {
@@ -151,7 +213,9 @@ function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5) {
       filePath: task.filePath || null,
       lineNumber: task.lineNumber != null ? task.lineNumber : null,
       ageDays: task.ageDays,
-      why: task._scoreReason || (task.moscow === 'must' ? 'Must move today' : 'High-signal task'),
+      // The scorer's reason wins when there is one — it knows more. Otherwise
+      // name the test that actually put this row here.
+      why: task._scoreReason || laneReason(task, todayStr),
       sourcePath: task.meta?.sourcePath || task.sourcePath || null,
     }));
 }

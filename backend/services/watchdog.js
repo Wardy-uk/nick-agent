@@ -184,6 +184,46 @@ function checkTaskExport() {
   return out;
 }
 
+// A scheduled job that has quietly stopped is the exact failure this file
+// exists for, and until now the scheduler was the one thing not watched: the
+// nightly sweep ran 9 nights in 45 and nobody knew, because a job that does not
+// run produces no log line to notice the absence of.
+//
+// Thresholds are generous — catch-up means a single missed slot self-heals on
+// the next boot, so an alert here means it has been failing to run for days.
+const JOB_STALE_DAYS = { daily: 3, weekly: 10 };
+
+function checkScheduledJobs() {
+  const out = [];
+  let jobs;
+  try { jobs = require('./scheduler').jobRunStatus(); }
+  catch (e) { return [{ key: 'jobs:status-failed', level: 'warn', title: 'Scheduler status unavailable', detail: e.message }]; }
+
+  // Before start() has registered anything there is nothing to say — an empty
+  // list must not read as "every job is broken".
+  if (!jobs || !jobs.length) return out;
+
+  for (const job of jobs) {
+    const limit = JOB_STALE_DAYS[job.kind] || 3;
+    if (!job.lastRun) {
+      // No stamp at all is expected on the first boot after this shipped, so it
+      // is a warning rather than a critical — it clears itself the same day.
+      out.push({ key: `jobs:never-ran:${job.name}`, level: 'warn', title: `${job.name} has never run`, detail: 'no recorded run yet — expected once on first boot after deploy' });
+      continue;
+    }
+    const days = Math.floor((Date.now() - new Date(`${job.lastRun}T12:00:00`).getTime()) / 86400000);
+    if (days >= limit) {
+      out.push({
+        key: `jobs:stale:${job.name}`,
+        level: 'critical',
+        title: `${job.name} has stopped running`,
+        detail: `last ran ${job.lastRun} (${days} days ago) — a ${job.kind} job`,
+      });
+    }
+  }
+  return out;
+}
+
 async function checkHost() {
   const out = [];
   try {
@@ -210,6 +250,7 @@ async function run({ notify = true } = {}) {
   const issues = [
     ...checkBackups(),
     ...checkTaskExport(),
+    ...checkScheduledJobs(),
     ...(await checkAi()),
     ...(await checkHost()),
   ];
@@ -248,4 +289,4 @@ async function run({ notify = true } = {}) {
   };
 }
 
-module.exports = { run, checkBackups, checkTaskExport, checkAi, checkHost };
+module.exports = { run, checkBackups, checkTaskExport, checkScheduledJobs, checkAi, checkHost };

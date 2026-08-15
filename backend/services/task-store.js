@@ -85,6 +85,7 @@ function toTodoShape(row) {
     mustdo: row.moscow === 'must',
     moscow: row.moscow || null,
     moscowProposed: Boolean(row.moscow_proposed),
+    estimateMinutes: row.estimate_minutes == null ? null : row.estimate_minutes,
     context: row.context || null,
     notes: row.notes || null,
     filePath: null,
@@ -208,6 +209,7 @@ function createTask(input = {}) {
     context,
     notes: input.notes || null,
     ms_id: input.ms_id || null,
+    estimate_minutes: normEstimate(input.estimateMinutes ?? input.estimate_minutes),
     dedupe_key: key,
   });
 
@@ -221,6 +223,29 @@ function normMoscow(value) {
   const v = String(value).toLowerCase().replace(/[^a-z']/g, '');
   if (v === 'wont' || v === "won't") return 'wont';
   return VALID_MOSCOW.includes(v) ? v : null;
+}
+
+/**
+ * How long it takes, in minutes.
+ *
+ * Snapped to coarse buckets on purpose. Asking an ADHD brain to predict "37
+ * minutes" is asking for a number it does not have and cannot check; asking
+ * "quick / half an hour / a couple of hours" is a judgement anyone can make in
+ * one second, which is the only kind that will actually get filled in. The
+ * buckets are also honest about the precision the data supports.
+ *
+ * Anything unrecognised returns null — NOT ESTIMATED — rather than a guess.
+ */
+const ESTIMATE_BUCKETS = [5, 15, 30, 60, 120, 240];
+
+function normEstimate(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  // Snap up: a task that takes "about 20 minutes" should not be offered for a
+  // 15-minute gap. Rounding the wrong way here is how a system that promises
+  // "this fits" stops being trusted.
+  return ESTIMATE_BUCKETS.find(b => n <= b) || ESTIMATE_BUCKETS[ESTIMATE_BUCKETS.length - 1];
 }
 
 /** Accepts 1-3, "1".."3", or the legacy high/normal/low strings. */
@@ -255,6 +280,9 @@ function updateTask(id, fields = {}) {
     patch.moscow_proposed = 0;
   }
   if ('priority' in fields) patch.priority = normPriority(fields.priority);
+  if ('estimateMinutes' in fields || 'estimate_minutes' in fields) {
+    patch.estimate_minutes = normEstimate(fields.estimateMinutes ?? fields.estimate_minutes);
+  }
   if ('due_date' in fields) patch.due_date = fields.due_date || null;
   if ('notes' in fields) patch.notes = fields.notes || null;
   if ('context' in fields) patch.context = fields.context || null;

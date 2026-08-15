@@ -1,0 +1,111 @@
+/* "What fits before your next meeting" — see TimeFitCard.jsx. */
+
+.tf-card {
+  margin-bottom: 20px;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 6px;
+}
+
+.tf-unknown { border-left-color: var(--text-muted); }
+
+.tf-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.tf-until {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tf-blurb {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tf-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.tf-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tf-row:last-child { border-bottom: none; }
+
+.tf-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text);
+  min-width: 0;
+}
+
+.tf-mins {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* An assumed duration must not read like a measured one. */
+.tf-assumed { color: var(--text-muted); }
+.tf-assumed em {
+  font-style: normal;
+  opacity: 0.75;
+  margin-left: 4px;
+}
+
+.tf-est {
+  font-size: 11px;
+  padding: 2px 4px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.tf-foot {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tf-coverage {
+  font-family: var(--font-mono);
+  margin-left: auto;
+}
+
+.tf-inline {
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+@media (max-width: 600px) {
+  .tf-row { flex-wrap: wrap; }
+  .tf-text { flex: 1 1 100%; }
+  .tf-coverage { margin-left: 0; }
+}

@@ -2,6 +2,125 @@ const cron = require('node-cron');
 const nudges = require('./nudges');
 const jira = require('./jira');
 const imports = require('./imports');
+const db = require('../db/database');
+
+// ── Missed-run catch-up ─────────────────────────────────────────────────────
+//
+// `node-cron` is in-process and has NO catch-up: if the process is not running
+// at 02:30, that night's job simply never happens and nothing says so. Measured
+// on the Pi: the nightly sweep ran 9 times in 45 nights and the weekly hygiene
+// pass 4 times in 7 Fridays, while the 22:00 rollup showed 111 runs and the Pi
+// itself had 34 days of uptime. So it was never downtime — it was `neuro-backend`
+// restarting (49 restarts, mostly deploys; two or three Claude sessions deploy a
+// day) and each restart silently eating whatever was due while it was gone.
+//
+// Every job that IS reliable already has a startup fallback — capture drain,
+// embeddings, imports, Plaud, MS Tasks, calendar. Every 02:30 and Friday job
+// lacked one. This is that pattern, generalised: stamp the run date into
+// `agent_state`, and on boot run anything whose slot has already passed today
+// and whose stamp is not today's.
+//
+// Deliberately: a job missed YESTERDAY is not run today. Catch-up means "this
+// slot has passed and was missed", not "replay history" — a week of missed
+// sweeps firing at once on a Monday boot is a worse failure than the one being
+// fixed.
+const JOB_STATE_PREFIX = 'scheduler_last_run:';
+
+function _dateStr(d = new Date()) {
+  // Local date, deliberately not toISOString() — the Pi may run in UTC and a
+  // 02:30 job stamped with a UTC date would roll over at the wrong moment.
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function lastRunOf(name) {
+  try { return db.getState(`${JOB_STATE_PREFIX}${name}`) || null; }
+  catch { return null; }
+}
+
+function _markRan(name, when = new Date()) {
+  try { db.setState(`${JOB_STATE_PREFIX}${name}`, _dateStr(when)); }
+  catch (e) { console.error(`[Scheduler] Could not stamp ${name}:`, e.message); }
+}
+
+// Wrap a job so every run — cron or catch-up — records itself.
+function _tracked(name, fn) {
+  return async (via = 'cron') => {
+    const started = Date.now();
+    try {
+      await fn();
+    } catch (e) {
+      // Jobs catch their own errors; this is the backstop so one throw cannot
+      // take down the catch-up sequence behind it.
+      console.error(`[Scheduler] ${name} threw (${via}):`, e.message);
+    }
+    // Stamped either way. A job that fails every night should not re-run on
+    // every deploy as well — the failure belongs in the log, not in a retry loop.
+    _markRan(name);
+    if (via !== 'cron') console.log(`[Scheduler] ${name} ran via ${via} (${Date.now() - started}ms)`);
+  };
+}
+
+// The two predicates, pure and exported — they are the only part of this with
+// real logic in it, and the only part worth pinning.
+
+/** Has today's hour:minute slot passed without a run today? */
+function isDailyDue(lastRun, hour, minute, now = new Date()) {
+  if (lastRun === _dateStr(now)) return false;
+  return now.getHours() > hour || (now.getHours() === hour && now.getMinutes() >= minute);
+}
+
+/** Has the most recent weekly slot passed without a run in it? */
+function isWeeklyDue(lastRun, weekday, hour, minute, now = new Date()) {
+  // Wind back to the last time this slot came round — earlier today, or up to
+  // six days ago. Missed means the stamp predates that moment.
+  const slot = new Date(now);
+  slot.setHours(hour, minute, 0, 0);
+  let back = (now.getDay() - weekday + 7) % 7;
+  if (back === 0 && now < slot) back = 7; // today IS the day, but before the time
+  slot.setDate(slot.getDate() - back);
+  return !lastRun || lastRun < _dateStr(slot);
+}
+
+const _catchUp = [];
+
+/** Register a job that should run once a day at hour:minute. */
+function scheduleDaily(name, cronExpr, hour, minute, fn) {
+  const run = _tracked(name, fn);
+  cron.schedule(cronExpr, () => run('cron'));
+  _catchUp.push({ name, run, kind: 'daily', due: (now) => isDailyDue(lastRunOf(name), hour, minute, now) });
+}
+
+/** Register a job that should run once a week on `weekday` (0=Sun) at hour:minute. */
+function scheduleWeekly(name, cronExpr, weekday, hour, minute, fn) {
+  const run = _tracked(name, fn);
+  cron.schedule(cronExpr, () => run('cron'));
+  _catchUp.push({ name, run, kind: 'weekly', due: (now) => isWeeklyDue(lastRunOf(name), weekday, hour, minute, now) });
+}
+
+/**
+ * Run anything whose slot has passed and which has not run in it.
+ *
+ * Staggered, because several of these walk the whole vault and firing them
+ * together on boot would make every deploy cost a load spike on a Pi that is
+ * also serving Focus and chat.
+ */
+function runCatchUp({ delayMs = 45000, gapMs = 60000 } = {}) {
+  const now = new Date();
+  const due = _catchUp.filter(j => { try { return j.due(now); } catch { return false; } });
+  if (!due.length) return [];
+  console.log(`[Scheduler] Catch-up: ${due.length} missed job(s) — ${due.map(j => j.name).join(', ')}`);
+  due.forEach((job, i) => {
+    const t = setTimeout(() => { job.run('catch-up'); }, delayMs + i * gapMs);
+    // Never hold the process open for a catch-up.
+    if (t.unref) t.unref();
+  });
+  return due.map(j => j.name);
+}
+
+/** What ran, and when — so a job that has quietly stopped is answerable. */
+function jobRunStatus() {
+  return _catchUp.map(j => ({ name: j.name, kind: j.kind, lastRun: lastRunOf(j.name) }));
+}
 
 function start() {
   // Fire nudges immediately if server starts after 9am on a weekday
@@ -24,6 +143,9 @@ function start() {
   } catch (e) {
     console.error('[Scheduler] Capture drain on startup failed:', e.message);
   }
+
+  // Run anything today's restart caused us to miss. Registered below, so this
+  // is deferred to the end of start() — see the runCatchUp() call there.
 
   // 8:55am weekdays — pre-warm standup questions
   cron.schedule('55 8 * * 1-5', () => {
@@ -90,7 +212,7 @@ function start() {
   // Friday 4:30pm — snapshot the week's outcomes, then generate the review.
   // Snapshot FIRST so the review can read a stored week rather than recomputing
   // one, and so the number is fixed at the moment it was taken.
-  cron.schedule('30 16 * * 5', () => {
+  scheduleWeekly('weekly-review', '30 16 * * 5', 5, 16, 30, () => {
     try {
       require('./outcomes').snapshot();
     } catch (e) { console.error('[Scheduler] Outcomes snapshot failed:', e.message); }
@@ -107,7 +229,7 @@ function start() {
 
   // Friday 4:35pm — weekly vault-hygiene pass (READ-ONLY): refresh the lint audit
   // and contextual-link cards so they're ready to review/approve. Never applies.
-  cron.schedule('35 16 * * 5', () => {
+  scheduleWeekly('weekly-hygiene', '35 16 * * 5', 5, 16, 35, () => {
     try {
       const vaultRoot = process.env.OBSIDIAN_VAULT_PATH;
       if (!vaultRoot) return;
@@ -152,7 +274,7 @@ function start() {
   // Nightly 2:30am — hygiene sweep (APPLY): content-safe Summary-N dedup, collect
   // unnamed "Speaker N" recordings into the Orphan hub, archive empty stragglers.
   // All mutations are reversible (archive + backups) and reported to Vault Audit.
-  cron.schedule('30 2 * * *', () => {
+  scheduleDaily('nightly-sweep', '30 2 * * *', 2, 30, () => {
     try {
       const vaultRoot = process.env.OBSIDIAN_VAULT_PATH;
       if (!vaultRoot) return;
@@ -162,7 +284,7 @@ function start() {
   });
 
   // Monday 8:10am — generate a knowledge reflection brief for the week ahead
-  cron.schedule('10 8 * * 1', () => {
+  scheduleWeekly('knowledge-reflection', '10 8 * * 1', 1, 8, 10, () => {
     try {
       const result = require('./knowledge-memory').generateReflection({ write: true });
       if (result?.path) {
@@ -185,7 +307,7 @@ function start() {
   });
 
   // 10pm nightly — build daily activity summary + entity extraction + write observations
-  cron.schedule('0 22 * * *', () => {
+  scheduleDaily('nightly-rollup', '0 22 * * *', 22, 0, () => {
     console.log('[Scheduler] Running nightly activity rollup...');
     try {
       require('./activity').runNightlyRollup();
@@ -321,10 +443,14 @@ function start() {
   });
 
   // 2am nightly — rebuild vault embeddings for changed files
-  cron.schedule('0 2 * * *', () => {
+  scheduleDaily('embeddings-rebuild', '0 2 * * *', 2, 0, () => {
     console.log('[Scheduler] Rebuilding vault embeddings...');
     try {
-      require('./embeddings').rebuildEmbeddings().catch(e => {
+      // Returned, not fire-and-forget, so the run is stamped on COMPLETION.
+      // A full re-index is hours on Voyage's free tier; if the backend restarts
+      // part-way there is no stamp, catch-up re-triggers it, and it resumes from
+      // the content hashes rather than starting over.
+      return require('./embeddings').rebuildEmbeddings().catch(e => {
         console.error('[Scheduler] Embedding rebuild failed:', e.message);
       });
     } catch (e) {
@@ -545,6 +671,16 @@ function start() {
   });
 
   console.log('[Scheduler] Started — pre-warm 8:55am, standup 9am, 1-2-1 9:10am, nag 15m, EOD pre-warm 4:55pm, EOD 5pm, weekly review Fri 4:30pm, knowledge reflection Mon 8:10am, import consolidation hourly, import report 18:10, plan milestone 9:05am, escalations 5m, email triage 8/12/17, meeting prep 5m, Plaud MCP 30m, MS Tasks 30m');
+
+  // Last, so every tracked job is registered. Staggered — several of these walk
+  // the whole vault, and a deploy should not cost a load spike on a Pi that is
+  // also serving Focus and chat.
+  runCatchUp();
 }
 
-module.exports = { start };
+module.exports = {
+  start, runCatchUp, jobRunStatus, lastRunOf,
+  scheduleDaily, scheduleWeekly,
+  // exported for tests
+  isDailyDue, isWeeklyDue, _dateStr,
+};

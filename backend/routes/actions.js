@@ -44,6 +44,67 @@ function rank(action) {
   return TYPE_RANK[action.type] ?? KIND_RANK[action.presentation.kind] ?? 1;
 }
 
+// ── Reaching past the cap ────────────────────────────────────────────────────
+//
+// The cap above is right and so is the ordering, but "show more" in the panel
+// only ever revealed what had already been SENT — so 347 of 467 pending actions
+// could not be reached from the UI at all. That blocked the plan of record for
+// clearing the backfill by hand, and even inside the 120 it was two taps a row
+// with no way to act on a group.
+//
+// The answer is not a bigger cap (that just moves the cliff, per the calendar).
+// It is a filter the server understands, so the client asks for a slice by
+// source note / month / owner and pages through it.
+
+/** The note date a candidate came from — that is what "which month" means here,
+ *  not when the row happened to be created by a sweep. */
+function monthOf(action) {
+  const src = action.payload?.sourcePath || '';
+  const m = src.match(/(\d{4})-(\d{2})-\d{2}/);
+  if (m) return `${m[1]}-${m[2]}`;
+  const created = String(action.created_at || '');
+  return created.slice(0, 7) || null;
+}
+
+function matchesFilter(action, f) {
+  if (f.type && action.type !== f.type) return false;
+  if (f.kind && action.presentation.kind !== f.kind) return false;
+  if (f.owner && (action.payload?.owner || 'unowned') !== f.owner) return false;
+  if (f.source && (action.payload?.sourcePath || '') !== f.source) return false;
+  if (f.month && monthOf(action) !== f.month) return false;
+  return true;
+}
+
+function readFilter(q) {
+  const f = {};
+  for (const key of ['type', 'kind', 'owner', 'source', 'month']) {
+    if (q[key]) f[key] = String(q[key]);
+  }
+  return f;
+}
+
+/** What you can filter BY, counted over everything pending — so the picker
+ *  offers real groups with honest sizes rather than whatever fitted on screen. */
+function buildFacets(all) {
+  const bump = (obj, key) => { if (key) obj[key] = (obj[key] || 0) + 1; };
+  const byMonth = {}, byOwner = {}, bySource = {};
+  for (const a of all) {
+    bump(byMonth, monthOf(a));
+    bump(byOwner, a.payload?.owner || 'unowned');
+    bump(bySource, a.payload?.sourcePath);
+  }
+  return {
+    byMonth,
+    byOwner,
+    // Biggest first — a note that threw off 40 candidates is the one worth
+    // dealing with in one go.
+    bySource: Object.entries(bySource)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 60)
+      .map(([path, count]) => ({ path, count })),
+  };
+}
+
 // GET /api/actions — list pending actions + recent history
 //
 // Each action carries a `presentation` built on the server from its STORED
@@ -86,11 +147,27 @@ router.get('/', (req, res) => {
       .filter(a => a.status !== 'pending')
       .map(decorate);
 
+    // Filter + page. With no filter and no offset this returns exactly what it
+    // always did, so every existing caller is unaffected.
+    const filter = readFilter(req.query);
+    const filtered = Object.keys(filter).length ? all.filter(a => matchesFilter(a, filter)) : all;
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit) || PENDING_LIMIT));
+    const page = filtered.slice(offset, offset + limit);
+
     res.json({
-      pending: all.slice(0, PENDING_LIMIT),
+      pending: page,
       pendingTotal: all.length,
       pendingByType,
       pendingByKind,
+      // Everything needed to know whether there is more, and how much — the
+      // absence of exactly this is what made 347 rows unreachable.
+      filter,
+      filteredTotal: filtered.length,
+      offset,
+      limit,
+      hasMore: offset + page.length < filtered.length,
+      facets: buildFacets(all),
       recent,
     });
   } catch (e) {
@@ -225,4 +302,59 @@ router.post('/batch', async (req, res) => {
   }
 });
 
+// POST /api/actions/bulk-reject — reject everything matching a filter.
+// Body: { type?, kind?, owner?, source?, month?, dryRun? }
+//
+// Reject only, deliberately. There is no bulk APPROVE over a filter and there
+// should not be: rejecting is internal and reversible-by-re-extraction, while
+// approving runs executors — one of which sends email. "Select all and approve"
+// across a filter nobody read is exactly the accident this queue's two-gate
+// design exists to prevent. Individual approval stays one at a time.
+//
+// Three further guards, in order of how badly each would bite:
+//   · at least one filter — an unfiltered bulk reject is "delete the queue"
+//   · nothing outbound in the matched set, ever, even though it is only a reject
+//   · dryRun first, so the UI can say "reject 191 items?" with a true number
+router.post('/bulk-reject', (req, res) => {
+  try {
+    const { dryRun = false } = req.body || {};
+    const filter = readFilter(req.body || {});
+    if (!Object.keys(filter).length) {
+      return res.status(400).json({ error: 'A filter is required — refusing to reject the whole queue' });
+    }
+
+    const decorate = (a) => ({ ...a, presentation: actionPresenter.describe(a) });
+    const matched = db.getPendingSaraActions(READ_ALL).map(decorate).filter(a => matchesFilter(a, filter));
+
+    const outbound = matched.filter(a => a.presentation.kind === 'outbound');
+    if (outbound.length) {
+      return res.status(400).json({
+        error: `Refusing: ${outbound.length} of these leave the building. Reject those individually.`,
+        outboundIds: outbound.map(a => a.id),
+      });
+    }
+
+    if (dryRun) {
+      return res.json({
+        dryRun: true, filter, matched: matched.length,
+        sample: matched.slice(0, 5).map(a => ({ id: a.id, text: a.payload?.text || a.reason })),
+      });
+    }
+
+    const rejected = [];
+    for (const a of matched) {
+      const outcome = rejectAction(a.id);
+      if (outcome.status === 200) rejected.push(a.id);
+    }
+
+    workingMemory.invalidate('sara actions bulk reject');
+    res.json({ ok: true, filter, rejected: rejected.length, ids: rejected });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
+// The filter/facet logic is where the correctness is, so it is reachable from a
+// test without standing up Express.
+module.exports._internals = { monthOf, matchesFilter, readFilter, buildFacets };
