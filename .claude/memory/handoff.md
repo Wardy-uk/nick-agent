@@ -163,9 +163,11 @@ running.
 
 # Session Handoff — 2026-08-14 (actions, rituals, measurement, meetings)
 
-Ran alongside the 1-2-1 session above, in the same working tree. Everything below
-is committed and deployed to the Pi (`6af06a7`+). 153 backend tests, CI now runs
-both suites on push.
+Ran alongside the 1-2-1 session above, in the same working tree. Everything is
+committed, pushed and deployed — local, origin and Pi all at `361df08`, backend
+healthy. 153 backend tests + 34 SARA, CI now runs both suites on push.
+
+**Read the "Outstanding" section below first — it is ordered to be worked through.**
 
 ## The one thing to internalise
 
@@ -211,21 +213,72 @@ Ollama for scheduled; Anthropic/OpenAI demoted to backstops — the Anthropic ke
 outcomes measurement (`outcomes.js`, weekly snapshot, Friday 4:30pm) · meeting
 agenda triage + decline/propose.
 
-## Open / next
+## Outstanding — start here
 
-1. **463 pending `capture_todo` actions** — meeting-action candidates awaiting yes/no.
-   Working as designed (review-only), but it needs a batch review session.
-2. **Plan for the rest**: https://claude.ai/code/artifact/cd51cfe0-e7db-4328-bdf8-8aac285f09d2
-   Remaining: NOVA manual escalation (its `escalation_log` table already exists and
-   already records CC→T2 tier moves; needs a `reason_kind` split because the seeded
-   reasons are capability-flavoured, not urgency), person record → NOVA with vault
-   notes as capture points, agent-id join key, 1-2-1 agenda, Teams (a real build, not
-   a config toggle), commitment chasing, escalation first-drafts.
-3. **Baseline to beat**: week 2026-W33 = 9 things finished, 26 nudges pushed back.
-   The nudge tone ladder changed on 14 Aug (shame tiers deleted, gradient inverted so
-   it warms rather than sharpens) — next Friday's number is the first honest read.
-4. **`sara/` tree** — two backends, seed data, a state engine duplicating the decision
-   engine. Nick has not yet decided whether it is the future or scaffolding to retire.
+**Plan for everything below**: https://claude.ai/code/artifact/cd51cfe0-e7db-4328-bdf8-8aac285f09d2
+
+### Blocked on a decision from Nick
+
+1. **`sara/` tree** — two backends, seed data, a state engine duplicating the decision
+   engine. Either it is the future and NEURO's frontend folds into it, or it is
+   scaffolding to retire. Today it costs maintenance without being either.
+2. **`reason_kind` for NOVA escalations** — the seeded `escalation_reasons` are
+   capability-flavoured ("beyond T1 scope", with troubleshooting checklists). Nick's
+   case is urgency ("the AM says the client is at renewal"). Needs a second vocabulary
+   and probably a column BEFORE any code.
+3. **Does Jira allow writing `duedate`?** The needed-by date changing the ticket's SLA
+   position is what makes an escalation bite. Unconfirmed.
+
+### Agreed with the other session, not yet built
+
+4. **Split the background tasks** — cloud for `email_triage` and `transcript_processing`
+   (prose Nick reads, and 1.5B is poor at both); local for `import_classification` and
+   `journal_prompts` (a routing decision and a once-a-day prompt). One-line override.
+5. **Skip a known-dead Pi 4 worker** rather than burning the 60s timeout, with periodic
+   retry. NOTE: the worker is currently **UP** (`/health` 200 in 90ms,
+   `PI4_WORKER_ENABLED=true`) — this is insurance, not a live fix. A comment in their
+   `ai-routing.test.js` claiming it has been offline since June is STALE.
+6. **Surface worker-down in the AI health panel.** Their health recording is half of it;
+   nothing displays it. This is the real value — a dependency reportedly down for months
+   with nobody noticing is the same failure mode as everything in the section above.
+
+### Build queue (sequenced in the plan)
+
+7. NOVA manual escalation — `escalation_log` already exists AND already records CC→T2
+   tier moves via `jira-sync-service` as `escalation_type: 'jira_transition'`. Missing:
+   a manual endpoint, the Jira comment, the notification, a view. Escalation closes when
+   the TICKET closes; add a needed-by date that writes through to the ticket due date.
+8. Agent-id join key → sensitive-content list → person record migrates to NOVA, with
+   vault People notes becoming capture points (the `Tasks/Capture.md` drop-box pattern).
+   NEURO renders a person card. Meeting-note backlinks must keep resolving.
+9. 1-2-1 agenda, built in NOVA once the person record lands. Coordinate — the other
+   session is live in this area.
+10. Teams — a real build, NOT a config toggle. Decide first: Power Automate Workflows
+    webhook for channels, or delegated `ChatMessage.Send` for a DM that comes from Nick.
+11. Commitment chasing, then escalation first-drafts (prototype those on CLOSED tickets
+    before they go anywhere near a customer).
+
+### Known but unfixed
+
+12. **463 pending `capture_todo` actions** — meeting-action candidates awaiting yes/no.
+    Working as designed (review-only), but it wants a batch review session.
+
+### Scoped out deliberately — reopen only if Nick disagrees
+
+- Snooze-to-date works on NEURO-owned tasks only. Microsoft-owned would need a Graph
+  `dueDateTime` write; a vault checkbox has nowhere to put a date. The control hides
+  rather than failing silently.
+- No snooze on the ADHD quick-wins list — those are "do this now", and a defer button
+  works against them.
+
+### Needs Nick in the real world, not another session
+
+- **The Today panel's avoidance section** — useful or accusatory? One line to fix.
+- **A real standup** — it should chase carried commitments and push back ONCE on
+  anything vague. Twice is nagging; loosen it if that happens.
+- **Baseline to beat**: week 2026-W33 = **9 things finished, 26 nudges pushed back**.
+  The tone ladder changed 14 Aug (82 messages → 32, shame tiers deleted, gradient
+  inverted so it warms rather than sharpens). Next Friday is the first honest read.
 
 ## Working alongside another session
 
