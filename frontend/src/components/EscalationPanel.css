@@ -76,6 +76,7 @@
 
 .esc-tag-req { color: var(--danger); }
 .esc-tag-tier { color: var(--text-muted); }
+.esc-tag-urgency { color: var(--warning); cursor: help; }
 
 .esc-row-action {
   margin-left: auto;

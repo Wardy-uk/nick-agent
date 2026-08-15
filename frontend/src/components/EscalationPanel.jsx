@@ -20,7 +20,7 @@ function ageDays(iso) {
 }
 
 /** The escalated queue. Read-only — acting on a row means opening it. */
-function ActiveEscalations({ items, loading, error, onPick, onRefresh }) {
+function ActiveEscalations({ items, loading, error, warning, onPick, onRefresh }) {
   return (
     <section className="esc-active">
       <div className="esc-active-head">
@@ -35,6 +35,9 @@ function ActiveEscalations({ items, loading, error, onPick, onRefresh }) {
 
       {error && <div className="esc-error">{error}</div>}
 
+      {/* A short list is indistinguishable from a quiet day, so say so. */}
+      {warning && <div className="esc-warn">{warning}</div>}
+
       {!error && !loading && items.length === 0 && (
         <p className="esc-empty">Nothing is escalated. That is the good outcome, not a broken query.</p>
       )}
@@ -48,10 +51,16 @@ function ActiveEscalations({ items, loading, error, onPick, onRefresh }) {
               <span className="esc-row-summary">{t.summary}</span>
             </div>
             <div className="esc-row-meta">
-              {/* Why it's here. The two routes in mean different things — the
-                  customer raised it, or we moved it — so they read differently. */}
+              {/* Why it's here. The three routes in mean different things — the
+                  customer raised it, we moved it, or someone escalated it for
+                  urgency — so they read differently. A row can carry several. */}
               {t.viaRequestType && <span className="esc-tag esc-tag-req">customer-raised</span>}
               {t.viaTier && <span className="esc-tag esc-tag-tier">tier</span>}
+              {t.viaUrgency && (
+                <span className="esc-tag esc-tag-urgency" title={
+                  [t.urgencyReason, t.escalatedBy && `by ${t.escalatedBy}`].filter(Boolean).join(' — ')
+                }>urgency</span>
+              )}
               <span>{t.status || '—'}</span>
               <span>{t.priority || 'No priority'}</span>
               <span>{t.assignee || 'Unassigned'}</span>
@@ -81,6 +90,7 @@ export default function EscalationPanel() {
   const [active, setActive] = useState([]);
   const [activeLoading, setActiveLoading] = useState(true);
   const [activeError, setActiveError] = useState(null);
+  const [activeWarning, setActiveWarning] = useState(null);
   const keyInput = useRef(null);
 
   useEffect(() => { keyInput.current?.focus(); }, []);
@@ -99,6 +109,7 @@ export default function EscalationPanel() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Could not load escalations');
       setActive(data.escalations || []);
+      setActiveWarning(data.warning || null);
     } catch (err) {
       setActiveError(err.message);
     } finally {
@@ -177,6 +188,7 @@ export default function EscalationPanel() {
         items={active}
         loading={activeLoading}
         error={activeError}
+        warning={activeWarning}
         onRefresh={loadActive}
         onPick={(k) => lookup(null, k)}
       />

@@ -88,49 +88,69 @@ async function fetchEscalationTickets() {
 const TIER_FIELD = 'customfield_12981';        // Current Tier
 const REQUEST_TYPE_FIELDS = ['customfield_10020', 'customfield_12800'];
 
-async function fetchActiveEscalations() {
-  const jql = `project = ${JIRA_PROJECT_KEY} AND statusCategory != Done AND `
-    + `("Request Type" in ("Escalation (NT)") OR cf[12981] = "Escalations") `
-    + `ORDER BY created ASC`;
+const ESCALATION_FIELDS = ['summary', 'status', 'priority', 'assignee', 'created', 'updated',
+  'duedate', TIER_FIELD, ...REQUEST_TYPE_FIELDS];
 
+function mapEscalationIssue(issue) {
+  const f = issue.fields || {};
+  // Two fields carry the request type on this instance and only one is
+  // populated per ticket — take whichever answers rather than guessing.
+  const requestType = REQUEST_TYPE_FIELDS
+    .map(id => f[id]?.requestType?.name)
+    .find(Boolean) || null;
+  const tier = f[TIER_FIELD]?.value || null;
+  const base = JIRA_BASE_URL ? JIRA_BASE_URL.replace(/\/$/, '') : null;
+  return {
+    key: issue.key,
+    summary: f.summary || '',
+    status: f.status?.name || null,
+    priority: f.priority?.name || null,
+    assignee: f.assignee?.displayName || null,
+    created: f.created || null,
+    updated: f.updated || null,
+    duedate: f.duedate || null,
+    tier,
+    requestType,
+    // Why this ticket is in the list. Without it a row is unexplained, and the
+    // routes in mean different things: the customer shouting, us having moved
+    // it, or someone having escalated it for urgency.
+    viaRequestType: /escalation/i.test(requestType || ''),
+    viaTier: tier === 'Escalations',
+    viaUrgency: false,
+    url: base ? `${base}/browse/${issue.key}` : null,
+  };
+}
+
+async function searchEscalations(jql) {
   const result = await jiraRequest('/rest/api/3/search/jql', {
     method: 'POST',
-    body: {
-      jql,
-      fields: ['summary', 'status', 'priority', 'assignee', 'created', 'updated', 'duedate',
-        TIER_FIELD, ...REQUEST_TYPE_FIELDS],
-      maxResults: 100,
-    },
+    body: { jql, fields: ESCALATION_FIELDS, maxResults: 100 },
   });
+  return (result.issues || []).map(mapEscalationIssue);
+}
 
-  const base = JIRA_BASE_URL ? JIRA_BASE_URL.replace(/\/$/, '') : null;
-  return (result.issues || []).map((issue) => {
-    const f = issue.fields || {};
-    // Two fields carry the request type on this instance and only one is
-    // populated per ticket — take whichever answers rather than guessing.
-    const requestType = REQUEST_TYPE_FIELDS
-      .map(id => f[id]?.requestType?.name)
-      .find(Boolean) || null;
-    const tier = f[TIER_FIELD]?.value || null;
-    return {
-      key: issue.key,
-      summary: f.summary || '',
-      status: f.status?.name || null,
-      priority: f.priority?.name || null,
-      assignee: f.assignee?.displayName || null,
-      created: f.created || null,
-      updated: f.updated || null,
-      duedate: f.duedate || null,
-      tier,
-      requestType,
-      // Why this ticket is in the list. Without it a row is unexplained, and the
-      // two routes in mean different things: one is the customer shouting, the
-      // other is us having moved it.
-      viaRequestType: /escalation/i.test(requestType || ''),
-      viaTier: tier === 'Escalations',
-      url: base ? `${base}/browse/${issue.key}` : null,
-    };
-  });
+async function fetchActiveEscalations() {
+  return searchEscalations(
+    `project = ${JIRA_PROJECT_KEY} AND statusCategory != Done AND `
+    + `("Request Type" in ("Escalation (NT)") OR cf[12981] = "Escalations") `
+    + `ORDER BY created ASC`
+  );
+}
+
+/**
+ * The still-open subset of a list of keys, in the same shape.
+ *
+ * Urgency escalations are known only to NOVA's log, which records that an
+ * escalation happened and has no idea whether the ticket has since been closed.
+ * So NOVA supplies the keys and Jira answers which are still live — neither
+ * source can answer it alone.
+ */
+async function fetchOpenIssuesByKey(keys) {
+  const list = (keys || []).filter(k => /^[A-Z][A-Z0-9]+-\d+$/.test(k));
+  if (list.length === 0) return [];
+  return searchEscalations(
+    `key in (${list.join(',')}) AND statusCategory != Done ORDER BY created ASC`
+  );
 }
 
 function nickHasCommented(issue) {
@@ -282,6 +302,7 @@ module.exports = {
   isConfigured,
   fetchEscalationTickets,
   fetchActiveEscalations,
+  fetchOpenIssuesByKey,
   syncEscalations,
   markEscalationsSeen,
   getUnseenEscalationCount,

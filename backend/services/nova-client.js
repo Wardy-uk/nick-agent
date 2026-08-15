@@ -73,6 +73,16 @@ async function listUrgencyReasons() {
   return call('/api/neuro-bridge/escalation-reasons?kind=urgency');
 }
 
+/**
+ * Tickets NOVA's escalation log has an escalation for, newest per ticket.
+ *
+ * The log is NOVA's alone and there is no Jira field that mirrors it, so
+ * without this an urgency escalation is invisible to every list NEURO can build.
+ */
+async function listEscalations({ days = 90 } = {}) {
+  return call(`/api/neuro-bridge/escalations?days=${encodeURIComponent(days)}`);
+}
+
 /** Enough ticket detail to confirm it is the right ticket before escalating. */
 async function getTicket(key) {
   return call(`/api/neuro-bridge/ticket/${encodeURIComponent(key)}`);
@@ -94,4 +104,4 @@ async function escalate({ ticketKey, reasonCode, neededBy, notes }) {
   });
 }
 
-module.exports = { isConfigured, listUrgencyReasons, getTicket, escalate, call };
+module.exports = { isConfigured, listUrgencyReasons, listEscalations, getTicket, escalate, call };

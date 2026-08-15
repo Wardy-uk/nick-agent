@@ -47,21 +47,66 @@ function adfText(node, depth = 0) {
 /**
  * GET /api/escalation/active — what is escalated right now.
  *
- * Reads Jira directly rather than going through NOVA: this is a question about
- * the state of the queue, and NEURO already holds Jira credentials for the
- * escalation poll. It deliberately does NOT sit behind `requireNova` — the list
- * is the useful half of this screen and should still render when the bridge is
- * down, even though escalating would then fail.
+ * Three populations, two systems. Jira answers the first two (Request Type =
+ * Escalation, and Current Tier = Escalations) directly, because those are
+ * facts on the ticket. The third — an urgency escalation raised here or in
+ * NOVA — changes priority and the due date but deliberately leaves the tier
+ * alone, so it writes NOTHING to Jira identifying the ticket as escalated:
+ * NOVA's escalation_log is the only record it happened. That is why NT-28062
+ * and NT-28075 were escalated and still invisible to a Jira-only query.
+ *
+ * NOVA supplies the keys, Jira says which are still open — neither source can
+ * answer it alone.
+ *
+ * Deliberately NOT behind `requireNova`: the two Jira arms are the bulk of the
+ * list and must still render on a day the bridge is down. When it is down the
+ * response carries a `warning` rather than quietly returning a short list,
+ * because a list that silently omits a population is worse than no list.
  */
 router.get('/active', async (req, res) => {
   if (!jira.isConfigured()) {
     return res.status(503).json({ error: 'Jira is not configured' });
   }
+
+  let escalations;
   try {
-    res.json({ escalations: await jira.fetchActiveEscalations() });
+    escalations = await jira.fetchActiveEscalations();
   } catch (e) {
-    res.status(502).json({ error: `Could not reach Jira: ${e.message}` });
+    return res.status(502).json({ error: `Could not reach Jira: ${e.message}` });
   }
+
+  let warning = null;
+  if (nova.isConfigured()) {
+    try {
+      const logged = await nova.listEscalations({ days: 90 });
+      const byKey = new Map(escalations.map(t => [t.key, t]));
+
+      // Anything the log knows about that the tier/request-type arms missed
+      // still has to be checked against Jira — the log has no idea whether the
+      // ticket has since been closed.
+      const unknown = logged.map(e => e.ticket_key).filter(k => !byKey.has(k));
+      for (const t of await jira.fetchOpenIssuesByKey(unknown)) {
+        byKey.set(t.key, t);
+        escalations.push(t);
+      }
+
+      for (const e of logged) {
+        const t = byKey.get(e.ticket_key);
+        if (!t) continue;   // closed since, or not in this project
+        t.viaUrgency = true;
+        t.urgencyReason = e.reason_label || e.reason_code || null;
+        t.escalatedBy = e.escalated_by || null;
+        t.escalatedAt = e.created_at || null;
+      }
+    } catch (e) {
+      warning = `Urgency escalations are missing from this list — NOVA said: ${e.message}`;
+    }
+  } else {
+    warning = 'Urgency escalations are missing from this list — NOVA is not configured.';
+  }
+
+  escalations.sort((a, b) => new Date(a.created || 0) - new Date(b.created || 0));
+  res.json({ escalations, warning });
 });
 
 // GET /api/escalation/reasons — the urgency vocabulary, for the picker.
