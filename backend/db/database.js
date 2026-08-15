@@ -440,6 +440,13 @@ function upsertInboxItem(item) {
   ]);
 }
 
+// Every email we have already triaged, dismissed or not. The inbox scanner
+// uses this to avoid paying to re-analyse the same unread mail every 10
+// minutes — 32 unread emails were being re-triaged 6 times an hour.
+function getTriagedEmailIds() {
+  return all('SELECT email_id FROM inbox_items').map(r => r.email_id);
+}
+
 function getActiveInboxItems() {
   return all(
     'SELECT * FROM inbox_items WHERE dismissed = 0 ORDER BY CASE urgency WHEN \'high\' THEN 0 WHEN \'medium\' THEN 1 WHEN \'low\' THEN 2 END, created_at DESC'
@@ -602,6 +609,36 @@ function replaceNovaFlags(flags) {
 
 function getActiveNovaFlags() {
   return all('SELECT * FROM nova_flags ORDER BY risk_score DESC');
+}
+
+// ── Health samples (Apple Health time series) ──
+
+// INSERT OR IGNORE, so re-posting a sample the watch already gave us is a no-op
+// rather than a duplicate that would drag the baseline.
+function insertHealthSample(metric, value, recordedAt, source) {
+  const r = run(
+    `INSERT OR IGNORE INTO health_samples (metric, value, recorded_at, source)
+     VALUES (?, ?, ?, ?)`,
+    [metric, value, recordedAt, source || 'ingest']
+  );
+  return r.changes > 0;
+}
+
+function getHealthSamples(metric, sinceIso, limit) {
+  return all(
+    `SELECT value, recorded_at FROM health_samples
+     WHERE metric = ? AND recorded_at >= ?
+     ORDER BY recorded_at DESC LIMIT ?`,
+    [metric, sinceIso, limit || 5000]
+  );
+}
+
+function getLatestHealthSample(metric) {
+  return get(
+    `SELECT value, recorded_at FROM health_samples
+     WHERE metric = ? ORDER BY recorded_at DESC LIMIT 1`,
+    [metric]
+  );
 }
 
 // ── Location Visits ──
@@ -849,6 +886,7 @@ module.exports = {
   getTodayActivity,
   upsertInboxItem,
   getActiveInboxItems,
+  getTriagedEmailIds,
   dismissInboxItem,
   cleanupOldDismissed,
   clearStaleInboxItems,
@@ -877,6 +915,10 @@ module.exports = {
   deleteDoNext,
   replaceNovaFlags,
   getActiveNovaFlags,
+  // Health samples
+  insertHealthSample,
+  getHealthSamples,
+  getLatestHealthSample,
   // Location visits
   saveLocationVisit,
   getLocationVisits,

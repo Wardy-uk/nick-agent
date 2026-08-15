@@ -400,6 +400,10 @@ async function _runTaskInner(taskType, payload, options = {}) {
     if (!pi4Worker.isEnabled()) {
       console.log(`[AIRouting] ${taskType}: Pi 4 worker not enabled, using cloud`);
       workerFellBack = true;
+    } else if (pi4Worker.shouldSkip()) {
+      // Already known to be failing — go straight to the fallback rather than
+      // spending another 60s proving it again.
+      workerFellBack = true;
     } else {
       try {
         const workerResult = await pi4Worker.runTask(taskType, payload);

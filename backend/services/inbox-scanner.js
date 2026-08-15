@@ -100,8 +100,33 @@ async function scanInbox() {
       return;
     }
 
+    // Only triage mail we have not already triaged.
+    //
+    // Without this the scanner re-analysed every unread email every 10 minutes
+    // for as long as it stayed unread: 32 unread emails meant 72 AI calls in
+    // 12 hours, all producing the same answer. That was merely wasteful while
+    // it ran on the Pi 4; once it could reach the cloud it burned 104,464
+    // tokens and blew the daily budget, which then took the fallback chain down
+    // with it. Cost is a function of NEW mail, as it always should have been.
+    const alreadyTriaged = new Set(db.getTriagedEmailIds());
+    const fresh = candidates.filter(e => !alreadyTriaged.has(e.id));
+
+    if (fresh.length === 0) {
+      console.log(`[InboxScanner] ${candidates.length} candidates, all already triaged \u2014 skipping AI`);
+      lastScanTime = new Date().toISOString();
+      return;
+    }
+
+    // Hard cap regardless. One unusually busy morning should not be able to
+    // spend the whole day's token budget in a single call.
+    const MAX_PER_SCAN = 15;
+    const toTriage = fresh.slice(0, MAX_PER_SCAN);
+    if (fresh.length > MAX_PER_SCAN) {
+      console.log(`[InboxScanner] ${fresh.length} new emails, triaging ${MAX_PER_SCAN} this pass`);
+    }
+
     // Build email summary for Claude
-    const emailSummary = candidates.map(e => ({
+    const emailSummary = toTriage.map(e => ({
       id: e.id,
       subject: e.subject,
       from: `${e.from} <${e.fromEmail}>`,
@@ -118,7 +143,7 @@ async function scanInbox() {
     try {
       const aiProvider = require('./ai-provider');
       const result = await aiProvider.triageEmails(
-        `${TRIAGE_PROMPT}\n\nHere are ${candidates.length} emails from the last 12 hours:\n\n${JSON.stringify(emailSummary, null, 2)}`
+        `${TRIAGE_PROMPT}\n\nHere are ${toTriage.length} emails from the last 12 hours:\n\n${JSON.stringify(emailSummary, null, 2)}`
       );
       if (result.text) {
         const jsonMatch = result.text.match(/\[[\s\S]*\]/);
@@ -132,7 +157,7 @@ async function scanInbox() {
     try {
       // Enrich with email metadata and persist to DB
       for (const item of parsed) {
-        const email = candidates.find(e => e.id === item.emailId);
+        const email = toTriage.find(e => e.id === item.emailId);
         const enriched = {
           ...item,
           received: email?.received || null,

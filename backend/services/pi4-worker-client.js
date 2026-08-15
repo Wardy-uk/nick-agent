@@ -16,6 +16,33 @@ const PI4_TIMEOUT = parseInt(process.env.PI4_WORKER_TIMEOUT_MS) || 60000;
 let _healthCache = { ok: null, at: 0 };
 const HEALTH_CACHE_TTL = 60000; // 1 minute
 
+// Consecutive task failures, and a cooldown once it is clearly not coping.
+//
+// The worker answers /health in 47ms but cannot finish a real triage inside the
+// 60s timeout, so every scan waited a full minute before failing over — 74
+// timeouts in 12 hours. Worse, our timeout only abandons OUR side: the Pi 4
+// keeps grinding, so retrying every 10 minutes piles work onto a box already
+// behind. Backing off is not just faster, it stops us making it worse.
+let _consecutiveFailures = 0;
+let _skipUntil = 0;
+const SKIP_AFTER_FAILURES = 3;
+const SKIP_FOR_MS = 15 * 60 * 1000;
+
+// True when the worker has failed enough in a row to be worth skipping. The
+// cooldown expires on its own, so a worker that recovers is picked back up
+// without anyone intervening.
+function shouldSkip() {
+  return Date.now() < _skipUntil;
+}
+
+function skipState() {
+  return {
+    skipping: shouldSkip(),
+    consecutiveFailures: _consecutiveFailures,
+    skipUntil: _skipUntil ? new Date(_skipUntil).toISOString() : null,
+  };
+}
+
 function isEnabled() {
   return PI4_ENABLED;
 }
@@ -79,6 +106,8 @@ async function runTask(task, payload) {
     // called by /api/ai/settings, so a worker doing real work all day still
     // reported "status unknown" on the health panel.
     _healthCache = { ok: true, at: Date.now() };
+    _consecutiveFailures = 0;
+    _skipUntil = 0;
     return {
       ok: data.ok,
       result: data.result || '',
@@ -95,6 +124,12 @@ async function runTask(task, payload) {
     // routing, and leave reachability to say what is actually true.
     const timedOut = /abort|timeout/i.test(e.message || '');
     if (!timedOut) _healthCache = { ok: false, at: Date.now() };
+
+    _consecutiveFailures += 1;
+    if (_consecutiveFailures >= SKIP_AFTER_FAILURES && !shouldSkip()) {
+      _skipUntil = Date.now() + SKIP_FOR_MS;
+      console.warn(`[Pi4Worker] ${_consecutiveFailures} consecutive failures — skipping the worker for ${SKIP_FOR_MS / 60000} minutes`);
+    }
     return { ok: false, error: e.message, timedOut };
   } finally {
     clearTimeout(timer);
@@ -107,8 +142,9 @@ function getStatus() {
     url: PI4_URL,
     timeout: PI4_TIMEOUT,
     lastHealthy: _healthCache.ok,
+    ...skipState(),
     healthCheckedAt: _healthCache.at ? new Date(_healthCache.at).toISOString() : null,
   };
 }
 
-module.exports = { isEnabled, isHealthy, runTask, getStatus };
+module.exports = { isEnabled, isHealthy, runTask, getStatus, shouldSkip, skipState };
