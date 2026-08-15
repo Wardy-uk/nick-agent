@@ -98,6 +98,16 @@
 }
 .chat__send:disabled { opacity: 0.45; cursor: default; }
 
+.chat__voice-note {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--muted);
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.chat__voice-note--err { color: #ffb4b4; background: #3a1a1a; }
+
 .chat__mic {
   flex: 0 0 auto;
   width: 2.8rem;

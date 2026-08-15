@@ -5,6 +5,18 @@ import './Chat.css';
 
 // Chat = talk to the brain, with real vault reasoning behind it.
 // Streams over POST /api/chat (SSE). If streaming fails, falls back to POST /api/chat/sync.
+
+// Web Speech errors are terse codes. On a phone there is no console to read, so the
+// reason has to reach the screen — a mic that fails silently is indistinguishable from
+// a mic that isn't wired up at all.
+const VOICE_ERRORS = {
+  'not-allowed': 'Microphone blocked. Allow it in Settings → Safari → Microphone, then reload.',
+  'service-not-allowed': 'iOS refused speech recognition here. Try opening SARA in Safari rather than the installed app.',
+  'audio-capture': 'No microphone available.',
+  'no-speech': 'Didn’t hear anything — try again, closer to the mic.',
+  'network': 'Speech recognition needs the network and couldn’t reach it.',
+  aborted: '',
+};
 export default function Chat() {
   const [messages, setMessages] = useState([]); // { role, content }
   const [input, setInput] = useState('');
@@ -12,6 +24,7 @@ export default function Chat() {
   const [mode, setMode] = useState(null); // 'api' | 'local'
   const [voiceOut, setVoiceOut] = useState(isVoiceOutEnabled);
   const [listening, setListening] = useState(false);
+  const [voiceErr, setVoiceErr] = useState('');
   const convRef = useRef(null);
   const endRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -48,6 +61,7 @@ export default function Chat() {
     rec.interimResults = false;
     rec.continuous = true;
     dictatedRef.current = '';
+    setVoiceErr('');
     rec.onresult = (evt) => {
       let chunk = '';
       for (let i = evt.resultIndex; i < evt.results.length; i++) chunk += evt.results[i][0].transcript;
@@ -56,11 +70,26 @@ export default function Chat() {
     };
     rec.onend = () => {
       setListening(false);
-      if (dictatedRef.current.trim()) submit(dictatedRef.current);
+      const said = dictatedRef.current.trim();
+      if (said) submit(said);
+      // Ended with nothing and no error fired: iOS often cuts recognition off in a
+      // standalone PWA without ever reporting why. Say so rather than sitting silent.
+      else setVoiceErr((e) => e || 'Heard nothing. If that keeps happening, try Safari rather than the installed app.');
     };
-    rec.onerror = () => setListening(false);
+    rec.onerror = (evt) => {
+      setListening(false);
+      setVoiceErr(VOICE_ERRORS[evt?.error] || `Mic error: ${evt?.error || 'unknown'}`);
+      console.warn('[SARA Voice] recognition error', evt?.error, evt);
+    };
     recognitionRef.current = rec;
-    try { rec.start(); setListening(true); } catch { /* start() throws if already running — ignore */ }
+    try {
+      rec.start();
+      setListening(true);
+    } catch (err) {
+      // start() throws if one is already running — otherwise it's a real failure.
+      console.warn('[SARA Voice] start() threw', err);
+      setVoiceErr(`Couldn’t start the mic: ${err.message}`);
+    }
   }
 
   function toggleVoice() {
@@ -155,6 +184,18 @@ export default function Chat() {
         ))}
         <div ref={endRef} />
       </div>
+
+      {(voiceErr || (listening && 'listening')) && (
+        <div className={`chat__voice-note${voiceErr ? ' chat__voice-note--err' : ''}`}>
+          {voiceErr || 'Listening… tap ⏺ to send.'}
+        </div>
+      )}
+      {!SpeechRecognition && (
+        <div className="chat__voice-note chat__voice-note--err">
+          This browser has no speech recognition, so there’s no mic. On iPhone that usually
+          means the installed app rather than Safari.
+        </div>
+      )}
 
       <form className="chat__composer" onSubmit={send}>
         {SpeechRecognition && (
