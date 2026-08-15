@@ -169,6 +169,47 @@ async function getAccessToken() {
   }
 }
 
+/**
+ * A token for scopes OUTSIDE `GRAPH_SCOPES`, acquired on its own.
+ *
+ * This exists so an optional capability can ask for its scope without that
+ * scope becoming a precondition for everything else. Widening `GRAPH_SCOPES`
+ * would be the obvious move and it is a trap: `getAccessToken()` passes the
+ * whole list to `acquireTokenSilent`, so one unconsented addition makes the
+ * silent call throw and returns null for Calendar, Mail, Tasks and briefings
+ * alike. That is how "add Teams" turns into "Microsoft is down".
+ *
+ * Deliberately touches neither `graphTokenCache` nor `lastTokenError` — a
+ * failure here is a fact about one optional feature, not about Microsoft
+ * access, and must not show up in `getMailAccessStatus()`.
+ *
+ * Returns `{ token }` on success or `{ token: null, reason }` where reason is
+ * `'auth'` (nobody signed in), `'consent'` (scope not granted yet — the normal,
+ * expected state until an admin approves) or `'error'`.
+ *
+ * Because MSAL will silently pick up a scope the moment consent lands, a
+ * capability built on this lights up on approval alone, with no code change and
+ * no re-auth. That is the Q8 requirement, met by construction.
+ */
+async function getScopedToken(scopes) {
+  try {
+    const client = getClient();
+    const accounts = await client.getTokenCache().getAllAccounts();
+    if (accounts.length === 0) return { token: null, reason: 'auth' };
+
+    const result = await client.acquireTokenSilent({ scopes, account: accounts[0] });
+    return { token: result.accessToken };
+  } catch (err) {
+    const msg = err?.message || String(err);
+    // MSAL signals "the user/admin has not consented to this" by demanding
+    // interaction. That is not an error worth logging every five minutes.
+    const needsConsent = err?.errorCode === 'interaction_required'
+      || err?.errorCode === 'consent_required'
+      || /interaction_required|consent_required|AADSTS65001/i.test(msg);
+    return { token: null, reason: needsConsent ? 'consent' : 'error', error: msg };
+  }
+}
+
 function getMailAccessStatus() {
   return {
     bridgeConfigured: isBridgeConfigured(),
@@ -1037,6 +1078,7 @@ module.exports = {
   isBridgeConfigured,
   getMailAccessStatus,
   getAccessToken,
+  getScopedToken,
   startDeviceCodeFlow,
   fetchCalendarEvents,
   createCalendarEvent,

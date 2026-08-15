@@ -18,6 +18,18 @@ router.get('/status', async (req, res) => {
   res.json({ configured, authenticated, bridgeConfigured, bridgeConnected });
 });
 
+// GET /api/microsoft/teams-send-status — is the Teams DM path live, or what is
+// it waiting on? An unconsented scope is a normal, silent state (Q8); this makes
+// it inspectable, which is exactly what NOVA's Teams path lacked while it sat
+// dead for months looking built.
+router.get('/teams-send-status', async (req, res) => {
+  try {
+    res.json(await require('../services/teams').getSendStatus());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/microsoft/auth — start device code flow for Graph permissions
 router.post('/auth', async (req, res) => {
   if (!microsoft.isConfigured()) {
