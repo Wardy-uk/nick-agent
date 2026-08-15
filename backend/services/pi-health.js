@@ -393,11 +393,24 @@ function getBroadband() {
   if (csv) {
     const lines = csv.trim().split('\n').slice(1);
     for (const line of lines.slice(-40)) {
-      const [t, down, up, ping] = line.split(',');
+      const [t, down, up, ping, , , jitter, gb] = line.split(',');
       if (!down) continue; // failed sample, kept in the file so the gap is visible
-      history.push({ t, down: parseFloat(down), up: parseFloat(up), ping: parseFloat(ping) });
+      history.push({
+        t,
+        down: parseFloat(down),
+        up: parseFloat(up),
+        ping: parseFloat(ping),
+        jitter: jitter ? parseFloat(jitter) : null,
+        gb: gb ? parseFloat(gb) : null,
+      });
     }
   }
+
+  // A full gigabit test moves ~1.3GB, so the running total is worth showing —
+  // it is the one cost of this feature that is not obvious.
+  const gbToday = history
+    .filter(h => h.t && h.t.slice(0, 10) === new Date().toISOString().slice(0, 10))
+    .reduce((a, h) => a + (h.gb || 0), 0);
 
   const downs = history.map(h => h.down).filter(Number.isFinite);
   const avg = downs.length ? Math.round(downs.reduce((a, b) => a + b, 0) / downs.length) : null;
@@ -407,6 +420,7 @@ function getBroadband() {
     ...latest,
     ageMs: Number.isFinite(checkedMs) ? Date.now() - checkedMs : null,
     samples: history.length,
+    gbToday: Math.round(gbToday * 10) / 10,
     avgDownMbps: avg,
     // Judged against this line's own history, not a headline figure — what
     // matters is a drop from what it normally does.

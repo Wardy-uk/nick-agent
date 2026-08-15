@@ -445,6 +445,20 @@ export default function PiHealthPanel() {
                         {broadband.downVsAvgPct != null ? `${broadband.downVsAvgPct}%` : '—'}
                       </b>
                     </div>
+                    <div>
+                      {/* Jitter breaks calls where raw speed does not — a 900Mbps
+                          line with 30ms jitter still stutters on Teams. */}
+                      <span>Jitter</span>
+                      <b className={broadband.jitterMs > 20 ? 'bad' : broadband.jitterMs > 10 ? 'warn' : 'good'}>
+                        {broadband.jitterMs != null ? `${broadband.jitterMs} ms` : '—'}
+                      </b>
+                    </div>
+                    <div>
+                      {/* Measuring a gigabit line costs ~1.3GB a test — not obvious,
+                          so show the running total rather than hide it. */}
+                      <span>Data used today</span>
+                      <b>{broadband.gbToday != null ? `${broadband.gbToday} GB` : '—'}</b>
+                    </div>
                     <div><span>Samples</span><b>{broadband.samples}</b></div>
                   </div>
 
@@ -462,6 +476,12 @@ export default function PiHealthPanel() {
                         <div className="ph-trend-head"><span>Ping</span><b>{broadband.pingMs} ms</b></div>
                         <Spark points={broadband.history.map(h => h.ping)} band="warn" />
                       </div>
+                      {broadband.history.some(h => h.jitter != null) && (
+                        <div className="ph-trend">
+                          <div className="ph-trend-head"><span>Jitter</span><b>{broadband.jitterMs} ms</b></div>
+                          <Spark points={broadband.history.map(h => h.jitter)} band="warn" />
+                        </div>
+                      )}
                     </div>
                   )}
                 </>
