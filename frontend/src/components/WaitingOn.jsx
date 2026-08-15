@@ -226,20 +226,23 @@ export default function WaitingOn({ person = null, embedded = false }) {
           const isOpen = person ? true : (expanded[g.person] ?? gi === 0);
           return (
             <div key={g.person} className="wo-group">
-              <button
-                className="wo-group-head"
-                onClick={() => !person && setExpanded(p => ({ ...p, [g.person]: !isOpen }))}
-                disabled={Boolean(person)}
-              >
-                <span className="wo-group-name">
-                  {!person && <span className="wo-caret">{isOpen ? '▾' : '▸'}</span>}
-                  {g.person}
-                </span>
-                <span className="wo-group-meta">
-                  <span className="wo-group-count">{g.count}</span>
-                  <span className={`wo-age${g.oldestDays >= 3 ? ' stale' : ''}`}>oldest {ageLabel(g.oldestDays)}</span>
-                </span>
-              </button>
+              {/* In person mode the panel header already says who and how many,
+                  so a group header would be the same line twice. */}
+              {!person && (
+                <button
+                  className="wo-group-head"
+                  onClick={() => setExpanded(p => ({ ...p, [g.person]: !isOpen }))}
+                >
+                  <span className="wo-group-name">
+                    <span className="wo-caret">{isOpen ? '▾' : '▸'}</span>
+                    {g.person}
+                  </span>
+                  <span className="wo-group-meta">
+                    <span className="wo-group-count">{g.count}</span>
+                    <span className={`wo-age${g.oldestDays >= 3 ? ' stale' : ''}`}>oldest {ageLabel(g.oldestDays)}</span>
+                  </span>
+                </button>
+              )}
 
               {isOpen && (() => {
                 // The worst offender opens with 13 items, which on a phone is

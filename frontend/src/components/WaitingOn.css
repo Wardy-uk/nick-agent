@@ -141,6 +141,9 @@
   padding: 9px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
+/* Person mode drops the group header, so there is nothing above to divide. */
+.wo-items:first-child { border-top: none; }
+
 .wo-row:last-child { border-bottom: none; }
 .wo-row.is-snoozed { opacity: 0.55; }
 
