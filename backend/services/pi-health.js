@@ -331,6 +331,43 @@ async function getRouter() {
   return { ...status, ageMs, stale: ageMs != null && ageMs > ROUTER_STALE_MS, linkDrops24h, lastLinkDrop };
 }
 
+// ------------------------------------------------------------------- pi 4
+
+// Written by pi4-watch.sh (cron) rather than SSH'd on demand — same reason as
+// the router: a box that has gone slow must not be able to stall a panel load,
+// and this one demonstrably does go slow.
+const PI4_STATUS = '/mnt/data/logs/pi4-status.json';
+
+function getPi4() {
+  if (!IS_LINUX) return null;
+  let d = null;
+  try {
+    const raw = readFile(PI4_STATUS);
+    if (raw) d = JSON.parse(raw);
+  } catch { /* treated as absent */ }
+  if (!d) return null;
+
+  const checkedMs = Date.parse(d.checkedAt);
+  const ageMs = Number.isFinite(checkedMs) ? Date.now() - checkedMs : null;
+
+  // Decode with the same bit table the Pi 5 uses, so both boxes report
+  // throttling in the same words.
+  let power = null;
+  if (d.throttledRaw) {
+    const mask = parseInt(String(d.throttledRaw).replace(/^0x/, ''), 16);
+    if (Number.isFinite(mask)) {
+      const now = [];
+      const since = [];
+      for (const [bit, when, label] of THROTTLE_BITS) {
+        if (mask & (1 << bit)) (when === 'now' ? now : since).push(label);
+      }
+      power = { raw: d.throttledRaw, mask, now, since, clean: mask === 0 };
+    }
+  }
+
+  return { ...d, ageMs, stale: ageMs != null && ageMs > 15 * 60 * 1000, power };
+}
+
 // --------------------------------------------------------------- broadband
 
 // Written by speedtest-log.sh (cron, 4x/day). Reading the file rather than
@@ -500,6 +537,22 @@ function assess(s) {
     add('warn', 'Last broadband test failed', bb.error || 'speedtest did not complete');
   }
 
+  const p4 = s.pi4;
+  if (p4 && !p4.stale && p4.reachable) {
+    // Under-voltage is the one that matters: it degrades the whole box and
+    // eventually corrupts storage. Everything else here is informational now
+    // that the Pi 4 no longer serves NEURO.
+    if (p4.power && p4.power.now.length) {
+      add('critical', `Pi 4: ${p4.power.now.join(', ')} NOW`, 'check the power supply');
+    } else if (p4.power && p4.power.since.includes('Under-voltage occurred')) {
+      add('warn', 'Pi 4 has under-volted since boot', 'inadequate PSU — it caps CPU frequency and can corrupt the SD card');
+    }
+    if (p4.memUsedPct >= 90) add('warn', `Pi 4 memory ${p4.memUsedPct}%`, `${Math.round((p4.memAvailableKb || 0) / 1024)}MB available`);
+    if (p4.tempC >= 80) add('warn', `Pi 4 at ${p4.tempC}\u00b0C`, 'running hot');
+  } else if (p4 && (p4.stale || !p4.reachable)) {
+    add('warn', 'Pi 4 not reporting', p4.stale ? `last checked ${Math.round((p4.ageMs || 0) / 60000)}m ago` : 'unreachable over SSH');
+  }
+
   for (const svc of s.services || []) {
     if (svc.state === 'failed') add('critical', `${svc.name} failed`, 'systemd unit is in a failed state');
   }
@@ -543,7 +596,8 @@ async function collect() {
   const smart = await getSmart(disks);
 
   const broadband = getBroadband();
-  const snapshot = { host, cpu, power, memory, disks, smart, pm2, top, services, router, broadband };
+  const pi4 = getPi4();
+  const snapshot = { host, cpu, power, memory, disks, smart, pm2, top, services, router, broadband, pi4 };
   pushHistory(snapshot);
 
   const { status, issues } = assess(snapshot);

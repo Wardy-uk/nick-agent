@@ -187,7 +187,7 @@ export default function PiHealthPanel() {
     );
   }
 
-  const { host, cpu, memory, disks = [], smart, power, pm2 = [], top = [], services = [], issues: hostIssues = [], history = [], router, broadband } = data;
+  const { host, cpu, memory, disks = [], smart, power, pm2 = [], top = [], services = [], issues: hostIssues = [], history = [], router, broadband, pi4 } = data;
 
   // AI problems belong in the same ranked list as host problems — a dead worker
   // matters more than a warm CPU, and splitting them buries one of the two.
@@ -353,6 +353,73 @@ export default function PiHealthPanel() {
             <div className="ph-smart-missing">
               Last speed test failed — {broadband.error || 'no result'}
             </div>
+          )}
+        </section>
+      )}
+
+      {/* ---- PI 4 (pi-dev): retired from the AI path, still on the network ---- */}
+      {pi4 && (
+        <section className="ph-card">
+          <h2 className="ph-card-title">
+            Pi 4 <span className="ph-card-hint">
+              {pi4.reachable
+                ? `${pi4.model || 'pi-dev'} · ${pi4.stale ? 'STALE' : `checked ${Math.round((pi4.ageMs || 0) / 1000)}s ago`}`
+                : 'unreachable'}
+            </span>
+          </h2>
+
+          {pi4.reachable ? (
+            <>
+              <div className="ph-router-grid">
+                <div>
+                  <span>CPU load</span>
+                  <b className={pi4.loadPct >= 90 ? 'bad' : pi4.loadPct >= 70 ? 'warn' : 'good'}>
+                    {pi4.loadPct}%
+                  </b>
+                </div>
+                <div>
+                  <span>Temperature</span>
+                  <b className={pi4.tempC >= 80 ? 'bad' : pi4.tempC >= 70 ? 'warn' : 'good'}>{pi4.tempC}°C</b>
+                </div>
+                <div>
+                  <span>Memory</span>
+                  <b className={pi4.memUsedPct >= 90 ? 'bad' : pi4.memUsedPct >= 80 ? 'warn' : 'good'}>
+                    {pi4.memUsedPct}%
+                  </b>
+                </div>
+                <div>
+                  <span>Swap used</span>
+                  {/* Swapping on an SD card is slow and wears the card out */}
+                  <b className={pi4.swapUsedKb > 0 ? 'warn' : 'good'}>
+                    {pi4.swapUsedKb ? `${Math.round(pi4.swapUsedKb / 1024)}MB` : 'none'}
+                  </b>
+                </div>
+                <div><span>Uptime</span><b>{fmtDuration(pi4.uptimeSec)}</b></div>
+                <div>
+                  <span>Disk</span>
+                  <b className={pi4.diskUsedPct >= 90 ? 'bad' : 'good'}>{pi4.diskUsedPct}%</b>
+                </div>
+              </div>
+
+              {pi4.power && !pi4.power.clean && (
+                <div className="ph-router-foot">
+                  {pi4.power.now.length > 0 && (
+                    <span className="ph-router-flag">NOW: {pi4.power.now.join(', ')}</span>
+                  )}
+                  {pi4.power.since.length > 0 && (
+                    <span className="ph-router-flag">since boot: {pi4.power.since.join(', ')}</span>
+                  )}
+                </div>
+              )}
+
+              {pi4.topCpu && (
+                <div className="ph-router-foot">
+                  <span>top: {pi4.topCpu.trim().split(/\s+/).map(x => x.replace(':', ' ')).join(' · ')}</span>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="ph-smart-missing">pi-dev is not reachable over SSH from the Pi 5.</div>
           )}
         </section>
       )}
