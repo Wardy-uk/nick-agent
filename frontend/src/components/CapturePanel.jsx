@@ -44,6 +44,31 @@ function looksLikeTodo(text) {
     /^(buy|call|email|book|send|fix|update|check|schedule|remind)\s/i.test(t); // action verbs
 }
 
+// Feature ideas go to the NEURO Feature Tracker, not the task list — but only on an
+// EXPLICIT prefix. Everything here is guessed from prose, and guessing "that's a
+// feature" from a note would file thinking as backlog, which is the harder mistake
+// to notice. "feature: X", "idea: X", or "neuro:/sara:/nova: X" (which also picks
+// the system).
+const FEATURE_RE = /^(feature|idea|neuro|sara|nova)\s*:\s*/i;
+const FEATURE_SYSTEMS = { neuro: 'NEURO', sara: 'SARA', nova: 'NOVA' };
+
+function parseFeature(text) {
+  const t = text.trim();
+  const m = t.match(FEATURE_RE);
+  if (!m) return null;
+  const body = t.slice(m[0].length).trim();
+  const [title, ...rest] = body.split('\n');
+  // Just the prefix and nothing after it isn't a feature yet — let it fall through
+  // to a note rather than POSTing a title the server will reject.
+  if (!title.trim()) return null;
+  return {
+    title: title.trim(),
+    notes: rest.join('\n').trim() || undefined,
+    system: FEATURE_SYSTEMS[m[1].toLowerCase()] || 'NEURO',
+    source: 'NEURO Capture',
+  };
+}
+
 export default function CapturePanel() {
   const [content, setContent] = useState('');
   const [file, setFile] = useState(null);
@@ -108,10 +133,18 @@ export default function CapturePanel() {
     setSubmitting(true);
     setResult(null);
 
+    const feature = file ? null : parseFeature(content);
+
     try {
       let res;
 
-      if (file) {
+      if (feature) {
+        res = await fetch(apiUrl('/api/capture/feature'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(feature)
+        });
+      } else if (file) {
         // File/photo upload
         const formData = new FormData();
         formData.append('file', file);
@@ -145,8 +178,12 @@ export default function CapturePanel() {
         // Vibrate on error
         try { navigator.vibrate?.([200, 100, 200, 100, 200]); } catch {}
       } else {
-        const isTodo = !file && looksLikeTodo(content);
-        setResult({ success: true, type: isTodo ? 'todo' : file ? 'file' : 'note' });
+        const isTodo = !file && !feature && looksLikeTodo(content);
+        setResult({
+          success: true,
+          type: feature ? 'feature' : isTodo ? 'todo' : file ? 'file' : 'note',
+          number: data.number
+        });
         // Haptic success
         try { navigator.vibrate?.(100); } catch {}
         fetchRecent();
@@ -155,9 +192,15 @@ export default function CapturePanel() {
     } catch (err) {
       // Offline — queue text captures
       if (!file && content.trim()) {
-        const isTodo = looksLikeTodo(content);
+        const isTodo = !feature && looksLikeTodo(content);
         const text = content.trim();
-        if (isTodo) {
+        if (feature) {
+          addToQueue({
+            url: apiUrl('/api/capture/feature'),
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(feature)
+          });
+        } else if (isTodo) {
           const cleanText = text.replace(/^-?\s*\[.\]\s*/, '').replace(/^(todo|task|action|reminder):\s*/i, '');
           addToQueue({
             url: apiUrl('/api/capture/todo'),
@@ -183,7 +226,9 @@ export default function CapturePanel() {
   };
 
   const canSubmit = content.trim().length > 0 || !!file;
+  const detectedFeature = file ? null : parseFeature(content);
   const detectedType = file ? (file.type.startsWith('image/') ? 'photo' : 'file')
+    : detectedFeature ? 'feature'
     : content.trim() && looksLikeTodo(content) ? 'todo' : 'note';
 
   return (
@@ -197,7 +242,10 @@ export default function CapturePanel() {
         <div className={`capture-result-banner ${result.error ? 'capture-result-error' : result.queued ? 'capture-result-queued' : 'capture-result-ok'}`}>
           <span className="capture-result-icon">{result.error ? '✗' : result.queued ? '⏳' : '✓'}</span>
           <span className="capture-result-text">
-            {result.error || (result.queued ? 'Queued. Will sync when online.' : result.type === 'todo' ? 'Added to todos.' : 'Captured.')}
+            {result.error || (result.queued ? 'Queued. Will sync when online.'
+              : result.type === 'todo' ? 'Added to todos.'
+              : result.type === 'feature' ? `Added to the feature tracker${result.number ? ` as #${result.number}` : ''}.`
+              : 'Captured.')}
           </span>
         </div>
       )}
@@ -217,7 +265,8 @@ export default function CapturePanel() {
         {/* Type indicator */}
         {content.trim() && !file && (
           <div className="capture-type-hint">
-            {detectedType === 'todo' ? 'Will save as todo' : 'Will save as note'}
+            {detectedType === 'feature' ? `Will go to the feature tracker (${detectedFeature.system})`
+              : detectedType === 'todo' ? 'Will save as todo' : 'Will save as note'}
           </div>
         )}
 

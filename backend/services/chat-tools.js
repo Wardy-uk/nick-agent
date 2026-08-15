@@ -122,6 +122,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'capture_feature',
+    tier: 'write',
+    description: 'Add an idea, gap or improvement for NEURO, SARA or NOVA to the feature tracker in the vault. Use whenever Nick says something should be built, fixed or changed about the system itself — that belongs in the backlog, NOT in his task list. Not for ordinary work: use create_task for that.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'The idea in one line, as a thing to build or fix.' },
+        notes: { type: 'string', description: 'Why it matters, what it would change, anything he said about it. Write it so it still makes sense in a month.' },
+        system: { type: 'string', enum: ['NEURO', 'SARA', 'NOVA', 'Both'], description: 'Which system it belongs to. Defaults to NEURO.' },
+      },
+      required: ['title'],
+    },
+  },
+  {
     name: 'draft_email_reply',
     tier: 'queued',
     description: 'Queue a reply to an email for Nick\'s approval. This does NOT send: it drafts the reply and puts it in the approval queue. Tell Nick it is waiting for him to approve. Use email ids from get_urgent_emails.',
@@ -354,6 +368,22 @@ const HANDLERS = {
       out.microsoft = result.completed ? 'completed' : `failed (${result.reason})`;
     }
     return out;
+  },
+
+  capture_feature({ title, notes, system }) {
+    const result = require('./feature-tracker').captureFeature({
+      title,
+      notes,
+      system,
+      source: 'chat',
+    });
+    if (!result.ok) return result;
+    return {
+      ok: true,
+      number: result.number,
+      system: result.system,
+      note: `Added to the NEURO Feature Tracker as #${result.number}, unranked. Tell Nick the number.`,
+    };
   },
 
   append_daily_note({ text }) {

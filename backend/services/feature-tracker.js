@@ -1,0 +1,142 @@
+'use strict';
+
+/**
+ * Feature capture — the backlog gets a front door.
+ *
+ * `Projects/NEURO/NEURO Feature Tracker.md` is where the NEURO/SARA/NOVA backlog
+ * lives, and until now the only way into it was a Claude session editing the file
+ * by hand. So an idea Nick had on the train either survived until the next session
+ * or it didn't. Everything else he thinks of has a capture route; the backlog is
+ * the one that didn't, which is why it kept getting re-derived from handoffs.
+ *
+ * Append-only and surgical, like the vault-hygiene writers: one table row into one
+ * section, plus the `updated:` stamp. It never rewrites a row, never renumbers, and
+ * never touches the ranked sections above — those are Nick's editorial, and a
+ * capture route that reorders his priorities is worse than no capture route.
+ *
+ * Numbering is `max(existing) + 1` rather than a count: the file already has a
+ * duplicate #103, and a count would have silently minted a third.
+ */
+
+const fs = require('fs');
+const path = require('path');
+
+const TRACKER_REL = path.join('Projects', 'NEURO', 'NEURO Feature Tracker.md');
+
+/** Where new items land. Created on first capture if it isn't there. */
+const SECTION = '## Captured — raised in passing';
+const SECTION_BLURB =
+  'Raised from chat or Capture as they came up, rather than waiting for a session to\n' +
+  'write them down. Unranked and unedited — triage moves them into the sections above.';
+const TABLE_HEAD = '| # | Feature | System | Status | Notes |\n|---|---|---|---|---|';
+
+const SYSTEMS = ['NEURO', 'SARA', 'NOVA', 'Both'];
+
+function trackerPath() {
+  if (process.env.NEURO_TRACKER_PATH) return process.env.NEURO_TRACKER_PATH;
+  const vault = process.env.OBSIDIAN_VAULT_PATH || '';
+  if (!vault) return null;
+  return path.join(vault, TRACKER_REL);
+}
+
+/** "15 Aug" — local getters, never toISOString(). */
+function stamp(d = new Date()) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${d.getDate()} ${months[d.getMonth()]}`;
+}
+
+function isoDate(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Highest item number anywhere in the file, +1. */
+function nextNumber(text) {
+  let max = 0;
+  for (const m of text.matchAll(/^\|\s*(\d+)\s*\|/gm)) {
+    const n = Number(m[1]);
+    if (n > max) max = n;
+  }
+  return max + 1;
+}
+
+/** A table cell cannot contain a raw pipe or a newline. */
+function cell(value) {
+  return String(value || '')
+    .replace(/\r?\n+/g, ' ')
+    .replace(/\|/g, '\\|')
+    .trim();
+}
+
+/** Bump the frontmatter `updated:` so the note doesn't claim to be older than it is. */
+function restamp(text, today) {
+  const end = text.indexOf('\n---', 4);
+  if (!text.startsWith('---') || end === -1) return text;
+  const head = text.slice(0, end);
+  if (!/^updated:/m.test(head)) return text;
+  return head.replace(/^updated:.*$/m, `updated: ${today}`) + text.slice(end);
+}
+
+/**
+ * Insert `row` at the end of the capture section's table, creating the section
+ * (above `## Related`, or at the end) the first time.
+ */
+function insertRow(text, row) {
+  const at = text.indexOf(SECTION);
+  if (at === -1) {
+    const block = `${SECTION}\n\n${SECTION_BLURB}\n\n${TABLE_HEAD}\n${row}\n\n---\n\n`;
+    const related = text.indexOf('\n## Related');
+    if (related === -1) return `${text.replace(/\s+$/, '')}\n\n---\n\n${block.replace(/\s+$/, '')}\n`;
+    return `${text.slice(0, related + 1)}${block}${text.slice(related + 1)}`;
+  }
+
+  // Section runs to the next heading of the same level, or to EOF.
+  const rest = text.slice(at + SECTION.length);
+  const nextHeading = rest.search(/\n## /);
+  const bodyEnd = nextHeading === -1 ? text.length : at + SECTION.length + nextHeading;
+
+  const body = text.slice(at, bodyEnd);
+  // Land immediately after the last table row, so a trailing `---` or a note
+  // under the table stays under it.
+  const rows = [...body.matchAll(/^\|.*\|\s*$/gm)];
+  if (!rows.length) {
+    return `${text.slice(0, bodyEnd).replace(/\s+$/, '')}\n\n${TABLE_HEAD}\n${row}\n${text.slice(bodyEnd)}`;
+  }
+  const last = rows[rows.length - 1];
+  const cut = at + last.index + last[0].length;
+  return `${text.slice(0, cut)}\n${row}${text.slice(cut)}`;
+}
+
+/**
+ * Capture a feature idea into the tracker.
+ * Returns `{ ok, number, row, path }`, or `{ ok:false, error }` — never throws for
+ * a caller's benefit, because both callers (chat tool, capture route) report the
+ * reason rather than failing blind.
+ */
+function captureFeature({ title, notes, system, source } = {}) {
+  const text = String(title || '').trim();
+  if (!text) return { ok: false, error: 'title is required' };
+
+  const file = trackerPath();
+  if (!file) return { ok: false, error: 'Vault path not configured — cannot reach the tracker' };
+  if (!fs.existsSync(file)) return { ok: false, error: `Tracker not found at ${file}` };
+
+  const sys = SYSTEMS.find(s => s.toLowerCase() === String(system || '').trim().toLowerCase()) || 'NEURO';
+  const today = new Date();
+  const contents = fs.readFileSync(file, 'utf8');
+  const number = nextNumber(contents);
+
+  const note = cell(notes) || '_Captured with no detail — needs a sentence on why before it can be ranked._';
+  const via = source ? ` (via ${cell(source)})` : '';
+  const row = `| ${number} | **${cell(text)}** | ${sys} | **Captured ${stamp(today)}** | ${note}${via} |`;
+
+  const updated = restamp(insertRow(contents, row), isoDate(today));
+  fs.writeFileSync(file, updated, 'utf8');
+
+  try { require('./vault-hooks').onVaultWrite(file, 'feature-capture'); } catch {}
+
+  console.log(`[FeatureTracker] Captured #${number}: ${text}`);
+  return { ok: true, number, row, path: file, system: sys };
+}
+
+module.exports = { captureFeature, nextNumber, insertRow, trackerPath, SECTION, SYSTEMS };

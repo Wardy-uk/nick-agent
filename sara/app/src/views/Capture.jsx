@@ -3,16 +3,21 @@ import { apiFetch } from '../api';
 import './Capture.css';
 
 // Capture = zero-friction input straight to the brain. Must work on a bad day.
-//   Note → POST /api/capture/note {title?, content}
-//   Todo → POST /api/capture/todo {text, priority?}
+//   Note    → POST /api/capture/note {title?, content}
+//   Todo    → POST /api/capture/todo {text, priority?}
+//   Feature → POST /api/capture/feature {title, notes?, system?} — straight into the
+//             NEURO Feature Tracker in the vault, NOT the task list: the backlog is
+//             where it gets ranked, and a feature idea filed as a todo is one nobody
+//             reads next to the other ninety.
 // Optional voice dictation via the Web Speech API (append to the text box).
 const RECENT_LIMIT = 5;
 
 export default function Capture({ autoRecord = false }) {
-  const [mode, setMode] = useState('note'); // 'note' | 'todo'
+  const [mode, setMode] = useState('note'); // 'note' | 'todo' | 'feature'
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
   const [priority, setPriority] = useState('normal'); // todo only
+  const [system, setSystem] = useState('NEURO'); // feature only
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(null); // { ok, msg }
   const [recent, setRecent] = useState([]);
@@ -30,13 +35,23 @@ export default function Capture({ autoRecord = false }) {
   }
   useEffect(() => { loadRecent(); }, []);
 
+  // A feature is titled, not typed at — the one line IS the item, and the notes
+  // are optional context. Everything else is the other way round.
+  const ready = mode === 'feature' ? title.trim().length > 0 : text.trim().length > 0;
+
   async function submit(e) {
     e.preventDefault();
-    if (!text.trim() || busy) return;
+    if (!ready || busy) return;
     setBusy(true);
     setFlash(null);
     try {
-      if (mode === 'note') {
+      if (mode === 'feature') {
+        const res = await apiFetch('/api/capture/feature', {
+          method: 'POST',
+          body: JSON.stringify({ title: title.trim(), notes: text.trim() || undefined, system, source: 'SARA Capture' }),
+        });
+        setFlash({ ok: true, msg: `Tracker #${res.number} — ${res.system}` });
+      } else if (mode === 'note') {
         const res = await apiFetch('/api/capture/note', {
           method: 'POST',
           body: JSON.stringify({ title: title.trim() || undefined, content: text.trim() }),
@@ -98,26 +113,30 @@ export default function Capture({ autoRecord = false }) {
       <div className="cap__modes">
         <button type="button" className={`cap__mode${mode === 'note' ? ' cap__mode--on' : ''}`} onClick={() => setMode('note')}>Note</button>
         <button type="button" className={`cap__mode${mode === 'todo' ? ' cap__mode--on' : ''}`} onClick={() => setMode('todo')}>Todo</button>
+        <button type="button" className={`cap__mode${mode === 'feature' ? ' cap__mode--on' : ''}`} onClick={() => setMode('feature')}>Feature</button>
       </div>
 
       <form className="cap__form" onSubmit={submit}>
-        {mode === 'note' && (
+        {(mode === 'note' || mode === 'feature') && (
           <input
             className="cap__title"
             type="text"
-            placeholder="Title (optional)"
+            placeholder={mode === 'feature' ? 'What should it do? (one line)' : 'Title (optional)'}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
+            autoFocus={mode === 'feature'}
           />
         )}
         <div className="cap__textwrap">
           <textarea
             className="cap__text"
-            placeholder={mode === 'note' ? "What's on your mind?" : 'What needs doing?'}
+            placeholder={mode === 'note' ? "What's on your mind?"
+              : mode === 'todo' ? 'What needs doing?'
+              : 'Why does it matter? (optional, but it needs one before it can be ranked)'}
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={5}
-            autoFocus
+            autoFocus={mode !== 'feature'}
           />
           {SpeechRecognition && (
             <button
@@ -143,8 +162,23 @@ export default function Capture({ autoRecord = false }) {
           </label>
         )}
 
-        <button className="cap__submit" type="submit" disabled={busy || !text.trim()}>
-          {busy ? 'Saving…' : mode === 'note' ? 'Save to vault' : 'Add todo'}
+        {mode === 'feature' && (
+          <div className="cap__modes cap__modes--sub">
+            {['NEURO', 'SARA', 'NOVA'].map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={`cap__mode${system === s ? ' cap__mode--on' : ''}`}
+                onClick={() => setSystem(s)}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <button className="cap__submit" type="submit" disabled={busy || !ready}>
+          {busy ? 'Saving…' : mode === 'note' ? 'Save to vault' : mode === 'todo' ? 'Add todo' : 'Add to tracker'}
         </button>
       </form>
 

@@ -179,6 +179,32 @@ router.post('/todo', (req, res) => {
   }
 });
 
+// POST /api/capture/feature — a NEURO/SARA/NOVA idea straight into the backlog.
+// Deliberately NOT a todo: the tracker is where the backlog is ranked and triaged,
+// and a feature idea sitting in the task list is one nobody reads next to the other 92.
+router.post('/feature', (req, res) => {
+  const { title, notes, system, source } = req.body;
+  if (!title || !title.trim()) {
+    return res.status(400).json({ error: 'title is required' });
+  }
+
+  try {
+    const result = require('../services/feature-tracker').captureFeature({
+      title,
+      notes,
+      system,
+      source: source || 'Capture',
+    });
+    if (!result.ok) return res.status(500).json({ error: result.error });
+
+    res.json({ success: true, number: result.number, system: result.system });
+    try { require('../services/activity').trackCapture('note'); } catch {}
+  } catch (e) {
+    console.error('[Capture] Feature error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/capture/photo — image upload (camera or gallery)
 router.post('/photo', upload.single('file'), (req, res) => {
   if (!req.file) {

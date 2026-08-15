@@ -4,6 +4,12 @@
   margin-bottom: 0.75rem;
 }
 
+/* Which system a captured feature belongs to — a second, quieter row of the same control. */
+.cap__modes--sub {
+  margin: 0 0 0.75rem;
+  font-size: 0.85em;
+}
+
 .cap__mode {
   flex: 1;
   padding: 0.5rem;
