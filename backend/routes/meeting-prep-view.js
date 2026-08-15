@@ -345,31 +345,60 @@ function _buildPrep(meeting) {
   // answered before you walk in. Read-only — chasing, resolving and snoozing
   // live on the People board, because a chase must be approved before it sends.
   //
-  // waiting-on canonicalises to a capitalised FIRST name, so that is what it is
-  // keyed on here; `list()` compares case-insensitively either way.
-  try {
-    const waitingOn = require('../services/waiting-on');
-    for (const att of prep.attendees) {
-      const first = String(att.name || '').trim().split(/\s+/)[0];
-      if (!first) continue;
-      // Snoozed means "they told me a date" — surfacing it before that date is
-      // exactly the nagging snooze exists to stop.
-      const open = waitingOn.list({ status: 'open', person: first }).filter(i => !i.snoozed);
-      if (!open.length) continue;
-      att.waitingOn = open.map(i => ({
-        key: i.key,
-        text: i.text,
-        ageDays: i.ageDays,
-        stale: i.stale,
-        chaseCount: i.chaseCount || 0,
-        sourceDate: i.sourceDate,
-      }));
-      prep.suggestedTopics.push(
-        `${open.length} outstanding from ${first} — oldest ${open[0].ageDays}d: "${open[0].text.slice(0, 60)}"`
-      );
+  // waiting_on stores a canonical FIRST name and nothing else, so matching it
+  // to an attendee is a first-name match — and a first name is only usable when
+  // it points at exactly one person. The first cut of this attached one Lucy's
+  // 16 commitments to four different Lucys on the SMT invite, and Chris
+  // Middleton's 31 to a Chris Smith. `entities.getRoster().firstNames` already
+  // holds exactly this rule (it is why Nathan Button and Nathan Rutland are both
+  // excluded from it), so use it rather than re-deriving a looser version:
+  // unambiguous in People/ AND the full name agrees, or no match at all.
+  //
+  // Above ALL_HANDS the meeting is a broadcast, not a conversation — nobody
+  // chases a commitment in a 40-person SMT update, and 40 blocks makes the prep
+  // card unreadable.
+  const ALL_HANDS = 12;
+  const MAX_TOPICS = 3;
+  if (prep.attendees.length <= ALL_HANDS) {
+    try {
+      const waitingOn = require('../services/waiting-on');
+      const { firstNames } = require('../services/entities').getRoster();
+      const owed = [];
+
+      for (const att of prep.attendees) {
+        const full = String(att.name || '').trim();
+        const first = full.split(/\s+/)[0];
+        if (!first) continue;
+        const resolved = firstNames.get(first.toLowerCase());
+        if (!resolved || resolved.toLowerCase() !== full.toLowerCase()) continue;
+
+        // Snoozed means "they told me a date" — raising it before that date is
+        // exactly the nagging snooze exists to stop.
+        const open = waitingOn.list({ status: 'open', person: first }).filter(i => !i.snoozed);
+        if (!open.length) continue;
+
+        att.waitingOn = open.map(i => ({
+          key: i.key,
+          text: i.text,
+          ageDays: i.ageDays,
+          stale: i.stale,
+          chaseCount: i.chaseCount || 0,
+          sourceDate: i.sourceDate,
+        }));
+        owed.push({ first, open });
+      }
+
+      // Oldest first, and only the worst few — the per-attendee blocks already
+      // carry the detail, so the topic list is a pointer, not a second copy.
+      owed.sort((a, b) => b.open[0].ageDays - a.open[0].ageDays);
+      for (const { first, open } of owed.slice(0, MAX_TOPICS)) {
+        prep.suggestedTopics.push(
+          `${open.length} outstanding from ${first} — oldest ${open[0].ageDays}d: "${open[0].text.slice(0, 60)}"`
+        );
+      }
+    } catch (e) {
+      console.warn('[MeetingPrep] waiting-on lookup failed:', e.message);
     }
-  } catch (e) {
-    console.warn('[MeetingPrep] waiting-on lookup failed:', e.message);
   }
 
   // 7. Generate suggested topics
