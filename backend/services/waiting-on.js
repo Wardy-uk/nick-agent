@@ -44,6 +44,22 @@ function _save(items) {
   return items;
 }
 
+/**
+ * Canonical person for grouping. Meeting notes name the same colleague both
+ * ways — "Chris to confirm" and "Chris Middleton to confirm" — which produced
+ * two separate entries for one person, and so two separate answers to "what am
+ * I waiting on from Chris?".
+ *
+ * First name wins because that is what the People index is keyed on. Two people
+ * sharing a first name would merge; with 13 reports that is a trade worth making
+ * for a list that is actually readable, and the full name is kept for display.
+ */
+function _canonicalPerson(person) {
+  const raw = String(person || '').trim().replace(/(?:’s|'s)$/, '');
+  const first = raw.split(/\s+/)[0] || raw;
+  return first.charAt(0).toUpperCase() + first.slice(1);
+}
+
 function _key(person, text) {
   const norm = String(text || '')
     .toLowerCase()
@@ -79,8 +95,9 @@ function _ageDays(iso) {
 function record({ person, text, sourcePath = null, sourceDate = null }) {
   if (!person || !String(text || '').trim()) return null;
 
+  const canonical = _canonicalPerson(person);
   const items = _load();
-  const key = _key(person, text);
+  const key = _key(canonical, text);
   const existing = items.find(i => i.key === key);
 
   if (existing) {
@@ -99,7 +116,9 @@ function record({ person, text, sourcePath = null, sourceDate = null }) {
   const now = new Date().toISOString();
   const item = {
     key,
-    person: String(person).trim(),
+    person: canonical,
+    // Kept for display where the note was specific.
+    personFull: String(person).trim() !== canonical ? String(person).trim() : null,
     text: String(text).trim(),
     sourcePath,
     sourceDate,

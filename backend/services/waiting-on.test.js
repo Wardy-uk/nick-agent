@@ -38,6 +38,18 @@ test('a future-dated note does not become a negative age', () => {
   assert.ok(waitingOn.list()[0].ageDays >= 0);
 });
 
+test('the same person named two ways is one person', () => {
+  // Notes say both "Chris to confirm" and "Chris Middleton to confirm", which
+  // produced two entries and so two answers to "what am I waiting on from Chris?"
+  waitingOn.record({ person: 'Chris', text: 'Confirm the budget' });
+  waitingOn.record({ person: 'Chris Middleton', text: 'Sign off the plan' });
+
+  const groups = waitingOn.byPerson();
+  assert.equal(groups.length, 1, 'Chris and Chris Middleton must group together');
+  assert.equal(groups[0].person, 'Chris');
+  assert.equal(groups[0].count, 2);
+});
+
 test('a commitment someone else made is recorded with who owes it', () => {
   const item = waitingOn.record({
     person: 'Abdi',
