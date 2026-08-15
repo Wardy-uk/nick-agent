@@ -354,12 +354,14 @@ function _buildPrep(meeting) {
   // excluded from it), so use it rather than re-deriving a looser version:
   // unambiguous in People/ AND the full name agrees, or no match at all.
   //
-  // Above ALL_HANDS the meeting is a broadcast, not a conversation — nobody
-  // chases a commitment in a 40-person SMT update, and 40 blocks makes the prep
-  // card unreadable.
-  const ALL_HANDS = 12;
+  // Above ROOM_SIZE the meeting is a broadcast, not a conversation — nobody
+  // works through a commitment list in the 309-attendee SMT update or the daily
+  // 13-person standup, and that many blocks makes the card unreadable. 8 keeps
+  // 1-2-1s and small team sessions (Tier Two Team Time is 7) and drops the rest;
+  // the People board is where you go through everyone.
+  const ROOM_SIZE = 8;
   const MAX_TOPICS = 3;
-  if (prep.attendees.length <= ALL_HANDS) {
+  if (prep.attendees.length <= ROOM_SIZE) {
     try {
       const waitingOn = require('../services/waiting-on');
       const { firstNames } = require('../services/entities').getRoster();
