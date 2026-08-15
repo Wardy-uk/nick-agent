@@ -106,6 +106,13 @@
 }
 .ph-chip-ok   { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
 .ph-chip-warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+/* Happening NOW, as opposed to "has happened since boot" — the distinction the
+   PowerChips component exists to make. */
+.ph-chip-bad  {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
 
 .ph-focus-actions { display: flex; gap: 8px; align-items: center; }
 

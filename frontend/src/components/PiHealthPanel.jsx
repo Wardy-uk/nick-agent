@@ -82,6 +82,25 @@ function Spark({ points, band = 'ok', max }) {
   );
 }
 
+// Throttle state, rendered the same way for both Pis. Two separate facts that
+// people conflate: what is happening NOW, and what has happened since boot.
+// The second is the one that catches an inadequate PSU, because the symptom
+// (frequency capping) disappears the moment you look.
+function PowerChips({ power, label = 'power' }) {
+  if (!power) return <span className="ph-chip">{label}: unknown</span>;
+  if (power.clean) return <span className="ph-chip ph-chip-ok">no throttling</span>;
+  return (
+    <>
+      {power.now.map(f => (
+        <span key={f} className="ph-chip ph-chip-bad">NOW: {f}</span>
+      ))}
+      {power.since.map(f => (
+        <span key={f} className="ph-chip ph-chip-warn">{f}</span>
+      ))}
+    </>
+  );
+}
+
 function Bar({ pct, band }) {
   return (
     <div className={`ph-bar ph-band-${band}`}>
@@ -223,8 +242,7 @@ export default function PiHealthPanel() {
               <h1 className="ph-focus-title">{statusCopy}</h1>
               <p className="ph-focus-sub">
                 {host?.model || host?.hostname} · up {fmtDuration(host?.uptimeSec)}
-                {power?.clean && <span className="ph-chip ph-chip-ok">no throttling</span>}
-                {power && !power.clean && <span className="ph-chip ph-chip-warn">{power.raw}</span>}
+                <PowerChips power={power} />
               </p>
             </div>
           </div>
@@ -291,132 +309,60 @@ export default function PiHealthPanel() {
         </section>
       )}
 
-      {/* ---- BROADBAND: sampled 4x/day by cron, never on page load ---- */}
-      {broadband && (
-        <section className="ph-card">
-          <h2 className="ph-card-title">
-            Broadband <span className="ph-card-hint">
-              {broadband.ok
-                ? `${(broadband.sponsor || '').replace(/_/g, ' ')} ${broadband.server || ''} · tested ${broadband.ageMs != null ? Math.round(broadband.ageMs / 3600000) + 'h ago' : 'recently'}`
-                : 'last test failed'}
-            </span>
-          </h2>
-
-          {broadband.ok ? (
-            <>
-              <div className="ph-router-grid">
-                <div>
-                  <span>Download</span>
-                  {/* Judged against this line's own history, not a headline number —
-                      what matters is a drop from what it normally does. */}
-                  <b className={broadband.downVsAvgPct != null && broadband.downVsAvgPct < 50 ? 'bad'
-                    : broadband.downVsAvgPct != null && broadband.downVsAvgPct < 75 ? 'warn' : 'good'}>
-                    {broadband.downMbps} Mbps
-                  </b>
-                </div>
-                <div><span>Upload</span><b>{broadband.upMbps} Mbps</b></div>
-                <div>
-                  <span>Ping</span>
-                  <b className={broadband.pingMs > 100 ? 'warn' : 'good'}>{broadband.pingMs} ms</b>
-                </div>
-                <div>
-                  <span>Average down</span>
-                  <b>{broadband.avgDownMbps != null ? `${broadband.avgDownMbps} Mbps` : '—'}</b>
-                </div>
-                <div>
-                  <span>vs average</span>
-                  <b className={broadband.downVsAvgPct != null && broadband.downVsAvgPct < 50 ? 'bad' : 'good'}>
-                    {broadband.downVsAvgPct != null ? `${broadband.downVsAvgPct}%` : '—'}
-                  </b>
-                </div>
-                <div><span>Samples</span><b>{broadband.samples}</b></div>
-              </div>
-
-              {broadband.history?.length > 1 && (
-                <div className="ph-trend-grid" style={{ marginTop: 14 }}>
-                  <div className="ph-trend">
-                    <div className="ph-trend-head"><span>Download</span><b>{broadband.downMbps} Mbps</b></div>
-                    <Spark points={broadband.history.map(h => h.down)} band="ok" />
-                  </div>
-                  <div className="ph-trend">
-                    <div className="ph-trend-head"><span>Upload</span><b>{broadband.upMbps} Mbps</b></div>
-                    <Spark points={broadband.history.map(h => h.up)} band="ok" />
-                  </div>
-                  <div className="ph-trend">
-                    <div className="ph-trend-head"><span>Ping</span><b>{broadband.pingMs} ms</b></div>
-                    <Spark points={broadband.history.map(h => h.ping)} band="warn" />
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="ph-smart-missing">
-              Last speed test failed — {broadband.error || 'no result'}
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* ---- PI 4 (pi-dev): retired from the AI path, still on the network ---- */}
+      {/* ---- PI 4 (pi-dev): same gauges as the Pi 5, so the two compare ---- */}
       {pi4 && (
         <section className="ph-card">
           <h2 className="ph-card-title">
-            Pi 4 <span className="ph-card-hint">
+            Pi 4
+            <span className="ph-card-hint">
               {pi4.reachable
-                ? `${pi4.model || 'pi-dev'} · ${pi4.stale ? 'STALE' : `checked ${Math.round((pi4.ageMs || 0) / 1000)}s ago`}`
+                ? `${pi4.model || 'pi-dev'} · up ${fmtDuration(pi4.uptimeSec)} · ${pi4.stale ? 'STALE' : `checked ${Math.round((pi4.ageMs || 0) / 1000)}s ago`}`
                 : 'unreachable'}
             </span>
           </h2>
 
           {pi4.reachable ? (
             <>
-              <div className="ph-router-grid">
-                <div>
-                  <span>CPU load</span>
-                  <b className={pi4.loadPct >= 90 ? 'bad' : pi4.loadPct >= 70 ? 'warn' : 'good'}>
-                    {pi4.loadPct}%
-                  </b>
-                </div>
-                <div>
-                  <span>Temperature</span>
-                  <b className={pi4.tempC >= 80 ? 'bad' : pi4.tempC >= 70 ? 'warn' : 'good'}>{pi4.tempC}°C</b>
-                </div>
-                <div>
-                  <span>Memory</span>
-                  <b className={pi4.memUsedPct >= 90 ? 'bad' : pi4.memUsedPct >= 80 ? 'warn' : 'good'}>
-                    {pi4.memUsedPct}%
-                  </b>
-                </div>
-                <div>
-                  <span>Swap used</span>
-                  {/* Swapping on an SD card is slow and wears the card out */}
-                  <b className={pi4.swapUsedKb > 0 ? 'warn' : 'good'}>
-                    {pi4.swapUsedKb ? `${Math.round(pi4.swapUsedKb / 1024)}MB` : 'none'}
-                  </b>
-                </div>
-                <div><span>Uptime</span><b>{fmtDuration(pi4.uptimeSec)}</b></div>
-                <div>
-                  <span>Disk</span>
-                  <b className={pi4.diskUsedPct >= 90 ? 'bad' : 'good'}>{pi4.diskUsedPct}%</b>
-                </div>
+              <p className="ph-focus-sub" style={{ marginTop: 0, marginBottom: 12 }}>
+                <PowerChips power={pi4.power} />
+              </p>
+
+              {/* Same four gauges as the Pi 5, in the same order, so a glance
+                  compares like with like. */}
+              <div className="ph-gauges">
+                <Gauge
+                  label="CPU load" value={pi4.loadPct} pct={pi4.loadPct}
+                  band={bandFor(pi4.loadPct, 75, 90)}
+                  sub={`${pi4.load1} / ${pi4.cores} cores`}
+                />
+                <Gauge
+                  label="Temp" value={pi4.tempC} suffix="°" pct={pi4.tempC}
+                  band={bandFor(pi4.tempC, 70, 80)}
+                  sub={pi4.freqMHz ? `${pi4.freqMHz} MHz` : 'SoC'}
+                />
+                <Gauge
+                  label="Memory" value={pi4.memUsedPct} pct={pi4.memUsedPct}
+                  band={bandFor(pi4.memUsedPct, 80, 90)}
+                  sub={`${fmtBytes((pi4.memAvailableKb || 0) * 1024)} free`}
+                />
+                <Gauge
+                  label="SD card" value={pi4.diskUsedPct} pct={pi4.diskUsedPct}
+                  band={bandFor(pi4.diskUsedPct, 80, 90)}
+                  sub={`${fmtBytes(pi4.diskAvailBytes)} free`}
+                />
               </div>
 
-              {pi4.power && !pi4.power.clean && (
-                <div className="ph-router-foot">
-                  {pi4.power.now.length > 0 && (
-                    <span className="ph-router-flag">NOW: {pi4.power.now.join(', ')}</span>
-                  )}
-                  {pi4.power.since.length > 0 && (
-                    <span className="ph-router-flag">since boot: {pi4.power.since.join(', ')}</span>
-                  )}
-                </div>
-              )}
-
-              {pi4.topCpu && (
-                <div className="ph-router-foot">
+              <div className="ph-router-foot">
+                {/* Swapping on an SD card is both slow and destructive */}
+                {pi4.swapUsedKb > 0 && (
+                  <span className="ph-router-flag">
+                    swapping {Math.round(pi4.swapUsedKb / 1024)}MB of {Math.round((pi4.swapTotalKb || 0) / 1024)}MB
+                  </span>
+                )}
+                {pi4.topCpu && (
                   <span>top: {pi4.topCpu.trim().split(/\s+/).map(x => x.replace(':', ' ')).join(' · ')}</span>
-                </div>
-              )}
+                )}
+              </div>
             </>
           ) : (
             <div className="ph-smart-missing">pi-dev is not reachable over SSH from the Pi 5.</div>
@@ -467,7 +413,70 @@ export default function PiHealthPanel() {
             </div>
           </div>
 
+          {/* Broadband belongs here: it is the same question as "is the router
+              working", just measured end to end rather than at the LAN port.
+              Sampled 4x/day by cron — never triggered by opening this page. */}
+          {broadband && (
+            <>
+              <div className="ph-sub-title">Broadband</div>
+              {broadband.ok ? (
+                <>
+                  <div className="ph-router-grid">
+                    <div>
+                      <span>Download</span>
+                      {/* Judged against this line's own average, not a headline figure */}
+                      <b className={broadband.downVsAvgPct != null && broadband.downVsAvgPct < 50 ? 'bad'
+                        : broadband.downVsAvgPct != null && broadband.downVsAvgPct < 75 ? 'warn' : 'good'}>
+                        {broadband.downMbps} Mbps
+                      </b>
+                    </div>
+                    <div><span>Upload</span><b>{broadband.upMbps} Mbps</b></div>
+                    <div>
+                      <span>Ping</span>
+                      <b className={broadband.pingMs > 100 ? 'warn' : 'good'}>{broadband.pingMs} ms</b>
+                    </div>
+                    <div>
+                      <span>Average down</span>
+                      <b>{broadband.avgDownMbps != null ? `${broadband.avgDownMbps} Mbps` : '—'}</b>
+                    </div>
+                    <div>
+                      <span>vs average</span>
+                      <b className={broadband.downVsAvgPct != null && broadband.downVsAvgPct < 50 ? 'bad' : 'good'}>
+                        {broadband.downVsAvgPct != null ? `${broadband.downVsAvgPct}%` : '—'}
+                      </b>
+                    </div>
+                    <div><span>Samples</span><b>{broadband.samples}</b></div>
+                  </div>
+
+                  {broadband.history?.length > 1 && (
+                    <div className="ph-trend-grid" style={{ marginTop: 14 }}>
+                      <div className="ph-trend">
+                        <div className="ph-trend-head"><span>Download</span><b>{broadband.downMbps} Mbps</b></div>
+                        <Spark points={broadband.history.map(h => h.down)} band="ok" />
+                      </div>
+                      <div className="ph-trend">
+                        <div className="ph-trend-head"><span>Upload</span><b>{broadband.upMbps} Mbps</b></div>
+                        <Spark points={broadband.history.map(h => h.up)} band="ok" />
+                      </div>
+                      <div className="ph-trend">
+                        <div className="ph-trend-head"><span>Ping</span><b>{broadband.pingMs} ms</b></div>
+                        <Spark points={broadband.history.map(h => h.ping)} band="warn" />
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="ph-smart-missing">
+                  Last speed test failed — {broadband.error || 'no result'}
+                </div>
+              )}
+            </>
+          )}
+
           <div className="ph-router-foot">
+            {broadband?.ok && broadband.ageMs != null && (
+              <span>speed tested {Math.round(broadband.ageMs / 3600000)}h ago via {(broadband.sponsor || '').replace(/_/g, ' ')}</span>
+            )}
             {router.rebootsToday > 0 && (
               <span className="ph-router-flag">recovered {router.rebootsToday}× today by router-watch</span>
             )}
