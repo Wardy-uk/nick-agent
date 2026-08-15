@@ -11,7 +11,7 @@ const tts = require('../services/tts');
 
 // GET /api/tts/status — can the client rely on this before switching to it?
 router.get('/status', (req, res) => {
-  res.json({ available: tts.isConfigured(), model: tts.MODEL, voice: tts.VOICE });
+  res.json({ available: tts.isConfigured(), model: tts.MODEL, voice: tts.VOICE, voices: tts.VOICES });
 });
 
 // POST /api/tts/speak { text, voice? } -> audio/wav

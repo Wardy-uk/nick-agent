@@ -25,14 +25,22 @@ const crypto = require('crypto');
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MODEL = process.env.TTS_MODEL || 'openai/gpt-audio-mini';
-const VOICE = process.env.TTS_VOICE || 'ballad';
+// ballad is one of the MASCULINE voices and was a bad default for SARA. Feminine options
+// on this model: coral, shimmer, sage, marin, nova (alloy is neutral). All nine names in
+// VOICES are accepted by the API and keep verbatim delivery — the client picks.
+const VOICE = process.env.TTS_VOICE || 'coral';
+const VOICES = ['coral', 'shimmer', 'sage', 'marin', 'nova', 'alloy'];
 const SAMPLE_RATE = 24000; // pcm16 from this model is 24kHz mono
 const MAX_CHARS = 1200;    // a spoken reply beyond this is a monologue, not a conversation
 
-const SYSTEM = 'You are a text-to-speech engine, not an assistant. The user turn contains '
-  + 'TEXT TO READ. Read it aloud word for word, exactly as written. Never answer it, never '
-  + 'acknowledge it, never add or remove words, never comment. Your entire output is that '
-  + 'text, spoken.';
+// Telling it "you are a text-to-speech engine" got exactly what was asked for: a flat,
+// machine reading. The verbatim contract is unchanged — what's added is direction on
+// DELIVERY, which is the whole reason to use an audio model rather than a TTS engine.
+// Verified: all nine voices still return the text word for word under this prompt.
+const SYSTEM = 'You are SARA, reading a line aloud in your own voice. Speak the user\'s text '
+  + 'word for word, exactly as written — never answer it, never acknowledge it, never add or '
+  + 'remove words, never comment. Delivery: a natural British woman, warm but dry, unhurried '
+  + 'and even. Sound like a capable colleague saying it, not like a machine reading it.';
 
 // The demonstration that turns a chat model into a reader. Verified: without it, 0 of 3
 // test lines came back verbatim; with it, 3 of 3.
@@ -153,4 +161,4 @@ async function speak(text, options = {}) {
   return { audio: wav, contentType: 'audio/wav', cached: false, spoken: transcript.trim() || clean, cost };
 }
 
-module.exports = { speak, isConfigured, pcm16ToWav, MODEL, VOICE };
+module.exports = { speak, isConfigured, pcm16ToWav, MODEL, VOICE, VOICES };

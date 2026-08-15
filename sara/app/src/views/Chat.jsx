@@ -13,6 +13,22 @@ import './Chat.css';
 // server-TTS fallback, which arrives long after any gesture has passed.
 const SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
+// Feminine voices on gpt-audio-mini. Nick picks — I can't hear them, and guessing is
+// what produced "a bored Stephen Hawking" in the first place.
+const VOICE_CHOICES = [
+  { id: 'coral', label: 'Coral' },
+  { id: 'shimmer', label: 'Shimmer' },
+  { id: 'sage', label: 'Sage' },
+  { id: 'marin', label: 'Marin' },
+  { id: 'nova', label: 'Nova' },
+];
+const VOICE_KEY = 'sara_tts_voice';
+const SAMPLE_LINE = 'Queue is at twelve, three at risk. Chase Abdi today, or hand it to Stephen.';
+
+function getTtsVoice() {
+  try { return localStorage.getItem(VOICE_KEY) || 'coral'; } catch { return 'coral'; }
+}
+
 const VOICE_ERRORS = {
   'not-allowed': 'Microphone blocked. Allow it in Settings → Safari → Microphone, then reload.',
   'service-not-allowed': 'iOS refused speech recognition here. Try opening SARA in Safari rather than the installed app.',
@@ -31,6 +47,8 @@ export default function Chat() {
   const [listening, setListening] = useState(false);
   const [voiceErr, setVoiceErr] = useState('');
   const [speaking, setSpeaking] = useState(false);
+  const [ttsVoice, setTtsVoice] = useState(getTtsVoice);
+  const [showVoices, setShowVoices] = useState(false);
   const convRef = useRef(null);
   const endRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -38,6 +56,8 @@ export default function Chat() {
   const busyRef = useRef(false);    // ditto for the in-flight guard
   const audioRef = useRef(null);
   const serverSpeakingRef = useRef(false);
+  // speakViaServer runs from a setTimeout inside an effect, so it must not read state.
+  const ttsVoiceRef = useRef(ttsVoice);
 
   const SpeechRecognition = typeof window !== 'undefined'
     && (window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -79,14 +99,14 @@ export default function Chat() {
 
   // Backend TTS: /api/tts/speak returns a WAV. Costs a fraction of a penny per reply,
   // so it is the fallback rather than the default — browser speech is free where it works.
-  async function speakViaServer(text) {
+  async function speakViaServer(text, voiceOverride) {
     if (serverSpeakingRef.current) return;
     serverSpeakingRef.current = true;
     setSpeaking(true);
     try {
       const blob = await apiFetchBlob('/api/tts/speak', {
         method: 'POST',
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, voice: voiceOverride || ttsVoiceRef.current }),
       });
       const el = audioRef.current;
       if (!el) throw new Error('no audio element');
@@ -101,6 +121,14 @@ export default function Chat() {
     } finally {
       serverSpeakingRef.current = false;
     }
+  }
+
+  function chooseVoice(id) {
+    setTtsVoice(id);
+    ttsVoiceRef.current = id;
+    try { localStorage.setItem(VOICE_KEY, id); } catch {}
+    // Audition it immediately — this tap is also the gesture that keeps <audio> unlocked.
+    speakViaServer(SAMPLE_LINE, id);
   }
 
   const toggleVoiceOut = () => {
@@ -247,9 +275,33 @@ export default function Chat() {
               {voiceOut ? '🔊' : '🔇'}
             </button>
           )}
+          <button
+            type="button"
+            className="chat__voice-pick"
+            onClick={() => setShowVoices((v) => !v)}
+            title="Choose SARA's voice"
+          >
+            {VOICE_CHOICES.find((v) => v.id === ttsVoice)?.label || 'Voice'} ▾
+          </button>
           {mode && <span className={`chat__mode chat__mode--${mode}`}>{mode === 'api' ? 'cloud' : 'local'}</span>}
         </div>
       </div>
+
+      {showVoices && (
+        <div className="chat__voices">
+          {VOICE_CHOICES.map((v) => (
+            <button
+              key={v.id}
+              type="button"
+              className={`chat__voice-chip${v.id === ttsVoice ? ' is-on' : ''}`}
+              onClick={() => chooseVoice(v.id)}
+            >
+              {v.label}
+            </button>
+          ))}
+          <span className="chat__voices-hint">Tap to hear it</span>
+        </div>
+      )}
 
       <div className="chat__thread">
         {messages.length === 0 && (
