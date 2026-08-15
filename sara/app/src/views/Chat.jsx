@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiFetch, chatStream } from '../api';
-import { speakSara, isVoiceOutEnabled, setVoiceOutEnabled } from '../voiceUtils';
+import { speakSara, isVoiceOutEnabled, setVoiceOutEnabled, unlockAudio } from '../voiceUtils';
 import './Chat.css';
 
 // Chat = talk to the brain, with real vault reasoning behind it.
@@ -25,6 +25,7 @@ export default function Chat() {
   const [voiceOut, setVoiceOut] = useState(isVoiceOutEnabled);
   const [listening, setListening] = useState(false);
   const [voiceErr, setVoiceErr] = useState('');
+  const [speaking, setSpeaking] = useState(false);
   const convRef = useRef(null);
   const endRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -41,10 +42,27 @@ export default function Chat() {
   useEffect(() => {
     if (busy || !voiceOut || messages.length === 0) return;
     const last = messages[messages.length - 1];
-    if (last.role === 'assistant' && last.content) speakSara(last.content);
+    if (last.role !== 'assistant' || !last.content) return;
+
+    const utterance = speakSara(last.content);
+    if (!utterance) { setVoiceErr('Speech synthesis refused the reply.'); return; }
+    // "Speaking…" appearing but nothing audible means the API worked and the phone
+    // didn't — silent switch or volume. Never appearing means it never spoke at all.
+    utterance.onstart = () => setSpeaking(true);
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = (evt) => {
+      setSpeaking(false);
+      if (evt?.error === 'interrupted' || evt?.error === 'canceled') return;
+      setVoiceErr(`Couldn’t speak: ${evt?.error || 'unknown'}`);
+      console.warn('[SARA Voice] utterance error', evt?.error, evt);
+    };
   }, [busy]);
 
   const toggleVoiceOut = () => {
+    // This tap is a guaranteed user gesture — the one moment iOS will accept an unlock.
+    // Waiting for the generic first-touch listener is a coin flip on which tap wins.
+    unlockAudio();
+    setVoiceErr('');
     setVoiceOut((v) => {
       const next = !v;
       setVoiceOutEnabled(next);
@@ -185,9 +203,9 @@ export default function Chat() {
         <div ref={endRef} />
       </div>
 
-      {(voiceErr || (listening && 'listening')) && (
+      {(voiceErr || listening || speaking) && (
         <div className={`chat__voice-note${voiceErr ? ' chat__voice-note--err' : ''}`}>
-          {voiceErr || 'Listening… tap ⏺ to send.'}
+          {voiceErr || (listening ? 'Listening… tap ⏺ to send.' : 'Speaking…')}
         </div>
       )}
       {!SpeechRecognition && (
