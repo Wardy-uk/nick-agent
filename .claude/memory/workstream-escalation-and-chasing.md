@@ -71,101 +71,164 @@ customer, or emailing a direct report something that reads as surveillance.
 
 ---
 
-## BA — answer these before writing code
+## BA — ANSWERED 15 Aug 2026. These are decisions, not proposals.
 
 ### NOVA manual escalation
 
-**Q1. Is the Jira comment internal or customer-visible? (Answer this first.)**
-The reason is commercial — *"the AM says they're at renewal"*. Customer-visible would be
-bad. Recommend **internal by default, with no option to make it public** in v1.
+**Q1. Jira comment visibility → INTERNAL ALWAYS, no override.**
+Every manual-escalation comment sets `properties: [{key:'sd.public.comment',
+value:{internal:true}}]`. There is **no public flag on the API** — not defaulted-internal,
+*absent*. A commercial reason (*"the AM says they're at renewal"*) can never reach a
+customer, including by a caller passing the wrong boolean.
 
-**Q2. What are the `urgency` reason codes?** `reason_kind` is decided (`capability` |
-`urgency`). The existing five are capability. Proposed starting set — confirm or replace:
-`commercial` (renewal, upsell, contract), `customer_impact` (blocking their operation),
+**Q2. `urgency` reason codes → the proposed five.**
+`commercial` (renewal/upsell/contract), `customer_impact` (blocking their operation),
 `reputational` (complaint risk, visible failure), `deadline` (external date), `exec_ask`
-(SLT or AM request). `requires_troubleshooting` is meaningless for these — either default
-it false for the kind, or the column stops applying.
+(SLT or AM request). The existing five (`complexity`, `access`, `third_party`,
+`data_issue`, `recurring`) stay as `reason_kind = 'capability'`.
+`requires_troubleshooting` **defaults false for `kind = 'urgency'`** — the column keeps
+applying to capability reasons only.
 
-**Q3. Who can escalate?** Just Nick in v1, or account managers too? Drives whether it
-needs a UI in NOVA or only an API. `escalated_by` already exists on the table.
+**Q3. Who can escalate → Nick only in v1, but built for more.**
+No NOVA UI in v1; reached from NEURO chat and the SARA mobile route. **`escalated_by`
+comes from the JWT, never hardcoded**, so a NOVA AM-facing UI in v2 is purely additive.
 
-**Q4. Does escalation change anything other than `duedate` + comment?** Priority field?
-`Agent Next Update` (`customfield_14185`)? Tier? Recommend **no** in v1 — a needed-by date
-and a comment are legible; silently moving priority is not.
+**Q4. What the escalation writes → `duedate` + internal comment + Priority.**
+*Nick overruled the recommendation to leave Priority alone.* Rationale accepted: Priority
+is the field assignees actually filter on, so an escalation that doesn't move it is
+invisible in their working view. **Known cost: priority-based SLA reporting now mixes "how
+bad is this" with "who escalated it".** Accept it, don't re-litigate.
+Tier is NOT written (`jira-sync-service` owns `Current Tier`). `Agent Next Update`
+(`customfield_14185`) is NOT written in v1.
 
-**Q5. What if the ticket already has a `duedate`?** Overwrite, refuse, or only tighten it?
-Recommend **only tighten** — an escalation should never push a date out.
+**Q4b. Priority rule → only ever raise, always to `Critical`.**
+Never lowers. Verified live on NT 15 Aug: the scheme runs **Blocker (190 issues) →
+Critical (805 total, only 13 currently open) → Major → Minor → Unset**. So `Blocker` stays
+reserved for genuine outages, and Critical is rare enough in the open queue that landing
+there still carries signal. If the ticket is already Blocker, leave it.
 
-**Q6. Who gets notified, and does the assignee get a say?** Assignee only, or their lead
-too? If the agent thinks the escalation is wrong, what is the route back? Today the answer
-is "nothing", which is how escalations become resented.
+**Q5. Existing `duedate` → only tighten, silently.**
+Write only if the requested date is earlier than the current one. If it is later, log the
+escalation and post the comment but **leave `duedate` untouched** — no error. An escalation
+must never push a commitment out.
 
-**Q7. Closure.** Decided: the escalation closes when the ticket closes, and
-`jira-sync-service` already sees closure. Confirm it should mark the `escalation_log` row
-resolved rather than deleting or leaving it open.
+**Q6. Notification → assignee only, with a route back.**
+The assignee is notified; their lead is not, by default. The notification **names how to
+push back** — a dispute lands as a row on `escalation_log` so a contested escalation is
+visible in the stats rather than resented in private.
+
+**Q7. Closure → mark resolved, keep the row, record time-to-close.**
+`jira-sync-service` stamps `resolved_at` when it sees closure, plus the interval from
+escalation to close, so *"did escalating actually change anything"* is answerable without
+a join. Rows are never deleted.
 
 ### Teams
 
-**Q8. Channel or DM?** They are different builds:
-- **Workflows webhook** → posts to a channel. No Graph scope, no admin consent, works
-  today. Team-visible, not personal.
-- **Delegated `ChatMessage.Send` from NEURO** → a DM that comes from Nick. One admin
-  consent. *"Nick escalated your ticket"* carries weight *"NOVA-bot says"* does not.
+**Q8. → BUILD BOTH, degrading gracefully.**
+DM (delegated `ChatMessage.Send` from NEURO, arrives as Nick) **and** channel post (Power
+Automate Workflows webhook + Adaptive Card from NOVA, replacing the retired O365 connector
+path in `alert-service.ts`). It is a weekend and admin consent cannot be obtained — so
+**both paths must be built to fail soft and log, never to throw or block the escalation**,
+and must light up on consent + config alone with no code change. An unset webhook or an
+unconsented scope is a normal, silent state.
 
-Recommend **DM via NEURO** for escalations and chasing (both are person-to-person), and
-the webhook only if a team-wide feed is wanted separately. Note this splits the feature
-across both codebases — worth deciding deliberately rather than by accident.
-
-**Q9. What is the fallback when Teams is unavailable?** Email works today in both
-directions. Recommend building email-first and treating Teams as an upgrade, so nothing
-blocks on the consent request.
+**Q9. Fallback → email-first, Teams is an upgrade.**
+Ship on email, which works in both codebases today. Teams becomes a delivery preference
+layered on. **Nothing in the build blocks on the consent request.**
 
 ### Commitment chasing (UI)
 
-**Q10. Where does it live?** Candidates: the People board (per-person card), 1-2-1 prep
-(*"what does Naomi owe me"* is exactly a 1-2-1 question), a standalone view, or the Today
-dashboard. Recommend **per-person on the People board, surfaced in 1-2-1 prep** — that is
-where the question is actually asked.
+**Q10. Lives on → the People board (per-person card) + surfaced in 1-2-1 prep.**
+*"What does Naomi owe me"* is a 1-2-1 question; that's where it goes. No standalone tab.
 
-**Q11. Grouped by person, or flat by age?** `byPerson()` and `list()` both exist.
+**Q11. → Grouped by person, oldest-first within each person.**
+Use `byPerson()`. One conversation per person, not one row per item.
 
-**Q12. What can Nick do from the row?** Chase (queued), mark done, drop. Anything else?
+**Q12. Row actions → chase, mark done, drop, snooze.** All four.
+`chase` queues a `chase_commitment` action (approval-gated, already built end-to-end);
+`done` = they delivered; `drop` = misparsed or overtaken (needed, since it was backfilled
+automatically from 232 notes); `snooze` = hide until a date, for *"they said next Friday"*.
 
-**Q13. Does the KV→table move happen first?** 287 items is fine in KV; a UI that filters
-and sorts will want the table. Cheap now, annoying later.
+**Q13. KV→table → migrate FIRST, before the UI.**
+`schema.sql` is free now. Filter/sort/snooze all want SQL, and snooze especially — it's a
+per-item date the KV blob has nowhere to put.
 
-**Q14. Is there a staleness nudge?** Should something 30+ days old surface in Focus or the
-weekly review, or does it stay pull-only? Recommend pull-only in v1 — the notification
-budget is already the thing most at risk.
+**Q14. Staleness nudge → none. Pull-only in v1.**
+It appears when you open a person or 1-2-1 prep. The notification budget is the thing most
+at risk, and 287 backfilled items would make a very loud first day.
 
-### Escalation first-drafts
+### Escalation first-drafts — IN. (Dropped mid-BA, reinstated by Nick the same day.)
 
-**Q15. What is the output — a Jira comment draft, or an email?** And does it land as a
-draft on the ticket, or in the approval queue?
+*What it is, stated plainly, because the name confused this once already:* when an NT
+escalation ticket lands, an agent spends ~20 minutes reading the history before writing
+anything. NOVA assembles that context and pre-writes the first substantive update, so the
+agent **edits instead of starting blank**.
 
-**Q16. What context feeds it?** Ticket history, account context (`bc-account-resolver`),
-similar past escalations. NOVA has all three; NEURO has none of them.
+**Q15. Output → BOTH, internal first.** One context pipeline, two output shapes.
+- **Phase A — internal handover draft.** What's been tried, account context, suggested
+  next step. Internal-only comment. Near-zero risk, and it is the honest test of whether
+  the context assembly is any good. Saves reading time.
+- **Phase B — customer-facing update.** Only attempted once Phase A demonstrably works.
+  This is where the real 20 minutes is, and where the Q17 gate applies.
 
-**Q17. How is quality judged before this goes near a customer?** Decided: prototype on
-CLOSED tickets. Define the pass mark — e.g. Nick reads 20 drafts against what was actually
-sent and says how many he would have sent. **Do not ship on a vibe.**
+**Q16. Context → ticket history + account context + similar past escalations.**
+Comments, transitions and tier moves; `bc-account-resolver` for who the customer is and
+their contract state; retrieval over closed escalations that resemble this one so the
+draft can reuse what actually worked. **NOT** the SOP-002 troubleshooting checklists.
+All three live in NOVA — NEURO has none of them, which is why this is a NOVA feature.
+⚠️ `bc-account-resolver` is also the route by which commercial detail could reach a
+public comment. Phase B must never emit contract/renewal state into customer-facing text.
 
-**Q18. Who is allowed to approve a send?** Nick only, or the assignee too?
+**Q17. Pass mark → 20 closed tickets, ZERO-WRONG is the only gate.**
+*Nick declined a percentage target.* The single blocking rule: **no draft may state
+something untrue about the ticket or the account** — no invented history, no wrong
+account, no claiming a step was taken that wasn't. One such draft in 20 and it does not
+ship. Everything above that line is Nick's judgement on the day, not a scored threshold.
+Run the prototype against closed tickets only, comparing to what was actually sent.
+
+**Q18. Approval → the assignee approves, Nick is notified.**
+*Nick overruled the recommendation to reserve customer-facing drafts for himself.*
+Internal drafts need no approval plumbing; customer-facing sends are approved by the
+person on the ticket, with a notification to Nick after the fact.
+**Recorded risk, accepted, do not re-litigate:** Q17 is a one-off gate judged by Nick at
+prototype, but production enforcement then sits with whoever is on shift — on text a
+customer reads. Cheap mitigation to build in from the start: **log every approved
+customer-facing send (draft text, final text, approver) so the delta is auditable**, and
+Nick's notification carries what actually went out, not just that something did.
+
+Note for whoever reads this later: "escalation" named two unrelated things in the original
+brief. Commitment chasing is **internal, about Nick's team, never touches Jira**. Manual
+escalation and first-drafts are **the NT support queue**. They only share a word.
 
 ---
 
-## Build order once the BA lands
+## Build order — BA has landed, this is the plan
 
-1. **`reason_kind` migration** (NOVA, needs Nick's explicit OK) — column + urgency
-   vocabulary. Schema before code.
-2. **`POST /escalation/manual`** — log row, internal Jira comment, `duedate` tighten.
-   Verify editmeta on a real ticket first. Notification stubbed behind Q8.
-3. **NEURO capture surface** — a chat tool and a mobile route that call NOVA directly
+**STATUS 15 Aug 16:20 — steps 1–3 DONE and live (NOVA `7a6655a`, NEURO `006ca71`).
+Step 4's migration is done; its UI is not.** Escalation reaches NOVA over the
+**NEURO bridge**, not the `@sara` service account — that account's password did
+not exist anywhere, and the bridge is hardcoded to Nick so attribution is honest.
+Verified end to end on NT-28075. Resume at the chasing UI (Q10–Q12).
+
+1. ~~**`reason_kind` migration**~~ — DONE, verified: 8 urgency reasons live. (NOVA, **needs Nick's explicit OK before running** per the
+   Azure SQL rule) — column on `escalation_reasons` + seed the five urgency codes with
+   `requires_troubleshooting = 0`. Schema before code.
+2. **`POST /escalation/manual`** — log row, internal-only comment, `duedate` tighten-only,
+   Priority raise-only-to-Critical. **Verify editmeta on a real ticket before the first
+   write** (createmeta is not proof). Notification behind the Q8/Q9 email-first path.
+3. **NEURO capture surface** — a chat tool and a SARA mobile route calling NOVA directly
    (decided: direct, not via n8n). NEURO needs a service identity; NOVA's routes are
-   JWT-guarded by role.
-4. **Commitment chasing UI** — per Q10–Q14.
-5. **Teams** — per Q8, after the consent request if the DM path wins.
-6. **Escalation first-drafts** — last, and only after the prototype in Q17 passes.
+   JWT-guarded by role, and `escalated_by` reads from that token.
+4. **waiting-on KV→table migration** (Q13) — then the **People board + 1-2-1 prep UI**
+   (Q10–Q12), pull-only (Q14).
+5. **Teams, both paths** (Q8) — fail-soft, config-gated, no code change needed when
+   consent lands. Raise the `ChatMessage.Send` admin consent request early so it's queued
+   while the rest is built.
+6. **Escalation first-drafts, Phase A** (internal handover draft) — context pipeline
+   (Q16) + internal-only output. No approval plumbing needed.
+7. **Escalation first-drafts, Phase B** (customer-facing) — **only after the Q17
+   prototype passes on closed tickets, zero-wrong**. Ships with the send audit log from
+   Q18 on day one, not retrofitted.
 
 ## Rules for that session
 
