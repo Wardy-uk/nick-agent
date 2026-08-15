@@ -204,8 +204,9 @@ escalation and first-drafts are **the NT support queue**. They only share a word
 
 ## Build order — BA has landed, this is the plan
 
-**STATUS 15 Aug 17:30 — steps 1–4 DONE and live (NOVA `7a6655a`, NEURO `006ca71`,
-`2129d7b`…`d1a79a6`). Resume at step 5, Teams.** Escalation reaches NOVA over the
+**STATUS 15 Aug 18:20 — steps 1–5 code-complete. Resume at step 6, escalation
+first-drafts Phase A.** Steps 1–4 are live and proven. Step 5's code is deployed
+but both Teams paths are dark pending two things only Nick can do — see step 5. Escalation reaches NOVA over the
 **NEURO bridge**, not the `@sara` service account — that account's password did
 not exist anywhere, and the bridge is hardcoded to Nick so attribution is honest.
 Verified end to end on NT-28075.
@@ -242,9 +243,24 @@ refused. That is why the recipient is editable; an override is stamped
    must go through `entities.getRoster().firstNames` (unambiguous in `People/` AND the
    full name agrees). Matching the bare first name put one Lucy's 16 commitments on
    four Lucys and Chris Middleton's 31 on a Chris Smith.
-5. **Teams, both paths** (Q8) — fail-soft, config-gated, no code change needed when
-   consent lands. Raise the `ChatMessage.Send` admin consent request early so it's queued
-   while the rest is built.
+5. ~~**Teams, both paths** (Q8) — fail-soft, config-gated, no code change needed when
+   consent lands.~~ — **CODE DONE, both paths. Waiting on Nick for two external things,
+   neither of which is a code change:**
+   - **DM path (NEURO)** — `teams.sendDm()`. Blocked on the `ChatMessage.Send` admin
+     consent request. **Raise it in the tenant's Admin consent requests queue**, not the
+     Grant consent button. `GET /api/microsoft/teams-send-status` says what it is waiting
+     on; it flips to `available:true` on approval with no redeploy.
+   - **Channel path (NOVA `42b412c`)** — `services/teams-webhook.ts`. Blocked on pasting a
+     **Power Automate Workflows** URL into the `agent_teams_webhook_url` setting. NOVA
+     still needs `deploy.ps1 -Branch nova-codex` (Nick runs it).
+
+   **The trap to not re-introduce:** do NOT add `ChatMessage.Send` to `GRAPH_SCOPES`.
+   `getAccessToken()` passes that whole list to `acquireTokenSilent`, so one unconsented
+   entry makes the silent call throw and takes Calendar, Mail, Tasks and briefings down
+   with it — "add Teams" becomes "Microsoft is down". Optional scopes go through
+   `microsoft.getScopedToken(scopes)`, which acquires them alone and touches neither
+   `graphTokenCache` nor `lastTokenError`. Probed live 15 Aug: `ChatMessage.Send` →
+   `consent` (AADSTS65001), `Mail.Send` → GRANTED, main token unaffected either side.
 6. **Escalation first-drafts, Phase A** (internal handover draft) — context pipeline
    (Q16) + internal-only output. No approval plumbing needed.
 7. **Escalation first-drafts, Phase B** (customer-facing) — **only after the Q17
