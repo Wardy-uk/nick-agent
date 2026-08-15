@@ -20,66 +20,46 @@
  * should read to them, not for what it technically is.
  */
 
-const db = require('../db/database');
-
 const TIMEOUT_MS = 15000;
 
+/**
+ * Auth is the NEURO bridge's shared secret, NOT a NOVA login.
+ *
+ * The service-account route needed a password that turned out not to exist
+ * anywhere, and it signed the internal Jira comment "Escalated by sara" — a
+ * robot reaching into an assignee's ticket. The bridge NOVA already exposes for
+ * the Microsoft integration is hardcoded to Nick and nobody else, which makes
+ * it both simpler AND more honest: attribution is a property of the route
+ * rather than a lookup table, and manual escalation is Nick-only in v1 anyway.
+ *
+ * Reuses NOVA_BRIDGE_URL / NOVA_BRIDGE_SECRET, already configured on the Pi.
+ */
 function config() {
   return {
-    url: (process.env.NOVA_URL || db.getState('nova.url') || '').replace(/\/$/, ''),
-    username: process.env.NOVA_USERNAME || db.getState('nova.username') || '',
-    password: process.env.NOVA_PASSWORD || db.getState('nova.password') || '',
+    url: (process.env.NOVA_BRIDGE_URL || '').replace(/\/api\/neuro-bridge\/?$/, '').replace(/\/$/, ''),
+    secret: process.env.NOVA_BRIDGE_SECRET || '',
   };
 }
 
 /** Configured at all? Callers use this to degrade rather than throw. */
 function isConfigured() {
   const c = config();
-  return Boolean(c.url && c.username && c.password);
+  return Boolean(c.url && c.secret);
 }
 
-let cachedToken = null;
-
-async function login() {
-  const c = config();
-  if (!isConfigured()) throw new Error('NOVA is not configured (NOVA_URL / NOVA_USERNAME / NOVA_PASSWORD)');
-
-  const res = await fetch(`${c.url}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: c.username, password: c.password }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok || !body?.data?.token) {
-    throw new Error(`NOVA login failed (${res.status}): ${body?.error || 'no token returned'}`);
-  }
-  cachedToken = body.data.token;
-  return cachedToken;
-}
-
-/** Call NOVA, re-authenticating once if the cached token has expired. */
 async function call(path, { method = 'GET', body } = {}) {
   const c = config();
-  if (!cachedToken) await login();
+  if (!isConfigured()) throw new Error('NOVA bridge is not configured (NOVA_BRIDGE_URL / NOVA_BRIDGE_SECRET)');
 
-  const send = async () => fetch(`${c.url}${path}`, {
+  const res = await fetch(`${c.url}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${cachedToken}`,
+      'x-neuro-bridge-secret': c.secret,
     },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
-
-  let res = await send();
-  if (res.status === 401) {
-    cachedToken = null;
-    await login();
-    res = await send();
-  }
 
   const payload = await res.json().catch(() => ({}));
   if (!res.ok || payload?.ok === false) {
@@ -90,7 +70,12 @@ async function call(path, { method = 'GET', body } = {}) {
 
 /** The urgency vocabulary, so the model picks a real code rather than inventing one. */
 async function listUrgencyReasons() {
-  return call('/api/escalations/reasons?kind=urgency');
+  return call('/api/neuro-bridge/escalation-reasons?kind=urgency');
+}
+
+/** Enough ticket detail to confirm it is the right ticket before escalating. */
+async function getTicket(key) {
+  return call(`/api/neuro-bridge/ticket/${encodeURIComponent(key)}`);
 }
 
 /**
@@ -98,7 +83,7 @@ async function listUrgencyReasons() {
  * tighten-only due date, raise-only priority — and returns what it changed.
  */
 async function escalate({ ticketKey, reasonCode, neededBy, notes }) {
-  return call('/api/escalations/manual', {
+  return call('/api/neuro-bridge/escalate', {
     method: 'POST',
     body: {
       ticket_key: ticketKey,
@@ -109,4 +94,4 @@ async function escalate({ ticketKey, reasonCode, neededBy, notes }) {
   });
 }
 
-module.exports = { isConfigured, listUrgencyReasons, escalate, call };
+module.exports = { isConfigured, listUrgencyReasons, getTicket, escalate, call };

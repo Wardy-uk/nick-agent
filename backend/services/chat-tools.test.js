@@ -104,9 +104,8 @@ test('outward-facing tools queue for approval and send nothing', async () => {
 // escalate_ticket reaches into NOVA and changes a real customer ticket, so the
 // thing worth pinning is that chat NEVER does it directly — it only ever queues.
 test('escalate_ticket queues and escalates nothing', async () => {
-  process.env.NOVA_URL = 'http://nova.invalid';
-  process.env.NOVA_USERNAME = 'neuro-test';
-  process.env.NOVA_PASSWORD = 'unused-because-nothing-is-sent';
+  process.env.NOVA_BRIDGE_URL = 'http://nova.invalid';
+  process.env.NOVA_BRIDGE_SECRET = 'unused-because-nothing-is-sent';
 
   const res = await chatTools.execute('escalate_ticket', {
     ticket_key: 'nt-28061',

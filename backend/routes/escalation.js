@@ -26,7 +26,7 @@ const nova = require('../services/nova-client');
 function requireNova(req, res, next) {
   if (!nova.isConfigured()) {
     return res.status(503).json({
-      error: 'NOVA is not configured — set NOVA_URL, NOVA_USERNAME and NOVA_PASSWORD',
+      error: 'NOVA is not configured — set NOVA_BRIDGE_URL and NOVA_BRIDGE_SECRET',
     });
   }
   next();
@@ -59,7 +59,7 @@ router.get('/ticket/:key', requireNova, async (req, res) => {
     return res.status(400).json({ error: `"${key}" is not a ticket key (expected e.g. NT-28061)` });
   }
   try {
-    const t = await nova.call(`/api/jira/issues/${encodeURIComponent(key)}`);
+    const t = await nova.getTicket(key);
     // NOVA returns every navigable field; the form needs a handful.
     res.json({
       ticket: {
