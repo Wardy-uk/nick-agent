@@ -1,0 +1,277 @@
+.sop-panel {
+  padding: 20px;
+  max-width: 1220px;
+  margin: 0 auto;
+  font-family: var(--font-mono);
+}
+
+.sop-loading,
+.sop-error {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 48px 0;
+  text-align: center;
+}
+.sop-error { display: flex; flex-direction: column; gap: 6px; color: var(--danger); }
+.sop-error span { color: var(--text-muted); }
+
+/* ─────────────────────────────────────────────────────────── focus band */
+
+.sop-focus {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  margin-bottom: 16px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(90, 163, 249, 0.10), transparent 60%),
+    linear-gradient(180deg, var(--bg-card), var(--bg-secondary));
+  box-shadow: var(--shadow-card);
+  position: relative;
+  overflow: hidden;
+}
+.sop-focus::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--status-col, var(--success));
+}
+.sop-overall-ok       { --status-col: var(--success); }
+.sop-overall-warn     { --status-col: var(--warning); }
+.sop-overall-critical { --status-col: var(--danger); }
+
+.sop-focus-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.sop-focus-head h2 {
+  margin: 0;
+  font-size: 19px;
+  letter-spacing: -0.2px;
+  color: var(--text-primary);
+}
+.sop-focus-sub { margin: 4px 0 0; font-size: 12.5px; color: var(--text-secondary); }
+
+.sop-refresh {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  width: 30px; height: 30px;
+  cursor: pointer;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.sop-refresh:hover { color: var(--text-primary); border-color: var(--accent-dim); }
+
+.sop-issues { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sop-issue button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--sev, var(--text-muted));
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.sop-issue button:hover { background: rgba(255, 255, 255, 0.05); }
+.sop-sev-critical { --sev: var(--danger); }
+.sop-sev-warn     { --sev: var(--warning); }
+.sop-sev-info     { --sev: var(--accent); }
+
+.sop-issue-title { font-size: 13px; color: var(--text-primary); font-weight: 600; }
+.sop-issue-detail { font-size: 12px; color: var(--text-secondary); }
+
+/* ────────────────────────────────────────────────────────── stat strip */
+
+.sop-stats {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.sop-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 14px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: left;
+  font-family: inherit;
+  cursor: default;
+}
+button.sop-stat { cursor: pointer; }
+button.sop-stat:hover { border-color: var(--accent-dim); }
+
+.sop-stat-value { font-size: 26px; line-height: 1; color: var(--tone, var(--text-primary)); font-weight: 600; }
+.sop-stat-label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+.sop-stat-sub   { font-size: 11px; color: var(--text-muted); }
+
+.sop-tone-good   { --tone: var(--success); }
+.sop-tone-warn   { --tone: var(--warning); }
+.sop-tone-danger { --tone: var(--danger); }
+
+/* ────────────────────────────────────────────────────────────── cards */
+
+.sop-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 12px;
+}
+.sop-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px 16px;
+}
+.sop-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.sop-card-head h3 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.sop-link {
+  background: none; border: none; padding: 0;
+  color: var(--accent); font-size: 11.5px; cursor: pointer; font-family: inherit;
+}
+.sop-link:hover { text-decoration: underline; }
+
+/* ──────────────────────────────────────────────────────── split bar */
+
+.sop-bar {
+  display: flex;
+  height: 9px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+}
+.sop-bar-empty { opacity: 0.4; }
+.sop-bar-seg { display: block; height: 100%; }
+
+.sop-seg-must   { background: var(--danger); }
+.sop-seg-should { background: var(--accent); }
+.sop-seg-could  { background: var(--accent-dim); }
+.sop-seg-unset  { background: var(--text-muted); }
+
+.sop-bar-key { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 9px; }
+.sop-bar-key-item { font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
+.sop-bar-key-item b { color: var(--text-primary); }
+.sop-dot { width: 7px; height: 7px; border-radius: 2px; display: inline-block; }
+
+/* ───────────────────────────────────────────────────────────── facts */
+
+.sop-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin: 14px 0 0; }
+.sop-facts > div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.sop-facts dt { font-size: 11.5px; color: var(--text-muted); margin: 0; }
+.sop-facts dd { font-size: 13px; color: var(--text-primary); margin: 0; font-weight: 600; }
+.sop-bad { color: var(--danger); }
+
+.sop-context { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.sop-chip {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-radius: 20px;
+  padding: 3px 9px;
+}
+.sop-chip b { color: var(--text-primary); }
+
+/* ──────────────────────────────────────────────────────────── people */
+
+.sop-people { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.sop-people li { display: grid; grid-template-columns: 70px 1fr 26px 34px; align-items: center; gap: 8px; }
+.sop-person { font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sop-person-bar { height: 6px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden; }
+.sop-person-bar i { display: block; height: 100%; background: var(--accent); }
+.sop-person-n { font-size: 12px; color: var(--text-primary); text-align: right; font-weight: 600; }
+.sop-person-age { font-size: 11px; color: var(--text-muted); text-align: right; }
+
+/* ───────────────────────────────────────────────────────────── queue */
+
+.sop-freshness {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  margin-bottom: 12px;
+}
+.sop-freshness.sop-stale {
+  color: var(--danger);
+  background: rgba(224, 85, 85, 0.10);
+  border: 1px solid rgba(224, 85, 85, 0.30);
+}
+
+.sop-queue-nums { display: flex; gap: 22px; margin-bottom: 12px; }
+.sop-queue-nums div { display: flex; flex-direction: column; }
+.sop-queue-nums b { font-size: 21px; color: var(--text-primary); line-height: 1.1; }
+.sop-queue-nums span { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+
+.sop-statuses { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.sop-statuses li { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); }
+.sop-statuses b { color: var(--text-primary); }
+.sop-empty { color: var(--text-muted); font-size: 12px; font-style: italic; }
+
+/* ─────────────────────────────────────────────────────────── rituals */
+
+.sop-ritual-row { display: grid; grid-template-columns: 58px 1fr 42px; align-items: center; gap: 9px; margin-bottom: 9px; }
+.sop-ritual-label { font-size: 11.5px; color: var(--text-secondary); }
+.sop-ritual-n { font-size: 11.5px; color: var(--text-muted); text-align: right; }
+.sop-cells { display: flex; gap: 3px; }
+.sop-cell {
+  flex: 1;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  border: 1px solid transparent;
+}
+.sop-cell.on { background: var(--success); }
+
+.sop-note { font-size: 11px; color: var(--text-muted); margin: 10px 0 0; }
+
+/* ───────────────────────────────────────────────────────── sparkline */
+
+.sop-spark { display: flex; align-items: flex-end; gap: 3px; height: 46px; }
+.sop-spark-bar { flex: 1; background: var(--accent-dim); border-radius: 2px 2px 0 0; min-height: 3px; }
+.sop-spark-accent .sop-spark-bar:last-child { background: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────── jobs */
+
+.sop-jobs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.sop-job { display: grid; grid-template-columns: 8px 1fr auto; align-items: center; gap: 9px; font-size: 12px; }
+.sop-job-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--jobcol, var(--text-muted)); }
+.sop-job-ok    { --jobcol: var(--success); }
+.sop-job-stale { --jobcol: var(--danger); }
+.sop-job-never { --jobcol: var(--warning); }
+.sop-job-name { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sop-job-when { color: var(--text-muted); font-size: 11px; }
+
+/* ──────────────────────────────────────────────────────────── events */
+
+.sop-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.sop-events li { display: flex; flex-direction: column; gap: 1px; }
+.sop-event-when { font-size: 10.5px; color: var(--text-muted); }
+.sop-event-subject { font-size: 12.5px; color: var(--text-primary); }
+.sop-event-free .sop-event-subject { color: var(--text-secondary); }
+
+.sop-stamp { text-align: center; font-size: 10.5px; color: var(--text-muted); margin: 18px 0 0; }
+
+/* ───────────────────────────────────────────────────────── responsive */
+
+@media (max-width: 900px) {
+  .sop-stats { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 560px) {
+  .sop-panel { padding: 14px; }
+  .sop-stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .sop-stat-value { font-size: 22px; }
+  .sop-grid { grid-template-columns: 1fr; }
+  .sop-focus { padding: 16px; }
+}

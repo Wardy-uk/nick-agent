@@ -3,6 +3,11 @@ import { apiUrl } from '../api';
 import './Sidebar.css';
 
 const PRIMARY_ITEMS = [
+  // Above Briefing on purpose. Briefing answers "what about today"; this answers
+  // "what shape is everything in" — including the things no other screen looks
+  // at, like a Jira cache that had been stale for six weeks while every panel
+  // reading it rendered happily.
+  { id: 'state',      label: 'State of Play', icon: '◈' },
   { id: 'briefing',   label: 'Briefing',  icon: '◉' },
   { id: 'chat',       label: 'Ask',       icon: '›' },
   { id: 'capture',    label: 'Capture',   icon: '+' },

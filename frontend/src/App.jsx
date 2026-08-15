@@ -26,6 +26,7 @@ import JournalPanel from './components/JournalPanel';
 import FocusPanel from './components/FocusPanel';
 import AdhdPanel from './components/AdhdPanel';
 import BriefingPanel from './components/BriefingPanel';
+import StateOfPlay from './components/StateOfPlay';
 import PiHealthPanel from './components/PiHealthPanel';
 import MeetingPrep from './components/MeetingPrep';
 import InstallBanner from './components/InstallBanner';
@@ -263,6 +264,7 @@ function AuthenticatedApp() {
 
   const renderView = () => {
     switch (activeView) {
+      case 'state': return <StateOfPlay onNavigate={handleNavigate} />;
       case 'briefing': return <BriefingPanel onNavigate={handleNavigate} />;
       case 'focus': return <FocusPanel onNavigate={handleNavigate} />;
       case 'today': return <AdhdPanel onNavigate={handleNavigate} />;
