@@ -225,6 +225,13 @@
 }
 .wo-more:hover { color: var(--accent); }
 
+.wo-more-items {
+  margin: 0;
+  padding: 7px 12px;
+  text-align: left;
+  border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+
 /* ───────────────────────────────────────────────────────── mobile */
 
 /* 768px matches the app's own breakpoint (App.css), where the bottom nav
@@ -245,7 +252,7 @@
   }
 
   /* Touch targets: 10px text in a 4px-padded button is not tappable. */
-  .wo-btn { padding: 7px 12px; font-size: 11px; }
+  .wo-btn { padding: 9px 14px; font-size: 11px; }
   .wo-date { padding: 6px 8px; font-size: 11px; }
 
   .wo-snooze { flex-wrap: wrap; }

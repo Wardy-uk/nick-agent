@@ -23,6 +23,10 @@ const SNOOZE_PRESETS = [
   { label: '2 weeks', days: 14 },
 ];
 
+// Rows shown per person before "N older". Oldest-first ordering means the cut
+// is always the least urgent end of the list.
+const ITEM_CAP = 5;
+
 /** YYYY-MM-DD n days out, built from local getters — toISOString() shifts the day in BST. */
 function isoDaysFromNow(days) {
   const d = new Date();
@@ -110,6 +114,7 @@ export default function WaitingOn({ person = null, embedded = false }) {
   const [error, setError] = useState(null);
   const [expanded, setExpanded] = useState({});   // person -> bool
   const [showAll, setShowAll] = useState(false);
+  const [showAllItems, setShowAllItems] = useState({});   // person -> bool
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [busyKey, setBusyKey] = useState(null);
   const [flash, setFlash] = useState(null);       // { key, text }
@@ -236,9 +241,16 @@ export default function WaitingOn({ person = null, embedded = false }) {
                 </span>
               </button>
 
-              {isOpen && (
+              {isOpen && (() => {
+                // The worst offender opens with 13 items, which on a phone is
+                // ~1900px of one person and buries the other 28 plus the whole
+                // roster below them. Oldest first means the top few are the ones
+                // that matter anyway.
+                const capped = showAllItems[g.person] ? g.items : g.items.slice(0, ITEM_CAP);
+                const hidden = g.items.length - capped.length;
+                return (
                 <div className="wo-items">
-                  {g.items.map(item => (
+                  {capped.map(item => (
                     <React.Fragment key={item.key}>
                       <WaitingRow
                         item={item}
@@ -250,8 +262,17 @@ export default function WaitingOn({ person = null, embedded = false }) {
                       )}
                     </React.Fragment>
                   ))}
+                  {(hidden > 0 || showAllItems[g.person]) && (
+                    <button
+                      className="wo-more wo-more-items"
+                      onClick={() => setShowAllItems(p => ({ ...p, [g.person]: !p[g.person] }))}
+                    >
+                      {hidden > 0 ? `${hidden} older` : 'Show fewer'}
+                    </button>
+                  )}
                 </div>
-              )}
+                );
+              })()}
             </div>
           );
         })}
