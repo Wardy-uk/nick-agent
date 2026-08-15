@@ -890,6 +890,50 @@ function getRecentSaraActions(limit = 20) {
   return rows;
 }
 
+/**
+ * Scoped reads. These exist because callers kept asking "has this note/event
+ * been actioned before?" by pulling `getRecentSaraActions(N)` and filtering it
+ * — which is a GLOBAL recency window, not a scoped query. The table churns
+ * thousands of rows a day (16,281 by 15 Aug), so the newest 500 spanned about
+ * 21 hours: last night's actions for a note were already invisible, and the
+ * nightly vault scan re-queued every candidate it had queued the night before.
+ * 926 pending capture_todos, 442 of them distinct.
+ *
+ * A LIMIT is a cliff, not a page. If the question is "for this note" or "of
+ * this type", ask SQL that question.
+ */
+function getSaraActionsBySource(sourcePath, type = null) {
+  const rows = type
+    ? all(`SELECT * FROM sara_actions
+             WHERE type = ? AND json_extract(payload, '$.sourcePath') = ?
+             ORDER BY created_at DESC`, [type, sourcePath])
+    : all(`SELECT * FROM sara_actions
+             WHERE json_extract(payload, '$.sourcePath') = ?
+             ORDER BY created_at DESC`, [sourcePath]);
+  for (const row of rows) row.payload = JSON.parse(row.payload || '{}');
+  return rows;
+}
+
+function getSaraActionsByType(type, limit = 5000) {
+  const rows = all(
+    'SELECT * FROM sara_actions WHERE type = ? ORDER BY created_at DESC LIMIT ?',
+    [type, limit]
+  );
+  for (const row of rows) row.payload = JSON.parse(row.payload || '{}');
+  return rows;
+}
+
+/** Status tally since an ISO timestamp — counted in SQL, so no window can clip it. */
+function countSaraActionsSince(since) {
+  const rows = all(
+    'SELECT status, COUNT(*) n FROM sara_actions WHERE created_at >= ? GROUP BY status',
+    [since]
+  );
+  const out = {};
+  for (const r of rows) out[r.status] = r.n;
+  return out;
+}
+
 module.exports = {
   init,
   getDb,
@@ -1005,4 +1049,7 @@ module.exports = {
   updateSaraActionStatus,
   updateSaraActionPayload,
   getRecentSaraActions,
+  getSaraActionsBySource,
+  getSaraActionsByType,
+  countSaraActionsSince,
 };

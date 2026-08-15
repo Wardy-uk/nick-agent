@@ -343,11 +343,15 @@ function syncNoteActionCandidates(relativePath) {
     return { created: 0, autoPromoted: 0, pending: 0, superseded: 0, candidates: [] };
   }
   const activeIds = new Set(candidates.map((candidate) => candidate.focusItemId));
-  const existing = db.getRecentSaraActions(500).filter((action) => {
-    if (action.type !== 'capture_todo') return false;
-    if (!action.payload || action.payload.sourcePath !== relativePath) return false;
-    return true;
-  });
+  // Every capture_todo ever raised FOR THIS NOTE, not the newest 500 rows in
+  // the table filtered down to it. That filter was the whole duplication bug:
+  // the table churns thousands of rows a day, so the 500-row window covered
+  // about 21 hours and last night's actions for this note had already fallen
+  // out of it. `alreadyTracked` then found nothing, and the 10pm scan re-queued
+  // the same candidates every single night — 926 pending rows, 442 distinct.
+  // The supersede loop below was blinded by exactly the same window, which is
+  // why the older copies stayed pending instead of being retired.
+  const existing = db.getSaraActionsBySource(relativePath, 'capture_todo');
 
   let superseded = 0;
   for (const action of existing) {

@@ -145,9 +145,13 @@ async function checkEvents(eventIds, { dryRun = false, now = new Date() } = {}) 
   // and sent — a second ask is worse than none.
   let seen = new Set();
   try {
+    // Every chase_agenda ever, not the newest 200 rows across all types. The
+    // table churns thousands of rows a day, so that window covered well under
+    // a day — and this set is what stops a second email going to the same
+    // organiser about the same meeting.
     seen = new Set(
-      db.getRecentSaraActions(200)
-        .filter(a => a.type === 'chase_agenda' && a.status !== 'rejected')
+      db.getSaraActionsByType('chase_agenda')
+        .filter(a => a.status !== 'rejected')
         .map(a => a.payload?.eventId)
         .filter(Boolean)
     );

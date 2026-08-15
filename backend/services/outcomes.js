@@ -99,13 +99,15 @@ function computeWeek(anchor = new Date()) {
   // suggestions train you to stop reading them. ──
   let actions = { executed: 0, rejected: 0, pending: 0 };
   try {
-    const recent = db.getRecentSaraActions(200)
-      .filter(a => (a.created_at || '') >= from);
-    for (const a of recent) {
-      if (a.status === 'executed') actions.executed++;
-      else if (a.status === 'rejected') actions.rejected++;
-      else if (a.status === 'pending') actions.pending++;
-    }
+    // Counted in SQL over the period. Taking the newest 200 and filtering by
+    // date silently understates every figure the moment the period holds more
+    // than 200 actions — which, at ~460 candidates a night, it always did. An
+    // approval rate that is wrong in the direction of "looks fine" is worse
+    // than no approval rate.
+    const tally = db.countSaraActionsSince(from);
+    actions.executed = tally.executed || 0;
+    actions.rejected = tally.rejected || 0;
+    actions.pending = tally.pending || 0;
   } catch (e) { console.warn('[Outcomes] Actions read failed:', e.message); }
 
   // ── Surface reach: if Today and Tasks are not opened, nothing above matters ──
