@@ -15,7 +15,8 @@ const VOICE_ERRORS = {
   'audio-capture': 'No microphone available.',
   'no-speech': 'Didn’t hear anything — try again, closer to the mic.',
   'network': 'Speech recognition needs the network and couldn’t reach it.',
-  aborted: '',
+  // Only reached when nothing was captured — an abort after a good turn returns early.
+  aborted: 'Dictation was cut off before it caught anything. Tap 🎤 and try again.',
 };
 export default function Chat() {
   const [messages, setMessages] = useState([]); // { role, content }
@@ -44,11 +45,17 @@ export default function Chat() {
     const last = messages[messages.length - 1];
     if (last.role !== 'assistant' || !last.content) return;
 
-    const utterance = speakSara(last.content);
-    if (!utterance) { setVoiceErr('Speech synthesis refused the reply.'); return; }
+    say(last.content);
+  }, [busy]);
+
+  // One place that speaks, so the toggle's test phrase and the real replies share
+  // exactly the same path — if one works and the other doesn't, that's the finding.
+  function say(text) {
+    const utterance = speakSara(text);
+    if (!utterance) { setVoiceErr('Speech synthesis refused that.'); return; }
     // "Speaking…" appearing but nothing audible means the API worked and the phone
     // didn't — silent switch or volume. Never appearing means it never spoke at all.
-    utterance.onstart = () => setSpeaking(true);
+    utterance.onstart = () => { setSpeaking(true); setVoiceErr(''); };
     utterance.onend = () => setSpeaking(false);
     utterance.onerror = (evt) => {
       setSpeaking(false);
@@ -56,7 +63,14 @@ export default function Chat() {
       setVoiceErr(`Couldn’t speak: ${evt?.error || 'unknown'}`);
       console.warn('[SARA Voice] utterance error', evt?.error, evt);
     };
-  }, [busy]);
+    // Nothing fired at all — the call was accepted and silently dropped. That is the
+    // signature of speechSynthesis in an installed iOS PWA.
+    setTimeout(() => {
+      if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+        setVoiceErr((e) => e || 'Speech was accepted but never played. On iPhone this usually means the installed app — try SARA in Safari to confirm.');
+      }
+    }, 1200);
+  }
 
   const toggleVoiceOut = () => {
     // This tap is a guaranteed user gesture — the one moment iOS will accept an unlock.
@@ -66,6 +80,10 @@ export default function Chat() {
     setVoiceOut((v) => {
       const next = !v;
       setVoiceOutEnabled(next);
+      // Speak the confirmation from inside the tap — the case iOS is most permissive
+      // about. Hearing this but not the replies narrows it to the async path; hearing
+      // nothing at all means synthesis is dead in this context, not mis-wired.
+      if (next) say('Voice on.');
       return next;
     });
   };
@@ -96,8 +114,15 @@ export default function Chat() {
     };
     rec.onerror = (evt) => {
       setListening(false);
-      setVoiceErr(VOICE_ERRORS[evt?.error] || `Mic error: ${evt?.error || 'unknown'}`);
-      console.warn('[SARA Voice] recognition error', evt?.error, evt);
+      const code = evt?.error || 'unknown';
+      console.warn('[SARA Voice] recognition error', code, evt);
+      // Whatever was said before the abort still counts — don't cry over a finished turn.
+      if (dictatedRef.current.trim()) return;
+      // hasOwnProperty, not `||`: a mapped empty string means "known and benign", and
+      // `||` would fall through to the generic message and shout about it anyway.
+      const known = Object.prototype.hasOwnProperty.call(VOICE_ERRORS, code);
+      const msg = known ? VOICE_ERRORS[code] : `Mic error: ${code}`;
+      if (msg) setVoiceErr(msg);
     };
     recognitionRef.current = rec;
     try {
