@@ -26,10 +26,27 @@ const CTX_CACHE_TTL = 2 * 60 * 1000; // 2 minutes
  * @param {string} options.intent - query intent hint
  * @returns {{ systemContext: string, tokenEstimate: number }}
  */
+// A bare greeting is not a status request. Without this, "Hello there" pulled the queue
+// counts, every active task, the 90-day plan and a vault similarity search on the word
+// "hello" — so a hello came back as a status readout. The whole message must be the
+// greeting: "morning, what's at risk?" is a real question and keeps the full context.
+const GREETING_RE = /^\s*(hi+|hey+|hello|hiya|yo|sup|howdy|alright|morning|afternoon|evening|good\s+(morning|afternoon|evening|day))(\s+(there|sara|mate))?[\s!.,?]*$/i;
+
 async function buildChatContext(userMessage, options = {}) {
   const mode = options.mode || 'api';
   const isApi = mode === 'api';
   const t0 = Date.now();
+
+  if (GREETING_RE.test(userMessage || '')) {
+    console.log('[ChatContextV2] Greeting — skipping status context');
+    return {
+      systemContext: 'Nick opened with a greeting and nothing else. No status was gathered '
+        + 'for this turn: do not state queue counts, task counts or plan progress, and do '
+        + 'not invent them. Answer in one short line and let him say what he wants.',
+      tokenEstimate: 45,
+      greeting: true,
+    };
+  }
 
   // ── Working memory (already cached, fast) ──
   let wm = null;
@@ -40,7 +57,10 @@ async function buildChatContext(userMessage, options = {}) {
   // ── 1. Queue summary (always, compact) ──
   if (wm?.queueSummary?.total > 0) {
     const q = wm.queueSummary;
-    parts.push(`Queue: ${q.total} tickets, ${(q.at_risk_tickets || []).length} at risk, ${q.open_p1s || 0} P1s.`);
+    // at_risk_count, NOT at_risk_tickets.length — working-memory slices that array to 10
+    // for rendering, so counting it reported "10 at risk" for any real figure of 10+.
+    const atRisk = q.at_risk_count ?? (q.at_risk_tickets || []).length;
+    parts.push(`Queue: ${q.total} tickets, ${atRisk} at risk, ${q.open_p1s || 0} P1s.`);
   }
 
   // ── 2. Today status ──
