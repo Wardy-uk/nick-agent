@@ -93,9 +93,31 @@ function snapshot() {
       .map(r => ({ person: r.person, count: r.c, oldest: r.oldest, ageDays: daysSince(r.oldest) })),
   };
 
+  // What counts as outbound is action-presenter's call, never a list of type
+  // names kept here. The first cut hardcoded one and got it wrong immediately:
+  // `draft_reply` LOOKS outbound and is classified `write`, because approving it
+  // sends nothing — it drafts the words and queues a separate reply_email for a
+  // second approval. A dashboard claiming two things would leave the building
+  // while the Actions panel says one is worse than no dashboard.
+  //
+  // getPendingSaraActions defaults to limit 10; passing a real bound matters,
+  // since this queue has been 930 deep inside the last week.
+  let pendingKinds = {};
+  let pendingActions = [];
+  try {
+    const presenter = require('./action-presenter');
+    pendingActions = db.getPendingSaraActions(2000) || [];
+    for (const a of pendingActions) {
+      const kind = presenter.describe(a)?.kind || 'unknown';
+      pendingKinds[kind] = (pendingKinds[kind] || 0) + 1;
+    }
+  } catch { pendingKinds = {}; }
+
   const approvals = {
     pending: scalar("SELECT COUNT(*) c FROM sara_actions WHERE status='pending'"),
     pendingByType: tally(rows("SELECT type k, COUNT(*) c FROM sara_actions WHERE status='pending' GROUP BY k"), 'k'),
+    pendingByKind: pendingKinds,
+    outbound: pendingKinds.outbound || 0,
     lifetime: tally(rows("SELECT status k, COUNT(*) c FROM sara_actions GROUP BY k"), 'k'),
     recent: rows(`SELECT date(created_at) d, COUNT(*) c FROM sara_actions
                   WHERE created_at >= date('now','-13 day') GROUP BY d ORDER BY d`),
@@ -200,14 +222,12 @@ function assess(s) {
   }
 
   if (s.approvals.pending > 0) {
-    const outbound = (s.approvals.pendingByType.draft_reply || 0)
-      + (s.approvals.pendingByType.reply_email || 0)
-      + (s.approvals.pendingByType.chase_commitment || 0);
+    const outbound = s.approvals.outbound || 0;
     add(outbound > 0 ? 'warn' : 'info',
       `${s.approvals.pending} action${s.approvals.pending === 1 ? '' : 's'} awaiting approval`,
       outbound > 0
-        ? `${outbound} of them would leave the building.`
-        : 'Nothing outbound — all internal.',
+        ? `${outbound} would send something to a real person (email or Teams). The rest are internal.`
+        : 'All internal — nothing here sends anything.',
       'actions');
   }
 

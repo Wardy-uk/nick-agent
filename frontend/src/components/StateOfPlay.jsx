@@ -248,6 +248,16 @@ export default function StateOfPlay({ onNavigate }) {
         <Card title="Approval queue" action={<button className="sop-link" onClick={() => go('actions')}>Open →</button>}>
           <Spark points={approvals.recent.map(r => ({ label: r.d, value: r.c }))} />
           <p className="sop-note">Actions raised, last 14 days.</p>
+          {/* Outbound stated separately and first. "4 pending" and "1 of them
+              sends an email to a real person" are different facts, and only the
+              second one decides whether this needs looking at today. */}
+          {approvals.pending > 0 && (
+            <div className={`sop-freshness${approvals.outbound > 0 ? ' sop-stale' : ''}`}>
+              {approvals.outbound > 0
+                ? `${approvals.outbound} would send to a real person · ${approvals.pending - approvals.outbound} internal`
+                : `All ${approvals.pending} internal — nothing here sends anything`}
+            </div>
+          )}
           <ul className="sop-statuses">
             {Object.entries(approvals.pendingByType).map(([k, v]) => (
               <li key={k}><span>{k.replace(/_/g, ' ')}</span><b>{v}</b></li>

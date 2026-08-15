@@ -84,14 +84,33 @@ test('a job that stopped is critical; one never yet stamped is only info', () =>
 
 // ── Outbound changes the severity, not just the wording ─────────────────────
 
-test('pending approvals escalate when something would leave the building', () => {
-  const internal = assess(clean({ approvals: { pending: 3, pendingByType: { capture_todo: 3 }, lifetime: {}, recent: [] } }));
+test('pending approvals escalate only when something really sends', () => {
+  const internal = assess(clean({ approvals: { pending: 3, outbound: 0, pendingByType: { capture_todo: 3 }, pendingByKind: { write: 3 }, lifetime: {}, recent: [] } }));
   assert.equal(internal[0].severity, 'info');
-  assert.match(internal[0].detail, /Nothing outbound/);
+  assert.match(internal[0].detail, /All internal/);
 
-  const outbound = assess(clean({ approvals: { pending: 3, pendingByType: { draft_reply: 1, capture_todo: 2 }, lifetime: {}, recent: [] } }));
+  const outbound = assess(clean({ approvals: { pending: 3, outbound: 1, pendingByType: { chase_commitment: 1, capture_todo: 2 }, pendingByKind: { outbound: 1, write: 2 }, lifetime: {}, recent: [] } }));
   assert.equal(outbound[0].severity, 'warn');
-  assert.match(outbound[0].detail, /leave the building/);
+  assert.match(outbound[0].detail, /1 would send something to a real person/);
+});
+
+// The regression this replaced. draft_reply reads as outbound by its name and is
+// classified `write`, because approving it sends NOTHING — it drafts the words
+// and queues a separate reply_email for a second approval. Counting it as
+// outbound made the panel disagree with the Actions queue and with the guard in
+// bulk-reject, all three of which must mean the same thing by "leaves the
+// building". The count now comes from action-presenter, so this asserts that the
+// severity follows the presenter's verdict rather than a list of type names.
+test('draft_reply alone does not count as outbound', () => {
+  const presenter = require('./action-presenter');
+  const kind = presenter.describe({ type: 'draft_reply', payload: { from: 'a@b.c', subject: 'x', emailId: '1' } }).kind;
+  assert.equal(kind, 'write', 'draft_reply must stay a write — gate 1 of 2 sends nothing');
+
+  const issues = assess(clean({
+    approvals: { pending: 1, outbound: 0, pendingByType: { draft_reply: 1 }, pendingByKind: { write: 1 }, lifetime: {}, recent: [] },
+  }));
+  assert.equal(issues[0].severity, 'info');
+  assert.match(issues[0].detail, /All internal/);
 });
 
 // ── Coverage gaps are stated, never rendered as a confident zero ────────────
