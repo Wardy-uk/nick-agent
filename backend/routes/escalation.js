@@ -78,7 +78,9 @@ router.get('/ticket/:key', requireNova, async (req, res) => {
         // Newest first, and flagged so an internal note isn't mistaken for
         // something the customer has already been told.
         comments: (t.comments || []).slice(-5).reverse().map(c => ({
-          author: c.author?.displayName || 'Unknown',
+          // The bridge flattens author to a string; Jira's own shape is an object.
+          // Handle both, or every comment reads "Unknown".
+          author: (typeof c.author === 'string' ? c.author : c.author?.displayName) || 'Unknown',
           created: c.created,
           internal: c.jsdPublic === false,
           text: adfText(c.body).trim().slice(0, 600),
