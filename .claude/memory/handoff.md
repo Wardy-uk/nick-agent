@@ -229,18 +229,31 @@ agenda triage + decline/propose.
 3. **Does Jira allow writing `duedate`?** The needed-by date changing the ticket's SLA
    position is what makes an escalation bite. Unconfirmed.
 
-### Agreed with the other session, not yet built
+### Agreed with the other session — ALL THREE NOW DONE (15 Aug)
 
-4. **Split the background tasks** — cloud for `email_triage` and `transcript_processing`
-   (prose Nick reads, and 1.5B is poor at both); local for `import_classification` and
-   `journal_prompts` (a routing decision and a once-a-day prompt). One-line override.
-5. **Skip a known-dead Pi 4 worker** rather than burning the 60s timeout, with periodic
-   retry. NOTE: the worker is currently **UP** (`/health` 200 in 90ms,
-   `PI4_WORKER_ENABLED=true`) — this is insurance, not a live fix. A comment in their
-   `ai-routing.test.js` claiming it has been offline since June is STALE.
-6. **Surface worker-down in the AI health panel.** Their health recording is half of it;
-   nothing displays it. This is the real value — a dependency reportedly down for months
-   with nobody noticing is the same failure mode as everything in the section above.
+4. ~~**Split the background tasks**~~ — **was already built and deployed** when this list
+   was written (`CLOUD_ON_WORKER_FALLBACK` in `ai-routing.js`, commit `9800959`, which
+   predates the `361df08` this handoff calls the deploy point). Confirmed live: two
+   `email_triage` calls served by openrouter, `focus_enhancement` by ollama. The list was
+   stale, not the code. No override env var exists — the set is a constant; add one only
+   if the split turns out to be wrong.
+5. ~~**Skip a known-dead Pi 4 worker**~~ — **also already built** (`shouldSkip()` /
+   `SKIP_AFTER_FAILURES` 3 / `SKIP_FOR_MS` 15min in `pi4-worker-client.js`, commit
+   `396090c`). The cooldown expiring IS the periodic retry.
+6. **Surface worker-down in the AI health panel** — **done, `adb027c`.** It was worse than
+   described. The worker is UP (`/health` 200 in 247ms) but **times out on every real
+   triage** — live at 07:52 today: `consecutiveFailures: 2`, `errorClass: 'timeout'`,
+   `lastHealthy: null`. Because a timeout deliberately no longer sets `lastHealthy: false`
+   (`396090c`), both the panel and the Topbar rendered "unverified · background AI tasks
+   have not run" — wrong on both counts. `shared/worker-health.cjs` now owns one verdict
+   for both surfaces (too slow ≠ unreachable ≠ never asked ≠ in cooldown); pinned by
+   `backend/services/worker-health.test.js` (9 tests).
+
+   **The open question this exposes is not a display one:** why can a Pi 4 running
+   qwen2.5:1.5b not finish a triage in 60s? Either raise `PI4_WORKER_TIMEOUT_MS`, batch
+   the triage smaller, or accept that the worker is now permanently in fallback and turn
+   it off. Right now it burns 60s three times before backing off for 15 minutes, and the
+   cloud does the work anyway.
 
 ### Build queue (sequenced in the plan)
 
