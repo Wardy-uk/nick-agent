@@ -67,6 +67,28 @@ ${JSON.stringify(emailSummary, null, 2)}`;
   return JSON.parse(jsonMatch[0]);
 }
 
+// Seen-set of every email already sent to the triage model, kept in the state
+// store rather than a table because it is a cache, not a record. Pruned to a
+// week — anything older has long since dropped out of the 12-hour candidate
+// window anyway.
+const SEEN_KEY = 'inbox_scanner_seen';
+const SEEN_TTL_MS = 7 * 24 * 3600 * 1000;
+
+function _loadSeen() {
+  try { return JSON.parse(db.getState(SEEN_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function _markSeen(ids) {
+  const seen = _loadSeen();
+  const now = Date.now();
+  for (const id of ids) seen[id] = now;
+  for (const [id, t] of Object.entries(seen)) {
+    if (now - t > SEEN_TTL_MS) delete seen[id];
+  }
+  db.setState(SEEN_KEY, JSON.stringify(seen));
+}
+
 async function scanInbox() {
   if (scanInProgress) return;
 
@@ -108,8 +130,13 @@ async function scanInbox() {
     // it ran on the Pi 4; once it could reach the cloud it burned 104,464
     // tokens and blew the daily budget, which then took the fallback chain down
     // with it. Cost is a function of NEW mail, as it always should have been.
+    // inbox_items only holds emails the AI FLAGGED, so it is not a record of
+    // what has been triaged — a scan of 11 that flags 1 leaves 10 looking fresh
+    // forever, and they get re-sent every 10 minutes. Keep our own seen-set of
+    // everything actually sent to the model.
+    const seen = _loadSeen();
     const alreadyTriaged = new Set(db.getTriagedEmailIds());
-    const fresh = candidates.filter(e => !alreadyTriaged.has(e.id));
+    const fresh = candidates.filter(e => !alreadyTriaged.has(e.id) && !seen[e.id]);
 
     if (fresh.length === 0) {
       console.log(`[InboxScanner] ${candidates.length} candidates, all already triaged \u2014 skipping AI`);
@@ -148,7 +175,9 @@ async function scanInbox() {
       if (result.text) {
         const jsonMatch = result.text.match(/\[[\s\S]*\]/);
         parsed = JSON.parse(jsonMatch ? jsonMatch[0] : '[]');
-        console.log(`[InboxScanner] Triaged via ${result.provider}`);
+        console.log(`[InboxScanner] Triaged ${toTriage.length} via ${result.provider}`);
+        // Only on success: a failed call must leave them fresh to retry.
+        _markSeen(toTriage.map(e => e.id));
       }
     } catch (aiErr) {
       console.error('[InboxScanner] AI triage failed:', aiErr.message);
