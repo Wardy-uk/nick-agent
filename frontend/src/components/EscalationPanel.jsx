@@ -49,10 +49,14 @@ function EscalationRow({ t, onPick }) {
   );
 }
 
-/** One collapsible group. Open by default — a closed section hides a count. */
+/**
+ * One collapsible group, closed by default. Safe to close because the count
+ * lives in the summary — the shut state still answers "is there anything
+ * here", which is the question that must never need a click.
+ */
 function EscalationGroup({ title, blurb, items, onPick }) {
   return (
-    <details className="esc-group" open>
+    <details className="esc-group">
       <summary>
         <span className="esc-group-title">{title}</span>
         <span className="esc-count">{items.length}</span>
