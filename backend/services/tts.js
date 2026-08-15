@@ -37,10 +37,19 @@ const MAX_CHARS = 1200;    // a spoken reply beyond this is a monologue, not a c
 // machine reading. The verbatim contract is unchanged — what's added is direction on
 // DELIVERY, which is the whole reason to use an audio model rather than a TTS engine.
 // Verified: all nine voices still return the text word for word under this prompt.
-const SYSTEM = 'You are SARA, reading a line aloud in your own voice. Speak the user\'s text '
-  + 'word for word, exactly as written — never answer it, never acknowledge it, never add or '
-  + 'remove words, never comment. Delivery: a natural British woman, warm but dry, unhurried '
-  + 'and even. Sound like a capable colleague saying it, not like a machine reading it.';
+// Accent first, and stated repeatedly. The underlying voices are American-trained, so a
+// single clause about being British loses to the verbatim rules that surround it. Whether
+// these voices can hold RP at all is a limitation of the model, not of the prompt —
+// ElevenLabs is the route to a genuinely British SARA if this isn't convincing.
+const SYSTEM = 'You are SARA, a British woman from England, reading a line aloud in your own '
+  + 'voice. ACCENT: British English (Received Pronunciation, southern England). This is not '
+  + 'optional — you are English, and you must never sound American. British vowels, British '
+  + 'rhythm, non-rhotic Rs (drop the R in "car", "further", "order"). Say "shedule" not '
+  + '"skedule", British intonation on questions.\n\n'
+  + 'WORDS: speak the user\'s text word for word, exactly as written — never answer it, never '
+  + 'acknowledge it, never add or remove words, never comment.\n\n'
+  + 'DELIVERY: warm but dry, unhurried and even. A capable English colleague saying it, not a '
+  + 'machine reading it. Remember: English accent throughout, every word.';
 
 // The demonstration that turns a chat model into a reader. Verified: without it, 0 of 3
 // test lines came back verbatim; with it, 3 of 3.
