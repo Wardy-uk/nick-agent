@@ -249,11 +249,17 @@ agenda triage + decline/propose.
    for both surfaces (too slow ≠ unreachable ≠ never asked ≠ in cooldown); pinned by
    `backend/services/worker-health.test.js` (9 tests).
 
-   **The open question this exposes is not a display one:** why can a Pi 4 running
-   qwen2.5:1.5b not finish a triage in 60s? Either raise `PI4_WORKER_TIMEOUT_MS`, batch
-   the triage smaller, or accept that the worker is now permanently in fallback and turn
-   it off. Right now it burns 60s three times before backing off for 15 minutes, and the
-   cloud does the work anyway.
+   **The open question this exposed — why can't the Pi 4 finish a triage in 60s? — was
+   answered the same morning by the other session and is now closed:** they measured 12
+   tokens/sec prompt processing on the smallest model it had, so a ~3,700-token payload
+   needed five minutes just to READ the prompt. A hardware ceiling, not model sizing.
+   Worker RETIRED via `PI4_WORKER_ENABLED=false` (`78a0af6`), code left in place so
+   re-enabling is one env var. `assessWorker` reports `disabled` as an ok state, so the
+   panel says so plainly rather than flagging a fault.
+
+   **Deployed and verified 15 Aug 09:12.** Pi at `49a97e4`, backend live with
+   `skipAfter`/`lastFailure` in `/api/status`, frontend rebuilt and serving
+   `index-8r4a6eOP.js`.
 
 ### Build queue (sequenced in the plan)
 
