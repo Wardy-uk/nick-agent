@@ -27,9 +27,12 @@ picked for live correctness bugs over new features. Pi is at `a309f62`, 251 test
 
 - **Re-index still running** — hours on Voyage's free tier (~8,400 chunks). It resumes by
   itself: stamped on completion, so a restart leaves no stamp and catch-up re-triggers it.
-- **Tonight's 22:00 rollup is the test of two things** — #34 (person pages should stop
-  ranking `Master Todo` above meetings) and #78 (a small `created` number means the gate
-  held; hundreds means it didn't).
+- **The 22:00 rollup is the test of two things, and it had NOT run when this was written
+  (session ended ~20:00).** #34 (person pages should stop ranking `Master Todo` above
+  meetings) and #78 (a small `created` number in `[Scheduler] Meeting actions:` means the
+  gate held; hundreds means it didn't). No route triggers it — `runNightlyRollup`,
+  `scanRecentNotes` and `processRecentNotes` are scheduler-only. So either check the log
+  after 22:00, or get on with something else; it is not a blocker, just unverified.
 - **Watch the nudge count.** #73/#74 moves it — `nudges.js` ranks off the same builder.
   That is the one baseline signal allowed to argue against the backlog (#17).
 - **#44** — `stress-score.js` / `health.js` still uncommitted, left where they were found.
