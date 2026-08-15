@@ -217,17 +217,78 @@ agenda triage + decline/propose.
 
 **Plan for everything below**: https://claude.ai/code/artifact/cd51cfe0-e7db-4328-bdf8-8aac285f09d2
 
-### Blocked on a decision from Nick
+### Decided by Nick, 15 Aug — no longer blocked
 
-1. **`sara/` tree** — two backends, seed data, a state engine duplicating the decision
-   engine. Either it is the future and NEURO's frontend folds into it, or it is
-   scaffolding to retire. Today it costs maintenance without being either.
-2. **`reason_kind` for NOVA escalations** — the seeded `escalation_reasons` are
-   capability-flavoured ("beyond T1 scope", with troubleshooting checklists). Nick's
-   case is urgency ("the AM says the client is at renewal"). Needs a second vocabulary
-   and probably a column BEFORE any code.
-3. **Does Jira allow writing `duedate`?** The needed-by date changing the ticket's SLA
-   position is what makes an escalation bite. Unconfirmed.
+1. **`sara/` tree — NOTHING RETIRES. The old framing was wrong.** Nick's architecture,
+   in his words: *"NEURO is the brain, and the NEURO app gives me direct access to that
+   when I need. SARA is my J.A.R.V.I.S — she uses NEURO's brain and should come to me,
+   prompt me, push me, help me, but also be there as a visual/audio route to interact
+   with the NEURO brain in a more interactive way."* So NEURO = brain + direct access;
+   SARA = the proactive, ambient, conversational surface. The kiosk is the *ambient*
+   half of that, not scaffolding.
+
+   **Audit findings (verified against the running systems, not the code) — two of the
+   three complaints in the old bullet do not survive checking:**
+   - `sara/` is **three** things, not one: `app/` (2,168 LOC, the phone PWA, active
+     14 Aug); `backend/`+`frontend/` (8,324 LOC, the Pi 4 desk kiosk); and
+     `desktop-electron/` (194 LOC, dormant since 10 Jul).
+   - **"Two backends" is misleading.** `sara/app` talks DIRECTLY to the NEURO backend
+     (`VITE_API_URL=https://pi5.tailecb90f.ts.net`, standard PIN header) and never
+     touches `sara/backend`. There is nothing to "fold in" — the PWA is already a
+     NEURO client. `sara/backend` (:3005) serves ONLY the kiosk.
+   - **"Seed data" is no longer what serves.** Live `/api/state` reports
+     `dataSource: neuro` with all four domains (`queue`/`focus`/`people`/`vault`) at
+     `source: neuro`. `seed.js` is now only an outage fallback + the location provider.
+     **It is stale fiction though — it hardcodes `assignee: 'Arman'`, who has left and
+     was archived 14 Aug.** A NEURO outage shows the kiosk a departed employee holding
+     a ticket. Unambiguous defect; fix or delete the fixtures.
+   - **"A state engine duplicating the decision engine" is not what `inference.js` is.**
+     It opens by explicitly disclaiming exactly that and answers a different question —
+     *which view should the kiosk show* — advisory only. `stateEngine.js` is an
+     assembler over NEURO data, not a rival to `next-action-engine`/`do-next`.
+   - The kiosk IS in use: `ss` on pi5 shows one established connection to :3005 from
+     `100.69.158.50` (the Pi 4 DSI screen).
+
+   **THE REAL GAP, and it is the handoff's own favourite failure species — it exists,
+   so it looks done.** The kiosk backend is already plumbed for precisely the JARVIS
+   behaviour: `neuroChat.js` configures a nudge stream at `/api/nudges/stream`, and
+   `routes/actions.js` proxies `/api/actions/:id/approve` and `/reject`. **The screen
+   consumes neither.** Its complete API surface is 17 paths and the only actions it
+   calls are `/api/actions/focus/dismiss` and `/done`. So the one surface whose whole
+   job is to come to Nick and prompt him is the one that never renders a nudge or a
+   pending SARA action. This is a frontend job on an existing backend, not new
+   architecture — and it is the natural batch-review surface for the **463 pending
+   `capture_todo` actions** in item 12.
+
+   **Open tension, Nick's call, deliberately not resolved here:** `inference.js` is
+   advisory-only and "never switches a view" — a protected principle from WS5. Under
+   "she comes to me", an ambient screen that knows what Nick is doing but refuses to
+   change itself may now be the wrong constraint.
+
+2. **`reason_kind` — DECIDED: add the column, two vocabularies.** `capability`
+   (existing: "beyond T1 scope" + troubleshooting checklists) and `urgency` (new: "AM
+   says the client is at renewal"). The agent picks kind first, then a reason from that
+   kind's list. Schema migration lands BEFORE any code. NOTE: this is a NOVA-side change
+   (Azure SQL) — `escalation_reasons` is not on the forbidden-table list, but per Nick's
+   own safety rule the write needs explicit confirmation, and `daypilot/CLAUDE.md` should
+   be read first. Coordinate: another session has been live in the NOVA/People area.
+
+3. **Jira `duedate` — CONFIRMED WRITABLE, and the escalation also comments.** Nick:
+   *"add it as a comment on the ticket, but there is also a due date field."* So the
+   manual escalation writes BOTH a Jira comment (the needed-by rationale, human-readable
+   on the ticket) and sets `duedate`. Verified read-only against the API 15 Aug: on
+   `NT`/`Support` (10706), `duedate` is a system field, `"schema": {"type":"date",
+   "system":"duedate"}`, `"operations": ["set"]`, and the token carries
+   `write:jira-work`. Residual check when the code is built: this is createmeta (create
+   screen); confirm the edit screen too via editmeta on a real ticket — cheap, and the
+   prototype-on-CLOSED-tickets rule from item 11 applies.
+
+   **Field IDs found in the same query, for item 7:** `Current Tier` =
+   `customfield_12981` (Customer Care / Production / Tier 2 / Tier 3 / Development /
+   Escalations — the field `jira-sync-service` already reads for CC→T2 moves);
+   `Agent Next Update` = `customfield_14185` (datetime); `Agent Last Updated` =
+   `customfield_14081`; `Triaged By AI Agent` = `customfield_14114`. NEURO's queue is
+   `JIRA_PROJECT_KEY=NT`, request type `"Escalation (NT)"`.
 
 ### Agreed with the other session — ALL THREE NOW DONE (15 Aug)
 
