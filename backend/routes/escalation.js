@@ -78,7 +78,19 @@ router.get('/active', async (req, res) => {
   let warning = null;
   if (nova.isConfigured()) {
     try {
-      const logged = await nova.listEscalations({ days: 90 });
+      // Manual only, and that is a semantic choice rather than a filter for
+      // speed. The other types already show up in the Jira arms or are not
+      // escalations in this sense: `jira_transition` IS a tier move, so the
+      // tier arm has it; `ai_agent` is the AI raising one. Only a manual
+      // urgency escalation leaves no trace in Jira, which is the entire reason
+      // this arm exists — and badging 1,300 old tier moves "urgency" would be
+      // untrue as well as unreadable.
+      // Filtered again here rather than trusting the query param: an older NOVA
+      // ignores `type` and answers with all ~1,950 rows, and this route should
+      // be correct against whichever version is deployed rather than only the
+      // one it shipped alongside.
+      const logged = (await nova.listEscalations({ days: 90, type: 'manual' }) || [])
+        .filter(e => e.escalation_type === 'manual');
       const byKey = new Map(escalations.map(t => [t.key, t]));
 
       // Anything the log knows about that the tier/request-type arms missed

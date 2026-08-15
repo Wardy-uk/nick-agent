@@ -146,11 +146,22 @@ async function fetchActiveEscalations() {
  * source can answer it alone.
  */
 async function fetchOpenIssuesByKey(keys) {
-  const list = (keys || []).filter(k => /^[A-Z][A-Z0-9]+-\d+$/.test(k));
+  const list = [...new Set((keys || []).filter(k => /^[A-Z][A-Z0-9]+-\d+$/.test(k)))];
   if (list.length === 0) return [];
-  return searchEscalations(
-    `key in (${list.join(',')}) AND statusCategory != Done ORDER BY created ASC`
-  );
+
+  // Chunked, because `maxResults` is a cliff and not an error: one query for
+  // 1,900 keys returns the first 100 by sort order and says nothing about the
+  // rest, which is how today's escalations got cut while three-month-old ones
+  // came back. A key query is exactly bounded, so ask in batches that fit.
+  const CHUNK = 100;
+  const out = [];
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const batch = list.slice(i, i + CHUNK);
+    out.push(...await searchEscalations(
+      `key in (${batch.join(',')}) AND statusCategory != Done ORDER BY created ASC`
+    ));
+  }
+  return out;
 }
 
 function nickHasCommented(issue) {

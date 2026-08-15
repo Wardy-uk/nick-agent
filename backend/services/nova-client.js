@@ -79,8 +79,10 @@ async function listUrgencyReasons() {
  * The log is NOVA's alone and there is no Jira field that mirrors it, so
  * without this an urgency escalation is invisible to every list NEURO can build.
  */
-async function listEscalations({ days = 90 } = {}) {
-  return call(`/api/neuro-bridge/escalations?days=${encodeURIComponent(days)}`);
+async function listEscalations({ days = 90, type } = {}) {
+  const q = new URLSearchParams({ days: String(days) });
+  if (type) q.set('type', type);
+  return call(`/api/neuro-bridge/escalations?${q}`);
 }
 
 /** Enough ticket detail to confirm it is the right ticket before escalating. */
