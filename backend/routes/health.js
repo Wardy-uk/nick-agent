@@ -4,6 +4,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/database');
 const stressScore = require('../services/stress-score');
+const appleHealth = require('../services/apple-health');
 
 // Metrics kept as a time series in health_samples. Everything else still only
 // lands in the daily KV blob — a stress baseline needs history, a body weight
@@ -218,6 +219,38 @@ router.get('/metrics', (req, res) => {
       metricCount: metrics.length,
       totalSamples: metrics.reduce((n, m) => n + m.samples, 0),
       metrics,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/health/sleep — per-night totals from the per-segment rows (#40).
+//
+// The ingest deliberately stores segments raw because grouping them needs a
+// day-boundary rule; that rule lives in apple-health.rollupSleepNights and is
+// applied here at read time, so changing it never means re-ingesting.
+router.get('/sleep', (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 365);
+    // Reach back an extra day: a night is keyed by its WAKE date, so the
+    // earliest night in the window has segments that started before it.
+    const since = new Date(Date.now() - (days + 1) * 86400000).toISOString().replace('T', ' ').slice(0, 19);
+
+    const rows = [];
+    for (const stage of ['deep', 'rem', 'core', 'light', 'awake', 'in_bed', 'inbed', 'asleep', 'unspecified', 'asleep_unspecified', 'asleepunspecified']) {
+      for (const r of db.getHealthSamples(`sleep_${stage}_hours`, since, 5000)) {
+        rows.push({ metric: `sleep_${stage}_hours`, value: r.value, recorded_at: r.recorded_at });
+      }
+    }
+
+    const nights = appleHealth.rollupSleepNights(rows).slice(0, days);
+    res.json({
+      windowDays: days,
+      nights,
+      // Distinguishes "no sleep data at all" from "nothing recent" — with iOS
+      // deciding when the phone syncs, those are different problems.
+      hasData: nights.length > 0,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

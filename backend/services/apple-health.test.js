@@ -158,6 +158,87 @@ test('record-shaped sections are reported as not stored, never silently discarde
   assert.equal(out.samples.length, 0);
 });
 
+test('APPLE_HEALTH_EXCLUDE drops a metric by either spelling, and says it did', () => {
+  const prev = process.env.APPLE_HEALTH_EXCLUDE;
+  // Written in HAE names, but six metrics are STORED under a NEURO name — so
+  // matching one spelling only would silently miss them.
+  process.env.APPLE_HEALTH_EXCLUDE = 'physical_effort, step_count';
+  try {
+    const out = ah.parsePayload({
+      data: {
+        metrics: [
+          { name: 'physical_effort', units: 'kcal/hr·kg', data: [{ date: '2026-08-16 09:00:00 +0100', qty: 3 }] },
+          { name: 'step_count', units: 'count', data: [{ date: '2026-08-16 09:00:00 +0100', qty: 812 }] },
+          { name: 'vo2_max', units: 'mL/min·kg', data: [{ date: '2026-08-16 09:00:00 +0100', qty: 41 }] },
+        ],
+      },
+    });
+    assert.equal(out.samples.length, 1, 'only vo2_max survives');
+    assert.equal(out.samples[0].metric, 'vo2_max');
+    // Counted and named, never silently dropped.
+    assert.deepEqual(out.excluded, { physical_effort: 1, steps: 1 });
+  } finally {
+    if (prev === undefined) delete process.env.APPLE_HEALTH_EXCLUDE;
+    else process.env.APPLE_HEALTH_EXCLUDE = prev;
+  }
+});
+
+test('nothing is excluded by default — Nick asked for everything the app offers', () => {
+  const prev = process.env.APPLE_HEALTH_EXCLUDE;
+  delete process.env.APPLE_HEALTH_EXCLUDE;
+  try {
+    const out = ah.parsePayload({
+      data: { metrics: [{ name: 'physical_effort', units: 'x', data: [{ date: '2026-08-16 09:00:00 +0100', qty: 3 }] }] },
+    });
+    assert.equal(out.samples.length, 1);
+    assert.deepEqual(out.excluded, {});
+  } finally {
+    if (prev !== undefined) process.env.APPLE_HEALTH_EXCLUDE = prev;
+  }
+});
+
+test('a night is the one you WAKE on, so evening and small-hours segments merge', () => {
+  // 23:30 BST (22:30 UTC) on the 15th and 03:00 BST (02:00 UTC) on the 16th are
+  // the same night, and both belong to the 16th.
+  assert.equal(ah.nightKey('2026-08-15 22:30:00'), '2026-08-16');
+  assert.equal(ah.nightKey('2026-08-16 02:00:00'), '2026-08-16');
+  assert.equal(ah.nightKey('2026-08-16 06:00:00'), '2026-08-16');
+  // Known wart, asserted so it is a decision and not a surprise: an afternoon
+  // nap lands on the following night.
+  assert.equal(ah.nightKey('2026-08-16 13:00:00'), '2026-08-17');
+});
+
+test('sleep segments roll up into nights with stages and efficiency', () => {
+  const nights = ah.rollupSleepNights([
+    { metric: 'sleep_core_hours', value: 3.5, recorded_at: '2026-08-15 22:30:00' },
+    { metric: 'sleep_deep_hours', value: 1.2, recorded_at: '2026-08-16 02:00:00' },
+    { metric: 'sleep_rem_hours', value: 1.3, recorded_at: '2026-08-16 04:00:00' },
+    { metric: 'sleep_awake_hours', value: 0.4, recorded_at: '2026-08-16 03:00:00' },
+    { metric: 'sleep_in_bed_hours', value: 7.0, recorded_at: '2026-08-15 22:15:00' },
+    // A different night entirely.
+    { metric: 'sleep_core_hours', value: 5.0, recorded_at: '2026-08-16 23:00:00' },
+  ]);
+
+  assert.equal(nights.length, 2);
+  assert.equal(nights[0].night, '2026-08-17', 'newest first');
+
+  const night = nights.find(n => n.night === '2026-08-16');
+  assert.equal(night.asleepHours, 6, 'core + deep + rem, awake and in-bed excluded');
+  assert.equal(night.awakeHours, 0.4);
+  assert.equal(night.inBedHours, 7);
+  assert.equal(night.efficiency, 85.7);
+  assert.equal(night.segments, 5);
+  assert.equal(night.stages.deep, 1.2);
+});
+
+test('efficiency is null without In Bed data, never a confident 100%', () => {
+  const [night] = ah.rollupSleepNights([
+    { metric: 'sleep_core_hours', value: 6, recorded_at: '2026-08-15 23:00:00' },
+  ]);
+  assert.equal(night.asleepHours, 6);
+  assert.equal(night.efficiency, null);
+});
+
 test('a malformed payload is refused rather than counted as an empty success', () => {
   assert.equal(ah.parsePayload({}).ok, false);
   assert.equal(ah.parsePayload(null).ok, false);

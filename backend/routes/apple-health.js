@@ -144,6 +144,9 @@ router.post('/ingest', (req, res) => {
     if (Object.keys(parsed.unstored).length) {
       console.log('[AppleHealth] Received but not stored:', JSON.stringify(parsed.unstored));
     }
+    if (Object.keys(parsed.excluded).length) {
+      console.log('[AppleHealth] Excluded by APPLE_HEALTH_EXCLUDE:', JSON.stringify(parsed.excluded));
+    }
     console.log(
       `[AppleHealth] ${parsed.received} points → ${inserted} new, ${skipped} already had, ` +
       `${parsed.rejected.length} rejected (${Date.now() - started}ms)`
@@ -161,6 +164,7 @@ router.post('/ingest', (req, res) => {
       neuro: {
         rejectedReasons: reasons,
         receivedNotStored: parsed.unstored,
+        excludedByConfig: parsed.excluded,
         ignoredCategorySamples: parsed.ignoredCategory,
       },
     });

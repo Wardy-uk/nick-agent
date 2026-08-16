@@ -59,6 +59,26 @@ const UNIT_RULES = {
 
 const SLEEP_TYPE_RE = /sleepanalysis/i;
 
+// Optional denylist, read from APPLE_HEALTH_EXCLUDE as a comma-separated list of
+// HAE names. Empty by default: Nick asked for everything the app offers, and
+// this is the switch for changing his mind, not a decision taken for him.
+//
+// It exists because the first backfill measured the cost — `physical_effort`
+// alone was 38,460 rows in six months, 65% of everything ingested, and
+// `basal_energy_burned` is the one FreeReps' own uploader refuses outright
+// ("~8 MB/day of estimated BMR data, not useful"). Both are estimates rather
+// than measurements. Excluded metrics are COUNTED and reported, never silently
+// dropped — a payload that shrinks with no explanation is the thing this
+// codebase keeps having to debug.
+function excludedMetrics() {
+  return new Set(
+    String(process.env.APPLE_HEALTH_EXCLUDE || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+  );
+}
+
 /**
  * Parse the wire date format: "2006-01-02 15:04:05 -0700" (FreeReps'
  * HealthTimeLayout), returning 'YYYY-MM-DD HH:MM:SS' in UTC to match what
@@ -137,13 +157,21 @@ function convertUnits(metric, value, units) {
  * Never invents a reading: a point without a usable number or a parseable date
  * is counted as rejected and named, not silently dropped.
  */
-function parseMetrics(metrics, out) {
+function parseMetrics(metrics, out, excluded) {
   if (!Array.isArray(metrics)) return;
 
   for (const metric of metrics) {
     if (!metric || typeof metric !== 'object') continue;
     const name = metricName(metric.name);
     if (!name || !Array.isArray(metric.data)) continue;
+
+    // Checked against BOTH spellings: the denylist is written in HAE names
+    // (what the app sends and what Nick reads in the logs), but six of them are
+    // stored under a NEURO name, so matching only one would silently miss them.
+    if (excluded && (excluded.has(metric.name) || excluded.has(name))) {
+      out.excluded[name] = (out.excluded[name] || 0) + metric.data.length;
+      continue;
+    }
 
     for (const point of metric.data) {
       out.received++;
@@ -250,6 +278,7 @@ function parsePayload(body) {
     rejected: [],
     ignoredCategory: 0,
     unstored: {},
+    excluded: {},
   };
 
   const data = body && body.data;
@@ -257,7 +286,7 @@ function parsePayload(body) {
     return { ...out, ok: false, error: 'payload must be { data: { ... } }' };
   }
 
-  parseMetrics(data.metrics, out);
+  parseMetrics(data.metrics, out, excludedMetrics());
   parseCategorySamples(data.category_samples, out);
 
   for (const section of UNSTORED_SECTIONS) {
@@ -268,7 +297,80 @@ function parsePayload(body) {
   return { ...out, ok: true };
 }
 
+// ── Sleep rollup ─────────────────────────────────────────────────────────────
+//
+// Ingest stores sleep per SEGMENT because grouping them into nights needs a
+// day-boundary rule, and burying that in the write path would have hidden it.
+// This is that rule, kept separate and pure so it can be argued with and changed
+// without re-ingesting anything.
+//
+// A segment belongs to the night you WAKE on: night = date(start + 12h). So
+// 23:30 and 03:00 both land on the same morning's date, which is how Apple
+// presents sleep and how anyone actually talks about it. The known wart is that
+// an afternoon nap lands on the FOLLOWING night; naps are rare in this data and
+// the alternative (a fixed 18:00 cut) breaks shift-shaped sleep instead.
+const ASLEEP_STAGES = new Set(['deep', 'rem', 'core', 'light', 'asleep', 'asleep_unspecified', 'asleepunspecified', 'unspecified']);
+const AWAKE_STAGES = new Set(['awake']);
+const IN_BED_STAGES = new Set(['in_bed', 'inbed']);
+
+function sleepStage(metric) {
+  const m = /^sleep_(.+)_hours$/.exec(String(metric || ''));
+  return m ? m[1] : null;
+}
+
+function nightKey(sqlUtc) {
+  const ms = Date.parse(`${String(sqlUtc).replace(' ', 'T')}Z`);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms + 12 * 3600000).toISOString().slice(0, 10);
+}
+
+/**
+ * Group stored sleep segments into nights.
+ * `rows` are health_samples rows: { metric, value, recorded_at }.
+ *
+ * Efficiency is asleep / inBed and is null when there is no In Bed data at all,
+ * rather than falling back to asleep/asleep — which would report a confident
+ * 100% for every night the watch did not record time in bed.
+ */
+function rollupSleepNights(rows) {
+  const nights = new Map();
+
+  for (const row of rows || []) {
+    const stage = sleepStage(row && row.metric);
+    if (!stage) continue;
+    const key = nightKey(row.recorded_at);
+    if (!key) continue;
+    const hours = Number(row.value);
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+
+    if (!nights.has(key)) {
+      nights.set(key, { night: key, asleepHours: 0, awakeHours: 0, inBedHours: 0, stages: {}, segments: 0 });
+    }
+    const n = nights.get(key);
+    n.segments++;
+    n.stages[stage] = Math.round(((n.stages[stage] || 0) + hours) * 100) / 100;
+
+    if (ASLEEP_STAGES.has(stage)) n.asleepHours += hours;
+    else if (AWAKE_STAGES.has(stage)) n.awakeHours += hours;
+    else if (IN_BED_STAGES.has(stage)) n.inBedHours += hours;
+  }
+
+  return [...nights.values()]
+    .map((n) => ({
+      ...n,
+      asleepHours: Math.round(n.asleepHours * 100) / 100,
+      awakeHours: Math.round(n.awakeHours * 100) / 100,
+      inBedHours: Math.round(n.inBedHours * 100) / 100,
+      efficiency: n.inBedHours > 0 ? Math.round((n.asleepHours / n.inBedHours) * 1000) / 10 : null,
+    }))
+    .sort((a, b) => (a.night < b.night ? 1 : -1));
+}
+
 module.exports = {
+  rollupSleepNights,
+  sleepStage,
+  nightKey,
+  excludedMetrics,
   parsePayload,
   parseHealthDate,
   metricName,

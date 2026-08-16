@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiUrl } from '../api';
+import HealthCard from './HealthCard';
 import './InsightsPanel.css';
 
 export default function InsightsPanel({ onNavigate }) {
@@ -90,7 +91,15 @@ export default function InsightsPanel({ onNavigate }) {
   };
 
   if (loading) return <div className="insights-panel"><div className="insights-loading">Loading insights...</div></div>;
-  if (!data) return <div className="insights-panel"><div className="insights-empty">No activity data yet.</div></div>;
+  // Health is rendered here too, not only below: it fetches independently of the
+  // activity summary, and a quiet activity feed must not take the stress score
+  // off the screen with it.
+  if (!data) return (
+    <div className="insights-panel">
+      <HealthCard />
+      <div className="insights-empty">No activity data yet.</div>
+    </div>
+  );
 
   const { today, summaries } = data;
   const visibleSuggestions = suggestions.filter(s => !dismissed.has(s.id));
@@ -136,6 +145,9 @@ export default function InsightsPanel({ onNavigate }) {
         <h2 className="insights-title">Insights</h2>
         <button className="insights-refresh" onClick={fetchData}>Refresh</button>
       </div>
+
+      {/* #42 — the stress score had no reader anywhere in the frontend. */}
+      <HealthCard />
 
       {/* Suggestions */}
       {visibleSuggestions.length > 0 && (

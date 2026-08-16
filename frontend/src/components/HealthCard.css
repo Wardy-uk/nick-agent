@@ -1,0 +1,132 @@
+/* #42 — stress score + health feed, rendered inside InsightsPanel.
+   Uses the shared theme tokens (var(--panel), --text-muted, --success…) so it
+   sits with PiHealthPanel and the rest rather than inventing a palette. */
+
+.hc {
+  background: var(--panel, #12161c);
+  border: 1px solid var(--border, #232a34);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  font-family: var(--font-mono);
+}
+
+.hc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.hc-title { margin: 0; font-size: 14px; letter-spacing: 0.04em; text-transform: uppercase; }
+.hc-refresh {
+  background: none;
+  border: 1px solid var(--border, #232a34);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.hc-refresh:hover { color: var(--text); }
+
+.hc-quiet { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.hc-quiet--err { color: var(--danger); }
+
+/* ---------------------------------------------------------- stress */
+
+.hc-stress {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 46px;
+}
+
+.hc-score { display: flex; align-items: baseline; color: var(--band, var(--text)); }
+.hc-score-num { font-size: 34px; font-weight: 600; line-height: 1; }
+.hc-score-of { font-size: 12px; color: var(--text-muted); margin-left: 2px; }
+
+.hc-band--low  { --band: var(--success, #4ac97e); }
+.hc-band--mod  { --band: var(--warning, #d8a33c); }
+.hc-band--high { --band: var(--danger, #e0574a); }
+
+.hc-score-label { font-size: 13px; }
+.hc-score-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+/* Calibrating is a first-class state, not an error: below 7 days / 20 samples
+   the service returns a null score deliberately. */
+.hc-cal { width: 100%; }
+.hc-cal-label { font-size: 13px; color: var(--text); }
+.hc-cal-detail { font-size: 11px; color: var(--text-muted); margin: 3px 0 6px; line-height: 1.45; }
+.hc-cal-bar {
+  height: 3px;
+  background: var(--border, #232a34);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.hc-cal-bar span { display: block; height: 100%; background: var(--text-muted); }
+
+.hc-caveat {
+  font-size: 11px;
+  color: var(--warning, #d8a33c);
+  margin-top: 8px;
+  line-height: 1.45;
+}
+
+/* ---------------------------------------------------------- sleep */
+
+.hc-sub {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 16px 0 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hc-sub-note { text-transform: none; letter-spacing: 0; }
+
+.hc-night {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  padding: 2px 0;
+}
+.hc-night-date { color: var(--text-muted); width: 40px; flex: 0 0 auto; }
+.hc-night-bar { display: flex; flex: 1 1 auto; height: 7px; border-radius: 3px; overflow: hidden; background: var(--border, #232a34); }
+.hc-seg { display: block; min-width: 2px; }
+.hc-seg--deep { background: #4a6fd8; }
+.hc-seg--rem  { background: #7d5ad8; }
+.hc-seg--core { background: #3f7fa8; }
+.hc-night-total { width: 40px; text-align: right; flex: 0 0 auto; }
+.hc-night-eff { width: 44px; text-align: right; color: var(--text-muted); flex: 0 0 auto; }
+
+/* ---------------------------------------------------------- feed */
+
+.hc-metric {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  padding: 2px 0;
+}
+.hc-metric-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hc-metric-n { color: var(--text-muted); width: 56px; text-align: right; flex: 0 0 auto; }
+.hc-metric-age { color: var(--text-muted); width: 62px; text-align: right; flex: 0 0 auto; }
+/* A stale feed is the expected failure here, so it is coloured rather than
+   left to be spotted by reading dates. */
+.hc-metric-age--old { color: var(--warning, #d8a33c); }
+
+.hc-more {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 6px 0 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.hc-more:hover { color: var(--text); }
