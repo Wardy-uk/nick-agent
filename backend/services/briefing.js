@@ -16,6 +16,8 @@ const teams = require('./teams');
 
 const BRIEF_KEY = 'last_brief';
 const ALERT_SEEN_KEY = 'alert_seen_ids';
+// One-shot: set the first time the widened escalation query runs (#94).
+const ESCALATION_WIDE_ALERT_KEY = 'escalation_alert_wide_seeded';
 
 // ── Source collectors ────────────────────────────────────────────────────────
 
@@ -201,20 +203,44 @@ function getLastBrief() {
 // ── Alert checks (run every 5 min) ───────────────────────────────────────────
 
 /**
- * Check for new escalations (request type = Escalation OR label = neuro-escalation).
- * Fires a push if new ones found since last check.
+ * Check for new escalations. Fires a push if new ones found since last check.
+ *
+ * #94 — this had the same narrow query as `jira.syncEscalations`: the request
+ * type arm only, so an escalation the team moved into the tier never alerted.
+ * It is the LOUDER of the two paths, and the one worth being careful with: it
+ * pushes once PER ticket, and `escalation_alert` is in webpush's
+ * ALWAYS_DELIVER, which bypasses quiet hours and the hourly cap. Eleven of the
+ * seventeen were absent from the seen list, so widening this without the
+ * backfill below is eleven notifications about months-old tickets, at whatever
+ * hour the deploy happens to land. They are new to NEURO, not to Nick.
  */
 async function checkEscalationAlerts() {
   try {
     const jira = require('./jira');
 
-    // Fetch current escalations from Jira
-    const issues = await jira.fetchEscalationTickets();
-    const allEscalations = issues.map(i => ({ key: i.key, summary: i.fields?.summary || i.key }));
+    // Fetch current escalations from Jira — both arms.
+    const issues = await jira.fetchActiveEscalations();
+    const allEscalations = issues.map(i => ({ key: i.key, summary: i.summary || i.key }));
 
     const seenRaw = (() => { try { return JSON.parse(db.getState(ALERT_SEEN_KEY) || '{}'); } catch { return {}; } })();
     const seen = seenRaw.escalations || [];
     const newOnes = allEscalations.filter(t => !seen.includes(t.key));
+
+    // Stamped on the FIRST widened run whatever it finds. Gating the stamp on
+    // "found something to backfill" would leave the flag unset on a quiet run,
+    // and then swallow the next genuinely new escalation instead.
+    const backfilling = !db.getState(ESCALATION_WIDE_ALERT_KEY);
+    if (backfilling) db.setState(ESCALATION_WIDE_ALERT_KEY, new Date().toISOString());
+
+    if (backfilling && newOnes.length > 0) {
+      console.log(`[Briefing] Escalation alerts widened to both arms — recording ${newOnes.length} `
+        + `pre-existing escalation(s) as already alerted rather than pushing about them.`);
+      db.setState(ALERT_SEEN_KEY, JSON.stringify({
+        ...seenRaw,
+        escalations: [...seen, ...newOnes.map(t => t.key)].slice(-200),
+      }));
+      return;
+    }
 
     if (newOnes.length > 0) {
       console.log(`[Briefing] ${newOnes.length} new escalation(s) — alerting`);

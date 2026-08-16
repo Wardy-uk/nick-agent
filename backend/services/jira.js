@@ -55,6 +55,13 @@ function jiraRequest(urlPath, options = {}) {
 
 // ── Escalation queue ─────────────────────────────────────────────────────────
 
+/**
+ * The request-type arm ALONE — customer-raised portal escalations, 6 of the 17
+ * live ones. Nothing calls this any more and nothing should: it was what
+ * `syncEscalations` and the briefing alerts used, and it is why both understated
+ * escalations by two thirds (#94). Use `fetchActiveEscalations`, which ORs in
+ * the tier population. Kept only because it is exported.
+ */
 async function fetchEscalationTickets() {
   const jql = `resolution = Unresolved AND "Request Type" in ("Escalation (NT)") AND status not in (CLOSED, Done, Resolved) ORDER BY created DESC`;
 
@@ -91,6 +98,26 @@ const REQUEST_TYPE_FIELDS = ['customfield_10020', 'customfield_12800'];
 const ESCALATION_FIELDS = ['summary', 'status', 'priority', 'assignee', 'created', 'updated',
   'duedate', TIER_FIELD, ...REQUEST_TYPE_FIELDS];
 
+/**
+ * Has Nick replied on this ticket?
+ *
+ * Jira caps the inline `comment` field at 20 per issue, and it returns the
+ * NEWEST 20 (`startAt` is offset from the end — NT-14855 came back
+ * `startAt: 32, total: 52`). That was worth checking rather than assuming,
+ * because the oldest 20 would have made this answer "no" on exactly the long,
+ * churning threads an escalation becomes, and over-nagged on all of them.
+ * The newest window is also the right question: "has Nick engaged with this
+ * lately" is what the nudge is for, not "did he ever type in it".
+ */
+function nickInComments(comments) {
+  const nickEmail = (JIRA_EMAIL || '').toLowerCase();
+  return (comments || []).some(c => {
+    const authorEmail = (c.author?.emailAddress || '').toLowerCase();
+    const authorName = (c.author?.displayName || '').toLowerCase();
+    return (nickEmail && authorEmail.includes(nickEmail)) || authorName.includes('nick ward');
+  });
+}
+
 function mapEscalationIssue(issue) {
   const f = issue.fields || {};
   // Two fields carry the request type on this instance and only one is
@@ -117,23 +144,41 @@ function mapEscalationIssue(issue) {
     viaRequestType: /escalation/i.test(requestType || ''),
     viaTier: tier === 'Escalations',
     viaUrgency: false,
+    // null, not false, when `comment` was not requested — "we did not look" and
+    // "he has not replied" are different answers, and only one of them should
+    // ever put a ticket on the Focus card.
+    nickCommented: f.comment ? nickInComments(f.comment.comments) : null,
     url: base ? `${base}/browse/${issue.key}` : null,
   };
 }
 
-async function searchEscalations(jql) {
+const ESCALATION_PAGE_SIZE = 100;
+
+async function searchEscalations(jql, { withComments = false } = {}) {
+  // Comments roughly triple the payload, so only the caller that actually reads
+  // them pays for it — the /active route and the by-key lookup do not.
+  const fields = withComments ? [...ESCALATION_FIELDS, 'comment'] : ESCALATION_FIELDS;
   const result = await jiraRequest('/rest/api/3/search/jql', {
     method: 'POST',
-    body: { jql, fields: ESCALATION_FIELDS, maxResults: 100 },
+    body: { jql, fields, maxResults: ESCALATION_PAGE_SIZE },
   });
+  // `/search/jql` dropped `total`, so `isLast` is the only cap signal there is.
+  // Say so out loud: a silently truncated escalation list is the same species of
+  // bug as the 1,958-key JQL and the calendar $top=50, and this list drives a
+  // count Nick reads as complete.
+  if (result.isLast === false) {
+    console.warn(`[Jira] Escalation search hit the ${ESCALATION_PAGE_SIZE}-issue page and there are MORE — `
+      + `the list is truncated. JQL: ${jql}`);
+  }
   return (result.issues || []).map(mapEscalationIssue);
 }
 
-async function fetchActiveEscalations() {
+async function fetchActiveEscalations(opts = {}) {
   return searchEscalations(
     `project = ${JIRA_PROJECT_KEY} AND statusCategory != Done AND `
     + `("Request Type" in ("Escalation (NT)") OR cf[12981] = "Escalations") `
-    + `ORDER BY created ASC`
+    + `ORDER BY created ASC`,
+    opts
   );
 }
 
@@ -164,21 +209,26 @@ async function fetchOpenIssuesByKey(keys) {
   return out;
 }
 
-function nickHasCommented(issue) {
-  const comments = issue.fields?.comment?.comments || [];
-  const nickEmail = (JIRA_EMAIL || '').toLowerCase();
-  return comments.some(c => {
-    const authorEmail = (c.author?.emailAddress || '').toLowerCase();
-    const authorName = (c.author?.displayName || '').toLowerCase();
-    return authorEmail.includes(nickEmail) || authorName.includes('nick ward');
-  });
-}
-
+/**
+ * #94 — this used to call `fetchEscalationTickets()`, the request-type arm
+ * alone: only the escalations a customer raised through the portal. Every
+ * ticket the team moved into the Escalations TIER was invisible to the count,
+ * the Focus card, the briefing and the nudge — i.e. to every surface Nick
+ * actually checks. Measured live on 16 Aug: narrow 6, both arms 17.
+ *
+ * The naive swap is wrong in two ways that both fail silently:
+ *  - `fetchActiveEscalations` returns objects already flattened by
+ *    `mapEscalationIssue`, so reading `issue.fields.summary` off them blanks
+ *    every summary and created date;
+ *  - `comment` is not in `ESCALATION_FIELDS`, so "has Nick replied" would come
+ *    back false for all 17 and the whole queue would land unseen.
+ * Hence `withComments: true` and the flattened reads below.
+ */
 async function syncEscalations() {
   if (!isConfigured()) return { ok: false, reason: 'not configured' };
 
   try {
-    const issues = await fetchEscalationTickets();
+    const issues = await fetchActiveEscalations({ withComments: true });
 
     let known = {};
     try {
@@ -186,38 +236,60 @@ async function syncEscalations() {
       known = raw ? JSON.parse(raw) : {};
     } catch { known = {}; }
 
+    // The first sync after the widening backfills eleven tickets NEURO has
+    // never seen, the oldest 136 days old. They did not ARRIVE — NEURO simply
+    // started looking — so this run does not stamp them as interruptions
+    // against a running focus session (#89), whose one number is "what pulled
+    // you away, and when".
+    //
+    // Note what is deliberately NOT seeded: their unseen state. Of the 17, Nick
+    // has already replied to 12, and those never reach the card anyway — the
+    // filter is `!hasComment && !seen`. The five left are ones he has never
+    // answered, aged 6 to 65 days, and they are the entire finding. Marking
+    // them `seen` to keep the first day quiet would make this fix a no-op on
+    // the one surface it exists to correct. They surface as ONE banner, not
+    // five, because `buildEscalationMessage` counts and names the oldest.
+    const backfilling = !db.getState('escalation_wide_seeded');
+
     let newUnseen = 0;
     const updated = { ...known };
 
     for (const issue of issues) {
       const key = issue.key;
-      const hasComment = nickHasCommented(issue);
+      // `nickCommented` is null when Jira wasn't asked for comments. Treat that
+      // as "commented" — an unknown must never be the thing that raises a nudge.
+      if (issue.nickCommented === null) {
+        console.warn(`[Jira] ${key}: comments not returned, assuming replied rather than nagging`);
+      }
+      const hasComment = issue.nickCommented !== false;
 
       // Detail fields are refreshed every sync — Focus/Briefing render these,
       // so a stale summary or priority would show Nick the wrong thing.
       const details = {
-        summary: issue.fields?.summary || '',
-        created: issue.fields?.created,
-        status: issue.fields?.status?.name || null,
-        priority: issue.fields?.priority?.name || null,
-        assignee: issue.fields?.assignee?.displayName || null,
+        summary: issue.summary || '',
+        created: issue.created,
+        status: issue.status,
+        priority: issue.priority,
+        assignee: issue.assignee,
       };
 
       if (!updated[key]) {
         updated[key] = { seen: false, hasComment, ...details };
         if (!hasComment) {
           newUnseen++;
-          console.log(`[Jira] New escalation without Nick comment: ${key}`);
+          console.log(`[Jira] ${backfilling ? 'Backfilled' : 'New'} escalation without Nick comment: ${key}`);
           // Stamp the arrival against whatever Nick is mid-way through (#89).
           // It does NOT pause — an escalation landing is not proof he switched
           // to it, and guessing would corrupt the one number the return prompt
           // rests on. It only means the prompt can later say what interrupted.
-          try {
-            require('./focus-session').noteInterruption({
-              source: 'escalation',
-              detail: `${key} arrived`,
-            });
-          } catch { /* no session running, which is the usual case */ }
+          if (!backfilling) {
+            try {
+              require('./focus-session').noteInterruption({
+                source: 'escalation',
+                detail: `${key} arrived`,
+              });
+            } catch { /* no session running, which is the usual case */ }
+          }
         }
       } else {
         Object.assign(updated[key], details, { hasComment });
@@ -232,6 +304,11 @@ async function syncEscalations() {
     db.setState('escalation_seen', JSON.stringify(updated));
     db.setState('escalation_last_sync', new Date().toISOString());
     db.setState('escalation_count', String(issues.length));
+    if (backfilling) {
+      console.log(`[Jira] Escalation query widened to both arms — ${issues.length} active, `
+        + `${newUnseen} with no reply from Nick. Backfill run, no interruptions stamped.`);
+      db.setState('escalation_wide_seeded', new Date().toISOString());
+    }
 
     // Always sync — this raises, refreshes AND clears the banner, so an escalation
     // Nick has since replied to stops nagging without waiting for the nag cycle.
@@ -358,6 +435,8 @@ module.exports = {
   getUnseenEscalationCount,
   getUnseenEscalations,
   // pure, exported for the tests — what counts as informative is the decision
+  _mapEscalationIssue: mapEscalationIssue,
+  _nickInComments: nickInComments,
   _informativeStatus,
   _informativePriority,
   _informativeAssignee,
