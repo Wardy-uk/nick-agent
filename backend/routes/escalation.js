@@ -24,6 +24,29 @@ const router = express.Router();
 const nova = require('../services/nova-client');
 const jira = require('../services/jira');
 
+/**
+ * How far back the urgency arm asks NOVA's log — #104.
+ *
+ * This was 90 days, and a 90-day window is a SILENT cap: an urgency escalation
+ * older than that on a still-open ticket simply stopped being badged, and
+ * "still open 91 days after being escalated" is precisely the ticket Nick would
+ * most want to see. That is the fifth instance of this species here (calendar
+ * `$top=50`, the 1,958-key JQL, Planner `$top=200`, the escalation `isLast`).
+ *
+ * Measured before changing it: over the log's ENTIRE life it holds exactly TWO
+ * manual escalations, both raised on 15 Aug 2026, so the incidence of the bug
+ * today is zero — widening 90 → 3650 days moves 1,935 rows to 2,352 and finds
+ * the same 2. So this is not a fix for a live symptom; it retires the cap
+ * before the population is old enough to hit it, which costs ~400 extra rows on
+ * a route that is not hot.
+ *
+ * Ten years is "the whole log" rather than a tuned number — a window nobody can
+ * age out of is the only kind that never needs revisiting. And the response
+ * NAMES it either way, because a number that cannot state its own edge is the
+ * actual defect: honest beats wide.
+ */
+const URGENCY_WINDOW_DAYS = 3650;
+
 function requireNova(req, res, next) {
   if (!nova.isConfigured()) {
     return res.status(503).json({
@@ -76,6 +99,15 @@ router.get('/active', async (req, res) => {
   }
 
   let warning = null;
+  // What the urgency arm actually did, so the caller never has to assume. All
+  // three states are distinct: `off` (not configured), `error` (NOVA refused) and
+  // `ok` — and only `ok` means the count below is the whole population.
+  const urgency = {
+    state: 'off',
+    windowDays: URGENCY_WINDOW_DAYS,
+    logRows: null,
+    manual: null,
+  };
   if (nova.isConfigured()) {
     try {
       // Manual only, and that is a semantic choice rather than a filter for
@@ -89,8 +121,11 @@ router.get('/active', async (req, res) => {
       // ignores `type` and answers with all ~1,950 rows, and this route should
       // be correct against whichever version is deployed rather than only the
       // one it shipped alongside.
-      const logged = (await nova.listEscalations({ days: 90, type: 'manual' }) || [])
-        .filter(e => e.escalation_type === 'manual');
+      const raw = await nova.listEscalations({ days: URGENCY_WINDOW_DAYS, type: 'manual' }) || [];
+      const logged = raw.filter(e => e.escalation_type === 'manual');
+      urgency.state = 'ok';
+      urgency.logRows = raw.length;
+      urgency.manual = logged.length;
       const byKey = new Map(escalations.map(t => [t.key, t]));
 
       // Anything the log knows about that the tier/request-type arms missed
@@ -111,6 +146,7 @@ router.get('/active', async (req, res) => {
         t.escalatedAt = e.created_at || null;
       }
     } catch (e) {
+      urgency.state = 'error';
       warning = `Urgency escalations are missing from this list — NOVA said: ${e.message}`;
     }
   } else {
@@ -128,6 +164,10 @@ router.get('/active', async (req, res) => {
     escalations: decorated,
     awaitingReply,
     total: decorated.length,
+    // #104 — the list states the window it used. A count that cannot describe
+    // its own edge is indistinguishable from a complete one, which is how a cap
+    // stays invisible until the day it starts cutting.
+    urgency,
     warning,
   });
 });

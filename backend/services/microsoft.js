@@ -292,11 +292,55 @@ function getMailAccessStatus() {
 }
 
 // Fallback: device code flow for Graph permissions (one-time)
+//
+// A device code EXPIRES — Microsoft issues them with a ~15 minute life. Nothing
+// here used to record when one was issued, so `deviceCodePending` handed back
+// the cached code forever: after an admin-approval wait, asking for a fresh code
+// returned the long-dead one twice over and the only way out was restarting the
+// backend. That is exactly the moment Nick is locked out of Graph, so the one
+// path back in must not be the one that is stuck.
+//
+// The reset paths below are correct as far as they go (both `.then` and `.catch`
+// clear the pending flag); the gap was purely that an in-flight code was assumed
+// to still be good. Expiry is a pure function of issue time, so it lives in a
+// testable helper rather than being inlined — a real flow cannot be exercised in
+// a test without asking Microsoft for a code nobody will type in.
 let deviceCodePending = false;
 let deviceCodeInfo = null;
 
+// Microsoft's default is 15 minutes. Treated as a FLOOR, not a guess: the
+// response carries its own `expiresIn` and we prefer it when present, because a
+// tenant is free to shorten the life and a code we believe in for longer than
+// the issuer does is the same bug again.
+const DEVICE_CODE_DEFAULT_TTL_MS = 15 * 60 * 1000;
+
+// A 30s margin: a code that expires while Nick is mid-way through typing it is
+// indistinguishable to him from the wedge this fixes.
+const DEVICE_CODE_EXPIRY_MARGIN_MS = 30 * 1000;
+
+/**
+ * Is a cached device code still worth handing back?
+ *
+ * Returns false for a missing code as well as an expired one — a pending flow
+ * that has not yet reached its callback has nothing to show, and returning
+ * `null` from the route reads as "no code" rather than as a stale one.
+ */
+function isDeviceCodeUsable(info, now = Date.now()) {
+  if (!info || !info.userCode || !info.issuedAt) return false;
+  const ttl = Number(info.expiresInMs) > 0 ? Number(info.expiresInMs) : DEVICE_CODE_DEFAULT_TTL_MS;
+  return (now - info.issuedAt) < (ttl - DEVICE_CODE_EXPIRY_MARGIN_MS);
+}
+
 async function startDeviceCodeFlow() {
-  if (deviceCodePending) return deviceCodeInfo;
+  // Only reuse an in-flight code while it is still alive. An expired one is
+  // dropped and a fresh flow started, rather than being returned to a user who
+  // has no way of telling it is dead.
+  if (deviceCodePending) {
+    if (isDeviceCodeUsable(deviceCodeInfo)) return deviceCodeInfo;
+    console.warn('[Microsoft] Cached device code has expired — starting a fresh flow');
+    deviceCodePending = false;
+    deviceCodeInfo = null;
+  }
 
   const client = getClient();
   deviceCodePending = true;
@@ -305,10 +349,18 @@ async function startDeviceCodeFlow() {
     client.acquireTokenByDeviceCode({
       scopes: GRAPH_SCOPES,
       deviceCodeCallback: (response) => {
+        const expiresInMs = Number(response.expiresIn) > 0
+          ? Number(response.expiresIn) * 1000
+          : DEVICE_CODE_DEFAULT_TTL_MS;
         deviceCodeInfo = {
           userCode: response.userCode,
           verificationUri: response.verificationUri,
-          message: response.message
+          message: response.message,
+          // Stamped so the caller can show a deadline instead of a code with no
+          // stated shelf life — the reason the stale one went unnoticed twice.
+          issuedAt: Date.now(),
+          expiresInMs,
+          expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
         };
         console.log('[Microsoft] Device code:', response.message);
         resolve(deviceCodeInfo);
@@ -1333,6 +1385,7 @@ module.exports = {
   getAccessToken,
   getScopedToken,
   startDeviceCodeFlow,
+  isDeviceCodeUsable,
   fetchCalendarEvents,
   createCalendarEvent,
   updateCalendarEvent,
