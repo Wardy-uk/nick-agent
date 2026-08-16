@@ -284,18 +284,28 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
       {error && <div className="inbox-detail-error">{error}</div>}
 
       <div className="inbox-item-actions">
-        <button className="inbox-action-btn inbox-action-done" onClick={() => onDismiss(email.id)} disabled={busy}>
+        <button
+          className="inbox-action-btn inbox-action-done"
+          onClick={() => onDismiss(email.id, { reason: 'done' })}
+          disabled={busy}
+          title="Handled — triage was right to surface it"
+        >
           {busy ? '...' : 'Done'}
         </button>
         <button
           className="inbox-action-btn inbox-action-done"
-          onClick={() => onDismiss(email.id, { markRead: true })}
+          onClick={() => onDismiss(email.id, { markRead: true, reason: 'done' })}
           disabled={busy}
           title="Marks it read in Outlook as well as clearing it from triage"
         >
           {busy ? '...' : 'Read & dismiss'}
         </button>
-        <button className="inbox-action-btn inbox-action-ignore" onClick={() => onDismiss(email.id)} disabled={busy}>
+        <button
+          className="inbox-action-btn inbox-action-ignore"
+          onClick={() => onDismiss(email.id, { reason: 'not-relevant' })}
+          disabled={busy}
+          title="Triage should not have ranked this — recorded as a misclassification"
+        >
           {busy ? '...' : 'Not relevant'}
         </button>
         <button
@@ -348,13 +358,16 @@ export default function InboxPanel({ focusContext }) {
       .catch(() => setRunning(false));
   };
 
-  const dismiss = (emailId, { markRead = false } = {}) => {
+  // #70 — `reason` is what makes Done and Not relevant different buttons rather
+  // than two labels on the same one. "Not relevant" is a misclassification
+  // report and it is the only free feedback this classifier will ever get.
+  const dismiss = (emailId, { markRead = false, reason = 'done' } = {}) => {
     setDismissing(emailId);
     setDismissNote('');
     fetch(apiUrl(`/api/email/triage/dismiss/${encodeURIComponent(emailId)}`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ markRead }),
+      body: JSON.stringify({ markRead, reason }),
     })
       .then(r => r.json())
       .then(d => {

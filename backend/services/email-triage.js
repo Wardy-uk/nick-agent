@@ -205,14 +205,63 @@ function getTriageByCategory() {
   };
 }
 
-function dismissEmail(emailId) {
+// #70 — why it was dismissed, not just that it was.
+//
+// "Done" and "Not relevant" called the identical endpoint, so the distinction
+// was painted on. Every "not relevant" is Nick telling triage its ranking was
+// wrong, and that was discarded on the spot — the only feedback this classifier
+// will ever get for free. Two buttons that do the same thing quietly teach him
+// they mean nothing.
+const DISMISS_REASONS = new Set(['done', 'not-relevant', 'replied', 'unspecified']);
+
+function dismissEmail(emailId, reason = 'unspecified') {
+  const clean = DISMISS_REASONS.has(reason) ? reason : 'unspecified';
   const all = getStoredTriage();
   const updated = all.map(e =>
     e.id === emailId
-      ? { ...e, dismissed: true, dismissedAt: new Date().toISOString() }
+      ? { ...e, dismissed: true, dismissedAt: new Date().toISOString(), dismissReason: clean }
       : e
   );
   db.setState('email_triage', JSON.stringify(updated));
+  if (clean === 'not-relevant') {
+    // Logged loudly on purpose: it is a misclassification report, and until
+    // something consumes it the log is the only place it exists.
+    const item = all.find(e => e.id === emailId);
+    console.log(`[Triage] Misranked — "${(item?.subject || emailId).slice(0, 80)}" `
+      + `was ${item?.urgency || '?'}/${item?.category || '?'} and Nick says not relevant`);
+  }
+}
+
+/**
+ * How the classifier is doing, by its own output, against Nick's verdict.
+ *
+ * Deliberately counts only what he has actually judged: an email still sitting
+ * in triage is not evidence either way, and folding it in would make the score
+ * improve simply because he has not got to it yet.
+ */
+function getDismissFeedback() {
+  const judged = getStoredTriage().filter(e => e.dismissed && e.dismissReason && e.dismissReason !== 'unspecified');
+  const byCategory = {};
+  let notRelevant = 0;
+
+  for (const e of judged) {
+    const key = `${e.urgency || 'none'}/${e.category || 'none'}`;
+    byCategory[key] = byCategory[key] || { judged: 0, notRelevant: 0 };
+    byCategory[key].judged++;
+    if (e.dismissReason === 'not-relevant') {
+      byCategory[key].notRelevant++;
+      notRelevant++;
+    }
+  }
+
+  return {
+    judged: judged.length,
+    notRelevant,
+    // Null rather than 0 when nothing has been judged — an untested classifier
+    // is not a perfect one.
+    misrankRate: judged.length ? Math.round((notRelevant / judged.length) * 100) : null,
+    byCategory,
+  };
 }
 
 function clearDismissed() {
@@ -224,6 +273,7 @@ module.exports = {
   runTriage,
   getTriageByCategory,
   dismissEmail,
+  getDismissFeedback,
   clearDismissed,
   TRIAGE_CACHE_TTL
 };

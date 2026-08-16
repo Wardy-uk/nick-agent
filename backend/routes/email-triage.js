@@ -242,7 +242,10 @@ router.post('/triage/:emailId/reply', async (req, res) => {
     }
 
     // Replied means handled — take it out of triage so it doesn't come back.
-    emailTriage.dismissEmail(emailId);
+    // Recorded as 'replied' rather than 'done': it is the strongest possible
+    // signal that triage was RIGHT to surface this one, and lumping it in with a
+    // manual dismiss would throw that away (#70).
+    emailTriage.dismissEmail(emailId, 'replied');
     res.json({ ok: true, sent: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -281,10 +284,23 @@ router.post('/triage/dismiss/:emailId', async (req, res) => {
       }
     }
 
-    emailTriage.dismissEmail(emailId);
+    // #70 — the reason is the whole point of having two buttons.
+    emailTriage.dismissEmail(emailId, req.body?.reason);
     res.json({ ok: true, markedRead, readError });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// GET /api/email/triage/feedback — how the classifier is scoring against Nick's
+// verdict (#70). Only counts emails he has actually judged; one still sitting in
+// triage is not evidence, and counting it would make the score improve purely
+// because he hasn't got to it.
+router.get('/triage/feedback', (req, res) => {
+  try {
+    res.json(emailTriage.getDismissFeedback());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
