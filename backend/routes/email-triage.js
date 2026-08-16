@@ -97,6 +97,23 @@ router.get('/triage', async (req, res) => {
   }
 });
 
+// GET /api/email/triage/feedback — how the classifier is scoring against Nick's
+// verdict (#70). Only counts emails he has actually judged; one still sitting in
+// triage is not evidence, and counting it would make the score improve purely
+// because he hasn't got to it.
+//
+// MUST stay above `/triage/:emailId` — Express matches in registration order, so
+// declaring it after meant "feedback" was read as an email id and the route
+// answered `{"ok":false,"error":"Email not found"}`. Caught only because it was
+// hit against the deployed backend rather than assumed to work.
+router.get('/triage/feedback', (req, res) => {
+  try {
+    res.json(emailTriage.getDismissFeedback());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/email/triage/:emailId — fetch email detail, summary, and suggested reply
 router.get('/triage/:emailId', async (req, res) => {
   try {
@@ -289,18 +306,6 @@ router.post('/triage/dismiss/:emailId', async (req, res) => {
     res.json({ ok: true, markedRead, readError });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// GET /api/email/triage/feedback — how the classifier is scoring against Nick's
-// verdict (#70). Only counts emails he has actually judged; one still sitting in
-// triage is not evidence, and counting it would make the score improve purely
-// because he hasn't got to it.
-router.get('/triage/feedback', (req, res) => {
-  try {
-    res.json(emailTriage.getDismissFeedback());
-  } catch (e) {
-    res.status(500).json({ error: e.message });
   }
 });
 
