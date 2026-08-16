@@ -716,6 +716,22 @@ function getLatestHealthSample(metric) {
 // "we have 4,000 rows" and "nothing has arrived since Tuesday" look identical
 // on a count alone — and with iOS deciding when to sync, a stalled feed is the
 // expected failure, not a surprising one.
+// Every sleep segment in the window, whatever Apple called the stage.
+//
+// The caller used to enumerate metric names and ask for each one, which is how
+// the staged breakdown went missing for 725 of 728 nights: Apple's labels are
+// `sleep_asleep_core_hours` / `_asleep_rem_` / `_asleep_deep_`, and the list
+// asked for `sleep_core_hours`. A guessed name returns zero rows, not an error.
+// Matching on the prefix means a stage nobody anticipated still arrives.
+function getSleepSamples(sinceIso, limit) {
+  return all(
+    `SELECT metric, value, recorded_at FROM health_samples
+      WHERE metric LIKE 'sleep\\_%' ESCAPE '\\' AND recorded_at >= ?
+      ORDER BY recorded_at DESC LIMIT ?`,
+    [sinceIso, limit || 20000]
+  );
+}
+
 function getHealthMetricSummary(sinceIso) {
   return all(
     `SELECT metric,
@@ -1136,6 +1152,7 @@ module.exports = {
   insertHealthSampleWithUuid,
   getHealthMetricSummary,
   getHealthSamples,
+  getSleepSamples,
   getLatestHealthSample,
   // Location visits
   saveLocationVisit,

@@ -253,12 +253,12 @@ router.get('/sleep', (req, res) => {
     // earliest night in the window has segments that started before it.
     const since = new Date(Date.now() - (days + 1) * 86400000).toISOString().replace('T', ' ').slice(0, 19);
 
-    const rows = [];
-    for (const stage of ['deep', 'rem', 'core', 'light', 'awake', 'in_bed', 'inbed', 'asleep', 'unspecified', 'asleep_unspecified', 'asleepunspecified']) {
-      for (const r of db.getHealthSamples(`sleep_${stage}_hours`, since, 5000)) {
-        rows.push({ metric: `sleep_${stage}_hours`, value: r.value, recorded_at: r.recorded_at });
-      }
-    }
+    // Fetched by PREFIX, never by a list of stage names (#122). The list here
+    // asked for `sleep_core_hours`; Apple's label is `sleep_asleep_core_hours`,
+    // so the staged breakdown returned zero rows on every night and the card's
+    // stage bar was empty by construction — silently, because a wrong metric
+    // name is an empty result, not an error.
+    const rows = db.getSleepSamples(since, 20000);
 
     const nights = appleHealth.rollupSleepNights(rows).slice(0, days);
     res.json({

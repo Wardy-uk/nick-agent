@@ -208,15 +208,30 @@ test('a night is the one you WAKE on, so evening and small-hours segments merge'
   assert.equal(ah.nightKey('2026-08-16 13:00:00'), '2026-08-17');
 });
 
+// ⚠ These fixtures use the metric names the INGEST actually writes
+// (`sleep_asleep_core_hours`), not the `sleep_core_hours` they were originally
+// written against. That mismatch is exactly why this feature was dead for 725
+// of 728 nights while these tests stayed green: they asserted the rollup's
+// arithmetic against names no row in the table has ever carried.
+test('the stage names the ingest really writes are what the rollup understands', () => {
+  assert.equal(ah.sleepStage('sleep_asleep_core_hours'), 'core');
+  assert.equal(ah.sleepStage('sleep_asleep_rem_hours'), 'rem');
+  assert.equal(ah.sleepStage('sleep_asleep_deep_hours'), 'deep');
+  assert.equal(ah.sleepStage('sleep_asleep_unspecified_hours'), 'unspecified');
+  assert.equal(ah.sleepStage('sleep_awake_hours'), 'awake');
+  // The bare forms still resolve — older payloads and hand-written fixtures.
+  assert.equal(ah.sleepStage('sleep_core_hours'), 'core');
+});
+
 test('sleep segments roll up into nights with stages and efficiency', () => {
   const nights = ah.rollupSleepNights([
-    { metric: 'sleep_core_hours', value: 3.5, recorded_at: '2026-08-15 22:30:00' },
-    { metric: 'sleep_deep_hours', value: 1.2, recorded_at: '2026-08-16 02:00:00' },
-    { metric: 'sleep_rem_hours', value: 1.3, recorded_at: '2026-08-16 04:00:00' },
+    { metric: 'sleep_asleep_core_hours', value: 3.5, recorded_at: '2026-08-15 22:30:00' },
+    { metric: 'sleep_asleep_deep_hours', value: 1.2, recorded_at: '2026-08-16 02:00:00' },
+    { metric: 'sleep_asleep_rem_hours', value: 1.3, recorded_at: '2026-08-16 04:00:00' },
     { metric: 'sleep_awake_hours', value: 0.4, recorded_at: '2026-08-16 03:00:00' },
     { metric: 'sleep_in_bed_hours', value: 7.0, recorded_at: '2026-08-15 22:15:00' },
     // A different night entirely.
-    { metric: 'sleep_core_hours', value: 5.0, recorded_at: '2026-08-16 23:00:00' },
+    { metric: 'sleep_asleep_core_hours', value: 5.0, recorded_at: '2026-08-16 23:00:00' },
   ]);
 
   assert.equal(nights.length, 2);
@@ -228,12 +243,37 @@ test('sleep segments roll up into nights with stages and efficiency', () => {
   assert.equal(night.inBedHours, 7);
   assert.equal(night.efficiency, 85.7);
   assert.equal(night.segments, 5);
-  assert.equal(night.stages.deep, 1.2);
+  assert.equal(night.stages.deep, 1.2, 'reachable under the canonical name, not asleep_deep');
+  assert.equal(night.asleepSource, 'staged');
+});
+
+// #122: the two sources are two accounts of ONE night. Summing them reports
+// roughly double, and the unspecified sample is the less trustworthy of the two
+// — measured, it disagrees with the staged sum on 241 of 324 shared nights.
+test('a staged night ignores the whole-night sample rather than adding it', () => {
+  const [night] = ah.rollupSleepNights([
+    { metric: 'sleep_asleep_core_hours', value: 6.81, recorded_at: '2026-08-15 23:00:00' },
+    { metric: 'sleep_asleep_deep_hours', value: 0.93, recorded_at: '2026-08-16 01:00:00' },
+    { metric: 'sleep_asleep_rem_hours', value: 1.68, recorded_at: '2026-08-16 04:00:00' },
+    { metric: 'sleep_asleep_unspecified_hours', value: 10.42, recorded_at: '2026-08-16 02:50:00' },
+  ]);
+  assert.equal(night.asleepHours, 9.42, 'the staged sum, not 10.42 and certainly not 19.84');
+  assert.equal(night.asleepSource, 'staged');
+  // Still visible in the breakdown — dropped from the total, not from the data.
+  assert.equal(night.stages.unspecified, 10.42);
+});
+
+test('the whole-night sample is used only when there is no staged sleep at all', () => {
+  const [night] = ah.rollupSleepNights([
+    { metric: 'sleep_asleep_unspecified_hours', value: 11.27, recorded_at: '2026-07-18 02:00:00' },
+  ]);
+  assert.equal(night.asleepHours, 11.27);
+  assert.equal(night.asleepSource, 'unspecified', 'said out loud, so the card can hedge');
 });
 
 test('efficiency is null without In Bed data, never a confident 100%', () => {
   const [night] = ah.rollupSleepNights([
-    { metric: 'sleep_core_hours', value: 6, recorded_at: '2026-08-15 23:00:00' },
+    { metric: 'sleep_asleep_core_hours', value: 6, recorded_at: '2026-08-15 23:00:00' },
   ]);
   assert.equal(night.asleepHours, 6);
   assert.equal(night.efficiency, null);

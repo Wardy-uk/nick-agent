@@ -309,13 +309,45 @@ function parsePayload(body) {
 // presents sleep and how anyone actually talks about it. The known wart is that
 // an afternoon nap lands on the FOLLOWING night; naps are rare in this data and
 // the alternative (a fixed 18:00 cut) breaks shift-shaped sleep instead.
-const ASLEEP_STAGES = new Set(['deep', 'rem', 'core', 'light', 'asleep', 'asleep_unspecified', 'asleepunspecified', 'unspecified']);
+//
+// TWO SOURCES, NEVER SUMMED (#122). Every night carries a staged breakdown from
+// the Watch (core/deep/rem, many segments) AND — on 324 of 728 nights — a single
+// whole-night sample from a second source. They are two accounts of the same
+// sleep, so adding them double-counts the night to ~2x. `asleepHours` therefore
+// PREFERS the staged sum and falls back to the unspecified value only when
+// there is no staged sleep at all (3 nights of 728), and `asleepSource` says
+// which answered — the same honesty rule working-days.status() follows.
+//
+// Preferring staged is not a coin toss. Measured over the 324 both-source
+// nights, the unspecified sample disagrees by more than half an hour on 241 of
+// them, in BOTH directions: it over-states by up to 3.4h and under-states by up
+// to 9.7h (2025-05-24 recorded 0.33h against 10.08h of staged sleep). It is not
+// a reliable whole-night figure, and the staged segments are the ones the card
+// is built to draw.
+const STAGED_ASLEEP = new Set(['deep', 'rem', 'core', 'light']);
+const UNSPECIFIED_ASLEEP = new Set(['unspecified', 'asleep']);
 const AWAKE_STAGES = new Set(['awake']);
-const IN_BED_STAGES = new Set(['in_bed', 'inbed']);
+const IN_BED_STAGES = new Set(['in_bed']);
+
+// Apple labels the stages "Asleep Core" / "Asleep REM" / "Asleep Deep", which
+// ingest slugs to `asleep_core` and friends. Consumers — this rollup, the route
+// and the card — were all written against a guessed `core`. Canonicalise here,
+// once, rather than teaching three places the same aliases.
+const STAGE_ALIASES = {
+  asleep_core: 'core',
+  asleep_rem: 'rem',
+  asleep_deep: 'deep',
+  asleep_light: 'light',
+  asleep_unspecified: 'unspecified',
+  asleepunspecified: 'unspecified',
+  asleep_awake: 'awake',
+  inbed: 'in_bed',
+};
 
 function sleepStage(metric) {
   const m = /^sleep_(.+)_hours$/.exec(String(metric || ''));
-  return m ? m[1] : null;
+  if (!m) return null;
+  return STAGE_ALIASES[m[1]] || m[1];
 }
 
 function nightKey(sqlUtc) {
@@ -344,25 +376,32 @@ function rollupSleepNights(rows) {
     if (!Number.isFinite(hours) || hours <= 0) continue;
 
     if (!nights.has(key)) {
-      nights.set(key, { night: key, asleepHours: 0, awakeHours: 0, inBedHours: 0, stages: {}, segments: 0 });
+      nights.set(key, { night: key, stagedHours: 0, unspecifiedHours: 0, awakeHours: 0, inBedHours: 0, stages: {}, segments: 0 });
     }
     const n = nights.get(key);
     n.segments++;
     n.stages[stage] = Math.round(((n.stages[stage] || 0) + hours) * 100) / 100;
 
-    if (ASLEEP_STAGES.has(stage)) n.asleepHours += hours;
+    if (STAGED_ASLEEP.has(stage)) n.stagedHours += hours;
+    else if (UNSPECIFIED_ASLEEP.has(stage)) n.unspecifiedHours += hours;
     else if (AWAKE_STAGES.has(stage)) n.awakeHours += hours;
     else if (IN_BED_STAGES.has(stage)) n.inBedHours += hours;
   }
 
   return [...nights.values()]
-    .map((n) => ({
-      ...n,
-      asleepHours: Math.round(n.asleepHours * 100) / 100,
-      awakeHours: Math.round(n.awakeHours * 100) / 100,
-      inBedHours: Math.round(n.inBedHours * 100) / 100,
-      efficiency: n.inBedHours > 0 ? Math.round((n.asleepHours / n.inBedHours) * 1000) / 10 : null,
-    }))
+    .map(({ stagedHours, unspecifiedHours, ...n }) => {
+      const asleepHours = stagedHours > 0 ? stagedHours : unspecifiedHours;
+      return {
+        ...n,
+        asleepHours: Math.round(asleepHours * 100) / 100,
+        // Named, not inferred from `stages`, so a consumer never has to
+        // re-derive the choice this function already made.
+        asleepSource: stagedHours > 0 ? 'staged' : (unspecifiedHours > 0 ? 'unspecified' : 'none'),
+        awakeHours: Math.round(n.awakeHours * 100) / 100,
+        inBedHours: Math.round(n.inBedHours * 100) / 100,
+        efficiency: n.inBedHours > 0 ? Math.round((asleepHours / n.inBedHours) * 1000) / 10 : null,
+      };
+    })
     .sort((a, b) => (a.night < b.night ? 1 : -1));
 }
 

@@ -100,7 +100,11 @@
 .hc-seg--deep { background: #4a6fd8; }
 .hc-seg--rem  { background: #7d5ad8; }
 .hc-seg--core { background: #3f7fa8; }
-.hc-night-total { width: 40px; text-align: right; flex: 0 0 auto; }
+/* Deliberately flat and desaturated: this night has a total but no breakdown,
+   and it should not read as a stage. */
+.hc-seg--unstaged { background: var(--text-muted); opacity: 0.35; }
+.hc-night-total { width: 46px; text-align: right; flex: 0 0 auto; }
+.hc-night-flag { color: var(--text-muted); margin-left: 1px; }
 .hc-night-eff { width: 44px; text-align: right; color: var(--text-muted); flex: 0 0 auto; }
 
 /* ---------------------------------------------------------- feed */

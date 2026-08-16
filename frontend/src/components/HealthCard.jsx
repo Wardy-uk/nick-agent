@@ -132,19 +132,28 @@ export default function HealthCard() {
           {nights.slice(0, 5).map((n) => (
             <div className="hc-night" key={n.night}>
               <span className="hc-night-date">{n.night.slice(5)}</span>
+              {/* An unstaged night draws one flat bar rather than three
+                  coloured ones — the breakdown genuinely is not known, and a
+                  bar built from a single whole-night figure would invent a
+                  shape. #42's rule: never look more certain than the service. */}
               <span className="hc-night-bar">
-                {['deep', 'rem', 'core'].map((st) => (
-                  n.stages?.[st] ? (
-                    <span
-                      key={st}
-                      className={`hc-seg hc-seg--${st}`}
-                      style={{ flexGrow: n.stages[st] }}
-                      title={`${st} ${n.stages[st]}h`}
-                    />
-                  ) : null
-                ))}
+                {n.asleepSource === 'staged'
+                  ? ['deep', 'rem', 'core'].map((st) => (
+                    n.stages?.[st] ? (
+                      <span
+                        key={st}
+                        className={`hc-seg hc-seg--${st}`}
+                        style={{ flexGrow: n.stages[st] }}
+                        title={`${st} ${n.stages[st]}h`}
+                      />
+                    ) : null
+                  ))
+                  : <span className="hc-seg hc-seg--unstaged" style={{ flexGrow: 1 }} title="whole-night total only — no stage breakdown recorded" />}
               </span>
-              <span className="hc-night-total">{n.asleepHours}h</span>
+              <span className="hc-night-total">
+                {n.asleepHours}h
+                {n.asleepSource === 'unspecified' && <span className="hc-night-flag" title="whole-night total only — no stage breakdown recorded">*</span>}
+              </span>
               <span className="hc-night-eff">{n.efficiency === null ? '—' : `${n.efficiency}%`}</span>
             </div>
           ))}
