@@ -31,28 +31,63 @@ const router = express.Router();
 const db = require('../db/database');
 const appleHealth = require('../services/apple-health');
 
-// Tailscale hands out 100.64.0.0/10. Loopback is allowed so the endpoint can be
-// exercised with curl on the Pi during a deploy without opening it further.
-function isAllowedSource(req) {
-  const raw = String(req.ip || req.socket?.remoteAddress || '');
-  const ip = raw.replace(/^::ffff:/, '');
-  if (ip === '127.0.0.1' || ip === '::1') return true;
+// ── Source guard ─────────────────────────────────────────────────────────────
+//
+// A source-IP check is NOT sufficient here, and getting this wrong exposed an
+// unauthenticated write endpoint to the public internet for one deploy.
+//
+// pi5 already runs `tailscale serve` with **Funnel ON** for
+// https://pi5.tailecb90f.ts.net → 127.0.0.1:3001. Funnel means the whole
+// internet, not the tailnet. Everything under /api was fine because it needs the
+// PIN; these routes cannot take a PIN, so they need their own answer.
+//
+// The trap: Tailscale proxies BOTH tailnet and Funnel traffic from 127.0.0.1, so
+// "is the peer address local or 100.64/10" cannot tell a colleague's browser
+// from a stranger's. Trusting loopback let Funnel straight through.
+//
+// So this fails CLOSED and identifies the caller from what Tailscale adds:
+//   - `Tailscale-Funnel-Request` is set on Funnel traffic  → always refused.
+//   - `Tailscale-User-Login` is added by Serve for tailnet peers → accepted.
+//   - A direct connection from 100.64.0.0/10 (not via Serve) → accepted.
+//   - Bare loopback is NOT trusted by default, because that is exactly what a
+//     Funnel request looks like if the header is ever absent. Set
+//     APPLE_HEALTH_ALLOW_LOOPBACK=1 to curl it on the Pi.
+function classifySource(req) {
+  if (req.headers['tailscale-funnel-request'] !== undefined) {
+    return { ok: false, why: 'funnel (public internet)' };
+  }
+
+  const login = req.headers['tailscale-user-login'];
+  if (login) return { ok: true, via: `tailnet:${login}` };
+
+  const ip = String(req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
   const m = /^(\d+)\.(\d+)\./.exec(ip);
-  if (!m) return false;
-  const a = +m[1];
-  const b = +m[2];
-  return a === 100 && b >= 64 && b <= 127;
+  if (m && +m[1] === 100 && +m[2] >= 64 && +m[2] <= 127) {
+    return { ok: true, via: `tailnet-ip:${ip}` };
+  }
+
+  if ((ip === '127.0.0.1' || ip === '::1') && process.env.APPLE_HEALTH_ALLOW_LOOPBACK === '1') {
+    return { ok: true, via: 'loopback (explicitly enabled)' };
+  }
+
+  return { ok: false, why: `untrusted source ${ip || 'unknown'}` };
 }
 
 function guard(req, res, next) {
   if (String(process.env.APPLE_HEALTH_INGEST || '').toLowerCase() === 'off') {
     return res.status(503).json({ error: 'Apple Health ingest disabled' });
   }
-  if (!isAllowedSource(req)) {
-    const ip = String(req.ip || '').replace(/^::ffff:/, '');
-    console.warn(`[AppleHealth] Refused ${req.method} ${req.path} from off-tailnet ${ip}`);
-    return res.status(403).json({ error: 'Not on the tailnet' });
+
+  const src = classifySource(req);
+  if (!src.ok) {
+    // Logged with the Tailscale headers present, because the whole guard turns
+    // on them and a silent refusal would be indistinguishable from the app
+    // simply not reaching the Pi.
+    const seen = Object.keys(req.headers).filter(h => h.startsWith('tailscale-')).join(',') || 'none';
+    console.warn(`[AppleHealth] Refused ${req.method} ${req.path} — ${src.why} (tailscale headers: ${seen})`);
+    return res.status(403).json({ error: `Refused: ${src.why}` });
   }
+  req.appleHealthSource = src.via;
   next();
 }
 
@@ -61,7 +96,11 @@ router.use(guard);
 // The app calls this to "test connection" and does NOT parse the body — it
 // shows the raw JSON. It only needs HTTP 200.
 router.get('/me', (req, res) => {
-  res.json({ login: 'nick', display_name: 'Nick Ward' });
+  // The app shows this response verbatim on "Test Connection", so `via` is the
+  // one place Nick can see HOW he got in — tailnet identity, direct tailnet IP,
+  // or loopback. If that ever reads differently than expected, the guard is the
+  // first thing to look at.
+  res.json({ login: 'nick', display_name: 'Nick Ward', via: req.appleHealthSource || 'unknown' });
 });
 
 router.get('/version', (req, res) => {
