@@ -269,6 +269,35 @@ function getUnseenEscalationCount() {
   } catch { return 0; }
 }
 
+// Nick's own name and an unset priority are the DEFAULTS on this queue, not
+// facts about a ticket. Measured over all 41 escalations Jira has ever held:
+// priority is "Unset" on 33 of them (the other 8 include a Critical, so the
+// field is worth keeping when it is actually set), and 23 are assigned to Nick
+// on Nick's own board. "Open" is likewise the baseline for an unresolved
+// escalation. Rendering any of those is a badge on every row, which sorts and
+// tells nothing — so they are nulled HERE rather than filtered in each panel,
+// or Focus and Briefing get to disagree about what is worth showing.
+//
+// What survives is the discriminating half: Reopened / Waiting on Development,
+// a real priority, and an assignee who is someone other than Nick — including
+// nobody, which on an escalation is the loudest of the three.
+const ESCALATION_OWNER = 'Nick Ward';
+
+function _informativeStatus(status) {
+  if (!status || status === 'Open') return null;
+  return status;
+}
+
+function _informativePriority(priority) {
+  if (!priority || priority === 'Unset' || priority === 'None') return null;
+  return priority;
+}
+
+function _informativeAssignee(assignee) {
+  if (!assignee) return 'Unassigned';
+  return assignee === ESCALATION_OWNER ? null : assignee;
+}
+
 /**
  * The unseen escalations themselves, oldest first — a count on its own doesn't
  * tell Nick what to act on, so Focus/Briefing render these.
@@ -283,9 +312,9 @@ function getUnseenEscalations() {
         key,
         summary: v.summary || '',
         created: v.created || null,
-        status: v.status || null,
-        priority: v.priority || null,
-        assignee: v.assignee || null,
+        status: _informativeStatus(v.status),
+        priority: _informativePriority(v.priority),
+        assignee: _informativeAssignee(v.assignee),
         url: JIRA_BASE_URL ? `${JIRA_BASE_URL.replace(/\/$/, '')}/browse/${key}` : null,
       }))
       .sort((a, b) => new Date(a.created || 0) - new Date(b.created || 0));
@@ -328,6 +357,10 @@ module.exports = {
   markEscalationsSeen,
   getUnseenEscalationCount,
   getUnseenEscalations,
+  // pure, exported for the tests — what counts as informative is the decision
+  _informativeStatus,
+  _informativePriority,
+  _informativeAssignee,
   startPolling,
   stopPolling,
 };

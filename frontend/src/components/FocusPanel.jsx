@@ -54,6 +54,23 @@ function timeAgo(dateStr) {
   return `${Math.round(diff / 3600)}h ago`;
 }
 
+// The backend has already dropped the values that mean nothing here (an "Unset"
+// priority, "Open", Nick's own name) — anything that arrives is worth a badge.
+function EscalationBadges({ item }) {
+  if (!item.status && !item.priority && !item.assignee) return null;
+  return (
+    <>
+      {item.priority && (
+        <span className={`focus-card-list-badge focus-card-list-priority-${item.priority.toLowerCase()}`}>
+          {item.priority}
+        </span>
+      )}
+      {item.status && <span className="focus-card-list-badge">{item.status}</span>}
+      {item.assignee && <span className="focus-card-list-badge">{item.assignee}</span>}
+    </>
+  );
+}
+
 export default function FocusPanel({ onNavigate }) {
   const { data, status, refresh } = useCachedFetch('/api/focus', { interval: 30000 });
 
@@ -222,8 +239,13 @@ export default function FocusPanel({ onNavigate }) {
             {guidance?.why || current.reason}
           </p>
 
-          {/* Escalations name themselves — a count alone isn't actionable */}
-          {current.meta?.escalations?.length > 1 && (
+          {/* Escalations name themselves — a count alone isn't actionable.
+              The list used to render only at 2+, so a SINGLE escalation had no
+              anchor anywhere on the card: the title becomes the ticket, and
+              "Open →" goes to the in-app dashboard, not Jira. One row is still
+              a list. Its summary is dropped in that case because the title is
+              already carrying it. */}
+          {current.meta?.escalations?.length >= 1 && (
             <ul className="focus-card-list">
               {current.meta.escalations.map(e => (
                 <li key={e.key} className="focus-card-list-item">
@@ -235,14 +257,19 @@ export default function FocusPanel({ onNavigate }) {
                       rel="noopener noreferrer"
                     >
                       <span className="focus-card-list-key">{e.key}</span>
-                      <span className="focus-card-list-text">{e.summary}</span>
+                      {current.meta.escalations.length > 1 && (
+                        <span className="focus-card-list-text">{e.summary}</span>
+                      )}
                     </a>
                   ) : (
                     <>
                       <span className="focus-card-list-key">{e.key}</span>
-                      <span className="focus-card-list-text">{e.summary}</span>
+                      {current.meta.escalations.length > 1 && (
+                        <span className="focus-card-list-text">{e.summary}</span>
+                      )}
                     </>
                   )}
+                  <EscalationBadges item={e} />
                   {e.ageDays != null && (
                     <span className="focus-card-list-age">{e.ageDays === 0 ? 'today' : `${e.ageDays}d`}</span>
                   )}

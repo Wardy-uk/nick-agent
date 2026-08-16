@@ -31,6 +31,23 @@ function formatSlaMinutes(mins) {
   return `${Math.round(mins / 60)}h`;
 }
 
+// The backend has already dropped the values that mean nothing here (an "Unset"
+// priority, "Open", Nick's own name) — anything that arrives is worth a badge.
+function EscalationBadges({ item }) {
+  if (!item.status && !item.priority && !item.assignee) return null;
+  return (
+    <>
+      {item.priority && (
+        <span className={`briefing-card-list-badge briefing-card-list-priority-${item.priority.toLowerCase()}`}>
+          {item.priority}
+        </span>
+      )}
+      {item.status && <span className="briefing-card-list-badge">{item.status}</span>}
+      {item.assignee && <span className="briefing-card-list-badge">{item.assignee}</span>}
+    </>
+  );
+}
+
 export default function BriefingPanel({ onNavigate }) {
   const focusFetch = useCachedFetch('/api/focus', { interval: 30000 });
   const todoFetch = useCachedFetch('/api/todos', { interval: 60000 });
@@ -174,7 +191,11 @@ export default function BriefingPanel({ onNavigate }) {
                 <div className="briefing-card-take">
                   {guidance?.why || item.reason}
                 </div>
-                {item.meta?.escalations?.length > 1 && (
+                {/* One escalation is still a list — rendering only at 2+ left the
+                    single case with no Jira anchor at all, since the card click
+                    goes to the in-app dashboard. Its summary is dropped there
+                    because the card title is already carrying it. */}
+                {item.meta?.escalations?.length >= 1 && (
                   <ul className="briefing-card-list">
                     {item.meta.escalations.map(e => (
                       <li key={e.key}>
@@ -188,14 +209,19 @@ export default function BriefingPanel({ onNavigate }) {
                             onClick={(ev) => ev.stopPropagation()}
                           >
                             <span className="briefing-card-list-key">{e.key}</span>
-                            <span className="briefing-card-list-text">{e.summary}</span>
+                            {item.meta.escalations.length > 1 && (
+                              <span className="briefing-card-list-text">{e.summary}</span>
+                            )}
                           </a>
                         ) : (
                           <>
                             <span className="briefing-card-list-key">{e.key}</span>
-                            <span className="briefing-card-list-text">{e.summary}</span>
+                            {item.meta.escalations.length > 1 && (
+                              <span className="briefing-card-list-text">{e.summary}</span>
+                            )}
                           </>
                         )}
+                        <EscalationBadges item={e} />
                         {e.ageDays != null && (
                           <span className="briefing-card-list-age">{e.ageDays === 0 ? 'today' : `${e.ageDays}d`}</span>
                         )}

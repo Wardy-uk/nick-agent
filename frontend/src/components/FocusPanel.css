@@ -239,7 +239,10 @@
   text-decoration: none;
 }
 
-.focus-card-list-link:hover .focus-card-list-text {
+.focus-card-list-link:hover .focus-card-list-text,
+/* a single escalation renders no summary — the key is the whole link, so it
+   has to be the thing that shows it is one */
+.focus-card-list-link:hover .focus-card-list-key {
   text-decoration: underline;
 }
 
@@ -252,6 +255,27 @@
   color: var(--text-primary);
   flex: 1;
   min-width: 0;
+}
+
+/* Only ever rendered for a value the backend judged informative — an "Unset"
+   priority, an "Open" status and Nick's own name never reach here. */
+.focus-card-list-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.focus-card-list-priority-critical {
+  color: var(--danger);
+  background: rgba(224, 85, 85, 0.12);
+}
+
+.focus-card-list-priority-major {
+  color: var(--warning);
+  background: rgba(240, 160, 64, 0.12);
 }
 
 .focus-card-list-age {
