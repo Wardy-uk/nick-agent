@@ -80,3 +80,19 @@ test('a negative or missing nag count does not throw', () => {
   assert.ok(nudges.getNagMessage('standup', undefined));
   assert.ok(nudges.getNagMessage('standup', -3));
 });
+
+// #64's sibling: a stale banner must be retired every day, not only on weekdays.
+test('clearStaleNudges retires yesterday and leaves today alone', () => {
+  const db = require('../db/database');
+  const today = new Date();
+  const key = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  db.createNudge('email', 'stale one', '2020-01-01');
+  db.createNudge('email', 'todays one', key);
+
+  const cleared = nudges.clearStaleNudges();
+  assert.ok(cleared >= 1, 'the 2020 nudge must be retired');
+
+  const left = db.getActiveNudges().filter(n => n.date_key === '2020-01-01');
+  assert.strictEqual(left.length, 0, 'nothing from a previous day stays active');
+  assert.ok(db.getActiveNudges().some(n => n.date_key === key), "today's nudge survives");
+});

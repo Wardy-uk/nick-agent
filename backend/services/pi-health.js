@@ -254,6 +254,11 @@ async function getPm2() {
           name: p.name,
           status: p.pm2_env?.status || 'unknown',
           restarts: p.pm2_env?.restart_time ?? 0,
+          // PM2 counts these separately: a restart that happened INSIDE min_uptime,
+          // i.e. the process fell over rather than being asked to stop. A deliberate
+          // `pm2 restart` never increments it, which is the whole distinction #64
+          // needs. Absent on older PM2 → 0 → silent, which is the safe direction.
+          unstableRestarts: p.pm2_env?.unstable_restarts ?? 0,
           uptimeMs: p.pm2_env?.pm_uptime ? Date.now() - p.pm2_env.pm_uptime : null,
           cpu: p.monit?.cpu ?? null,
           memory: p.monit?.memory ?? null,
@@ -517,8 +522,17 @@ function assess(s) {
 
   for (const p of s.pm2 || []) {
     if (p.status !== 'online') add('critical', `${p.name} is ${p.status}`, 'Process is not running');
-    else if (p.restarts >= 5 && p.uptimeMs != null && p.uptimeMs < 6 * 60 * 60 * 1000) {
-      add('warn', `${p.name} restarted ${p.restarts}×`, `Up only ${fmtDuration(p.uptimeMs / 1000)} — check the logs`);
+    // #64 — this used to warn on TOTAL restarts, so with two or three Claude
+    // sessions deploying it sat on the panel all week saying "restarted 58×"
+    // about its own deploys. An alert that is always on is one you stop reading,
+    // which is the failure this codebase keeps having to fix (#81, #17).
+    //
+    // A deploy is not a fault; crash-looping is. PM2 already separates them —
+    // `unstable_restarts` only counts restarts inside min_uptime, and was 0 on
+    // the live Pi at 58 total. So the deliberate restarts go quiet and a genuine
+    // loop still shouts.
+    else if (p.unstableRestarts >= 3) {
+      add('critical', `${p.name} is crash-looping`, `${p.unstableRestarts} unstable restart(s) — it is failing to stay up, check the logs`);
     }
   }
 

@@ -189,6 +189,14 @@ function start() {
   // 9:10am weekdays — check 1-2-1 due dates
   cron.schedule('10 9 * * 1-5', () => { nudges.check121Nudges(); });
 
+  // Retiring yesterday's banner is a DAILY job, not a weekday one — nagCheck
+  // below runs Mon-Fri only, so a Saturday nudge survived the rollover and
+  // Sunday raised a second row for the same fact (see clearStaleNudges).
+  cron.schedule('5 0 * * *', () => {
+    const n = nudges.clearStaleNudges();
+    if (n) console.log(`[Scheduler] Cleared ${n} stale nudge(s) from previous days`);
+  });
+
   // Every 15 minutes between 9am-5pm weekdays — nag if not done
   cron.schedule('*/15 9-17 * * 1-5', () => {
     nudges.nagCheck();

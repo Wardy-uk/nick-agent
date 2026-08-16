@@ -411,17 +411,34 @@ function triggerUrgentEmailNudge() {
 }
 
 // Called every 15 min — escalates existing nudges
-function nagCheck() {
-  const nudges = db.getActiveNudges();
-
-  for (const nudge of nudges) {
-    // Clear stale nudges from previous days
+/**
+ * Retire yesterday's banners. Split out of nagCheck and scheduled EVERY day,
+ * because nagCheck is scheduled every 15 min, 9am-5pm, WEEKDAYS ONLY. `syncFactNudge`
+ * keys on (type, dateKey), so Saturday's banner survived the date rollover and
+ * Sunday minted a SECOND row for the same fact: one urgent email showed as two
+ * outstanding items. Nothing cleared it until Monday 09:00 or the next backend
+ * restart, and only the restarts hid how long it had been true.
+ *
+ * "Stop nagging" is a weekday concern. "Yesterday is over" is not.
+ */
+function clearStaleNudges() {
+  let cleared = 0;
+  for (const nudge of db.getActiveNudges()) {
     if (nudge.date_key && nudge.date_key < todayKey()) {
       db.completeNudge(nudge.id);
       console.log(`[Nudge] Cleared stale ${nudge.type} nudge from ${nudge.date_key}`);
       broadcast({ type: 'nudge_cleared', nudge_type: nudge.type });
-      continue;
+      cleared++;
     }
+  }
+  return cleared;
+}
+
+function nagCheck() {
+  clearStaleNudges();
+  const nudges = db.getActiveNudges();
+
+  for (const nudge of nudges) {
 
     // Check if standup was completed since last check
     if (nudge.type === 'standup' && isStandupDone()) {
@@ -687,6 +704,7 @@ module.exports = {
   triggerEscalationNudge,
   triggerUrgentEmailNudge,
   nagCheck,
+  clearStaleNudges,
   markStandupDone,
   startupCheck,
   snoozeNudge,
