@@ -1,4 +1,105 @@
-# Session Handoff — 2026-08-16 late
+# Session Handoff — 2026-08-16 night (#26, #40, #41, #42)
+
+## Shipped, deployed, verified live
+`0a88af9` #26 · `0032f38`+`1ce0a4b` #40 · `6ff90c8`+`9df11a4` #42 (+#41 with #40)
+Pi suite **430/430**, backend online, `unstable_restarts` 0. Docs: `a0f612c`, `52ae96e`.
+
+## ⚠ READ FIRST — a second session is live in this repo
+The tree was CLEAN at session start and grew ~14 modified files I never touched:
+`CLAUDE.md`, `routes/{capture,imports,journal,standup}.js`,
+`services/{ai-provider,briefing,claude,decision-engine,imports,nudges,scheduler,standup-session}.js`,
+`prompt-parity.test.js`, `sara/app/src/views/{Focus,Tasks}.jsx`, plus a new
+`services/sara-voice.js`. **I diffed every file hunk-by-hunk before staging and
+committed only my own.** Their work is still uncommitted — do the same.
+**`CLAUDE.md` is OWED for #26/#40/#42 and I deliberately did not write it**: it is
+one of their modified files, and editing it is exactly how the 16 Aug PeopleBoard
+incident happened. Write it once their work lands.
+
+## #26 — the phone had no route to the CURRENT standup
+Not "add a tab". `NotificationActionCard` was calling the **retired** stepper
+(`/api/standup/questions` + `/submit-guided`), which holds answers in browser
+state until one final POST — the exact failure `standup-session.js` exists to end.
+Nick chose both halves: a **Ritual** tab (`sara/app/src/views/Standup.jsx`) driving
+`/api/standup-session/*`, and the standup/EOD arms **deleted** from the card.
+- **The trap was ordering, not registration**: `resolveSaraLitePlan` checks the
+  'sheet' list BEFORE the 'tab' list, so adding the id to `SARA_LITE_TABS` alone
+  would have been a no-op that looked finished. Only standup/eod moved;
+  journal/meeting/brain are still sheets and a test asserts it.
+- `Standup.jsx` deliberately does **not** use `apiFetch` — it flattens a non-2xx
+  body into an Error *message*, discarding `retryable` and the SAVED SESSION the
+  503 carries. Uses a local fetch over a new exported `authHeaders()`.
+- Which ritual opens is derived from **what is outstanding**, not a clock.
+- `action-surfaces.test.js` parses `TABS` out of `App.jsx` and asserts
+  registration in BOTH directions — the silent trap now fails a test.
+- Live bundle carried build label `0a88af9`, `Ritual` present, `submit-guided` **0**.
+
+## #40 — Apple Health transport. The brief's Phase 2 answered: NO tsnet needed.
+**No Docker, no TimescaleDB, no poller, no second copy.** The FreeReps iOS app
+posts straight into NEURO's existing `health_samples`. Verified by reading
+`app/Sources/FreeReps`, not assumed: config has **seven fields and no credential**,
+bare `POST {base}/api/v1/ingest/`, **URLSession with no delegate** (so no cert
+pinning), `ping()` doesn't parse `/me` (only needs 200), `IngestResult` fields all
+optional, and FreeReps' own tests run with **no Tailscale middleware**.
+**Phase 3 was already built** — `stress-score.js` had the 14-day baseline all
+along, so #40 was only ever transport and the scorer is unchanged.
+
+### ⚠ A security bug I introduced and fixed — understand this before touching the guard
+The app can send no credential, so I guarded by source IP and trusted loopback.
+**pi5 serves `https://pi5.tailecb90f.ts.net` → `127.0.0.1:3001` with Funnel ON**,
+and Tailscale proxies BOTH tailnet and public traffic **from loopback** — so that
+guard published an unauthenticated write endpoint to the internet for ~20 minutes.
+Now fails closed: `Tailscale-Funnel-Request` → always refused,
+`Tailscale-User-Login` → accepted, direct `100.64.0.0/10` → accepted, **bare
+loopback NOT trusted** (`APPLE_HEALTH_ALLOW_LOOPBACK=1` for curl).
+**Nick's off-tailnet test confirmed the refusal empirically** — the log recorded
+`tailscale-funnel-request` and a 403. I could NOT verify this myself: WebFetch
+egresses from the local machine, which is on the tailnet.
+**Before exempting ANY route from auth on this Pi, run `tailscale serve status` first.**
+
+### Real-world gotchas found during setup
+- **iCloud Private Relay** routes Safari outside the VPN → the `.ts.net` name
+  resolved publicly → Funnel → 403 **with Tailscale on**. Turning it off fixed it.
+- The app has **no HTTPS toggle** and normal mode is hardcoded to **port 443** —
+  only "Test Mode" exposes a port field. Host = `pi5.tailecb90f.ts.net`, nothing else.
+- Sync is slow because the app posts **50 points per request**. NEURO answers in
+  4–5ms; the phone is the bottleneck and there is nothing to fix server-side.
+
+## #42 — the score renders, sleep rolls up, firehose has a switch
+`HealthCard` in **InsightsPanel** (already in the Sidebar, so no unreachable gap).
+**The card must never look more certain than the service**: `calibrating`/`stale`
+render **no number**, the service's own `detail` is shown verbatim, `caveats`
+always visible. Fetches independently so a quiet activity feed can't hide it.
+- **Caught by deploying and looking**: `?days=30` returned 0 metrics over a
+  161,637-row table, because the backfill runs forward chronologically. Both were
+  right and it read as a broken feed — route now returns `allTime` beside the window.
+- `GET /api/health/sleep` — a segment belongs to the night you **WAKE** on, applied
+  at READ time so the rule can change without re-ingesting. Efficiency is null
+  without In Bed data, never a confident 100%.
+- `APPLE_HEALTH_EXCLUDE` — **empty by default**; Nick asked for everything. Built
+  because the first backfill measured the cost: `physical_effort` was 65% of the
+  first 59k rows, `basal_energy_burned` is what FreeReps' own uploader refuses.
+
+## ⏳ STILL RUNNING — pick this up first
+The 24-month backfill is **in progress**: ~172,000 samples, **0 rejected**,
+13 metrics, spanning Aug 2024 → Nov 2025. It is still in ACTIVITY metrics.
+**HRV has not arrived yet, so the metric #40 exists for is unconfirmed on real
+data.** When vitals land, check: HRV units are `ms` (the parser rejects anything
+else rather than storing at an unknown scale), and whether `/api/health/stress`
+leaves `calibrating` — the backfill brings history, so it may go straight to a
+real score rather than waiting a fortnight.
+
+## Also still true from the previous session
+`escalation_alert_wide_seeded` may still be null — `checkEscalationAlerts` is
+`*/5 8-18 * * 1-5`, weekdays only. **Unset is NORMAL. Do not "fix" it.**
+
+## NEXT — on Nick, in the office
+**#2** Teams consent · **#99** read the 287 · **#106** approve one action — all
+three are in-office, tomorrow. Then **#59** (off-site backup) is the ONLY ranked
+build left; everything else in the Order of play is P5 decisions or "later".
+Tracker corrected this session: #25/#28/#69 shipped yesterday but still read
+"Ready", and #26/#40/#41/#42 are now marked Done. New rows #119–#121 captured.
+
+
 
 ## Three of the four queued items shipped, deployed and verified live
 `6eae9db`+`ac0d823` #25 · `ab4278d` #28 · `31b2a50` #69.
