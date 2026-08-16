@@ -416,9 +416,11 @@ ${queueSummary.at_risk_tickets.length > 0 ? '### At-Risk Tickets\n' + queueSumma
   if (['people', 'general'].includes(intent)) try {
     const upcoming121s = obsidian.getUpcoming121s(3);
     if (upcoming121s.length > 0) {
-      const lines = upcoming121s.map(u =>
-        `- ${u.name}: ${u.overdue ? '⚠️ OVERDUE (was ' + u.dueDate + ')' : 'due ' + u.dueDate + ' (' + u.daysUntil + ' day' + (u.daysUntil !== 1 ? 's' : '') + ')'}`
-      );
+      const lines = upcoming121s.map(u => {
+        if (u.state === 'overdue') return `- ${u.name}: ⚠️ OVERDUE (was ${u.dueDate}), not booked`;
+        if (u.state === 'unwritten') return `- ${u.name}: met ${u.bookedDate}, no note written up yet`;
+        return `- ${u.name}: due ${u.dueDate} (${u.daysUntil} day${u.daysUntil !== 1 ? 's' : ''}), not booked`;
+      });
       parts.push(`## Upcoming 1-2-1s\n${lines.join('\n')}`);
       diagnostics.push(`121s: ${upcoming121s.length}`);
     }

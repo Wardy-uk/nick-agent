@@ -116,6 +116,7 @@ function buildRoster({ includeInactive = false } = {}) {
       bookable: !archived && !NO_CADENCE.test(cadence),
       recordedLast: fm['last-1-2-1'] || null,
       recordedNextDue: fm['next-1-2-1-due'] || null,
+      recordedBooked: fm['1-2-1-booked'] || null,
       email: fm.email || null,
       archived,
     };
@@ -474,6 +475,72 @@ function cadenceDays(cadence) {
 }
 
 /**
+ * What state is this person's 1-2-1 cadence actually in?
+ *
+ * Why this is one function rather than an `if` in each consumer: `next-1-2-1-due`
+ * used to carry two meanings. The detector wrote it as "when the next one is
+ * OWED" (last held + cadence); `book()` overwrote it with the date of the
+ * meeting it had just put in the diary. Both readers — the nudge and the Team
+ * board — assumed the first meaning, so every booking Nick made wrote a nag
+ * against himself: "Get them in the diary" about a meeting already in it, then
+ * "These need booking now" once the date passed. A booking now lives in its own
+ * field (`1-2-1-booked`) and `next-1-2-1-due` means exactly one thing again.
+ *
+ * Takes a PLAIN OBJECT, never a vault path, so the ranking is testable without a
+ * vault — same split as pi-health's `assess()`.
+ *
+ * States, in the order they are tested:
+ *   booked    — a 1-2-1 is in the diary for today or later. Silent: there is
+ *               nothing to ask for.
+ *   unwritten — the booked date has passed and no note has landed. NOT "book
+ *               one" — it's already happened, or it was cancelled and Nick will
+ *               know which when asked. `last-1-2-1` deliberately does not move
+ *               on a booking alone (see syncPeopleNotes), so this is the state
+ *               that keeps a cancelled 1-2-1 visible instead of silently
+ *               counting it as held.
+ *   overdue   — nothing booked and the due date has passed.
+ *   due-soon  — nothing booked and the due date is within `soonDays`.
+ *   ok        — nothing to say.
+ *
+ * Someone off-cadence (`bookable: false` — maternity, long-term sick) is always
+ * `ok`: they keep their card and their history but are never chased.
+ */
+function cadenceState({ lastHeld, nextDue, booked, bookable = true } = {}, today, { soonDays = 2 } = {}) {
+  const now = today || todayStr();
+  if (!bookable) return { state: 'ok' };
+
+  if (booked) {
+    if (booked >= now) {
+      return { state: 'booked', booked, daysUntil: daysBetween(now, booked) };
+    }
+    // A note dated on or after the booking proves it happened; the booking is
+    // spent and syncPeopleNotes will clear it. Until then it is unwritten.
+    if (!lastHeld || lastHeld < booked) {
+      return { state: 'unwritten', booked, daysSince: daysBetween(booked, now) };
+    }
+  }
+
+  if (!nextDue) return { state: 'ok' };
+  const delta = daysBetween(now, nextDue);
+  if (delta < 0) return { state: 'overdue', nextDue, daysOverdue: Math.abs(delta) };
+  if (delta <= soonDays) return { state: 'due-soon', nextDue, daysUntil: delta };
+  return { state: 'ok', nextDue, daysUntil: delta };
+}
+
+/** Whole days from `from` to `to`. Both are YYYY-MM-DD; -ve means `to` is past. */
+function daysBetween(from, to) {
+  const a = new Date(`${from}T12:00:00`); // midday, as addDays — no DST edge
+  const b = new Date(`${to}T12:00:00`);
+  return Math.round((b - a) / 86400000);
+}
+
+/** Today, local. Never toISOString() — the Pi may run UTC (see CLAUDE.md). */
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
  * Stamp each People note with the real last-1-2-1 and the next due date implied
  * by their cadence. Only moves a date FORWARD — a manual entry more recent than
  * anything on disk (a 1-2-1 held but not yet written up) is left alone.
@@ -511,6 +578,12 @@ function syncPeopleNotes({ apply = false } = {}) {
     // due date for `cadence: n/a` — that put someone on maternity leave into the
     // overdue list and very nearly into a batch booking.
     const next121Due = person.bookable ? addDays(latest.date, cadenceDays(person.cadence)) : null;
+    // The note that just landed proves the booked 1-2-1 happened, so the
+    // booking is spent — clear it, or the person reads as `booked` forever and
+    // never becomes due again. Only clear when the note is dated on or after
+    // the booking: an unrelated earlier note must not cancel a future one.
+    const clearBooking = person.recordedBooked && latest.date >= person.recordedBooked;
+
     changes.push({
       person: person.name,
       action: 'updated',
@@ -518,6 +591,7 @@ function syncPeopleNotes({ apply = false } = {}) {
       to: latest.date,
       nextDue: next121Due,
       bookable: person.bookable,
+      clearedBooking: clearBooking ? person.recordedBooked : null,
       evidence: latest.path,
     });
 
@@ -525,6 +599,7 @@ function syncPeopleNotes({ apply = false } = {}) {
       obsidian.updatePersonNote(person.name, {
         last121: latest.date,
         ...(next121Due ? { next121Due } : {}),
+        ...(clearBooking ? { booked121: '' } : {}),
       });
     }
   }
@@ -535,6 +610,7 @@ function syncPeopleNotes({ apply = false } = {}) {
 module.exports = {
   CADENCES,
   cadenceDays,
+  cadenceState,
   scan,
   refresh,
   getIndex,

@@ -595,12 +595,20 @@ function check121Nudges() {
     const dateKey = todayKey();
     const stateKey = `121_nudge_${dateKey}`;
     if (db.getState(stateKey)) return;
-    const overdue = upcoming.filter(u => u.overdue);
-    const soon = upcoming.filter(u => !u.overdue);
+    // Anything already in the diary never reaches here — getUpcoming121s drops
+    // `booked`. What's left needs one of three different things, and asking for
+    // the wrong one is the bug this replaced: a 1-2-1 that has already happened
+    // was being reported as "needs booking now".
+    const overdue = upcoming.filter(u => u.state === 'overdue');
+    const unwritten = upcoming.filter(u => u.state === 'unwritten');
+    const soon = upcoming.filter(u => u.state === 'due-soon');
     let msg = '';
     if (overdue.length > 0) {
       const names = overdue.map(u => `${u.name} (was ${u.dueDate})`).join(', ');
       msg = `Overdue 1-2-1${overdue.length > 1 ? 's' : ''}: ${names}. These need booking now.`;
+    } else if (unwritten.length > 0) {
+      const names = unwritten.map(u => `${u.name} (${u.bookedDate})`).join(', ');
+      msg = `1-2-1 with ${names} ${unwritten.length === 1 ? 'has' : 'have'} been and gone with no note. Write ${unwritten.length === 1 ? 'it' : 'them'} up — or if ${unwritten.length === 1 ? 'it was' : 'they were'} cancelled, rebook.`;
     } else {
       const names = soon.map(u => `${u.name} (due ${u.dueDate})`).join(', ');
       msg = `1-2-1 reminder: ${names} ${soon.length === 1 ? 'is' : 'are'} due within 2 days. Get them in the diary.`;

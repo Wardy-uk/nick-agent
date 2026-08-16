@@ -100,22 +100,44 @@ function analysePerson({ name, team }) {
   const fm = pf.frontmatter;
 
   // ── 1:1 cadence
+  //
+  // Classified by `one-to-one-detect.cadenceState()`, not here: this board and
+  // the 1-2-1 nudge must agree on what "overdue" means, and they didn't. Both
+  // read `next-1-2-1-due` as "owed by", while `book()` was writing the booked
+  // date into it — so a 1-2-1 sitting in the diary showed as high-severity
+  // overdue the day after it happened.
   const nextDue = fm['next-1-2-1-due'];
-  if (nextDue) {
-    const delta = daysBetween(nextDue, today); // -ve = overdue
-    if (delta < 0) {
+  const booked = fm['1-2-1-booked'] || null;
+  if (nextDue || booked) {
+    const s = require('./one-to-one-detect').cadenceState({
+      lastHeld: fm['last-1-2-1'] || null,
+      nextDue: nextDue || null,
+      booked,
+    }, today, { soonDays: 3 });
+
+    if (s.state === 'overdue') {
       issues.push({
         severity: 'high', type: 'overdue_1to1',
-        title: `1:1 overdue by ${Math.abs(delta)}d`,
-        meta: { dueDate: nextDue, daysOverdue: Math.abs(delta) },
+        title: `1:1 overdue by ${s.daysOverdue}d`,
+        meta: { dueDate: s.nextDue, daysOverdue: s.daysOverdue },
       });
-    } else if (delta <= 3) {
+    } else if (s.state === 'unwritten') {
+      // Not an overdue 1-2-1 — a missing write-up, or a cancellation nobody
+      // recorded. Different problem, different fix, so it gets its own type
+      // rather than being folded into the overdue count.
+      issues.push({
+        severity: 'med', type: 'unwritten_1to1',
+        title: `1:1 on ${s.booked} has no note (${s.daysSince}d ago)`,
+        meta: { bookedDate: s.booked, daysSince: s.daysSince },
+      });
+    } else if (s.state === 'due-soon') {
       issues.push({
         severity: 'med', type: 'due_soon_1to1',
-        title: `1:1 due in ${delta}d`,
-        meta: { dueDate: nextDue, daysUntil: delta },
+        title: `1:1 due in ${s.daysUntil}d`,
+        meta: { dueDate: s.nextDue, daysUntil: s.daysUntil },
       });
     }
+    // `booked` is silent — it's in the diary, there is nothing to raise.
   } else {
     issues.push({
       severity: 'med', type: 'missing_cadence',

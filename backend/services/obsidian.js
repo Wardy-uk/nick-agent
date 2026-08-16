@@ -103,7 +103,8 @@ function updatePersonNote(name, updates) {
   let content = fs.readFileSync(notePath, 'utf-8');
 
   // Update frontmatter fields
-  if (updates.last121 || updates.next121Due !== undefined || updates.employmentStatus || updates.cadence) {
+  if (updates.last121 || updates.next121Due !== undefined || updates.booked121 !== undefined ||
+      updates.employmentStatus || updates.cadence) {
     if (!content.startsWith('---')) {
       content = `---\n---\n` + content;
     }
@@ -124,6 +125,14 @@ function updatePersonNote(name, updates) {
       // remove it, or a stale date keeps them reading as overdue forever.
       if (updates.next121Due !== undefined && updates.next121Due !== null) {
         setField('next-1-2-1-due', updates.next121Due);
+      }
+      // The date of the 1-2-1 currently IN THE DIARY — deliberately its own
+      // field. It used to be written into `next-1-2-1-due`, which meant every
+      // booking nagged Nick to make the booking he had just made. Empty string
+      // clears it, same convention as above: a booking is spent once the
+      // meeting note lands.
+      if (updates.booked121 !== undefined && updates.booked121 !== null) {
+        setField('1-2-1-booked', updates.booked121);
       }
       if (updates.employmentStatus) setField('employment-status', updates.employmentStatus);
       // `cadence` is what decides whether someone is scheduled at all — `n/a`
@@ -1240,34 +1249,49 @@ function getMeetingPrepContext(hoursAhead = 3) {
   return prepContexts;
 }
 
-// Get upcoming 1-2-1s from People notes — checks direct-report frontmatter and next-1-2-1-due date
+// 1-2-1s that need something from Nick, from the People notes.
+//
+// The classification is NOT done here — it's `one-to-one-detect.cadenceState()`,
+// so this and the Team board cannot drift apart on what "overdue" means. In
+// particular a 1-2-1 already in the diary (`1-2-1-booked`) comes back `booked`
+// and is filtered out: chasing Nick to book a meeting he has booked is what this
+// whole path used to do.
 function getUpcoming121s(daysAhead = 2) {
   if (!isConfigured()) return [];
   const vaultPath = getVaultPath();
   const peopleDir = path.join(vaultPath, 'People');
   if (!fs.existsSync(peopleDir)) return [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const { cadenceState, CADENCES } = require('./one-to-one-detect');
   const upcoming = [];
   const files = fs.readdirSync(peopleDir).filter(f => f.endsWith('.md'));
   for (const file of files) {
     const content = fs.readFileSync(path.join(peopleDir, file), 'utf-8');
     const fm = parseFrontmatter(content);
     if (fm['direct-report'] !== 'true') continue;
-    const dueStr = fm['next-1-2-1-due'];
-    if (!dueStr) continue;
-    const due = new Date(dueStr);
-    due.setHours(0, 0, 0, 0);
-    const daysUntil = Math.round((due - today) / (1000 * 60 * 60 * 24));
-    if (daysUntil <= daysAhead) {
-      upcoming.push({
-        name: file.replace('.md', ''),
-        dueDate: dueStr,
-        daysUntil,
-        overdue: daysUntil < 0,
-        lastMeeting: fm['last-1-2-1'] || null
-      });
-    }
+    // `cadence: n/a` is how someone comes off the rota (maternity, long-term
+    // sick). They keep their note; they are never chased.
+    const cadence = String(fm.cadence || 'fortnightly').toLowerCase().trim();
+    const bookable = String(fm.archived || '').toLowerCase() !== 'true' &&
+      CADENCES.some(c => c.match.test(cadence));
+
+    const s = cadenceState({
+      lastHeld: fm['last-1-2-1'] || null,
+      nextDue: fm['next-1-2-1-due'] || null,
+      booked: fm['1-2-1-booked'] || null,
+      bookable,
+    }, null, { soonDays: daysAhead });
+
+    if (s.state === 'ok' || s.state === 'booked') continue;
+    upcoming.push({
+      name: file.replace('.md', ''),
+      state: s.state,
+      dueDate: s.nextDue || null,
+      bookedDate: s.booked || null,
+      daysUntil: s.daysUntil !== undefined ? s.daysUntil : -(s.daysOverdue ?? s.daysSince ?? 0),
+      overdue: s.state === 'overdue',
+      unwritten: s.state === 'unwritten',
+      lastMeeting: fm['last-1-2-1'] || null,
+    });
   }
   return upcoming.sort((a, b) => a.daysUntil - b.daysUntil);
 }

@@ -76,9 +76,8 @@ router.post('/people/:name/update', (req, res) => {
   // Changing the cadence should move the due date with it — otherwise switching
   // someone from weekly to monthly leaves them reading overdue against the old
   // interval. Two things it must NOT do: override a date the caller set
-  // explicitly, or overwrite a due date already in the future, because that one
-  // is a meeting that has been BOOKED. Recomputing over a booking silently
-  // detaches the card from the invite sitting in the calendar.
+  // explicitly, or recompute over a meeting that has been BOOKED, which would
+  // silently detach the card from the invite sitting in the calendar.
   let derivedNextDue = next121Due;
   if (cadence && !next121Due) {
     const detect = require('../services/one-to-one-detect');
@@ -91,12 +90,16 @@ router.post('/people/:name/update', (req, res) => {
     } else {
       const today = new Date();
       const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-      const currentDue = fm['next-1-2-1-due'];
-      const alreadyBooked = currentDue && /^\d{4}-\d{2}-\d{2}$/.test(currentDue) && currentDue >= todayStr;
+      // A booking is now a field, not an inference. This used to read "due date
+      // in the future" as proof of a booking, which was the only signal there
+      // was while book() overwrote next-1-2-1-due — and it also meant a
+      // perfectly ordinary not-yet-due date blocked the recompute.
+      const booked = fm['1-2-1-booked'];
+      const alreadyBooked = booked && /^\d{4}-\d{2}-\d{2}$/.test(booked) && booked >= todayStr;
 
       const last = last121 || fm['last-1-2-1'];
       if (alreadyBooked) {
-        derivedNextDue = undefined; // leave the booked date alone
+        derivedNextDue = undefined; // leave it alone until the booking is spent
       } else if (last && /^\d{4}-\d{2}-\d{2}$/.test(last)) {
         const d = new Date(`${last}T12:00:00`);
         d.setDate(d.getDate() + detect.cadenceDays(cadence));
