@@ -1,3 +1,36 @@
+# Session Handoff — 2026-08-16 17:30
+
+## Shipped today, all deployed + verified
+`205c549` #71 · `edf9de8` #53/#54 · `c89d914` #65. Suite **347 local / 338 Pi**.
+Pi clean at origin/main. Parked-by-Nick files still untouched and uncommitted:
+`backend/routes/health.js`, `backend/services/stress-score{,.test}.js` — **that is the
+9-test local/Pi gap, and it is #42/#44 in the tracker. Leave them.**
+
+## State changes Nick reported (tracker updated)
+- **#22 Nathan and #23 Stephen — DONE.** Both P0 1-2-1s held. ⚠ **NEURO will keep showing
+  them overdue until a meeting note exists** — `last-1-2-1` only moves when a note proves
+  it happened. Not a bug; will look like one.
+- **#63 done** (Tailscale key expiry already disabled).
+- **#2 Teams — parked, needs to be in the office.**
+- **The action queue collapsed on its own: 930 pending → 4.** 621 `capture_todo` rejected,
+  1,353 superseded. **#104 is effectively done**, and **#83's premise is stale** (tracker
+  says "currently sits at 929").
+- **#106 is still live and is the cheapest thing on Nick's list**: exactly one pending
+  `draft_reply`, to **Stephen Mitchell, "Integration Partner Escalation Contacts"**.
+  Approving SENDS NOTHING (gate 1 of 2). `draft_reply` has **executed zero times** ever —
+  1,168 superseded, none run. Untested executor.
+
+## NOVA findings logged as #115–#118 — do NOT build these
+All gated behind **#116**, which is Nick's re-auth (NOVA → avatar → My Settings →
+Microsoft 365). NOVA's bridge is missing four routes NEURO calls, reports failures as
+HTTP 200, and its M365 card shows green off `--list-accounts` (row count, not token
+validity). None of it is urgent — NEURO's own MSAL Graph is healthy.
+
+## NEXT — #94, #56, #83, agreed with Nick, NOT started
+Full brief in **`.claude/memory/next-session-prompt.md`**. Read that before starting.
+**#94 has a landmine that will push-notify Nick at any hour if walked into blind** —
+`ALWAYS_DELIVER` bypasses quiet hours and the cap. Do not swap the query naively.
+
 # Session Handoff — 2026-08-16 16:40
 
 ## `c89d914` — #65, and **the ticket described a bug that cannot happen**
