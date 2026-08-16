@@ -450,3 +450,15 @@
 }
 
 .inbox-recip-all:hover { background: rgba(96, 165, 250, 0.1); }
+
+/* Deliberately muted, not an alert — the reply still works, it just can't
+   promise it knows who else was on the thread. */
+.inbox-recip-unknown {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 3px 9px;
+  cursor: help;
+}

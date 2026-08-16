@@ -3,7 +3,56 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
-// NOVA bridge — fallback when MSAL not authenticated
+// NOVA bridge — fallback when MSAL not authenticated.
+//
+// "Configured" means a URL and a secret are set. It says NOTHING about whether
+// NOVA serves the path being asked for, and measured on 16 Aug 2026 most of
+// them are not: of the paths NEURO calls as its Priority-2 fallback, only
+// /mail, /calendar, /ticket/:key, /escalations, /flagged and /status exist.
+// /mail/{id}, /todo/lists, /todo/tasks and /planner/tasks are absent, so the
+// request falls past NOVA's bridge router into its app auth and answers 401.
+//
+// The quieter failure is the one that matters: a path that DOES exist answers
+// **HTTP 200 with the failure nested in `data`** — an expired msgraph token
+// reads `{ok:true, data:{error:"Failed to acquire token…"}}`. That used to be
+// handed straight back, every caller read `.id` off it, got undefined and
+// returned null — so a dead bridge was indistinguishable from an empty mailbox
+// and nothing logged a word.
+//
+// Nothing below BLOCKS a call: if NOVA gains a route, the next success clears
+// the entry by itself. This only records what actually happened.
+const _bridgeHealth = new Map();
+
+// /mail/<graph id> and /ticket/NT-123 would otherwise mint a map entry per
+// message and per ticket.
+function _bridgeKey(bridgePath) {
+  const clean = String(bridgePath).split('?')[0];
+  const m = clean.match(/^\/(mail|ticket)\/.+$/);
+  return m ? `/${m[1]}/:id` : clean;
+}
+
+function _noteBridge(bridgePath, state, detail) {
+  _bridgeHealth.set(_bridgeKey(bridgePath), {
+    state,
+    detail: detail || null,
+    at: new Date().toISOString(),
+  });
+}
+
+function _nestedBridgeError(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  return typeof data.error === 'string' && data.error ? data.error : null;
+}
+
+function getBridgeHealth() {
+  return {
+    configured: isBridgeConfigured(),
+    // Nothing is known about a path until it has been tried once — "not probed"
+    // is a third state, and reporting it as healthy is the bug this fixes.
+    paths: Object.fromEntries(_bridgeHealth),
+  };
+}
+
 async function novaBridgeFetch(bridgePath, params = {}) {
   const baseUrl = process.env.NOVA_BRIDGE_URL;
   const secret = process.env.NOVA_BRIDGE_SECRET;
@@ -19,13 +68,30 @@ async function novaBridgeFetch(bridgePath, params = {}) {
       signal: AbortSignal.timeout(8000)
     });
     if (!res.ok) {
-      console.warn(`[Bridge] ${bridgePath} returned ${res.status}`);
+      // 401/404 means the request never reached the bridge router — NOVA does
+      // not implement this path, which is a different thing from a bad call.
+      const unsupported = res.status === 401 || res.status === 404;
+      console.warn(`[Bridge] ${bridgePath} returned ${res.status}${unsupported ? ' — NOVA does not implement this path' : ''}`);
+      _noteBridge(bridgePath, unsupported ? 'unsupported' : 'error', `HTTP ${res.status}`);
       return null;
     }
     const json = await res.json();
-    return json.ok ? json.data : null;
+    if (!json.ok) {
+      console.warn(`[Bridge] ${bridgePath} reported failure:`, json.error || 'unknown');
+      _noteBridge(bridgePath, 'error', json.error || 'bridge reported failure');
+      return null;
+    }
+    const nested = _nestedBridgeError(json.data);
+    if (nested) {
+      console.warn(`[Bridge] ${bridgePath} answered 200 with an error payload:`, nested);
+      _noteBridge(bridgePath, 'error', nested);
+      return null;
+    }
+    _noteBridge(bridgePath, 'ok');
+    return json.data;
   } catch (e) {
     console.warn(`[Bridge] ${bridgePath} failed:`, e.message);
+    _noteBridge(bridgePath, 'error', e.message);
     return null;
   }
 }
@@ -211,8 +277,15 @@ async function getScopedToken(scopes) {
 }
 
 function getMailAccessStatus() {
+  const bridge = getBridgeHealth();
+  const mailPath = bridge.paths['/mail/:id'] || null;
   return {
-    bridgeConfigured: isBridgeConfigured(),
+    bridgeConfigured: bridge.configured,
+    // `bridgeConfigured` was the whole story here, and it is not the same claim
+    // as "the fallback works" — the mail-detail path is not implemented on NOVA
+    // at all, so a degraded Graph used to fall through to a silent null.
+    bridgeMailDetail: mailPath ? mailPath.state : 'unprobed',
+    bridgeMailDetailError: mailPath ? mailPath.detail : null,
     degraded: Boolean(lastTokenError),
     lastTokenError
   };
@@ -537,6 +610,11 @@ async function fetchEmailById(emailId) {
     }
   }
 
+  // Priority 2 — NOVA bridge. NOT IMPLEMENTED on NOVA (verified live 16 Aug
+  // 2026): there is a `/mail` list route but no `/mail/{id}`, so this answers
+  // 401 and returns null. Left in place because the shape is right the day NOVA
+  // adds the route — but do not read it as working redundancy. `recipients` is
+  // deliberately mapped here too, so the branch is correct if it ever fires.
   if (isBridgeConfigured()) {
     try {
       const bridgeData = await novaBridgeFetch(`/mail/${encodeURIComponent(emailId)}`);
@@ -548,6 +626,12 @@ async function fetchEmailById(emailId) {
           fromEmail: bridgeData.from?.emailAddress?.address || '',
           to: (bridgeData.toRecipients || []).map((item) => item.emailAddress?.name || item.emailAddress?.address).filter(Boolean),
           cc: (bridgeData.ccRecipients || []).map((item) => item.emailAddress?.name || item.emailAddress?.address).filter(Boolean),
+          // Names alone can't be replied to — same as the Graph branch above.
+          // This is #65's fix; it is correct, it is simply not reachable yet.
+          recipients: {
+            to: mapAddresses(bridgeData.toRecipients),
+            cc: mapAddresses(bridgeData.ccRecipients),
+          },
           received: bridgeData.receivedDateTime,
           isRead: bridgeData.isRead,
           importance: bridgeData.importance,
@@ -578,7 +662,8 @@ async function fetchTodoLists() {
       console.error('[Microsoft] ToDo lists fetch error:', err.message);
     }
   }
-  // Priority 2 — NOVA bridge
+  // Priority 2 — NOVA bridge. NOT IMPLEMENTED on NOVA (verified live 16 Aug
+  // 2026) — answers 401 and returns null. Not working redundancy.
   if (isBridgeConfigured()) {
     try {
       const bridgeData = await novaBridgeFetch('/todo/lists');
@@ -674,7 +759,9 @@ async function fetchTodoTasks(listId) {
       console.error('[Microsoft] ToDo tasks fetch error:', err.message);
     }
   }
-  // Priority 2 — NOVA bridge
+  // Priority 2 — NOVA bridge. NOT IMPLEMENTED on NOVA (verified live 16 Aug
+  // 2026) — answers 401 and returns null. Note this also means the persisted
+  // task→list cache (#71) is only ever filled by the Graph path above.
   if (isBridgeConfigured()) {
     try {
       const bridgeData = await novaBridgeFetch('/todo/tasks', { listId });
@@ -698,7 +785,8 @@ async function fetchPlannerTasks() {
       console.error('[Microsoft] Planner fetch error:', err.message);
     }
   }
-  // Priority 2 — NOVA bridge
+  // Priority 2 — NOVA bridge. NOT IMPLEMENTED on NOVA (verified live 16 Aug
+  // 2026) — answers 401 and returns null. Not working redundancy.
   if (isBridgeConfigured()) {
     try {
       const bridgeData = await novaBridgeFetch('/planner/tasks');
@@ -1269,5 +1357,8 @@ module.exports = {
   graphFetch,
   graphWrite,
   // pure, exported for the tests — the map surgery is the part worth pinning
-  _rekeyTodoList
+  _rekeyTodoList,
+  getBridgeHealth,
+  _nestedBridgeError,
+  _bridgeKey
 };

@@ -32,6 +32,14 @@ function buildFallbackSuggestedReply(message, triageItem) {
 
 // Reply goes to the sender; reply-all adds everyone else on the thread, minus
 // Nick himself. The composer shows both so nothing is sent blind.
+//
+// `threadKnown` is the honest half. Only the LIVE Graph message carries a
+// `recipients` block — the 290 cached triage entries hold `fromEmail` but no
+// participants at all. So when Graph is degraded, Reply still works and
+// reply-all quietly comes back EMPTY, which the composer rendered as "no other
+// participants" rather than "I could not find out". A one-to-one email and an
+// unreachable thread looked identical, and the difference is who gets left off
+// a reply. Say which one it is.
 async function buildReplyDefaults(merged) {
   const sender = merged.fromEmail
     ? [{ name: merged.from || merged.fromEmail, email: merged.fromEmail }]
@@ -54,7 +62,7 @@ async function buildReplyDefaults(merged) {
     return true;
   });
 
-  return { to: sender, cc: [], replyAllCc };
+  return { to: sender, cc: [], replyAllCc, threadKnown: Boolean(merged.recipients) };
 }
 
 // Merge the cached triage entry with the live Graph message. Returns null when
@@ -65,7 +73,10 @@ async function loadEmail(emailId) {
   const triageItem = all.find((item) => item.id === emailId) || null;
   const message = await microsoft.fetchEmailById(emailId);
   if (!message && !triageItem) return null;
-  return { triageItem, merged: { ...(triageItem || {}), ...(message || {}), id: emailId } };
+  // `live` false means this is the cached triage record only — Graph (and the
+  // bridge behind it) could not be reached. The record still renders; what it
+  // cannot carry is the thread.
+  return { triageItem, live: Boolean(message), merged: { ...(triageItem || {}), ...(message || {}), id: emailId } };
 }
 
 // GET /api/email/triage — get classified inbox
@@ -92,10 +103,21 @@ router.get('/triage/:emailId', async (req, res) => {
     const emailId = decodeURIComponent(req.params.emailId);
     const loaded = await loadEmail(emailId);
     if (!loaded) return res.status(404).json({ ok: false, error: 'Email not found' });
-    const { merged, triageItem } = loaded;
+    const { merged, triageItem, live } = loaded;
+    const mail = microsoft.getMailAccessStatus();
 
     res.json({
       ok: true,
+      live,
+      // Why it is degraded, in the order the user can act on: Graph's own token
+      // error first, then the bridge that was supposed to cover for it.
+      detail: live ? null : (
+        mail.lastTokenError
+        || (mail.bridgeMailDetail === 'unsupported'
+          ? 'Live fetch failed and the NOVA bridge does not serve message detail.'
+          : mail.bridgeMailDetailError)
+        || 'Live fetch failed — showing the cached copy.'
+      ),
       email: {
         id: merged.id,
         subject: merged.subject || 'Email',

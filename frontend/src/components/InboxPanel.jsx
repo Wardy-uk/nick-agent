@@ -26,6 +26,8 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
   const [to, setTo] = useState([]);
   const [cc, setCc] = useState([]);
   const [replyAllCc, setReplyAllCc] = useState([]);
+  // false = the thread could not be read, which is NOT the same as a one-to-one
+  const [threadKnown, setThreadKnown] = useState(true);
   const [newTo, setNewTo] = useState('');
   const [newCc, setNewCc] = useState('');
 
@@ -59,6 +61,7 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
       // Only prefill once — don't stamp on edits made before the fetch landed.
       setTo(prev => (prev.length ? prev : d.replyDefaults.to || []));
       setReplyAllCc(d.replyDefaults.replyAllCc || []);
+      setThreadKnown(d.replyDefaults.threadKnown !== false);
     });
   };
 
@@ -236,6 +239,14 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
                 <button className="inbox-recip-all" onClick={addAllCc}>
                   + everyone on thread ({replyAllCc.length})
                 </button>
+              )}
+              {/* An unreachable thread used to render as nothing at all, which
+                  reads exactly like a one-to-one email — and the difference is
+                  who gets left off the reply. */}
+              {!threadKnown && (
+                <span className="inbox-recip-unknown" title="Only the cached copy of this email was available, and it does not record the other participants.">
+                  thread unavailable — add anyone else by hand
+                </span>
               )}
             </div>
           </div>
