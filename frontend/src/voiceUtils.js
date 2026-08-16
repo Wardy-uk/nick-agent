@@ -1,3 +1,10 @@
+// PAIRED FILE — keep in step with `sara/app/src/voiceUtils.js`.
+//
+// #109: sara/app's copy started as a verbatim copy of this one and then diverged,
+// because this version was only ever proven on desktop and three of its behaviours
+// are wrong on iOS. Those fixes are ported back here (they are harmless on desktop),
+// so the two files match again. Change one, change the other.
+
 const STORAGE_KEY = 'sara_voice_out';
 
 export function isVoiceOutEnabled() {
@@ -11,14 +18,20 @@ export function setVoiceOutEnabled(enabled) {
 
 // iOS Safari requires a user gesture before speechSynthesis works.
 // We "unlock" it on the first tap by speaking a silent utterance.
+// The utterance must NOT be empty — iOS drops a zero-length one without queueing it,
+// so the unlock appears to happen and every later speak() is silently ignored. A single
+// space at volume 0 is inaudible everywhere and actually unlocks.
+// Exported so a button can unlock explicitly rather than relying on whichever touch
+// wins the {once:true} race.
 let unlocked = false;
-function unlockAudio() {
-  if (unlocked || !('speechSynthesis' in window)) return;
-  const u = new SpeechSynthesisUtterance('');
+export function unlockAudio() {
+  if (unlocked || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(' ');
   u.volume = 0;
   window.speechSynthesis.speak(u);
   unlocked = true;
 }
+export function isAudioUnlocked() { return unlocked; }
 if (typeof document !== 'undefined') {
   document.addEventListener('touchstart', unlockAudio, { once: true });
   document.addEventListener('click', unlockAudio, { once: true });
@@ -62,17 +75,25 @@ function cleanText(text) {
     .trim();
 }
 
+// Returns the utterance so callers can watch onstart/onerror, or null if it bailed.
 export function speakSara(text) {
-  if (!('speechSynthesis' in window)) return;
-  window.speechSynthesis.cancel();
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
+  const synth = window.speechSynthesis;
+  // Only cancel when there is something to cancel — an unconditional cancel() straight
+  // before speak() is one of the ways iOS ends up stuck with nothing coming out.
+  if (synth.speaking || synth.pending) synth.cancel();
+  // iOS can leave the queue paused after a backgrounded tab or a finished utterance;
+  // resume() is a no-op when it isn't.
+  synth.resume();
   const clean = cleanText(text);
-  if (!clean) return;
+  if (!clean) return null;
   const utterance = new SpeechSynthesisUtterance(clean);
   utterance.rate = 1.0;
   utterance.pitch = 1.0;
   const voice = pickVoice();
   if (voice) utterance.voice = voice;
-  window.speechSynthesis.speak(utterance);
+  synth.speak(utterance);
+  return utterance;
 }
 
 export function speakIfEnabled(text) {

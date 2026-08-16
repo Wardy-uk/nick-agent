@@ -1,3 +1,10 @@
+// PAIRED FILE — keep in step with `frontend/src/voiceUtils.js`.
+//
+// #109: this copy started as a verbatim copy of the frontend one and then diverged,
+// because that version was only ever proven on desktop and three of its behaviours
+// are wrong on iOS. Those fixes are now in both (they are harmless on desktop), so
+// the two files match again. Change one, change the other.
+
 const STORAGE_KEY = 'sara_voice_out';
 
 export function isVoiceOutEnabled() {
@@ -14,6 +21,8 @@ export function setVoiceOutEnabled(enabled) {
 // The utterance must NOT be empty — iOS drops a zero-length one without queueing it,
 // so the unlock appears to happen and every later speak() is silently ignored. A single
 // space at volume 0 is inaudible everywhere and actually unlocks.
+// Exported so a button can unlock explicitly rather than relying on whichever touch
+// wins the {once:true} race.
 let unlocked = false;
 export function unlockAudio() {
   if (unlocked || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
