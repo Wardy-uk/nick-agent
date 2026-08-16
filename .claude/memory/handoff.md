@@ -138,18 +138,48 @@ checked, not assumed.
 Confirmed with EXPLAIN QUERY PLAN that both scoped reads now SEARCH rather than SCAN —
 an expression index whose text does not match the query exactly is ignored silently.
 
-## ⏳ Apple Health — HRV STILL has not arrived
-**277,437 samples, still inserting at 16:56 today, 13 metrics, ALL activity.** No `hrv`,
-no `heartRate`, no sleep. Most metrics have reached Aug 2026, so this is starting to look
-less like "not yet" and more like **the FreeReps app not being configured to send vitals
-categories** — worth checking in the app. It gates #42's card, #43 and #44.
-`escalation_alert_wide_seeded` still unset — Sunday, weekday cron. **Normal, do not fix.**
+## ✅ Apple Health — the sync FINISHED, and everything arrived
+Confirmed stopped (row count stable across 20s). Measured at completion:
+
+| | 16 Aug afternoon | sync complete |
+|---|---|---|
+| Samples | 277,437 | **1,048,465** |
+| Metrics | 13 | **66** |
+| DB size | 235 MB | **447 MB** |
+
+`heartRate` **479,296** · `hrv` **42,564** · `respiratoryRate` 35,121 ·
+`blood_oxygen_saturation` 21,163 · sleep core/rem/deep/awake — all current to
+16:32. **HRV units are sound**: none ≤ 0, only 23 below 5ms, mean 23.3, max 175.
+I raised a worry that `stress-score` works in log space and `log(0)` is `-Inf` —
+checked it: the scorer already filters `value > 0` before the log, and there are
+no non-positive samples anyway. Not a bug.
+
+**`/api/health/stress` left `calibrating` on arrival**: `status:"ok"`, score **19
+("Very low")**, hrv 35.9, `baselineDays: 15`. So **#43 closed itself with no
+code**, exactly as the parked row predicted — the backfill carried the history
+with it, so a calibrating placeholder was never actually served to Nick. Tracker
+updated: #43 closed, #41 confirmed live.
+
+⚠ **One real finding, captured as #122.** Every night carries BOTH a staged
+breakdown from the Watch (core/deep/rem) AND a single whole-night
+`sleep_asleep_unspecified_hours` sample from a second source — 14 Aug is
+core 6.23 + deep 0.62 + rem 0.53 = **7.38h staged** beside ONE unspecified sample
+of **8.92h**. `GET /api/health/sleep` returns only `awake` + `asleep_unspecified`
+and takes `asleepHours` from the unspecified value, **so the staged breakdown
+never reaches the card built for it**, and 16 Aug reads 10.42h. Prefer the staged
+source, and never sum both (that double-counts to ~2x). **The ingest is fine** —
+this is a read-time rollup choice. `efficiency: null`, `inBedHours: 0` and
+`currentHr: null` are all BY DESIGN, not symptoms.
+
+⚠ **Two uncosted knock-ons.** The DB nearly doubled, and `backup-data.sh` keeps
+**28** rotated copies — so `/mnt/data/backups/nuero-db` heads for **~12.5 GB**
+and grows with every sync. And the off-site payload goes ~2.05 → ~2.26 GB against
+B2's 10 GB free tier: fine now, but that is the number to watch.
 
 ## NEXT
 **Nick, in the office / on his phone:** #116 NOVA msgraph re-auth (2 min, unblocks
 #115/#117/#118 — best ratio on the board) · #2 Teams consent · #99 the 287 ·
-#106 approve the pending `draft_reply` · check the health app's
-vitals categories.
+#106 approve the pending `draft_reply` .
 
 **Code, in order:** **#30** (Outlook moves don't come back — the card describes a meeting
 that isn't there; NOT started, nothing half-done) · **#50** (`/api/todos/moscow` legacy
