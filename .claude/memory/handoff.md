@@ -1,3 +1,109 @@
+# Session Handoff — 2026-08-16 late
+
+## Three of the four queued items shipped, deployed and verified live
+`6eae9db`+`ac0d823` #25 · `ab4278d` #28 · `31b2a50` #69.
+Suite **408 local / 408 Pi — the gap is still closed.** Pi clean at origin/main,
+`unstable_restarts` 0. **#26 (phone standup) is the one NOT started** — see below,
+it was left deliberately, not forgotten.
+
+## Every ticket premise was wrong again. Three for three.
+- **#25** said "zero hits for bank holidays". There IS a list — a hardcoded
+  three-date array in `obsidian.parseNinetyDayPlan()`, wrong for its own year
+  (missing 25 May 2026) and **dead** besides: the 90 Day Plan folder was archived
+  on 12 Aug so that function returns null. And it was **five** Mon–Fri copies, not
+  three (`shared/due-dates.cjs` had one too).
+- **#28** said "logged decisions render nowhere". **Nothing was ever logged.**
+  Table 0 rows; `Decision Log/decisions.md` held ONE entry in five months, a
+  pleasantry with a doubled bullet. Both prompts document `[DECISION: text]`; the
+  parser matched `[DECISION] text`. **Building the view as asked would have shipped
+  an empty screen that looked finished.**
+- **#69**'s premise held, and its hook (`dismissEmail(id,'replied')`) was exactly
+  where the brief said it was.
+
+## `6eae9db` — #25, and the harm was live, not hypothetical
+`SEARCH_DAYS` is 21, and **31 Aug 2026 (Summer bank holiday) is a Monday inside
+the live booking window.** Proved it: the naive predicate calls it a working day
+and a six-person batch filled it. Deployed code now steps 28 Aug → 1 Sep.
+
+`shared/working-days.cjs` (pure, browser-safe) + `backend/services/working-days.js`
+(the data). **The failure direction is the whole design** — failing open books
+meetings on Christmas Day, so it never falls back to "every weekday works".
+`live → cache → compiled-in floor`, and `status()` always names which answered.
+The floor works because gov.uk is a *static publication covering 2019–2028*, not a
+live API. **Leave is not a property of the day**, so `leaveDates()` reads
+`showAs:'oof'` from events the caller already holds; Graph's all-day end date is
+**exclusive**. Verified on the Pi: 83 events fetched, `builtin → cache`, and a
+week's OOF from 7 Sep pushes the slot to Mon 14 Sep.
+
+⚠ Both frontends import `shared/due-dates.cjs` directly, so **they still get plain
+Mon–Fri** — no DB route. Deliberate and commented. Both bundles were rebuilt and
+checked for the inlined predicate, because a `.cjs` require inside a browser-imported
+file is real bundler risk.
+
+## `ab4278d` — #28, capture fixed first, then rendered
+`parseDecisions()` is pure and exported; one test asserts **the PROMPTS still
+document the form the parser accepts**, so a rename fails there instead of silently
+emptying the table for another five months. `DecisionsPanel` got a **Sidebar entry**,
+not just an `App.jsx` case. Full chain verified on deployed code against a
+**scratch DB + scratch vault** (Nick's real vault untouched): parse → DB row →
+vault line, leading bullet stripped.
+
+## `31b2a50` — #69, the one-row version Nick chose
+`sent_replies` + `GET /api/email/replies` + a collapsed **REPLIED** section in
+InboxPanel. Recorded AFTER the send and **never allowed to fail the request** —
+the mail has already left. **Recipient provenance is the real judgement**: on a
+plain reply/replyAll GRAPH picks the addressees, so `recipients_source` is
+`explicit|inferred|unknown` and the UI says "from the thread, not confirmed"
+rather than presenting a guess as the record.
+
+A bug my own test caught: `limit=-5` clamped to **1** and returned a single row,
+which looks like the truth. Nonsense input now falls back to the default.
+
+**The richer #69 (extract commitments from reply bodies into waiting-on) is now
+buildable and was NOT built** — Nick picked one-row explicitly. It needs real
+replies to calibrate against, and there are currently **0 rows**.
+
+## ⏳ STILL PENDING, unchanged, no action needed
+`escalation_alert_wide_seeded` — `briefing.checkEscalationAlerts` backfills on its
+first widened run, cron `*/5 8-18 * * 1-5`, **weekdays only**. Today was Sunday, so
+the flag is still null and 11 keys still absent from `alert_seen_ids`. **Monday
+08:00 it records them silently and pushes 0. If you see it unset that is NORMAL —
+do not "fix" it, and do not widen anything else in that file first.** I did not
+touch `briefing.js`.
+
+## #26 — the phone can't start a standup. NOT STARTED, deliberately.
+Context was long and `mistakes.md` (16 Aug) is explicit that splitting a build
+across the boundary is how half-done work gets committed. Nothing was begun, so
+there is nothing half-done to inherit. The brief still stands in full:
+- Backend is **done and needs no changes** — `/api/standup-session/:kind/{start,
+  reply,finish,abandon}` + GET to resume. Transcript is saved **before AND after
+  every turn**; a failure returns **503 `retryable:true` WITH the saved session**,
+  so the client retries without Nick retyping.
+- **The trap is registration and it fails silently**: a new tab id must also exist
+  in `SARA_LITE_TABS` in `shared/action-surfaces.cjs`, or notification routing
+  falls back to Focus with no error.
+- Tab ids do not always mount what their name suggests — `voice` mounts **Capture**
+  with `autoRecord`, not Chat. **Read `App.jsx`, don't infer.**
+- Deploys via Netlify (`sara-nickward`, base `sara/app`). Verify against the LIVE
+  bundle and check `VITE_BUILD_LABEL` on screen — that is what #110 was for.
+
+## Two things worth carrying
+- **A green suite still says nothing about routing.** Both new routes
+  (`/api/time/working-days`, `/api/email/replies`) were called against the running
+  server before being called done. `/replies` is top-level rather than under
+  `/triage` precisely so it can never be parsed as an email id.
+- **`obsidian.appendDecision` writes a `## date` header per decision**, so two on
+  one day give two headers. Pre-existing, cosmetic, deliberately untouched.
+
+## NEXT — still on Nick, not code
+- **#40 Apple Health transport** — still the single biggest unblock, still a
+  research task. `/api/health/stress` correctly reads `calibrating`.
+- **The 5 escalations are real and unanswered** — NT-21284 is 65 days old.
+- **#106** approve the one `draft_reply` (sends nothing, gate 1 of 2).
+- **Write up the Nathan/Stephen 1-2-1s**, or the board keeps calling them overdue.
+- **#2** Teams consent on an office day; **#116** NOVA re-auth (gates #115/#117/#118);
+  **#59** off-site backup.
+
 # Session Handoff — 2026-08-16 evening
 
 ## Nine shipped today. Suite **373 local / 373 Pi — the gap is CLOSED.**
