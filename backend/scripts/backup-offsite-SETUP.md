@@ -1,117 +1,116 @@
-# Off-site backup — the one-time setup (#59)
+# Off-site backup — configured and verified (#59)
 
-Everything is built, deployed and scheduled. It runs nightly at **02:20** and
-currently **no-ops** with `state: unconfigured`, because the B2 remote does not
-exist yet. That is the intended state, not a fault — the watchdog reports it as
-`info`, never as a warning.
+**Live since 16 Aug 2026.** First full copy 2.05 GB in 12 minutes; incremental
+runs take about 2. Runs nightly at **02:20** from root cron.
 
-The steps below are the part that needs Nick's account. About ten minutes.
+## ⚠ Two things Nick must do
 
-## What is already done
+### 1. Store these somewhere off this machine — a password manager, not the vault
 
-- `/usr/local/bin/backup-offsite.sh` deployed and syntax-checked.
-- `rclone v1.60.1` installed (`apt`, raspbian 13.5 arm64).
-- Root cron entry at `20 2 * * *`, after the 00:00 local snapshot.
-- `watchdog.checkOffsiteBackup()` reads `/mnt/data/backups/offsite-status.json`
-  and distinguishes `unconfigured` (info) / `failed` (critical) / stale.
-
-## 1. Backblaze account and bucket
-
-1. Sign up at backblaze.com → B2 Cloud Storage.
-   **The free tier is 10 GB stored.** The payload below is ~2.15 GB, so this
-   sits inside it — but it is a tier, not free-forever, and versions count
-   toward it. Step 4 is what keeps it there.
-2. Create a **private** bucket. Suggested name `pi5-neuro-offsite` (bucket names
-   are globally unique, so you may need a suffix).
-3. **Application Keys → Add a New Application Key**, scoped to *that bucket
-   only*, read+write. Copy the `keyID` and `applicationKey` — the secret is
-   shown once.
-
-## 2. The two rclone remotes
-
-Encryption is not optional here: the vault holds 1-2-1 notes, performance
-conversations and personal data about named colleagues. Filenames are encrypted
-too, because a filename is as disclosive as a body in this vault.
-
-Run on pi5 (`ssh nickw@100.100.28.58`):
-
-```bash
-rclone config
+```
+CRYPT_PASSWORD: UcFpoqxNHjNbGvryHwfDiSS1D2RscVoQ
+CRYPT_SALT:     sl6UyasMtKLQphZQlyDKwqpRzTrl79KZ
 ```
 
-**Remote 1 — the bucket.** `n` → name `b2raw` → storage `b2` →
-`account` = keyID, `key` = applicationKey → defaults for the rest.
+They live in `/root/.config/rclone/rclone.conf`, which is itself inside the
+thing being backed up. Lose the Pi and lose these and the off-site copy is 2 GB
+of unrecoverable noise — a backup that exists and cannot be read is worse than
+no backup, because you stop worrying about it.
 
-**Remote 2 — the encryption layer.** `n` → name `b2crypt` → storage `crypt` →
-`remote` = `b2raw:pi5-neuro-offsite` (your bucket name) →
-`filename_encryption` = `standard` → `directory_name_encryption` = `true` →
-choose **`g`** to generate a password, and again for the salt.
+### 2. Regenerate the B2 master application key
 
-> ⚠ **Write both generated passwords down somewhere off this machine.**
-> They are in `/root/.config/rclone/rclone.conf`, which is itself inside the
-> thing being backed up. Losing them means the off-site copy is unrecoverable
-> ciphertext — the backup would exist and be useless, which is worse than not
-> having one, because you would stop worrying about it.
-> Put them in a password manager, not in the vault.
+The master key was pasted into a chat transcript, so treat it as exposed. It is
+no longer used by anything — the Pi now authenticates with a **bucket-scoped**
+key (`pi5-offsite-backup`, `000bb15eb1628800000000001`, capabilities
+`listBuckets listFiles readFiles writeFiles deleteFiles`, restricted to
+`pi5-neuro-offsite`). Regenerating the master key in the B2 UI invalidates the
+exposed one and breaks nothing here.
 
-The script runs as root from cron, so configure it as **root**
-(`sudo rclone config`) or the remote will be invisible to it.
+A master key could delete buckets and mint further keys, so it should not have
+been the credential on a cron job regardless of the exposure.
 
-## 3. First run
+## What is configured
 
-```bash
-sudo /usr/local/bin/backup-offsite.sh
-cat /mnt/data/backups/offsite-status.json
-```
+| Piece | Value |
+|---|---|
+| Bucket | `pi5-neuro-offsite`, **private**, eu-central |
+| Lifecycle | `daysFromHidingToDeleting: 1` — a replaced version is deleted after a day |
+| Remote (raw) | `b2raw` → B2, scoped key |
+| Remote (encrypted) | `b2crypt` → `b2raw:pi5-neuro-offsite`, filename **and** directory names encrypted |
+| Script | `/usr/local/bin/backup-offsite.sh` (source: `backend/scripts/`) |
+| Schedule | root cron, `20 2 * * *`, after the 00:00 local snapshot |
+| Status file | `/mnt/data/backups/offsite-status.json` |
+| Monitoring | `watchdog.checkOffsiteBackup()` |
 
-The first upload is ~2.15 GB and will take a while on domestic upstream; later
-runs ship only deltas. Expect `"state": "ok"` and `bytes` around 2.3e9.
-
-## 4. Bucket lifecycle — do not skip this
-
-In the bucket settings choose **"Keep only the last version of the file"**, or
-set a rule keeping prior versions for ~7 days.
-
-The script syncs with `--b2-hard-delete`, but B2's default lifecycle keeps every
-version forever. Without this, each nightly run of a 250 MB database file adds a
-new 250 MB version and the 10 GB tier is gone inside six weeks — silently, since
-the script's own size check only looks at current files.
-
-## 5. Prove a restore, once
-
-An untested backup is a hypothesis. Cheap version:
-
-```bash
-mkdir -p /tmp/restore-test
-rclone copy b2crypt:pi5/neuro-db /tmp/restore-test
-sqlite3 /tmp/restore-test/agent.db "PRAGMA integrity_check;"   # expect: ok
-rclone cat b2crypt:pi5/nuero-vault/CLAUDE.md | head            # readable text
-rm -rf /tmp/restore-test
-```
-
-If `integrity_check` says `ok` and the vault file reads as plain text, the
-encryption round-trips and the copy is real.
+The lifecycle rule is load-bearing. B2 keeps every version forever by default,
+so without it a nightly 250 MB database would add a new 250 MB version every
+night and consume the 10 GB free tier inside six weeks — invisibly, because the
+script's own size check only counts current files.
 
 ## What is copied, and what is not
 
 | Path | Size | Why |
 |---|---|---|
-| `nuero-vault/` | ~910M | The vault. No other copy that isn't in this house. |
+| `nuero-vault/` | ~895M (4,369 files) | The vault. No other copy that isn't in this house. |
 | `homeassistant/` | ~965M | Years of history, not reconstructable. |
-| `neuro-db/agent.db` | ~250M | ONE current copy, taken from the snapshot's integrity-checked rotation. |
+| `neuro-db/agent.db` | ~235M | ONE current copy, from the snapshot's integrity-checked rotation. |
 | `syncthing/` | ~11M | Config, so a rebuild doesn't start from nothing. |
 
-Deliberately excluded: `backups/` (2.1 GB of 28 rotated copies of the same
-database — derived data, and it grows daily as the health backfill lands),
-`nuero/` (a git checkout; GitHub has it and most of the 689 MB is
-`node_modules`), ollama models (a download, and `ollama-models.txt` records
-which), and the `quest/`, `freereps-eval/`, `vault-dedup-quarantine/` scratch.
+Total ~2.05 GB against B2's **10 GB free tier**. It is a tier, not free forever.
 
-## Recovering the whole lot
+Deliberately excluded: `backups/` (2.1 GB of 28 rotated copies of the same
+database — derived, and growing daily as the health backfill lands), `nuero/`
+(a git checkout; GitHub has it and most of the 689 MB is `node_modules`), ollama
+models (a download, and `ollama-models.txt` records which), and the `quest/`,
+`freereps-eval/`, `vault-dedup-quarantine/` scratch.
+
+Source is the **local snapshot**, not `/mnt/data` — the snapshot already contains
+a `sqlite3 .backup` taken before its rsync, so the database copy is consistent
+rather than a possibly-torn read of a live WAL file.
+
+## Verified restore — this was actually run, not just written down
 
 ```bash
-sudo rclone config          # recreate b2raw + b2crypt with the saved passwords
+mkdir -p /tmp/restore-test
+sudo rclone copy b2crypt:pi5/neuro-db /tmp/restore-test
+sqlite3 /tmp/restore-test/agent.db "PRAGMA integrity_check;"
+sqlite3 /tmp/restore-test/agent.db "SELECT COUNT(*) FROM health_samples;"
+sudo rclone cat "b2crypt:pi5/nuero-vault/People/Heidi Power.md" | head
+rm -rf /tmp/restore-test
+```
+
+Result on 16 Aug: `integrity_check` → `ok`, 308,562 health samples / 150 tasks /
+287 waiting_on, and the People note came back as plain text with its frontmatter
+intact. The raw bucket (`rclone ls b2raw:pi5-neuro-offsite`) shows only ciphertext
+paths, confirming the encryption layer is doing its job.
+
+> Pick a file that definitely exists. An earlier version of this doc used
+> `nuero-vault/CLAUDE.md`, which is not at the vault root — so the check returned
+> empty and looked like a failed restore when nothing was wrong. A verification
+> that can pass or fail by absence is not a verification.
+
+## Recovering everything
+
+```bash
+sudo rclone config                       # recreate b2raw + b2crypt with the saved password/salt
 rclone copy b2crypt:pi5/nuero-vault   /mnt/data/nuero-vault
 rclone copy b2crypt:pi5/homeassistant /mnt/data/homeassistant
 rclone copy b2crypt:pi5/neuro-db/agent.db /mnt/data/nuero/backend/db/agent.db
 ```
+
+`sync` mirrors, so a deletion here becomes a deletion there. That is intended —
+the off-site copy tracks current state, and the 56 local generations on
+`/mnt/backup` are what cover "I deleted it last week".
+
+## How it reports
+
+`watchdog.checkOffsiteBackup()` reads the status file, which is written on every
+exit path — so an absent file means the job never completed, not that it quietly
+succeeded. Three distinct answers:
+
+- `unconfigured` → **info**, not a warning. The state before the key existed.
+- `failed` → **critical**. It is trying and cannot.
+- `ok` but older than 50h → warn, 96h → critical.
+
+The check returns nothing at all off-Linux, so the Windows dev box cannot
+manufacture an issue.

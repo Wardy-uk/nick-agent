@@ -94,23 +94,39 @@ Handles this file's **duplicate numbers** (sorts by number, file order as tie-br
 dedupes nothing) and separates "none captured" from "couldn't reach the tracker".
 Verified against a running server, not just the suite.
 
-## #59 — off-site backup, built and scheduled; the B2 key is Nick's
-**Read `backend/scripts/backup-offsite-SETUP.md` — that is the remaining work, ~10 min.**
-Deployed: rclone installed on pi5, `/usr/local/bin/backup-offsite.sh`, root cron 02:20
-daily, `watchdog.checkOffsiteBackup()`.
+## #59 — off-site backup is LIVE and restore-tested
+Nick supplied a B2 key mid-session, so this went all the way rather than stopping
+at "built". Bucket `pi5-neuro-offsite` (private), rclone `crypt` with filenames
+AND directory names encrypted, nightly root cron 02:20, watchdog monitoring.
+**First copy 2.05GB in 12 minutes; incremental runs ~2 minutes.**
 
-Ships the irreplaceable half only: vault 910M + Home Assistant 965M + **ONE** current
-agent.db 250M + syncthing 11M = **~2.15GB**, inside B2's 10GB free tier. `backups/` is
-excluded deliberately — 2.1GB of 28 rotated copies of the same DB, derived and growing
-daily as the health backfill lands. Source is the local SNAPSHOT, which already contains
-an integrity-checked `sqlite3 .backup`, so no torn DB. Encrypted, filenames included.
+Ships the irreplaceable half only: vault 895M (4,369 files) + Home Assistant 965M
++ ONE current agent.db 235M + syncthing 11M. `backups/` excluded deliberately —
+2.1GB of 28 rotated copies of the same DB, derived and growing daily.
 
-**"unconfigured" is `info`, not a warning** — both setup states verified live (rclone
-absent, then remote absent). A job that cries wolf on day one gets muted before it matters.
-⚠ Two things in the setup doc are load-bearing: the **bucket lifecycle rule** (B2 keeps
-every version by default — a nightly 250MB DB eats the 10GB tier in six weeks, invisibly)
-and **storing the crypt passwords off this machine** (they live in a file that is itself
-inside the thing being backed up).
+**The restore was actually performed, not assumed**: `integrity_check` returned
+ok, 308,562 health samples / 150 tasks / 287 waiting_on readable, a People note
+came back as plain text with frontmatter intact, and `rclone ls` on the RAW
+bucket shows only ciphertext paths. Bucket lifecycle set to
+`daysFromHidingToDeleting: 1` via the B2 API — without it a nightly 250MB DB
+version would eat the 10GB free tier in six weeks, invisibly, because the
+size check in that script only counts current files.
+
+⚠ **Two follow-ups for Nick**, both in `backend/scripts/backup-offsite-SETUP.md`:
+1. **Store the crypt password + salt off the Pi.** They are in
+   `/root/.config/rclone/rclone.conf`, which is inside the thing being backed up.
+   Lose both and the off-site copy is unrecoverable ciphertext.
+2. **Regenerate the B2 master key.** He pasted it into the chat, so treat it as
+   exposed — and a master key can delete buckets and mint further keys, so it was
+   the wrong credential for a cron job regardless. I created a **bucket-scoped**
+   key (`pi5-offsite-backup`, listBuckets/listFiles/readFiles/writeFiles/
+   deleteFiles) and swapped it in; the master key is no longer in the config and
+   regenerating it breaks nothing here. Writes were re-verified after the swap.
+
+⚠ A doc bug worth remembering: the first restore check used
+`nuero-vault/CLAUDE.md`, which is not at the vault root — it returned empty and
+looked like a failed restore when nothing was wrong. **A verification that can
+pass or fail by absence is not a verification.**
 
 ## #52 / #107(b)
 #52: verified dead before removing (`getPlan()` returns null, folder archived 12 Aug). It
@@ -132,7 +148,7 @@ categories** — worth checking in the app. It gates #42's card, #43 and #44.
 ## NEXT
 **Nick, in the office / on his phone:** #116 NOVA msgraph re-auth (2 min, unblocks
 #115/#117/#118 — best ratio on the board) · #2 Teams consent · #99 the 287 ·
-#106 approve the pending `draft_reply` · **the B2 key for #59** · check the health app's
+#106 approve the pending `draft_reply` · check the health app's
 vitals categories.
 
 **Code, in order:** **#30** (Outlook moves don't come back — the card describes a meeting
