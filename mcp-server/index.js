@@ -1004,6 +1004,53 @@ server.tool('manage_kb_article',
 // still need NOVA data to pass through.
 
 // ═══════════════════════════════════════════════════════
+// Tools: Health
+// ═══════════════════════════════════════════════════════
+
+server.tool('get_health',
+  'Apple Health from the watch: stress score against a rolling 14-day HRV baseline, plus what data has actually arrived and how fresh it is.',
+  {
+    days: z.number().optional().describe('Freshness window for the metric summary, in days (default 30)'),
+  },
+  async ({ days }) => {
+    const [stress, series] = await Promise.all([
+      neuroApi('/api/health/stress'),
+      neuroApi(`/api/health/metrics?days=${days || 30}`),
+    ]);
+
+    const lines = ['# Health', ''];
+
+    // The score is deliberately allowed to say "I don't know yet". Below 7 days
+    // or 20 samples stress-score returns `calibrating` with a null score rather
+    // than inventing a number, and repeating that here is the whole point —
+    // rendering a confident figure over a thin baseline is the failure mode.
+    if (stress?.status === 'calibrating') {
+      lines.push(`**Stress: calibrating** — ${stress.reason || 'not enough baseline yet'}`);
+    } else if (stress?.status === 'stale') {
+      lines.push('**Stress: stale** — no HRV reading recently enough to score.');
+    } else if (typeof stress?.score === 'number') {
+      lines.push(`**Stress ${stress.score}/100** (${stress.band || 'n/a'}) — HRV ${stress.hrv}ms at ${stress.hrvAt}`);
+    } else {
+      lines.push('**Stress: unavailable**');
+    }
+    for (const c of stress?.caveats || []) lines.push(`- ⚠ ${c}`);
+
+    lines.push('', `## Data arriving (${series.metricCount} metrics, ${series.totalSamples} samples / ${series.windowDays}d)`, '');
+    if (!series.metrics?.length) {
+      lines.push('Nothing in the window. The phone syncs at iOS\'s discretion, so a gap is not necessarily a fault — but nothing at all usually means the app has been force-quit.');
+    } else {
+      for (const m of series.metrics.slice(0, 40)) {
+        const age = m.ageHours === null ? '?' : m.ageHours < 48 ? `${m.ageHours}h ago` : `${Math.round(m.ageHours / 24)}d ago`;
+        lines.push(`- **${m.metric}** — ${m.samples} samples, last ${age}`);
+      }
+      if (series.metrics.length > 40) lines.push(`- …and ${series.metrics.length - 40} more`);
+    }
+
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
+  }
+);
+
+// ═══════════════════════════════════════════════════════
 // Tools: System
 // ═══════════════════════════════════════════════════════
 

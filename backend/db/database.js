@@ -98,6 +98,30 @@ async function init() {
     console.error('[DB] tasks migration check failed:', e.message);
   }
 
+  // Migration: health_samples.source_uuid (#40 — Apple Health transport).
+  //
+  // UNIQUE(metric, recorded_at) already made a re-post idempotent, and it stays
+  // the primary guard. This adds the sample's own HealthKit UUID as a second,
+  // stricter one, because the phone re-sends overlapping windows constantly:
+  // iOS decides when a background sync runs, so "send everything since X" is the
+  // only workable contract and the same reading arrives many times.
+  //
+  // The unique index is PARTIAL (WHERE source_uuid IS NOT NULL) — every row
+  // written before this migration, and anything arriving without a UUID, must
+  // still be allowed to coexist. A plain UNIQUE would treat all those NULLs as
+  // one value on some engines and reject the second row.
+  try {
+    const healthColumns = db.prepare('PRAGMA table_info(health_samples)').all().map(r => r.name);
+    if (healthColumns.length && !healthColumns.includes('source_uuid')) {
+      db.exec('ALTER TABLE health_samples ADD COLUMN source_uuid TEXT');
+      console.log('[DB] health_samples.source_uuid added');
+    }
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_health_samples_uuid
+             ON health_samples(source_uuid) WHERE source_uuid IS NOT NULL`);
+  } catch (e) {
+    console.error('[DB] health_samples migration check failed:', e.message);
+  }
+
   console.log('[DB] Initialized');
 }
 
@@ -631,6 +655,20 @@ function insertHealthSample(metric, value, recordedAt, source) {
   return r.changes > 0;
 }
 
+// As above, plus the sample's HealthKit UUID. Two OR IGNOREs are in play: the
+// (metric, recorded_at) constraint and the partial unique index on source_uuid,
+// so a re-sent reading folds on whichever it trips first. Returns false when it
+// folded, which is what lets the ingest response report inserted vs skipped
+// honestly rather than counting everything it received as new.
+function insertHealthSampleWithUuid(metric, value, recordedAt, source, sourceUuid) {
+  const r = run(
+    `INSERT OR IGNORE INTO health_samples (metric, value, recorded_at, source, source_uuid)
+     VALUES (?, ?, ?, ?, ?)`,
+    [metric, value, recordedAt, source || 'ingest', sourceUuid || null]
+  );
+  return r.changes > 0;
+}
+
 function getHealthSamples(metric, sinceIso, limit) {
   return all(
     `SELECT value, recorded_at FROM health_samples
@@ -645,6 +683,25 @@ function getLatestHealthSample(metric) {
     `SELECT value, recorded_at FROM health_samples
      WHERE metric = ? ORDER BY recorded_at DESC LIMIT 1`,
     [metric]
+  );
+}
+
+// What is actually in the health series, per metric. Powers the MCP tool and
+// the ingest status view. Reports first/last seen as well as counts, because
+// "we have 4,000 rows" and "nothing has arrived since Tuesday" look identical
+// on a count alone — and with iOS deciding when to sync, a stalled feed is the
+// expected failure, not a surprising one.
+function getHealthMetricSummary(sinceIso) {
+  return all(
+    `SELECT metric,
+            COUNT(*)          AS samples,
+            MIN(recorded_at)  AS first_at,
+            MAX(recorded_at)  AS last_at
+       FROM health_samples
+      WHERE (? IS NULL OR recorded_at >= ?)
+      GROUP BY metric
+      ORDER BY last_at DESC`,
+    [sinceIso || null, sinceIso || null]
   );
 }
 
@@ -1051,6 +1108,8 @@ module.exports = {
   getActiveNovaFlags,
   // Health samples
   insertHealthSample,
+  insertHealthSampleWithUuid,
+  getHealthMetricSummary,
   getHealthSamples,
   getLatestHealthSample,
   // Location visits

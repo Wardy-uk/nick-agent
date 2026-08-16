@@ -191,4 +191,37 @@ router.get('/status', (req, res) => {
   }
 });
 
+// GET /api/health/metrics — what is actually in the series, per metric (#40).
+//
+// The point of this is freshness, not volume. iOS decides when the phone syncs
+// (BGProcessingTask is a request, not a schedule, and stops entirely after a
+// force-quit), so a feed going quiet is the EXPECTED failure. `lastAt` and
+// `ageHours` are what make that visible; a row count alone cannot.
+router.get('/metrics', (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 3650);
+    const since = new Date(Date.now() - days * 86400000).toISOString().replace('T', ' ').slice(0, 19);
+    const now = Date.now();
+
+    const metrics = db.getHealthMetricSummary(since).map((row) => ({
+      metric: row.metric,
+      samples: row.samples,
+      firstAt: row.first_at,
+      lastAt: row.last_at,
+      ageHours: row.last_at
+        ? Math.round(((now - Date.parse(`${row.last_at.replace(' ', 'T')}Z`)) / 3600000) * 10) / 10
+        : null,
+    }));
+
+    res.json({
+      windowDays: days,
+      metricCount: metrics.length,
+      totalSamples: metrics.reduce((n, m) => n + m.samples, 0),
+      metrics,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

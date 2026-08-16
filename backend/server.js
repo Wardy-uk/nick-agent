@@ -36,6 +36,7 @@ const captureRoutes = require('./routes/capture');
 const journalRoutes = require('./routes/journal');
 const stravaRoutes = require('./routes/strava');
 const healthRoutes = require('./routes/health');
+const appleHealthRoutes = require('./routes/apple-health');
 const locationRoutes = require('./routes/location');
 const jiraRoutes = require('./routes/jira');
 const queueRoutes = require('./routes/queue');
@@ -74,6 +75,13 @@ app.use('/api', (req, res, next) => {
 
   // Allow Strava OAuth flow (browser redirects can't send PIN header)
   if (req.path === '/strava/auth' || req.path === '/strava/callback') return next();
+
+  // Allow the FreeReps iOS app's wire API (#40). Same reason as the exemptions
+  // above — the client cannot send a header. This one is not a limitation of the
+  // browser but of the app: its config model has no credential field at all, so
+  // there is nothing to send. The routes enforce their own guard (tailnet source
+  // only) and can write to exactly one table. See routes/apple-health.js.
+  if (req.path.startsWith('/v1/')) return next();
 
   const providedPin = req.headers['x-neuro-pin'] || req.query.pin;
   const providedApiToken = req.headers['x-neuro-api-token'] || req.query.api_token;
@@ -137,6 +145,10 @@ app.use('/api/capture', captureRoutes);
 app.use('/api/journal', journalRoutes);
 app.use('/api/strava', stravaRoutes);
 app.use('/api/health', healthRoutes);
+// Mounted at /api/v1 because the iOS app hard-codes that path — see
+// routes/apple-health.js. Exempt from the PIN middleware above, guarded by
+// source address instead.
+app.use('/api/v1', appleHealthRoutes);
 app.use('/api/location', locationRoutes);
 app.use('/api/jira', jiraRoutes);
 app.use('/api/queue', queueRoutes);
