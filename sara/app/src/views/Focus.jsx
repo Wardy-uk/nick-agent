@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api';
 import actionSurfaces from '../../../../shared/action-surfaces.cjs';
+import { speakIfEnabled, isAudioUnlocked } from '../voiceUtils';
 import './Focus.css';
 
 // Focus = the single "what matters now" glance. Default view.
@@ -24,6 +25,36 @@ export default function Focus({ onNavigate, onActionIntent }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // #111 — speak the briefing. NEURO's desktop BriefingPanel has done this since
+  // voice shipped; the phone rendered it silently, which is the half that matters,
+  // because SARA's job is to come to Nick rather than wait to be opened.
+  //
+  // Gated on the same persisted `sara_voice_out` toggle as Chat (OFF by default —
+  // a PWA that talks unprompted on a train gets deleted), and spoken once per
+  // distinct briefing rather than once per render or per poll.
+  //
+  // The retry is the part that makes it work on iOS at all: speechSynthesis needs a
+  // user gesture first, and a cold start landing straight on Focus can render before
+  // any touch has happened. Without this the briefing is dropped silently and looks
+  // like the toggle is broken. So if audio is still locked we leave it UNSPOKEN and
+  // try again on the next interaction.
+  const spokenRef = useRef(null);
+  useEffect(() => {
+    const briefing = state.data?.sara?.briefing;
+    if (!briefing || briefing === spokenRef.current) return;
+
+    const say = () => {
+      spokenRef.current = briefing;
+      speakIfEnabled(briefing);
+    };
+
+    if (isAudioUnlocked()) { say(); return; }
+
+    const onGesture = () => say();
+    document.addEventListener('pointerdown', onGesture, { once: true });
+    return () => document.removeEventListener('pointerdown', onGesture);
+  }, [state.data?.sara?.briefing]);
 
   async function dismiss(item) {
     setDismissing((d) => ({ ...d, [item.id]: true }));

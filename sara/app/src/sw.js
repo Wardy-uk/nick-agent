@@ -39,6 +39,10 @@ self.addEventListener('notificationclick', (event) => {
   const notificationUrl = data.url || '/';
   const notificationType = data.type || null;
   const notificationTitle = event.notification.title || 'SARA';
+  // #111 — the nudge's actual words are the notification BODY; the title is a
+  // label ("SARA — Escalation"). It was never forwarded, so the card could only
+  // ever show and speak the label. Speaking "SARA nudge" is worse than silence.
+  const notificationBody = event.notification.body || '';
   const appUrl = new URL('/', self.location.origin);
   const payload = JSON.stringify({
     ...data,
@@ -49,6 +53,7 @@ self.addEventListener('notificationclick', (event) => {
   if (notificationType) appUrl.searchParams.set('type', notificationType);
   if (notificationUrl) appUrl.searchParams.set('url', notificationUrl);
   if (notificationTitle) appUrl.searchParams.set('title', notificationTitle);
+  if (notificationBody) appUrl.searchParams.set('body', notificationBody);
   appUrl.searchParams.set('payload', payload);
 
   event.waitUntil(
@@ -61,6 +66,7 @@ self.addEventListener('notificationclick', (event) => {
             notificationType,
             notificationUrl,
             notificationTitle,
+            notificationBody,
             notificationData: data,
           });
           if ('navigate' in client) {

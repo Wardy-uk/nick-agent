@@ -42,6 +42,7 @@ function readLaunchIntent() {
   const type = params.get('type');
   const url = params.get('url');
   const title = params.get('title');
+  const body = params.get('body');
   const payload = params.get('payload');
 
   if (source !== 'notification' && !tab && !type && !url && !payload) return null;
@@ -61,6 +62,7 @@ function readLaunchIntent() {
     type: type || raw.type || null,
     url: url || raw.url || null,
     title: title || raw.title || null,
+    body: body || raw.body || null,
     payload: raw,
   };
 }
@@ -107,6 +109,7 @@ export default function App() {
         type: data.notificationType || null,
         url: data.notificationUrl || null,
         title: data.notificationTitle || null,
+        body: data.notificationBody || null,
         payload: data.notificationData || {},
       };
       setActive(intent.tab);

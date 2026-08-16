@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch, apiUrl } from '../api';
 import { completeTask } from '../completeTask';
 import actionSurfaces from '../../../../shared/action-surfaces.cjs';
+import { speakIfEnabled } from '../voiceUtils';
 import './NotificationActionCard.css';
 
 const { resolveNueroUrl, resolveSaraLitePlan } = actionSurfaces;
@@ -16,6 +17,16 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
   const [saving, setSaving] = useState(false);
   const [doneIds, setDoneIds] = useState({});
   const plan = useMemo(() => resolveSaraLitePlan(intent), [intent]);
+  // #111 — speak the nudge once per distinct message. Arriving here means Nick
+  // tapped the notification, so the iOS audio unlock has already happened and no
+  // retry dance is needed (unlike Focus, which can render before any gesture).
+  const spokenRef = useRef(null);
+  useEffect(() => {
+    const message = intent?.body;
+    if (!message || message === spokenRef.current) return;
+    spokenRef.current = message;
+    speakIfEnabled(message);
+  }, [intent?.body]);
   const kind = plan.kind;
   const nueroUrl = useMemo(() => resolveNueroUrl(intent, apiUrl('/')), [intent]);
   const handledInSara = plan.canHandle && plan.presentation !== 'handoff';
@@ -130,6 +141,7 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
   const title = intent?.title || 'SARA nudge';
   const note = nueroUrl ? `${title} • ${nueroUrl}` : title;
   const canSubmit = answers.some((entry) => String(entry || '').trim());
+  const nudgeText = intent?.body || null;
 
   return (
     <section className="notif card">
@@ -137,6 +149,10 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
         <div>
           <div className="notif__eyebrow">Notification action</div>
           <div className="notif__title">{note}</div>
+          {/* #111 — the words the nudge actually said. The title is only a label,
+              so without this the card dropped the entire message and Nick had to
+              remember what the notification read before he tapped it. */}
+          {nudgeText && <div className="notif__message">{nudgeText}</div>}
         </div>
         <button type="button" className="notif__close" onClick={onDismiss} aria-label="Dismiss notification panel">✕</button>
       </div>

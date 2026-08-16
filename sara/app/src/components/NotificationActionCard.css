@@ -25,6 +25,15 @@
   font-weight: 600;
 }
 
+/* The nudge's own words, under the label. Quieter than the title because the
+   title says which nudge and this says what it wants. */
+.notif__message {
+  margin-top: 0.35rem;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  opacity: 0.85;
+}
+
 .notif__close {
   background: none;
   border: none;
