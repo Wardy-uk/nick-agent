@@ -1,3 +1,50 @@
+# Session Handoff — 2026-08-16 16:40
+
+## `c89d914` — #65, and **the ticket described a bug that cannot happen**
+Deployed and verified live. Suite **347 local / 338 Pi**.
+
+#65 said: "the bridge fallback can't reply — map `toRecipients`/`ccRecipients` in the
+bridge branch, ten lines." **That branch cannot run.** NOVA's bridge serves eight routes
+and `/mail/{id}` is not one of them, so NEURO's call falls past the bridge router into
+NOVA's app auth and answers **401**. Same for `/todo/lists`, `/todo/tasks`,
+`/planner/tasks` — all three labelled "Priority 2 — NOVA bridge" and none implemented.
+**Checking the other repo before writing the fix is what caught this**; the ten lines
+would have shipped as a no-op and the ticket would have closed.
+
+**The real bug was one level down and silent.** A route that DOES exist answers
+**HTTP 200 with the failure nested in `data`** — NOVA's msgraph token is expired, so
+`/mail` returns `{ok:true, data:{error:"Failed to acquire token…"}}`. `novaBridgeFetch`
+returned that as a payload; callers read `.id`, got undefined, returned `null`. **A dead
+bridge was indistinguishable from an empty mailbox, and nothing logged a word.**
+
+Now: detected/logged/recorded per path, 401+404 classified `unsupported` (not `error`),
+nothing blocks a call so NOVA adding a route self-heals, keys normalised so `/mail/:id`
+doesn't mint an entry per message. `getMailAccessStatus()` reports what was **observed**
+— `bridgeConfigured` alone was the lie.
+
+**The user-visible half is also not what the ticket said.** Cached triage entries (290 of
+them) carry `fromEmail`, so on a Graph outage Reply **works**. What they carry no trace of
+is the other participants — `replyAllCc` comes back empty and the composer rendered that
+as *nothing at all*. **An unreachable thread looked exactly like a one-to-one email**, and
+the difference is who gets left off a reply. Now `replyDefaults.threadKnown`, `live` +
+`detail` on the route, and a muted "thread unavailable — add anyone else by hand" chip.
+
+Verified live: `/mail/:id` → `unsupported HTTP 401`; the real `/mail` 200-payload fed
+through the deployed classifier → correctly a failure; `getBridgeHealth()` starts `{}`
+(**"unprobed" is a real third state** — the bridge is only touched when Graph fails, and
+Graph is currently healthy).
+
+### Left for Nick — two minutes, unblocks the only bridge route that exists
+NOVA's msgraph MCP needs a re-login: `Failed to acquire token for account
+'NickW@nurtur.tech'. The token may have expired. Please re-login with: --login`.
+Nothing is broken today (NEURO's own MSAL Graph is healthy and was driven live this
+session) — but the fallback is dark until that happens.
+
+### Tracker correction
+**#63 is DONE** — Nick confirmed key expiry is already disabled; the tracker still ranked
+it P1 #1 "do it today". **#65 is two different items** under one number (bridge reply
+fallback, and metrics plotting) — same duplicate-numbering problem as the known #103.
+
 # Session Handoff — 2026-08-16 15:40
 
 ## Shipped — all three queued items, deployed and verified live
