@@ -462,3 +462,53 @@
   padding: 3px 9px;
   cursor: help;
 }
+
+/* #69 — replies Nick has sent. A sent reply dismisses the email, so it leaves
+   the triage list entirely; without this the only record is Outlook. */
+.inbox-reply {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.inbox-reply-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.inbox-reply-subject {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.inbox-reply-when {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.inbox-reply-to {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.inbox-reply-hint {
+  color: var(--text-muted);
+}
+
+.inbox-reply-body {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}

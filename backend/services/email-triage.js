@@ -272,6 +272,11 @@ function clearDismissed() {
 module.exports = {
   runTriage,
   getTriageByCategory,
+  // Read-only accessor. The reply route needs the cached subject/sender to
+  // record a sent reply (#69) without paying for a live Graph fetch — and a
+  // fetch that can fail must not be on the path of bookkeeping for mail that
+  // has already left.
+  getStoredTriage,
   dismissEmail,
   getDismissFeedback,
   clearDismissed,

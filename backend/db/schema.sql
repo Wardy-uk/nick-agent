@@ -387,3 +387,34 @@ CREATE TABLE IF NOT EXISTS waiting_on (
 
 CREATE INDEX IF NOT EXISTS idx_waiting_on_status ON waiting_on(status, first_seen);
 CREATE INDEX IF NOT EXISTS idx_waiting_on_person ON waiting_on(person, status);
+
+-- Replies Nick has sent from triage (#69).
+--
+-- Before this the send path called dismissEmail(id,'replied') and that was the
+-- ENTIRE record — the only evidence a reply happened lived in Outlook's Sent
+-- Items. So "I answered that on Tuesday" was not answerable from NEURO, and it
+-- was the newest write path in the system and the least observable.
+--
+-- Denormalised on purpose: subject/from are copied in rather than joined back
+-- to the triage blob, because that blob is a rolling cache (~290 entries) and a
+-- reply must stay answerable long after the email it answered has rolled out.
+CREATE TABLE IF NOT EXISTS sent_replies (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  email_id      TEXT NOT NULL,
+  subject       TEXT,
+  from_name     TEXT,
+  from_email    TEXT,
+  -- JSON array of {name,email}. On a plain reply/replyAll GRAPH picks the
+  -- recipients, not NEURO — so recipients_source records whether this is what
+  -- was actually addressed ('explicit') or NEURO's best reading of the thread
+  -- ('inferred'). Storing an inferred list as fact is how a record stops being
+  -- worth having.
+  recipients        TEXT,
+  recipients_source TEXT NOT NULL DEFAULT 'unknown',  -- explicit | inferred | unknown
+  reply_all     INTEGER NOT NULL DEFAULT 0,
+  body          TEXT NOT NULL,
+  sent_at       TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sent_replies_sent ON sent_replies(sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sent_replies_email ON sent_replies(email_id);

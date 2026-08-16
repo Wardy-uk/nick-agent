@@ -340,6 +340,11 @@ export default function InboxPanel({ focusContext }) {
   const [dismissing, setDismissing] = useState(null);
   const [dismissNote, setDismissNote] = useState('');
   const [fyiOpen, setFyiOpen] = useState(false);
+  // #69 — a sent reply dismisses the email, so it leaves this list entirely and
+  // the only record used to be Outlook's Sent Items. There is no "dismissed"
+  // view to hang a "Replied" badge on, so replies get their own section.
+  const [replies, setReplies] = useState(null);
+  const [repliesOpen, setRepliesOpen] = useState(false);
 
   const fetchTriage = () => {
     fetch(apiUrl('/api/email/triage'))
@@ -348,7 +353,14 @@ export default function InboxPanel({ focusContext }) {
       .catch(() => {});
   };
 
-  useEffect(() => { fetchTriage(); }, []);
+  const fetchReplies = () => {
+    fetch(apiUrl('/api/email/replies?limit=20'))
+      .then(r => r.json())
+      .then(data => setReplies(data))
+      .catch(() => {});
+  };
+
+  useEffect(() => { fetchTriage(); fetchReplies(); }, []);
 
   const runTriage = () => {
     setRunning(true);
@@ -379,8 +391,10 @@ export default function InboxPanel({ focusContext }) {
       .catch(() => setDismissing(null));
   };
 
-  // The backend dismisses on send, so a reply just needs a refresh.
-  const handleReplied = () => fetchTriage();
+  // The backend dismisses on send, so a reply just needs a refresh — and the
+  // reply now leaves a record, so refresh that too or the section it just
+  // joined would stay a send behind.
+  const handleReplied = () => { fetchTriage(); fetchReplies(); };
 
   const action = triage?.action || [];
   const delegate = triage?.delegate || [];
@@ -478,6 +492,34 @@ export default function InboxPanel({ focusContext }) {
           </button>
           {fyiOpen && [...fyi, ...ignore].map(e => (
             <EmailCard key={e.id} email={e} borderClass="urgency-low" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} />
+          ))}
+        </div>
+      )}
+
+      {replies?.total > 0 && (
+        <div className="inbox-section">
+          <button className="inbox-section-toggle" onClick={() => setRepliesOpen(o => !o)}>
+            {repliesOpen ? '▾' : '▸'} REPLIED ({replies.total})
+          </button>
+          {repliesOpen && replies.replies.map(r => (
+            <div className="inbox-reply" key={r.id}>
+              <div className="inbox-reply-head">
+                <span className="inbox-reply-subject">{r.subject || '(no subject)'}</span>
+                <span className="inbox-reply-when">{timeAgo(r.sentAt)}</span>
+              </div>
+              <div className="inbox-reply-to">
+                {r.recipients.length
+                  ? `To ${r.recipients.map(p => p.name || p.email).join(', ')}`
+                  : 'Recipients not recorded'}
+                {/* NEURO only knows the addressees for certain when the composer
+                    passed them; on a plain reply Graph chooses. Saying which is
+                    the difference between a record and a guess (#65). */}
+                {r.recipientsSource === 'inferred' && (
+                  <span className="inbox-reply-hint"> · from the thread, not confirmed</span>
+                )}
+              </div>
+              <div className="inbox-reply-body">{r.body}</div>
+            </div>
           ))}
         </div>
       )}

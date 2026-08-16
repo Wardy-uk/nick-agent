@@ -3,6 +3,7 @@ const router = express.Router();
 const emailTriage = require('../services/email-triage');
 const microsoft = require('../services/microsoft');
 const aiRouting = require('../services/ai-routing');
+const sentReplies = require('../services/sent-replies');
 const { evaluateEmail } = require('../services/email-priority');
 
 function trimText(value, max = 280) {
@@ -78,6 +79,20 @@ async function loadEmail(emailId) {
   // cannot carry is the thread.
   return { triageItem, live: Boolean(message), merged: { ...(triageItem || {}), ...(message || {}), id: emailId } };
 }
+
+// GET /api/email/replies — replies Nick has sent from triage (#69).
+//
+// Its own top-level path rather than under /triage, so it can never be read as
+// an email id — that is exactly how GET /triage/feedback answered "Email not
+// found" for a whole deploy (#70). `total` is returned beside the capped list
+// so no count on screen is the limit.
+router.get('/replies', (req, res) => {
+  try {
+    res.json({ ok: true, ...sentReplies.list({ limit: req.query.limit, offset: req.query.offset }) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // GET /api/email/triage — get classified inbox
 router.get('/triage', async (req, res) => {
@@ -257,6 +272,38 @@ router.post('/triage/:emailId/reply', async (req, res) => {
         error: messages[result.reason] || `Send failed (${result.reason})`,
       });
     }
+
+    // Keep a record of the reply itself (#69). Until this, dismissing was the
+    // ENTIRE trace — the only evidence a reply happened lived in Outlook's Sent
+    // Items, so "I answered that on Tuesday" was unanswerable from NEURO.
+    //
+    // Recorded AFTER the send and never allowed to fail the request: the mail
+    // has already left, and a bookkeeping error must not be reported to Nick as
+    // a failed send.
+    //
+    // Recipients carry their provenance rather than being stored as fact. On a
+    // plain reply/replyAll GRAPH chooses the addressees, not NEURO — only an
+    // explicit `to` from the composer is what was actually addressed. #65's
+    // rule: report what was observed.
+    const stored = emailTriage.getStoredTriage().find(e => e.id === emailId);
+    let recipients = to;
+    let recipientsSource = 'unknown';
+    if (Array.isArray(to) && to.length) {
+      recipientsSource = 'explicit';
+    } else if (stored?.fromEmail) {
+      recipients = [{ name: stored.from || stored.fromEmail, email: stored.fromEmail }];
+      recipientsSource = 'inferred';
+    }
+    sentReplies.record({
+      emailId,
+      subject: stored?.subject || null,
+      fromName: stored?.from || null,
+      fromEmail: stored?.fromEmail || null,
+      recipients,
+      recipientsSource,
+      replyAll: Boolean(req.body?.replyAll),
+      body,
+    });
 
     // Replied means handled — take it out of triage so it doesn't come back.
     // Recorded as 'replied' rather than 'done': it is the strongest possible
