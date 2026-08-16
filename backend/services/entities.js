@@ -11,14 +11,56 @@ const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
 // on it the day it was typed and went stale the moment a note was added.
 // Cached for 5 minutes because this runs once per note in the nightly sweep.
 const ROSTER_TTL_MS = 5 * 60 * 1000;
-let _roster = { at: 0, full: [], firstNames: new Map() };
+let _roster = { at: 0, full: [], firstNames: new Map(), aliases: new Map() };
+
+/**
+ * Read an `aliases:` list out of a note's frontmatter.
+ *
+ * Deliberately not `obsidian.parseFrontmatter` — that returns `""` for a YAML
+ * block list, the same line-based-reserialise blind spot that makes
+ * `updateFrontmatter` drop list values. So reading `fm.aliases` gives an empty
+ * string for all 30 notes that have one, and "wire aliases in" is a silent
+ * no-op. Handles both forms the vault actually contains: an inline `[a, b]` and
+ * a block list of `- ` lines.
+ *
+ * Vault notes are mixed CRLF/LF, so normalise before any line-anchored parsing.
+ */
+function readAliases(src) {
+  const text = String(src || '').replace(/\r\n/g, '\n');
+  const fm = text.match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return [];
+  const lines = fm[1].split('\n');
+  const idx = lines.findIndex(l => /^aliases:/.test(l));
+  if (idx < 0) return [];
+
+  const strip = s => s.trim().replace(/^["']|["']$/g, '').trim();
+  const out = [];
+
+  const inline = lines[idx].slice(lines[idx].indexOf(':') + 1).trim();
+  if (inline && inline !== '[]') {
+    for (const part of inline.replace(/^\[|\]$/g, '').split(',')) {
+      const v = strip(part);
+      if (v) out.push(v);
+    }
+  }
+  for (let j = idx + 1; j < lines.length; j++) {
+    if (/^\s*-\s+/.test(lines[j])) {
+      const v = strip(lines[j].replace(/^\s*-\s+/, ''));
+      if (v) out.push(v);
+    } else if (/^\S/.test(lines[j])) {
+      break; // next frontmatter key
+    }
+  }
+  return out;
+}
 
 function getRoster() {
   if (_roster.at && Date.now() - _roster.at < ROSTER_TTL_MS) return _roster;
 
+  const dir = path.join(VAULT_PATH, 'People');
   let names = [];
   try {
-    names = fs.readdirSync(path.join(VAULT_PATH, 'People'))
+    names = fs.readdirSync(dir)
       .filter(f => f.endsWith('.md') && !f.startsWith('_'))
       .map(f => f.slice(0, -3));
   } catch { names = []; }
@@ -37,7 +79,52 @@ function getRoster() {
     if (counts.get(first) === 1 && first !== n.toLowerCase()) firstNames.set(first, n);
   }
 
-  _roster = { at: Date.now(), full: names, firstNames };
+  // Aliases (#38). The ticket expected these to RESCUE the ambiguous first
+  // names — `nathan`, `andrea`, `chris`. Measured against the live vault, they
+  // do the opposite: `Chris` is listed as an alias on BOTH Chris Middleton and
+  // Chris Smith, and `Nathan` on both Nathans. The file does not disambiguate
+  // those names, it asserts them twice. Trusting it would re-create the bug
+  // `firstNames` exists to prevent — one Lucy's commitments landing on four
+  // different Lucys.
+  //
+  // So an alias earns the same test a first name gets: it is an identifier only
+  // when it points at exactly ONE person. Three ways it can fail, and the
+  // second is the one the ticket missed:
+  //   1. two people claim it            (`Chris`, `Nathan`)
+  //   2. it is a first name the ROSTER already finds ambiguous (`Andrea` — only
+  //      Andrea Melisa lists it, but Andrea Glykofrydis exists, so counting
+  //      alias claims alone would resolve it and the bare first name would not)
+  //   3. it is somebody else's full name
+  //
+  // What survives is the part that was always the real value: the deliberate
+  // ones a filename cannot express — `Seb`, `Nath`, `Ben M`, `Chris S`,
+  // `Steve R` — and the mis-transcriptions Plaud leaves behind, `Abdi Mohammad`
+  // and `Naomi Winkworth` (which is #39's phantom person, already mapped to the
+  // real Naomi Wentworth in the vault).
+  const fullLower = new Set(names.map(n => n.toLowerCase()));
+  const claims = new Map(); // alias-lower -> Set of full names claiming it
+  for (const n of names) {
+    let list = [];
+    try { list = readAliases(fs.readFileSync(path.join(dir, `${n}.md`), 'utf-8')); }
+    catch { continue; } // unreadable note — skip, never fail the whole roster
+    for (const a of list) {
+      const key = a.toLowerCase();
+      if (!key) continue;
+      if (!claims.has(key)) claims.set(key, new Set());
+      claims.get(key).add(n);
+    }
+  }
+  const aliases = new Map();
+  for (const [key, owners] of claims) {
+    if (owners.size !== 1) continue;                 // 1
+    if ((counts.get(key) || 0) > 1) continue;        // 2
+    const owner = [...owners][0];
+    if (fullLower.has(key) && key !== owner.toLowerCase()) continue; // 3
+    if (key === owner.toLowerCase()) continue;       // an alias equal to the name adds nothing
+    aliases.set(key, owner);
+  }
+
+  _roster = { at: Date.now(), full: names, firstNames, aliases };
   return _roster;
 }
 
@@ -68,6 +155,14 @@ function extractEntities(text) {
   for (const [first, person] of roster.firstNames) {
     if (entities.people.includes(person)) continue;
     if (mentionsName(lower, first)) entities.people.push(person);
+  }
+  // Aliases last, and only the unambiguous ones — see getRoster. This is what
+  // catches "Seb", "Nath" and the Plaud mis-transcriptions ("Naomi Winkworth"),
+  // none of which any filename-derived rule can reach. Stores the FULL name, so
+  // a mention resolves onto the real person's page.
+  for (const [alias, person] of roster.aliases) {
+    if (entities.people.includes(person)) continue;
+    if (mentionsName(lower, alias)) entities.people.push(person);
   }
 
   // Tasks — lines that look like action items
@@ -304,4 +399,4 @@ function processRecentNotes(daysBack = 7) {
   return { processed, pruned };
 }
 
-module.exports = { extractEntities, processNote, getMentionsOf, getOrphans, processRecentNotes, pruneExcludedEntities, getRoster };
+module.exports = { extractEntities, processNote, getMentionsOf, getOrphans, processRecentNotes, pruneExcludedEntities, getRoster, readAliases };

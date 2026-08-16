@@ -89,6 +89,38 @@ function invalidate() {
   _cache = { at: 0, contacts: [] };
 }
 
+/**
+ * An alias from a People note, resolved to the canonical full name (#38).
+ *
+ * The map comes from `entities.getRoster()` rather than being re-derived here —
+ * one place decides what an alias means, so the roster and the directory cannot
+ * drift apart on it. It contains ONLY aliases that point at exactly one person:
+ * `Chris` is claimed by both Chris Middleton and Chris Smith and so is absent,
+ * which is why this can never loosen matching. What it adds is the deliberate
+ * short forms a filename cannot express (`Seb`, `Nath`, `Steve R`) and the Plaud
+ * mis-transcriptions (`Naomi Winkworth`).
+ */
+function aliasTarget(normalisedQuery) {
+  try {
+    const { aliases } = require('./entities').getRoster();
+    return aliases.get(normalisedQuery) || null;
+  } catch {
+    return null; // no vault, unreadable People/ — fall through to the other tiers
+  }
+}
+
+// Everyone in People/ whose FIRST name is this. Used to spot an ambiguity that
+// the contact list cannot see, because it only holds people with an address.
+function rosterNamesByFirstName(normalisedQuery) {
+  if (!normalisedQuery || normalisedQuery.includes(' ')) return [];
+  try {
+    const { full } = require('./entities').getRoster();
+    return full.filter((n) => normalise(n).split(' ')[0] === normalisedQuery);
+  } catch {
+    return [];
+  }
+}
+
 // Exact full name, then first name, then "starts with" — most specific wins, and
 // we never fall through to a looser tier once a tighter one has matched.
 function matchLocal(query, contacts) {
@@ -123,12 +155,45 @@ async function resolveName(query) {
     return { query: raw, status: 'resolved', name: raw, email: raw, source: 'literal' };
   }
 
-  let hits = matchLocal(raw, localContacts());
+  // Canonicalise through the alias map BEFORE matching, rather than adding an
+  // alias tier to matchLocal (#38). A tier can be silently overruled: `Nath` is
+  // Nathan Button's alias, Nathan Button has no `email:` so he is not in
+  // contacts at all, the alias tier therefore matched nothing — and execution
+  // fell through to the "starts with" tier, which happily returned Nathan
+  // RUTLAND. A precise rule that degrades into a fuzzy one is worse than no rule,
+  // because it is confidently wrong about which of two colleagues you meant.
+  //
+  // Canonicalising up front means an alias decides WHO, once, and every tier
+  // below is then matching that person's real name. It also sends the right
+  // name to Graph: searching the org directory for "Nath" is a guess, searching
+  // for "Nathan Button" is not.
+  const canonical = aliasTarget(normalise(raw));
+
+  // A name the ROSTER knows is ambiguous must not resolve, even when only one of
+  // the candidates happens to have an address. `localContacts()` is built from
+  // notes carrying `email:`, so it cannot see the ambiguity at all: both Nathans
+  // exist in People/, only Rutland has an address, and asking for "Nathan"
+  // therefore resolved confidently to him. The contact list is the wrong place
+  // to ask "how many people are called this" — the roster is.
+  if (!canonical) {
+    const sameFirst = rosterNamesByFirstName(normalise(raw));
+    if (sameFirst.length > 1) {
+      return {
+        query: raw,
+        status: 'ambiguous',
+        candidates: sameFirst.map((name) => ({ name, source: 'vault' })),
+      };
+    }
+  }
+
+  const term = canonical || raw;
+
+  let hits = matchLocal(term, localContacts());
 
   // Nothing locally — ask the org directory.
   if (!hits.length) {
     try {
-      hits = await microsoft.searchPeople(raw);
+      hits = await microsoft.searchPeople(term);
     } catch { hits = []; }
   }
 
@@ -144,14 +209,102 @@ async function resolveName(query) {
   if (unique.length === 1) {
     return { query: raw, status: 'resolved', ...unique[0] };
   }
+  // `aliasOf` carries WHO the alias named even when no address was found, so a
+  // caller can say "Nathan Button — no address on file" instead of the bare
+  // "couldn't resolve Nath". Deliberately not `name`: that means "the matched
+  // contact" on a resolved result, and reusing it here would let a caller read
+  // an unresolved answer as a resolved one.
+  const aliasOf = canonical ? { aliasOf: canonical } : {};
   if (unique.length > 1) {
-    return { query: raw, status: 'ambiguous', candidates: unique.slice(0, 5) };
+    return { query: raw, status: 'ambiguous', candidates: unique.slice(0, 5), ...aliasOf };
   }
-  return { query: raw, status: 'unresolved', candidates: [] };
+  return { query: raw, status: 'unresolved', candidates: [], ...aliasOf };
 }
 
 async function resolveNames(names = []) {
   return Promise.all(names.map(resolveName));
+}
+
+/**
+ * Learn an address Nick typed in by hand, by writing it back to the People note.
+ *
+ * The loop this closes: the directory could not resolve a name, Nick supplied
+ * the address, and NEURO threw that knowledge away the moment the action was
+ * sent — so the next chase to the same person asked him again. 26 of 41 People
+ * notes carry no `email:`, so "the directory could not resolve it" is the normal
+ * case, not an edge one.
+ *
+ * Three rules, and the first is the one that would quietly corrupt the vault:
+ *
+ *   1. NEVER `obsidian.updateFrontmatter`. Its line-based reserialise drops list
+ *      values, and People notes carry `aliases:` lists — 30 of them. Writing an
+ *      address through it would silently delete the alias map that #38 just made
+ *      load-bearing. This edits the single `email:` line by hand, exactly as
+ *      `restampMeetingPeople` rewrites only the `people:` block.
+ *   2. A hand-typed address is evidence, not gospel: it is written when the note
+ *      has none, and an EXISTING address is never overwritten. Nick correcting a
+ *      one-off recipient must not silently retarget every future message to that
+ *      person; a genuine change is a deliberate edit to the note.
+ *   3. Only ever a real person on the roster. An address typed for someone with
+ *      no People note creates nothing — inventing notes is `people-gap`'s job,
+ *      behind its own review step.
+ *
+ * Backs the file up before touching it, like every other vault write here.
+ * Returns a reason rather than throwing: this runs AFTER the useful work, and a
+ * bookkeeping failure must never fail the caller (#69's rule).
+ */
+function learnEmail(personName, email) {
+  const name = String(personName || '').trim();
+  const addr = String(email || '').trim();
+  if (!name || !addr.includes('@')) return { ok: false, reason: 'bad-input' };
+
+  const dir = path.join(VAULT_PATH(), 'People');
+  if (!VAULT_PATH() || !fs.existsSync(dir)) return { ok: false, reason: 'no-vault' };
+
+  // Resolve to a real note — accept an alias, refuse anything ambiguous.
+  let target = null;
+  try {
+    const { full, aliases } = require('./entities').getRoster();
+    const q = normalise(name);
+    target = full.find((n) => normalise(n) === q) || aliases.get(q) || null;
+  } catch { return { ok: false, reason: 'no-roster' }; }
+  if (!target) return { ok: false, reason: 'no-person-note' };
+
+  const file = path.join(dir, `${target}.md`);
+  let src;
+  try { src = fs.readFileSync(file, 'utf-8'); } catch { return { ok: false, reason: 'unreadable' }; }
+
+  // Mixed CRLF/LF vault — normalise before anything line-anchored, then write
+  // back with the line ending the file already used.
+  const crlf = src.includes('\r\n');
+  const text = src.replace(/\r\n/g, '\n');
+  const fm = text.match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return { ok: false, reason: 'no-frontmatter' };
+
+  const lines = fm[1].split('\n');
+  const idx = lines.findIndex((l) => /^email:/.test(l));
+  if (idx >= 0 && lines[idx].slice(lines[idx].indexOf(':') + 1).trim().includes('@')) {
+    return { ok: false, reason: 'already-set' }; // rule 2 — never overwrite
+  }
+
+  if (idx >= 0) lines[idx] = `email: ${addr}`;
+  else lines.push(`email: ${addr}`);
+
+  const updated = text.replace(fm[0], `---\n${lines.join('\n')}\n---`);
+  const out = crlf ? updated.replace(/\n/g, '\r\n') : updated;
+
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupDir = path.join(VAULT_PATH(), 'Scripts', '.lint-backups', stamp);
+    fs.mkdirSync(backupDir, { recursive: true });
+    fs.writeFileSync(path.join(backupDir, `${target}.md`), src);
+    fs.writeFileSync(file, out);
+  } catch (e) {
+    return { ok: false, reason: `write-failed: ${e.message}` };
+  }
+
+  invalidate();                                  // the address is usable immediately
+  return { ok: true, person: target, email: addr };
 }
 
 module.exports = {
@@ -159,4 +312,5 @@ module.exports = {
   resolveNames,
   localContacts,
   invalidate,
+  learnEmail,
 };

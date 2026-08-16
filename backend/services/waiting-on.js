@@ -363,7 +363,30 @@ function setChaseRecipient(actionId, email) {
   if (!db.updateSaraActionPayload(action.id, payload)) {
     return { ok: false, error: 'Could not update — it may have just been approved' };
   }
-  return { ok: true, to: payload.to };
+
+  // Feedback loop: remember the address so the next chase to this person does
+  // not ask again. 26 of 41 People notes carry no `email:`, so being asked is
+  // the normal case. Runs AFTER the payload is safely stored and is never
+  // allowed to fail the override — the useful work is already done, and a vault
+  // write failing must not read to Nick as "your correction didn't save" (#69).
+  // `learnEmail` writes only when the note has no address; it never overwrites
+  // one, so a one-off recipient cannot silently retarget future messages.
+  //
+  // Note `payload.person` is the CANONICAL FIRST NAME — that is all `waiting_on`
+  // stores. `learnEmail` accepts it only when it maps to exactly one person, so
+  // "Heidi" learns and "Chris" does not. That is the right way round: the
+  // ambiguous ones are precisely where writing to the wrong colleague's note
+  // would be worst, and they are also the ones Nick is most often correcting.
+  let learned = null;
+  try {
+    const person = action.payload?.person;
+    if (person) {
+      const r = require('./contact-directory').learnEmail(person, clean);
+      if (r.ok) learned = r.person;
+    }
+  } catch { /* bookkeeping only */ }
+
+  return { ok: true, to: payload.to, ...(learned ? { learned } : {}) };
 }
 
 /**
