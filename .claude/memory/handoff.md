@@ -1,3 +1,89 @@
+# Session Handoff — 2026-08-16 14:00
+
+## Shipped all three queued items, deployed + verified live
+`6512027` #94 · `ca1c032` #56 · `e18183b` #83. Suite **363 local / 354 Pi**.
+Pi clean at origin/main, `unstable_restarts` 0. Parked files untouched and
+uncommitted: `backend/routes/health.js`, `backend/services/stress-score{,.test}.js`
+— **still exactly the 9-test gap. Leave them.**
+
+## ⏳ ONE THING STILL PENDING — fires Monday 08:00, no action needed
+`briefing.checkEscalationAlerts` backfills its seen-list on its first widened
+run, and its cron is `*/5 8-18 * * 1-5` — **weekdays only, and today is Sunday**.
+So `escalation_alert_wide_seeded` is still null and 11 keys are still absent from
+`alert_seen_ids`. Monday at 08:00 it will record those 11 silently and push **0**.
+Verified by rehearsal against the real seen-list, not by argument. If a future
+session sees that flag unset, that is the normal state until Monday — do not
+"fix" it, and do not widen anything else in that file before it has run once.
+
+## `6512027` — #94, and **the brief's "17 waiting on you" was wrong**
+Narrow arm 6 → both arms 17, confirmed. But the loud number the brief feared
+never existed: once `comment` is actually requested, **Nick has already replied
+to 12 of the 17**, and `!hasComment && !seen` means those never reach the card.
+**5 surface**, aged 6–65 days: NT-21284, NT-22339, NT-23239, NT-23803, NT-27431.
+Live now, as one banner: *"5 escalations waiting on you — oldest is NT-21284, 65d
+old."* Nick chose "let them surface" over seeding — seeding those 5 would have
+made the fix cosmetic on the one surface it exists to correct.
+
+**The brief missed the bigger landmine, and it was the second push path.**
+`briefing.checkEscalationAlerts` had the SAME narrow query, pushes once **per
+ticket**, and `escalation_alert` IS in `ALWAYS_DELIVER`. 11 of the 17 were absent
+from its seen list → widening it blind is **11 notifications at any hour**. The
+nudge path, by contrast, pushes type `escalation`, which is **not** in
+ALWAYS_DELIVER — so it respects quiet hours. The hazard was in the file nobody
+was looking at.
+
+**Two things checked rather than assumed, both of which changed the code:**
+- Jira caps the inline `comment` field at 20 per issue and returns the **NEWEST**
+  20 (NT-14855: `startAt 32, total 52`). The oldest 20 would read "no reply" on
+  exactly the long churning threads an escalation becomes. 3 of the 17 are
+  truncated; all 3 still resolve to "replied". No follow-up fetch needed.
+- `/search/jql` **has no `total`** — only `isLast`. That is now the cap signal
+  and it logs loudly.
+
+`nickCommented` is **null when comments were not requested, never false** — "we
+did not look" must not be what puts a ticket on the card. #54's badge rules were
+re-measured on the wider population and still hold (priority Unset 7 / Normal 8 /
+Major 1 / Critical 1; assignee Nick 16 of 17), so nothing there changed.
+
+## `ca1c032` — #56, **worse than the ticket said, and now measurable**
+The ticket said "degrades to near-keyword matching". It does not. The fallback is
+**128-dim** and Voyage is **1024-dim**, and `cosineSimilarity` returns **0** on a
+length mismatch — so a fallback row is not a worse match, it is **unreachable**,
+while the real content hash makes the rebuild skip the file forever.
+
+**Measured on the live index: 74 rows across 32 files.** Whole transcripts gone —
+16 chunks of one meeting, 13 of a NOVA doc, 8+8 of two standups. Oldest 18 June.
+**None of it could ever have healed on its own.** Now **0** — triggered the
+rebuild and watched it: sweep found exactly 32 files, re-embedded 148 chunks,
+0 errors, 0 left behind.
+
+Failed calls now write **nothing** (the file stays un-stamped and retries); a
+**partial** response counts as failure; the query side returns null so
+`semanticSearch` hands back to keyword search rather than returning an empty set
+that reads as "nothing matches". With **no key at all** the hash index is left
+alone — it is self-consistent, and only the *mixture* is broken.
+`GET /api/activity/embeddings-health` follows #65: not-configured / unprobed /
+degraded / ok, plus a live count of unreachable rows and the remedy.
+
+## `e18183b` — #83, latent, kept small
+Premise confirmed stale: **4 pending, not 929**. The real bug was that the route
+asked for 1,000 actions of *every* type and discarded all but `capture_todo`, so
+the bound was spent on rows it was about to throw away. Now typed
+(`getPendingSaraActionsByType`), capped at 200, **logs when it bites**, and the
+payload carries `suggestedTotal`/`suggestedCapped` so no number on screen is the
+capped one. Live: `suggestedTotal 0`.
+
+## NEXT — nothing queued from me. Still on Nick, not code:
+- **#106** — still the cheapest thing on his list. One pending `draft_reply` to
+  Stephen Mitchell, "Integration Partner Escalation Contacts". Approving **sends
+  nothing** (gate 1 of 2). That executor has **run zero times ever**.
+- **The 5 escalations are now visible and genuinely unanswered** — NT-21284 is
+  65 days old. That is the point of #94, and it is Nick's to action.
+- **Write up the Nathan (#22) / Stephen (#23) 1-2-1s** — until a note exists the
+  board keeps calling them overdue. Looks like a bug, isn't.
+- **#2 Teams** (office day, admin consent queue), **#116** NOVA re-auth
+  (#115/#117/#118 gated behind it — do not build), **#59** off-site backup.
+
 # Session Handoff — 2026-08-16 17:30
 
 ## Shipped today, all deployed + verified
