@@ -36,6 +36,31 @@ async function drainQueue(onDrained) {
   if (remaining.length < q.length && onDrained) onDrained(q.length - remaining.length);
 }
 
+// #114 — the capture section of the feature tracker, read back.
+// Capture wrote into the tracker from three surfaces and nothing ever read it,
+// so the only way to see whether an idea had landed was to open the file. This
+// is the cheapest honest version: a count and the last few rows, shown where the
+// confirmation already appears.
+function useCapturedFeatures(active) {
+  const [state, setState] = useState({ status: 'idle', items: [], total: 0 });
+
+  const load = useCallback(async () => {
+    setState(s => (s.status === 'idle' ? { ...s, status: 'loading' } : s));
+    try {
+      const res = await fetch(apiUrl('/api/features/captured?limit=3'));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setState({ status: 'ok', items: data.items || [], total: data.total || 0 });
+    } catch {
+      // "Couldn't ask" is not "there are none" (#28). The panel says so.
+      setState(s => ({ ...s, status: 'error' }));
+    }
+  }, []);
+
+  useEffect(() => { if (active) load(); }, [active, load]);
+  return { ...state, reload: load };
+}
+
 // Auto-detect if text looks like a todo
 function looksLikeTodo(text) {
   const t = text.trim();
@@ -80,6 +105,11 @@ export default function CapturePanel() {
   const [showAttach, setShowAttach] = useState(false);
   const fileRef = useRef(null);
   const textRef = useRef(null);
+
+  // Loads when a feature is being typed or has just been filed — never on every
+  // note capture, which would read the vault for nothing on the common path.
+  const featureInPlay = result?.type === 'feature' || FEATURE_RE.test(content.trim());
+  const captured = useCapturedFeatures(featureInPlay);
 
   const resetForm = () => {
     setContent('');
@@ -187,6 +217,9 @@ export default function CapturePanel() {
         // Haptic success
         try { navigator.vibrate?.(100); } catch {}
         fetchRecent();
+        // Re-read the tracker so the row just written is in the list, rather
+        // than showing the state from before the capture (#114).
+        if (feature) captured.reload();
         setTimeout(resetForm, 3000);
       }
     } catch (err) {
@@ -230,6 +263,7 @@ export default function CapturePanel() {
   const detectedType = file ? (file.type.startsWith('image/') ? 'photo' : 'file')
     : detectedFeature ? 'feature'
     : content.trim() && looksLikeTodo(content) ? 'todo' : 'note';
+  const showCaptured = detectedType === 'feature' || result?.type === 'feature';
 
   return (
     <div className="capture-panel">
@@ -267,6 +301,27 @@ export default function CapturePanel() {
           <div className="capture-type-hint">
             {detectedType === 'feature' ? `Will go to the feature tracker (${detectedFeature.system})`
               : detectedType === 'todo' ? 'Will save as todo' : 'Will save as note'}
+          </div>
+        )}
+
+        {/* #114 — what has actually landed in the tracker. Shown while a feature
+            is being typed as well as after one is filed, so it answers "did that
+            thing last week land" and not only "did this one". */}
+        {showCaptured && (
+          <div className="capture-captured">
+            <div className="capture-captured-head">
+              {captured.status === 'error' ? 'Recently captured — couldn’t reach the tracker'
+                : captured.status === 'loading' ? 'Recently captured…'
+                : captured.total === 0 ? 'Nothing captured yet — this would be the first'
+                : `Recently captured (${captured.total})`}
+            </div>
+            {captured.items.map(item => (
+              <div key={`${item.number}-${item.title}`} className="capture-captured-row">
+                <span className="capture-captured-num">#{item.number}</span>
+                <span className="capture-captured-title">{item.title}</span>
+                <span className="capture-captured-sys">{item.system}</span>
+              </div>
+            ))}
           </div>
         )}
 

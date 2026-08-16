@@ -78,23 +78,31 @@ function restamp(text, today) {
 }
 
 /**
+ * Bounds of the capture section — `[start, end)`, or null if it isn't there yet.
+ * The section runs to the next heading of the same level, or to EOF.
+ */
+function sectionBounds(text) {
+  const at = text.indexOf(SECTION);
+  if (at === -1) return null;
+  const rest = text.slice(at + SECTION.length);
+  const nextHeading = rest.search(/\n## /);
+  return { start: at, end: nextHeading === -1 ? text.length : at + SECTION.length + nextHeading };
+}
+
+/**
  * Insert `row` at the end of the capture section's table, creating the section
  * (above `## Related`, or at the end) the first time.
  */
 function insertRow(text, row) {
-  const at = text.indexOf(SECTION);
-  if (at === -1) {
+  const bounds = sectionBounds(text);
+  if (!bounds) {
     const block = `${SECTION}\n\n${SECTION_BLURB}\n\n${TABLE_HEAD}\n${row}\n\n---\n\n`;
     const related = text.indexOf('\n## Related');
     if (related === -1) return `${text.replace(/\s+$/, '')}\n\n---\n\n${block.replace(/\s+$/, '')}\n`;
     return `${text.slice(0, related + 1)}${block}${text.slice(related + 1)}`;
   }
 
-  // Section runs to the next heading of the same level, or to EOF.
-  const rest = text.slice(at + SECTION.length);
-  const nextHeading = rest.search(/\n## /);
-  const bodyEnd = nextHeading === -1 ? text.length : at + SECTION.length + nextHeading;
-
+  const { start: at, end: bodyEnd } = bounds;
   const body = text.slice(at, bodyEnd);
   // Land immediately after the last table row, so a trailing `---` or a note
   // under the table stays under it.
@@ -139,4 +147,65 @@ function captureFeature({ title, notes, system, source } = {}) {
   return { ok: true, number, row, path: file, system: sys };
 }
 
-module.exports = { captureFeature, nextNumber, insertRow, trackerPath, SECTION, SYSTEMS };
+/**
+ * Parse the rows of the capture section back out (#114).
+ *
+ * Capture writes into the tracker from chat and from both Capture surfaces, and
+ * until now nothing read it back — the only way to see what you had captured was
+ * to open the file. Same built-but-unreachable shape as #96/#97, one layer down:
+ * the write landed and the read had nowhere to happen.
+ *
+ * Scoped to the capture section ON PURPOSE. The ranked sections above it are
+ * Nick's editorial and run to well over a hundred rows; listing those here would
+ * make this a second, worse view of the tracker instead of an answer to "did that
+ * thing I said on the train actually land". Newest first, because that is the
+ * question being asked.
+ *
+ * Read-only, and it never throws — an empty tracker and an unreachable one are
+ * different answers (#28) and both are reported as such.
+ */
+function listCaptured({ limit = 5 } = {}) {
+  const file = trackerPath();
+  if (!file) return { ok: false, error: 'Vault path not configured — cannot reach the tracker', items: [], total: 0 };
+  if (!fs.existsSync(file)) return { ok: false, error: `Tracker not found at ${file}`, items: [], total: 0 };
+
+  let text;
+  try { text = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'); }
+  catch (e) { return { ok: false, error: `Could not read the tracker: ${e.message}`, items: [], total: 0 }; }
+
+  const bounds = sectionBounds(text);
+  // No section yet is not a failure — nothing has been captured. Working and
+  // waiting, which is a different thing from broken.
+  if (!bounds) return { ok: true, items: [], total: 0, path: file };
+
+  const body = text.slice(bounds.start, bounds.end);
+  const items = [];
+  for (const line of body.split('\n')) {
+    if (!/^\|/.test(line)) continue;
+    const cells = line.split('|').slice(1, -1).map(s => s.trim());
+    if (cells.length < 4) continue;
+    if (!/^\d+$/.test(cells[0])) continue;          // skips the header and its ---- rule
+    items.push({
+      number: Number(cells[0]),
+      title: cells[1].replace(/\*\*/g, '').trim(),
+      system: cells[2],
+      status: cells[3].replace(/\*\*/g, '').trim(),
+      notes: (cells[4] || '').trim(),
+    });
+  }
+
+  // Newest first. Sorting by NUMBER rather than trusting file order, because
+  // numbering is max+1 and the file is known to contain duplicates — but file
+  // order is the tie-break, so two rows sharing a number keep their real order.
+  const ordered = items.map((it, i) => ({ it, i }))
+    .sort((a, b) => (b.it.number - a.it.number) || (b.i - a.i))
+    .map(x => x.it);
+
+  const n = Number(limit);
+  const take = Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 50) : 5;
+  return { ok: true, items: ordered.slice(0, take), total: ordered.length, path: file };
+}
+
+module.exports = {
+  captureFeature, listCaptured, nextNumber, insertRow, sectionBounds, trackerPath, SECTION, SYSTEMS,
+};
