@@ -1,3 +1,61 @@
+# Session Handoff — 2026-08-16 15:40
+
+## Shipped — all three queued items, deployed and verified live
+`205c549` #71 · `edf9de8` #53/#54. Suite **340 local / 331 Pi** (the 9 is the parked
+stress-score work). Pi at `edf9de8`, frontend rebuilt, `unstable_restarts` still 0.
+
+## `205c549` — #71, the To-Do list cache survives a restart
+`agent_state.ms_todo_list_by_task`. Verified live: driven through the real endpoint,
+**9 entries / 2.5KB**, one list; reloaded intact in a fresh process after a restart.
+
+**Calibration worth carrying: the walk was cheaper than the ticket implies.** Nick has
+**2 To Do lists**, and one is `Flagged Emails`, which the sync skips — so the cold-start
+cost was ~2 Graph calls, not "every list" in any dramatic sense. Still worth fixing (it
+was on the critical path of every first completion after a deploy), but if something
+later looks like it needs the same treatment, measure the list count first.
+
+Persisting **flips the failure mode** — the in-memory map self-corrected every restart,
+a stored one cannot. Two guards, both in the commit: `fetchTodoTasks` **re-keys the whole
+list** instead of appending (completed tasks fall out, map stays at "tasks currently
+open"; the re-key returns a `changed` flag which gates the DB write, or it would rewrite
+the blob per-list per-sync forever), and `completeTodoTask` **forgets and re-walks once on
+a 404** so a moved task heals on the next completion rather than the next deploy.
+
+## `edf9de8` — #53/#54, and **#54's framing in the tracker was wrong**
+#53: the list rendered only at 2+, so a single escalation had no anchor. Now `>= 1`, with
+the summary dropped in that case (the title carries it) and the hover underline moved onto
+the key. Verified by building a real single-escalation card through deployed
+`decision-engine.evaluate` — title `NT-27530 — ESCALATION…`, one row, **live Jira link**,
+badge `Reopened`, 5d.
+
+**#54 said "show priority + assignee, or stop sending them". Neither is right, and the
+6 currently-open escalations would have led me to the wrong answer.** Against all **41**
+escalations Jira has ever held:
+- priority — `Unset` **33**, Normal 5, Major 2, **Critical 1**
+- assignee — Nick **23**, unassigned **7**, five other people 11
+- status (of the 6 open) — Open 3, Reopened 2, Waiting on Development 1
+
+Every field has a **default that is a fact about the queue, not about the ticket**, plus a
+tail worth interrupting for. So: suppress the default, keep the tail. `Unset` / `Open` /
+Nick's own name never leave `jira.js`; no assignee becomes **`Unassigned`**, which on an
+escalation is the finding rather than an absence. Nulled in the service, not per panel, so
+Focus and Briefing cannot drift. Live result — **3 of the 6 render no badges at all**, the
+other 3 render exactly one (`Reopened` ×2, `Waiting on Development` ×1).
+
+**If I had sampled only the 6 open, priority reads "always Unset" and assignee "always
+Nick", and I would have deleted a field that carries a Critical.** Same species as the
+`getPendingSaraActions` limit-10 lesson: the sample the system hands you is not the
+population.
+
+## NEXT
+Nothing queued from me. Still on Nick, not code:
+- **#59** off-site backup — one Backblaze B2 keyID + applicationKey away from buildable,
+  and needs a decision on where the restic password lives **off** the Pi.
+- **P0s outrank all of it**: #63 (Tailscale key, 28 Sept, home only), #2, #106, #22/#23/#99.
+
+`backend/routes/health.js` + `backend/services/stress-score{,.test}.js` remain parked and
+uncommitted — untouched this session, and the 9-test local/Pi gap is exactly them.
+
 # Session Handoff — 2026-08-16 13:15
 
 ## Shipped this session (all deployed + verified live)
