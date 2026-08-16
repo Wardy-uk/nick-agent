@@ -1,114 +1,108 @@
-# Next session — gather everything left, re-prioritise it, then build
+# Next session — #30, then the rest of the ranked queue
 
-Continuing NEURO. Read `.claude/memory/handoff.md` (the **2026-08-16 night** entry
-is newest, at the top), then `mistakes.md`, then `patterns.md`.
+Continuing NEURO. Read `.claude/memory/handoff.md` (the **2026-08-17** entry is
+newest, at the top), then `mistakes.md`, then `patterns.md`.
 
 ## Before touching anything
 
-`git status`, and `git diff <file>` on **every file before you stage it**. Nick runs
-2–3 Claude sessions on this repo at once. As of the last session another one was
-live and holding ~14 uncommitted files — `CLAUDE.md`, `routes/{capture,imports,
-journal,standup}.js`, `services/{ai-provider,briefing,claude,decision-engine,
-imports,nudges,scheduler,standup-session}.js`, `prompt-parity.test.js`,
-`sara/app/src/views/{Focus,Tasks}.jsx`, plus a new `services/sara-voice.js`.
-Explicit staging protects against unrelated *files*, not unrelated *hunks* in a
-file you legitimately touched. If an edit tool says "the file had been modified on
-disk since you last read it", that is a collision signal, not line-ending noise.
+`git status`, and `git diff <file>` on **every file before you stage it**. Nick
+runs 2–3 Claude sessions on this repo at once. A second session has been holding
+the same ~14 files uncommitted for two days: `CLAUDE.md`, `routes/{capture,
+imports,journal,standup}.js`, `services/{ai-provider,briefing,claude,
+decision-engine,imports,nudges,scheduler,standup-session}.js`,
+`prompt-parity.test.js`, `sara/app/src/views/{Focus,Tasks}.jsx`, plus
+`services/sara-voice.js`. Explicit staging protects against unrelated *files*,
+not unrelated *hunks*. "The file had been modified on disk since you last read
+it" is a collision signal, not line-ending noise.
 
-**`CLAUDE.md` is OWED** for #26, #40, #41 and #42 and was deliberately not written
-— it is one of that session's modified files. Write it once their work lands, and
-diff it first.
+**Check whether their work has landed first.** If it has:
+1. **`CLAUDE.md` is OWED for two sessions' work now** — #26/#40/#41/#42 *and*
+   #119/#21/#38/#114/#59/#52/#107b. Write it, and diff it first.
+2. Finish the #52 leftover: the 90-day-plan readers in `claude.js` and
+   `standup-session.js` are now unreachable (working-memory no longer populates
+   it) and should come out.
 
-## State — verified at the end of 16 Aug, not assumed
+If it has NOT landed, route around them as this session did — a new router file
+rather than editing theirs, and cut shared behaviour at the source.
 
-Local and Pi both clean at `c135730`, `main` in sync with origin. Pi suite
-**430/430**, backend online, `unstable_restarts` 0.
+## State — verified at the end of 17 Aug, not assumed
 
-Shipped that night: `0a88af9` #26 · `0032f38`+`1ce0a4b` #40 (+#41) ·
-`6ff90c8`+`9df11a4` #42, plus docs `a0f612c`, `52ae96e`, `c135730`.
+Local and Pi both at `163f760`, `main` in sync with origin. Pi suite **457/457**,
+backend online, `unstable_restarts` 0. **Local 462 vs Pi 457 is the other
+session's uncommitted `prompt-parity.test.js`, not a regression** — the same
+5-test gap existed the day before (Pi 430 / local 435). Confirm it is still the
+explanation rather than assuming.
 
-### Two things in flight that need checking FIRST
+Shipped: `8ff4e51` #119(+#21) · `de69070` #38 · `7008955` #114 · `b921d06` #59 ·
+`163f760` #52/#107b.
 
-1. **The Apple Health backfill is still running.** ~256,000 samples, **0 rejected**,
-   13 metrics, newest `2026-05-08` and climbing (it backfills forward from Aug
-   2024). It is still in ACTIVITY metrics. **HRV has not arrived yet, so the one
-   metric #40 exists for is still unconfirmed on real data.** When vitals land:
-   - check HRV units are `ms` (the parser refuses anything else rather than
-     storing at an unknown scale — see `UNIT_RULES` in `services/apple-health.js`);
-   - check whether `/api/health/stress` leaves `calibrating`. The backfill brings
-     history with it, so it may go straight to a real score. **If it does, #43
-     ("the score says nothing for its first fortnight") closes itself with no code
-     — verify before building anything for it.**
-   - The card is Sidebar → **Insights**, top of the panel.
-2. **`escalation_alert_wide_seeded` may still be null.** `checkEscalationAlerts`
-   runs `*/5 8-18 * * 1-5`, weekdays only. **Unset is NORMAL — do not "fix" it**,
-   and do not widen anything else in `briefing.js` before it has run once.
+### Two things to check FIRST
+
+1. **Apple Health HRV has STILL not arrived.** 277,437 samples, 13 metrics, all
+   activity — no `hrv`, no `heartRate`, no sleep, and most metrics have now
+   reached Aug 2026. This no longer reads as "the backfill hasn't got there";
+   it reads as **the FreeReps app not being configured to send vitals
+   categories**. Check the app before writing any code. It gates #42's card,
+   #43 and #44. If vitals do land, check units are `ms` and whether
+   `/api/health/stress` leaves `calibrating` — the backfill brings history, so
+   **#43 may close itself with no code**.
+2. **#59 is built but dark until Nick creates a Backblaze key.**
+   `backend/scripts/backup-offsite-SETUP.md` is the whole remaining job. Until
+   then `watchdog` reports `offsite:unconfigured` at level `info`. **That is the
+   designed state — do not "fix" it**, and do not treat it as a failure.
+
+`escalation_alert_wide_seeded` may still be unset — `checkEscalationAlerts` is
+`*/5 8-18 * * 1-5`, weekdays only. **Unset is NORMAL.**
 
 ## The task
 
-**Gather everything left to build, re-prioritise it, then crack on.**
+**#30 — moving or cancelling a 1-2-1 in Outlook doesn't come back.**
 
-### Why a re-rank is the first job, not the second
+`next-1-2-1-due` is stamped when NEURO books and nothing reconciles it after.
+Move Heidi's 1-2-1 in Outlook, or cancel it, and the vault still says the old
+date — so the Team card silently describes a meeting that isn't there. The
+detector already solves the mirror image for `last-1-2-1` (read the notes, don't
+trust the field); this is that lesson unapplied to the forward-looking date.
 
-The tracker's own **"Order of play"** section (`Projects/NEURO/NEURO Feature
-Tracker.md` in the vault) was written **15 Aug** and has not been re-run since.
-Measured at the end of 16 Aug: **66 open items — 34 Ready, 20 Needs Nick, 5
-Blocked, 7 Parked.** P1–P4 are clear, so the ranked queue currently contains
-exactly one build (**#59**, off-site backup) while **16-odd items numbered #99 and
-above have never been ranked at all** — including #119–#121, captured that night.
-So "what's ranked" and "what's outstanding" have come apart, and the ranking is
-the thing that fixes it.
+Cheap version from the row: on the nightly sweep, look for a
+`1-2-1 — Nick / X` event near the stored date and correct it.
 
-Rank the way that section already does: **by cost of waiting, not by size or by
-how interesting it is.** Everything not named is genuinely "later" — that is the
-point of ranking. Put the proposed order to Nick before building from it.
+**Measure before building.** Specifically:
+- How many of the 12 stored `1-2-1-booked` / `next-1-2-1-due` dates actually
+  disagree with the calendar right now? If the answer is zero, this is
+  speculative and should be ranked accordingly.
+- `one-to-one-booking.findOneToOne` already matches an existing meeting by
+  attendee email then subject — **reuse it, do not write a second matcher.**
+- ⚠ `services/scheduler.js` is one of the other session's files. `syncPeopleNotes`
+  already runs in the 10pm block, so hang the reconcile off `one-to-one-detect`
+  and touch no scheduler.
+- Remember the field split (16 Aug): `1-2-1-booked` is when the meeting IS,
+  `next-1-2-1-due` is when one is OWED. `last-1-2-1` moves **only** when a note
+  proves the meeting happened. A reconcile that moves `last-1-2-1` is wrong.
 
-### Known facts to fold into the ranking
-
-- **The cheapest unlock on the board is #116** — NOVA's msgraph MCP token has
-  expired. That single re-auth (Nick, ~2 min) unblocks **#115, #117 and #118**,
-  all Ready. Best ratio anywhere in the list.
-- **#59 is the only ranked build left**, and it is infrastructure rather than a
-  feature: backups are hardlinked snapshots on a USB stick plugged into the same
-  Pi as the data, so one fire/theft/power event loses the vault, the HA history
-  and the NEURO DB together.
-- **P0 is not software** and is Nick's, in the office: **#2** (Teams consent),
-  **#99** (read the 287 waiting-on items), **#106** (approve one SARA action —
-  no executor except the chase has ever run).
-- **P5 is decisions only Nick can make**: #91, #47, #57, #37, #18, #67/#68.
-  Note **#40 has dropped out of that list** — it was the biggest blocker there
-  ("blocks #41/#42/#43/#44 entirely") and is now done.
-- **Debt worth ranking honestly**: #21 (dead `one-to-one-prep.js`), #52 (the
-  90-day plan still injected in three places), #107 (`sara_actions` 96% dead rows,
-  nothing prunes it), #78 (929 pending action candidates), #119 (`npm test`
-  creates and deletes files in the REAL vault via `scripts/test-tier1.js`).
-- ⚠ **The tracker has duplicate numbers** — #66, #78, #106 and #107 each appear
-  twice, and `feature-tracker.js` already works around this by numbering
-  `max+1` rather than counting. **The number is not a reliable key**; match on
-  title as well.
-- ⚠ Rows go stale. #25, #28 and #69 shipped on 16 Aug and still read "Ready" the
-  next day until corrected. **Cross-check any "Ready" row against `git log`
-  before ranking it as outstanding.**
+Then, in order: **#50** (`/api/todos/moscow` legacy path — small), **#36**
+(people-gap review UI), **#31** (stale `Areas/1-2-1 Tracker.md`), then the NOVA
+trio (#115/#117/#118) once #116 unblocks them.
 
 ## The rule this repo keeps relearning
 
-**Every ticket premise has been wrong.** #25 said "zero hits for bank holidays"
-(there was a dead, wrong list). #28 said "logged decisions render nowhere"
-(nothing had ever been logged — building the view as written would have shipped
-an empty screen that looked finished). #26 said "seven tabs, falls back to Focus"
-(eight tabs; it opened a sheet; and the real finding — the phone was on the
-retired stepper — was not in the ticket at all). #40's brief specified a Docker +
-TimescaleDB stack and a poller; reading the app's source showed none of it was
-needed, and Phase 3 was already built.
+**Every ticket premise has been wrong.** This session made it nine in a row:
+#5 was already done (5 pending, not 929), #107's churn had already stopped by
+itself, #106 was narrower than written, #21 understated itself (the "dead" file
+was being executed against the live vault on every test run), and **#38 was
+backwards** — its aliases would have re-created the ambiguity it claimed to fix,
+and building it as written was a regression, not a feature.
 
 **Measure before building. State what you measured. If the ticket is wrong, say
-so and correct it in the tracker row.**
+so and correct the tracker row.**
 
-Two more that keep biting:
+Three more that keep biting:
 - **A green suite says nothing about routing.** Call any new route against the
   running server before calling it done.
 - **A feature is not available until it is reachable from the UI.** A new view
   needs its Sidebar entry in the same commit.
+- **An "already fixed" claim is a hypothesis too.** Cross-check every "Ready"
+  row against `git log` and against the live DB before ranking it as outstanding.
 
 ## Deploy sequence
 
@@ -120,10 +114,11 @@ Two more that keep biting:
 - DB at `/mnt/data/nuero/backend/db/agent.db` — open `{readonly:true}` while the
   backend runs.
 - `sara/app` deploys to Netlify (`sara-nickward`, base `sara/app`) on push to main.
-  Verify against the LIVE bundle and check `VITE_BUILD_LABEL` — it carries the
-  commit SHA.
+  Verify against the LIVE bundle and check `VITE_BUILD_LABEL`.
 - ⚠ **Before exempting any route from auth on the Pi, run `tailscale serve status`
   first.** pi5 serves `https://pi5.tailecb90f.ts.net` → `127.0.0.1:3001` with
   **Funnel ON** (public internet), and Tailscale proxies both tailnet and public
-  traffic from `127.0.0.1` — so a source-IP check that trusts loopback publishes
-  the route to the world. That happened on 16 Aug; see `mistakes.md`.
+  traffic from `127.0.0.1`.
+- ⚠ **`npm test` no longer touches the real vault** (#119) — keep it that way.
+  Smoke scripts are `backend/scripts/smoke-*.js` and refuse to run without an
+  explicit `OBSIDIAN_VAULT_PATH`; `no-live-vault-in-tests.test.js` pins it.

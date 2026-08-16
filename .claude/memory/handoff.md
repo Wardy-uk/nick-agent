@@ -1,3 +1,151 @@
+# Session Handoff — 2026-08-17 (re-prioritise, then #119/#21, #38, #114, #59, #52, #107b)
+
+## Shipped, deployed, verified live
+`8ff4e51` #119(+#21) · `de69070` #38 · `7008955` #114 · `b921d06` #59 · `163f760` #52/#107b
+
+Pi **457/457**, backend online, `unstable_restarts` 0, local at `163f760` = origin/main.
+⚠ **Local 462 vs Pi 457 is NOT a regression** — it is the other session's uncommitted
+`prompt-parity.test.js`. The same 5-test gap existed at session start (Pi 430 / local 435).
+
+## ⚠ The second session is STILL live and still uncommitted
+Same ~14 files as yesterday, unchanged: `CLAUDE.md`, `routes/{capture,imports,journal,
+standup}.js`, `services/{ai-provider,briefing,claude,decision-engine,imports,nudges,
+scheduler,standup-session}.js`, `prompt-parity.test.js`, `sara/app/src/views/{Focus,
+Tasks}.jsx`, `services/sara-voice.js`.
+
+**`CLAUDE.md` is STILL OWED** — now for #26/#40/#42 *and* #119/#38/#114/#59/#52/#107b.
+I did not write it, for the second session running, because it is one of their modified
+files and editing it is exactly how the 16 Aug PeopleBoard incident happened.
+**Write it the moment their work lands.**
+
+I routed around them twice rather than sharing a file: the #114 read route went in a new
+`routes/features.js` instead of `routes/capture.js`, and #52 was cut at the SOURCE
+(`working-memory`) so their guarded readers in `claude.js`/`standup-session.js` no-op
+without being touched.
+
+## The re-prioritisation (the actual first job)
+66 open items → **64** after correcting nine rows. Four premises were stale or wrong:
+
+- **#5/#78(a) "929 pending action candidates, do first" was already DONE.** Pi shows
+  **5 pending**, not 929: 622 rejected + 51 executed. Nick's #108 bulk-reject pass did it.
+- **#107's churn had already stopped.** Creation: 14 Aug **7,096** → 15 Aug **4** →
+  16 Aug **1**, once `persistSuggestions` gained its write-side dedupe guard. So (a) was
+  moot and only the index half was real.
+- **#106 is narrower than written.** `capture_todo` ×51 and `chase_commitment` ×2 HAVE
+  executed. What has never run is any **outbound** executor — no `reply_email`,
+  `schedule_focus_block` or `complete_task`. The 14 Aug `draft_reply` (action 15814) is
+  still pending. Still two minutes, still Nick's.
+- **#21 understated itself** — see below.
+
+## #119 (+#21) — `npm test` was writing to the live vault
+`node --test` globs `test-*.js`, so all four Tier smoke scripts ran on every invocation
+and were counted in the suite while asserting nothing. `test-tier1.js` defaulted
+`OBSIDIAN_VAULT_PATH` to the REAL vault and created a prep note and a meeting note in it.
+Renamed all four to `smoke-*` (that is what removes them from discovery), stripped the
+real-vault defaults, put tier1's remaining write behind `--allow-writes`.
+
+**#21's row said only "a comment and a test mention it".** It did not *mention* it —
+`test-tier1.js` required and EXECUTED `one-to-one-prep.js` against the real vault on
+every test run. That is gone, so the file now has **zero code consumers**. I did NOT
+delete it: NOVA confirmation is blocked behind #116, and deleting on an unconfirmed
+premise is the trap this repo keeps hitting.
+
+## #38 — the ticket was backwards, and building it as written was a regression
+It claimed aliases would rescue the ambiguous first names (`nathan`, `andrea`, `chris`).
+Measured: **30 of 41** notes carry aliases (not 17 of 42), and **`Chris` is listed on BOTH
+Chris Middleton and Chris Smith**, `Nathan` on both Nathans. The file does not
+disambiguate those names, it asserts them twice — trusting it re-creates the four-Lucys
+bug. It could never have worked regardless: `parseFrontmatter` returns `""` for a YAML
+block list, so `fm.aliases` is empty for all 30.
+
+So an alias earns the same uniqueness test a first name gets, with **three** rejection
+rules — the middle one is the one the ticket missed: two people claim it; it is a first
+name the ROSTER finds ambiguous (only Andrea Melisa lists `Andrea`, but a second Andrea
+exists); or it is someone else's full name. What survives is the real value: `Seb`,
+`Nath`, `Steve R`, and the Plaud mis-transcriptions — **`Naomi Winkworth` to Naomi
+Wentworth means #39's phantom person is already solved in data**, before any rename.
+
+⚠ **Two live bugs found while building, both silent:**
+1. An alias TIER in `matchLocal` is the obvious implementation and is wrong. `Nath` is
+   Nathan Button's alias, Button has no `email:` so he is not in the contact list, the
+   tier matched nothing — and execution **fell through to "starts with", returning Nathan
+   RUTLAND**. The alias now canonicalises the QUERY up front, so every tier below matches
+   the real name and Graph is asked for "Nathan Button" not "Nath".
+2. A name the ROSTER knows is ambiguous resolved anyway when only one candidate had an
+   address — `localContacts()` is built from notes with `email:`, so it cannot see the
+   ambiguity. "Nathan" resolved confidently to Rutland.
+
+**Feedback loop (Nick asked mid-session):** an address typed by hand is now written back
+to the People note. The hazard is the WRITE, not the loop — `updateFrontmatter` drops
+list values, so writing through it would have deleted the `aliases:` block this commit
+just made load-bearing. Hand-written single-line edit, backs up first, preserves CRLF,
+**never overwrites an existing address**, never invents a note, and can never fail the
+override it hangs off.
+
+Checked and NOT a problem: 26 of 41 People notes have no `email:`, but **all 13 direct
+reports do** — the gap is peers, leadership and auto-stubs, where the Graph fallback is
+the intended path. I called this a booking hazard before checking; it is not.
+
+## #114 — captured features can be read back
+`GET /api/features/captured` + a count and the last three under the CapturePanel composer,
+shown while a feature is being TYPED as well as after one is filed. Scoped to the capture
+section only — listing the ranked sections would make it a second, worse backlog view.
+Handles this file's **duplicate numbers** (sorts by number, file order as tie-break,
+dedupes nothing) and separates "none captured" from "couldn't reach the tracker".
+Verified against a running server, not just the suite.
+
+## #59 — off-site backup, built and scheduled; the B2 key is Nick's
+**Read `backend/scripts/backup-offsite-SETUP.md` — that is the remaining work, ~10 min.**
+Deployed: rclone installed on pi5, `/usr/local/bin/backup-offsite.sh`, root cron 02:20
+daily, `watchdog.checkOffsiteBackup()`.
+
+Ships the irreplaceable half only: vault 910M + Home Assistant 965M + **ONE** current
+agent.db 250M + syncthing 11M = **~2.15GB**, inside B2's 10GB free tier. `backups/` is
+excluded deliberately — 2.1GB of 28 rotated copies of the same DB, derived and growing
+daily as the health backfill lands. Source is the local SNAPSHOT, which already contains
+an integrity-checked `sqlite3 .backup`, so no torn DB. Encrypted, filenames included.
+
+**"unconfigured" is `info`, not a warning** — both setup states verified live (rclone
+absent, then remote absent). A job that cries wolf on day one gets muted before it matters.
+⚠ Two things in the setup doc are load-bearing: the **bucket lifecycle rule** (B2 keeps
+every version by default — a nightly 250MB DB eats the 10GB tier in six weeks, invisibly)
+and **storing the crypt passwords off this machine** (they live in a file that is itself
+inside the thing being backed up).
+
+## #52 / #107(b)
+#52: verified dead before removing (`getPlan()` returns null, folder archived 12 Aug). It
+was **more than three places** and it re-walked the vault on EVERY request because a null
+is not cached — one copy on `/focus`. Cut at the source; `decision-engine`'s
+`collectPlanClosure` opens `if (!p || !p.over ...)` so null short-circuits identically —
+checked, not assumed.
+#107(b): added `type` + an expression index on `json_extract(payload,'$.sourcePath')`.
+Confirmed with EXPLAIN QUERY PLAN that both scoped reads now SEARCH rather than SCAN —
+an expression index whose text does not match the query exactly is ignored silently.
+
+## ⏳ Apple Health — HRV STILL has not arrived
+**277,437 samples, still inserting at 16:56 today, 13 metrics, ALL activity.** No `hrv`,
+no `heartRate`, no sleep. Most metrics have reached Aug 2026, so this is starting to look
+less like "not yet" and more like **the FreeReps app not being configured to send vitals
+categories** — worth checking in the app. It gates #42's card, #43 and #44.
+`escalation_alert_wide_seeded` still unset — Sunday, weekday cron. **Normal, do not fix.**
+
+## NEXT
+**Nick, in the office / on his phone:** #116 NOVA msgraph re-auth (2 min, unblocks
+#115/#117/#118 — best ratio on the board) · #2 Teams consent · #99 the 287 ·
+#106 approve the pending `draft_reply` · **the B2 key for #59** · check the health app's
+vitals categories.
+
+**Code, in order:** **#30** (Outlook moves don't come back — the card describes a meeting
+that isn't there; NOT started, nothing half-done) · **#50** (`/api/todos/moscow` legacy
+path) · **#36** (people-gap review UI) · **#31** (stale 1-2-1 Tracker) · then the NOVA
+trio behind #116.
+
+⚠ Left deliberately: the now-unreachable 90-day-plan readers in `claude.js` and
+`standup-session.js` — finish those when the other session's work lands.
+
+
+---
+
 # Session Handoff — 2026-08-16 night (#26, #40, #41, #42)
 
 ## Shipped, deployed, verified live
