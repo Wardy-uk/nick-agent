@@ -21,10 +21,16 @@ const webpush = require('./webpush');
 
 const STATE_KEY = 'watchdog_active_issues';
 const BACKUP_SNAPSHOTS = '/mnt/backup/snapshots';
+const OFFSITE_STATUS = '/mnt/data/backups/offsite-status.json';
 
 // 6-hourly backups: one missed run is noise, four is a real failure.
 const BACKUP_WARN_HOURS = 12;
 const BACKUP_CRIT_HOURS = 26;
+
+// Off-site runs daily, and is allowed to be much later before it counts —
+// a missed night is a bandwidth blip, four days is a job that has stopped.
+const OFFSITE_WARN_HOURS = 50;
+const OFFSITE_CRIT_HOURS = 96;
 
 function _readActive() {
   try { return JSON.parse(db.getState(STATE_KEY) || '{}'); }
@@ -88,6 +94,91 @@ function checkBackups() {
     }
   } catch (e) {
     out.push({ key: 'backup:check-failed', level: 'warn', title: 'Backup check failed', detail: e.message });
+  }
+  return out;
+}
+
+/**
+ * The off-site copy (#59).
+ *
+ * Local backups are watched above; this watches the copy that leaves the
+ * building, because the failure mode of off-site backup is silence — it stops
+ * in March and you find out in November, when it is the only thing that would
+ * have helped.
+ *
+ * Reads the status file `backup-offsite.sh` writes on EVERY exit path, so an
+ * absent file means the job has never completed, not that it succeeded quietly.
+ * Three distinct answers, and keeping them apart is the whole point:
+ *
+ *   unconfigured — the B2 remote does not exist yet. That is the NORMAL state
+ *                  until the key is created, so it is `info`, not a warning.
+ *                  Same rule as state-of-play's `never` (#65): unknown is not
+ *                  broken, and a board that opens with false warnings is one
+ *                  nobody reads by week two.
+ *   failed       — it ran and could not finish. Critical: it is trying and
+ *                  cannot, which is the state that needs a person.
+ *   ok but old   — it stopped being run at all.
+ *
+ * Off-Linux (Nick's Windows dev box) there is no /mnt at all, so a missing file
+ * there must not manufacture an issue — same degradation rule as pi-health.
+ */
+function checkOffsiteBackup() {
+  const out = [];
+  if (process.platform !== 'linux') return out;
+  try {
+    if (!fs.existsSync(BACKUP_SNAPSHOTS)) return out; // not the Pi — the local check owns that alert
+
+    if (!fs.existsSync(OFFSITE_STATUS)) {
+      out.push({
+        key: 'offsite:never',
+        level: 'info',
+        title: 'No off-site copy yet',
+        detail: 'backup-offsite.sh has never completed a run — everything is still on one machine',
+      });
+      return out;
+    }
+
+    const raw = JSON.parse(fs.readFileSync(OFFSITE_STATUS, 'utf8'));
+    const finished = Date.parse(raw.finishedAt || '');
+    const age = Number.isFinite(finished) ? _hoursSince(finished) : Infinity;
+
+    if (raw.state === 'unconfigured') {
+      out.push({
+        key: 'offsite:unconfigured',
+        level: 'info',
+        title: 'Off-site backup is waiting on its remote',
+        detail: raw.detail || 'the rclone remote has not been configured yet',
+      });
+      return out;
+    }
+
+    if (raw.state === 'failed') {
+      out.push({
+        key: 'offsite:failed',
+        level: 'critical',
+        title: 'Off-site backup is failing',
+        detail: raw.detail || 'the last run did not complete',
+      });
+      return out;
+    }
+
+    if (age >= OFFSITE_CRIT_HOURS) {
+      out.push({
+        key: 'offsite:stale',
+        level: 'critical',
+        title: 'Off-site backup has stopped',
+        detail: `last successful copy was ${Math.round(age / 24)} days ago`,
+      });
+    } else if (age >= OFFSITE_WARN_HOURS) {
+      out.push({
+        key: 'offsite:stale',
+        level: 'warn',
+        title: 'Off-site backup is late',
+        detail: `last successful copy was ${Math.round(age)}h ago`,
+      });
+    }
+  } catch (e) {
+    out.push({ key: 'offsite:check-failed', level: 'warn', title: 'Off-site check failed', detail: e.message });
   }
   return out;
 }
@@ -249,6 +340,7 @@ async function checkHost() {
 async function run({ notify = true } = {}) {
   const issues = [
     ...checkBackups(),
+    ...checkOffsiteBackup(),
     ...checkTaskExport(),
     ...checkScheduledJobs(),
     ...(await checkAi()),
