@@ -79,6 +79,47 @@ router.post('/rebuild-embeddings', async (req, res) => {
   }
 });
 
+// GET /api/activity/embeddings-health — what the embedding path actually did.
+//
+// #56 — Voyage bypasses ai-routing, so it has no budget, no telemetry and no
+// place on the AI panel; a failure was visible only as a console.warn nobody
+// reads. It timed out on 13 Aug and the sole symptom was vault search quietly
+// getting worse. `status` distinguishes not-configured / unprobed / degraded /
+// ok, because "we have not called it yet" is not the same claim as "it works" —
+// the same distinction getBridgeHealth draws for the NOVA bridge (#65).
+router.get('/embeddings-health', (req, res) => {
+  try {
+    const embeddings = require('../services/embeddings');
+    const db = require('../db/database');
+    const health = embeddings.getEmbeddingHealth();
+
+    // Rows a failed call left behind in an earlier version: real content hash,
+    // fallback vector, so the rebuild skips them and every query scores them 0.
+    let unreachableRows = 0;
+    const unreachableFiles = new Set();
+    if (health.configured) {
+      for (const row of db.getAllEmbeddings()) {
+        if (embeddings._storedIsReal(row)) continue;
+        unreachableRows++;
+        unreachableFiles.add(row.relative_path);
+      }
+    }
+
+    res.json({
+      ...health,
+      unreachableRows,
+      unreachableFiles: unreachableFiles.size,
+      // Nothing self-heals these — they carry a valid hash. The next rebuild
+      // sweeps them, so say so rather than leaving a bare number on screen.
+      remedy: unreachableRows
+        ? 'POST /api/activity/rebuild-embeddings — the sweep re-embeds these files'
+        : null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/activity/vault-sync — vault sync status
 router.get("/vault-sync", (req, res) => {
   res.json({ enabled: true, mode: "syncthing", note: "Managed externally via Syncthing over Tailscale" });
