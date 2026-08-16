@@ -28,6 +28,15 @@ function EscalationRow({ t, onPick }) {
         <span className="esc-row-summary">{t.summary}</span>
       </div>
       <div className="esc-row-meta">
+        {/* #105 — the one badge that turns this list into a work queue. Only
+            rendered when it says something: "replied" is the quiet case and
+            "unknown" means the sync has never looked at this ticket's comments,
+            which must not read as "needs you". */}
+        {t.replyState === 'awaiting-you' && (
+          <span className="esc-tag esc-tag-awaiting" title="No reply from you on this ticket yet">
+            needs you
+          </span>
+        )}
         {/* Kept even though the groups now say most of this: a ticket can be
             more than one at once, and only the badges show the overlap. */}
         {t.viaRequestType && <span className="esc-tag esc-tag-req">customer-raised</span>}
@@ -81,7 +90,7 @@ function EscalationGroup({ title, blurb, items, onPick }) {
  * Membership is exclusive and most-specific-first, so the counts sum to the
  * total and nothing appears twice. The per-row badges still show overlap.
  */
-function ActiveEscalations({ items, loading, error, warning, onPick, onRefresh }) {
+function ActiveEscalations({ items, loading, error, warning, awaitingReply, onPick, onRefresh }) {
   const functional = items.filter(t => t.viaUrgency);
   const customer = items.filter(t => !t.viaUrgency && t.viaRequestType);
   const tier = items.filter(t => !t.viaUrgency && !t.viaRequestType);
@@ -99,6 +108,16 @@ function ActiveEscalations({ items, loading, error, warning, onPick, onRefresh }
       </div>
 
       {error && <div className="esc-error">{error}</div>}
+
+      {/* #105 — the whole point of the tab in one line, above the groups, which
+          are collapsed by default. "17 escalated" is a status; "5 of them are
+          waiting on you" is a to-do. Silent when nothing is waiting, because a
+          zero here is a good day rather than a thing to render. */}
+      {!loading && !error && awaitingReply > 0 && (
+        <div className="esc-awaiting-summary">
+          <strong>{awaitingReply}</strong> {awaitingReply === 1 ? 'is' : 'are'} waiting on a reply from you.
+        </div>
+      )}
 
       {/* A short list is indistinguishable from a quiet day, so say so. */}
       {warning && <div className="esc-warn">{warning}</div>}
@@ -148,6 +167,7 @@ export default function EscalationPanel() {
   const [activeLoading, setActiveLoading] = useState(true);
   const [activeError, setActiveError] = useState(null);
   const [activeWarning, setActiveWarning] = useState(null);
+  const [awaitingReply, setAwaitingReply] = useState(null);
   const keyInput = useRef(null);
 
   useEffect(() => { keyInput.current?.focus(); }, []);
@@ -166,6 +186,7 @@ export default function EscalationPanel() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Could not load escalations');
       setActive(data.escalations || []);
+      setAwaitingReply(data.awaitingReply ?? null);
       setActiveWarning(data.warning || null);
     } catch (err) {
       setActiveError(err.message);
@@ -246,6 +267,7 @@ export default function EscalationPanel() {
         loading={activeLoading}
         error={activeError}
         warning={activeWarning}
+        awaitingReply={awaitingReply}
         onRefresh={loadActive}
         onPick={(k) => lookup(null, k)}
       />

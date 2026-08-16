@@ -118,7 +118,18 @@ router.get('/active', async (req, res) => {
   }
 
   escalations.sort((a, b) => new Date(a.created || 0) - new Date(b.created || 0));
-  res.json({ escalations, warning });
+
+  // #105 — which of these are actually waiting on Nick. Decided in the service so
+  // this tab and the Focus card cannot disagree about what "needs a reply" means.
+  const decorated = jira.decorateWithReplyState(escalations);
+  const awaitingReply = decorated.filter(e => e.needsReply).length;
+
+  res.json({
+    escalations: decorated,
+    awaitingReply,
+    total: decorated.length,
+    warning,
+  });
 });
 
 // GET /api/escalation/reasons — the urgency vocabulary, for the picker.

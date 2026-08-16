@@ -398,6 +398,43 @@ function getUnseenEscalations() {
   } catch { return []; }
 }
 
+/**
+ * #105 — stamp a list of escalations with whether Nick has actually replied.
+ *
+ * `escalation_seen` already tracks this per ticket; it is what drives the Focus
+ * card's unseen count. The Escalations tab ignored it, so a ticket answered an
+ * hour ago looked identical to one nobody had touched in a week — which is the
+ * single piece of state that turns a list into a work queue.
+ *
+ * Only possible across the whole list since #94: before that `escalation_seen`
+ * held the six request-type escalations, so eleven of the seventeen rows had no
+ * state to read at all.
+ *
+ * Three values, not two. `unknown` is real and must not read as "needs you":
+ * a ticket the sync has not covered yet (NOVA's urgency arm can contribute keys
+ * Jira's two arms do not) has never had its comments looked at, and guessing
+ * would put a ticket on a work queue on no evidence. Same rule as
+ * `nickCommented` being null rather than false.
+ */
+function decorateWithReplyState(escalations) {
+  let known = {};
+  try {
+    const raw = db.getState('escalation_seen');
+    known = raw ? JSON.parse(raw) : {};
+  } catch { known = {}; }
+
+  return (escalations || []).map(e => {
+    const row = known[e.key];
+    if (!row) return { ...e, replyState: 'unknown', needsReply: false };
+    return {
+      ...e,
+      replyState: row.hasComment ? 'replied' : 'awaiting-you',
+      needsReply: !row.hasComment,
+      acknowledged: !!row.seen,
+    };
+  });
+}
+
 // ── Polling (escalations only) ───────────────────────────────────────────────
 
 function startPolling() {
@@ -434,6 +471,7 @@ module.exports = {
   markEscalationsSeen,
   getUnseenEscalationCount,
   getUnseenEscalations,
+  decorateWithReplyState,
   // pure, exported for the tests — what counts as informative is the decision
   _mapEscalationIssue: mapEscalationIssue,
   _nickInComments: nickInComments,

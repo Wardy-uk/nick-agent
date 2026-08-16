@@ -111,6 +111,17 @@
 .esc-tag-tier { color: var(--text-muted); }
 .esc-tag-urgency { color: var(--warning); cursor: help; }
 
+/* #105 — the only badge here that is a call to action rather than a
+   classification, so it is the only one with a fill. */
+.esc-tag-awaiting {
+  color: var(--danger, #e5534b);
+  border: 1px solid color-mix(in srgb, var(--danger, #e5534b) 45%, transparent);
+  background: color-mix(in srgb, var(--danger, #e5534b) 12%, transparent);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-weight: 600;
+}
+
 .esc-row-action {
   margin-left: auto;
   padding: 3px 8px;
@@ -167,6 +178,17 @@
   color: var(--danger);
   font-size: 13px;
   margin-bottom: 16px;
+}
+
+/* Sits above the collapsed groups: the count that is a to-do rather than a
+   status, so it must not need a click to reach. */
+.esc-awaiting-summary {
+  padding: 8px 12px;
+  border-left: 3px solid var(--danger, #e5534b);
+  background: color-mix(in srgb, var(--danger, #e5534b) 10%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  margin: 12px 0;
 }
 
 .esc-warn {
