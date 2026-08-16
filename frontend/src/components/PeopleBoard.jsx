@@ -44,6 +44,9 @@ function getSaraStatus(person, vaultData, summaries) {
   if (empStatus.includes('probation')) return { word: 'watch', tone: 'warning', reason: 'Probation' };
   if (tags.includes('blocked') || status === 'blocked') return { word: 'blocked', tone: 'warning', reason: 'Tagged blocked' };
   if (s121?.status === 'due-soon') return { word: 'watch', tone: 'warning', reason: s121.label };
+  // A 1-2-1 that happened but was never written up isn't "overdue" — nothing
+  // needs booking. It's a gap in the record, so it watches rather than alarms.
+  if (s121?.status === 'unwritten') return { word: 'watch', tone: 'warning', reason: s121.label };
   if (overdueTasks.length > 0) return { word: 'watch', tone: 'warning', reason: `${overdueTasks.length} overdue task${overdueTasks.length > 1 ? 's' : ''}` };
   if (status === 'flag' || person.note) return { word: 'watch', tone: 'warning', reason: person.note || 'Flagged' };
   return { word: 'solid', tone: 'ok', reason: '' };
@@ -72,14 +75,35 @@ function buildTeamSaraLine(teams, peopleData, personSummaries) {
   return parts.join(' ');
 }
 
+// Mirrors one-to-one-detect.cadenceState() on the server. A 1-2-1 already in the
+// diary reads "Booked", never "Overdue": `1-2-1-booked` is what is in the
+// calendar, `next-1-2-1-due` is only ever when the next one is OWED.
 function get121Status(frontmatter) {
   const due = frontmatter?.['next-1-2-1-due'];
+  const booked = frontmatter?.['1-2-1-booked'];
+  const last = frontmatter?.['last-1-2-1'];
+
+  const dayDelta = (from) => {
+    const d = new Date(`${from}T12:00:00`);
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    return Math.round((d - today) / (1000 * 60 * 60 * 24));
+  };
+
+  if (booked) {
+    const untilBooked = dayDelta(booked);
+    if (untilBooked >= 0) {
+      return { status: 'booked', daysUntil: untilBooked, label: untilBooked === 0 ? 'Booked today' : `Booked ${booked}` };
+    }
+    // Been and gone with nothing written up — a missing note, or a cancellation
+    // nobody recorded. Not the same as never having booked one.
+    if (!last || last < booked) {
+      return { status: 'unwritten', daysUntil: untilBooked, label: `Met ${booked} — no note` };
+    }
+  }
+
   if (!due) return null;
-  const dueDate = new Date(due);
-  dueDate.setHours(0, 0, 0, 0);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const daysUntil = Math.round((dueDate - today) / (1000 * 60 * 60 * 24));
+  const daysUntil = dayDelta(due);
   if (daysUntil < 0) return { status: 'overdue', daysUntil, label: `Overdue by ${Math.abs(daysUntil)}d` };
   if (daysUntil <= 3) return { status: 'due-soon', daysUntil, label: `Due in ${daysUntil}d` };
   return { status: 'ok', daysUntil, label: `Due ${due}` };
@@ -628,6 +652,152 @@ function BookDialog({ name, onClose, onBooked }) {
   );
 }
 
+/**
+ * Move an existing 1-2-1. Same two-step contract as BookDialog — proposing reads
+ * only, confirming PATCHes the event and Graph mails the attendee an update.
+ *
+ * The move count is shown BEFORE the confirm, not after, because the whole point
+ * is that a 1-2-1 slid for the third time should be visibly the third time.
+ */
+function RescheduleDialog({ name, onClose, onMoved }) {
+  const [proposal, setProposal] = useState(null);
+  const [slot, setSlot] = useState(null);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  const [moving, setMoving] = useState(false);
+  const [moved, setMoved] = useState(null);
+
+  useEffect(() => {
+    fetch(apiUrl('/api/1to1/propose-reschedule'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ person: name }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setProposal(d);
+          setSlot({ date: d.proposed.date, time: d.proposed.start.split('T')[1].slice(0, 5) });
+        } else setError(d.error || 'Could not find a slot to move to');
+      })
+      .catch(e => setError(e.message));
+  }, [name]);
+
+  const confirm = async () => {
+    setMoving(true);
+    setError('');
+    try {
+      const iso = slotToIso(slot.date, slot.time, proposal.durationMinutes);
+      const res = await fetch(apiUrl('/api/1to1/reschedule'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          person: name,
+          eventId: proposal.eventId,
+          start: iso.start,
+          end: iso.end,
+          reason: reason.trim() || undefined,
+        }),
+      });
+      const d = await res.json();
+      if (d.ok) { setMoved(d); onMoved?.(); }
+      else setError(d.error || 'Move failed');
+    } catch (e) { setError(e.message); }
+    setMoving(false);
+  };
+
+  const first = name.split(' ')[0];
+
+  return (
+    <div className="note-editor-overlay" onClick={onClose}>
+      <div className="book-dialog" onClick={e => e.stopPropagation()}>
+        <div className="note-editor-header">
+          <span className="note-editor-title">Move 1-2-1 — {name}</span>
+          <button className="note-editor-close" onClick={onClose}>x</button>
+        </div>
+
+        {moved ? (
+          <div className="book-dialog-body">
+            <div className="book-ok">
+              Moved to {formatDate(moved.event?.start?.split('T')[0])} at{' '}
+              {moved.event?.start?.split('T')[1]?.slice(0, 5)}. {first} has been sent an update.
+            </div>
+            {moved.moveCount >= 3 && (
+              <div className="book-warning">
+                That's {moved.moveCount} moves for this 1-2-1.
+              </div>
+            )}
+            <div className="book-actions">
+              <button className="btn btn-primary" onClick={onClose}>Done</button>
+            </div>
+          </div>
+        ) : !proposal && !error ? (
+          <div className="note-editor-loading">Finding the meeting...</div>
+        ) : error && !proposal ? (
+          <div className="book-dialog-body">
+            <div className="book-error">{error}</div>
+            <div className="book-actions"><button className="btn" onClick={onClose}>Close</button></div>
+          </div>
+        ) : (
+          <div className="book-dialog-body">
+            {proposal.warning && <div className="book-warning">{proposal.warning}</div>}
+            <dl className="book-meta">
+              <dt>Currently</dt>
+              <dd>
+                {formatDate(proposal.current.date)} at {proposal.current.start.split('T')[1].slice(0, 5)}
+                {' — '}{proposal.current.subject}
+              </dd>
+            </dl>
+            <div className="book-slot">
+              <span className="book-slot-date">{formatDate(slot.date)}</span>
+              <span className="book-slot-time">
+                {slot.time}–{slotToIso(slot.date, slot.time, proposal.durationMinutes).end.split('T')[1].slice(0, 5)}
+              </span>
+            </div>
+            <SlotEditor
+              date={slot.date}
+              time={slot.time}
+              durationMinutes={proposal.durationMinutes}
+              onChange={setSlot}
+            />
+            <input
+              className="book-reason"
+              type="text"
+              placeholder="Why is it moving? (optional, kept in NEURO only)"
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+            />
+            {proposal.previousMoves?.length > 0 && (
+              <dl className="book-meta">
+                <dt>Moved before</dt>
+                <dd>
+                  {proposal.previousMoves.map((m, i) => (
+                    <div key={i}>
+                      {formatDate(m.from?.split('T')[0])} → {formatDate(m.to?.split('T')[0])}
+                      {m.reason ? ` (${m.reason})` : ''}
+                    </div>
+                  ))}
+                </dd>
+              </dl>
+            )}
+            <p className="book-caveat">
+              This updates the existing meeting rather than cancelling it, so {first} gets a
+              "moved" notice and the thread is kept. Their availability isn't visible to NEURO.
+            </p>
+            {error && <div className="book-error">{error}</div>}
+            <div className="book-actions">
+              <button className="btn" onClick={onClose} disabled={moving}>Cancel</button>
+              <button className="btn btn-primary" onClick={confirm} disabled={moving}>
+                {moving ? 'Moving...' : 'Confirm & send update'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function NoteEditor({ name, onClose, onSaved }) {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
@@ -808,6 +978,7 @@ export default function PeopleBoard() {
   const [editingPerson, setEditingPerson] = useState(null); // person name being updated
   const [editingNote, setEditingNote] = useState(null); // person name whose raw note is being edited
   const [bookingFor, setBookingFor] = useState(null); // person name being booked
+  const [movingFor, setMovingFor] = useState(null);   // person whose 1-2-1 is being moved
   const [bookingAll, setBookingAll] = useState(null); // names being batch-booked
   const [oneToOnes, setOneToOnes] = useState(null); // { [name]: [{date,title,highlights}] }
   const [autoExpanded, setAutoExpanded] = useState(() => sessionStorage.getItem('people-auto-expanded') === 'true');
@@ -984,6 +1155,20 @@ export default function PeopleBoard() {
         />
       )}
 
+      {movingFor && (
+        <RescheduleDialog
+          name={movingFor}
+          onClose={() => setMovingFor(null)}
+          onMoved={() => {
+            // next-1-2-1-due moved with the meeting, so the card must re-read.
+            fetch(apiUrl(`/api/obsidian/people/${encodeURIComponent(movingFor)}`))
+              .then(r => r.json())
+              .then(data => setPeopleData(prev => ({ ...prev, [movingFor]: data })))
+              .catch(() => {});
+          }}
+        />
+      )}
+
       {editingNote && (
         <NoteEditor
           name={editingNote}
@@ -1140,6 +1325,13 @@ export default function PeopleBoard() {
                       title="Find the next free slot and send an invite"
                     >
                       Book now
+                    </button>
+                    <button
+                      className="person-move-btn"
+                      onClick={() => setMovingFor(person.name)}
+                      title="Move the existing 1-2-1 — updates the meeting, never cancels it"
+                    >
+                      Move
                     </button>
                     {n8nConfigured && (
                       <button

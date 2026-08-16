@@ -106,6 +106,56 @@ router.post('/book', async (req, res) => {
   }
 });
 
+// Find the existing 1-2-1 in the diary. Reads only.
+router.get('/find/:person', async (req, res) => {
+  try {
+    const result = await booking.findOneToOne(req.params.person);
+    res.json(result);
+  } catch (e) {
+    console.error('[1to1/find]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Propose where a 1-2-1 should move to. Reads only — moves nothing.
+router.post('/propose-reschedule', async (req, res) => {
+  try {
+    const { person, after, durationMinutes } = req.body || {};
+    if (!person) return res.status(400).json({ ok: false, error: 'person is required' });
+    const result = await booking.proposeReschedule(person, { after, durationMinutes });
+    res.json(result);
+  } catch (e) {
+    console.error('[1to1/propose-reschedule]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Move the event. Only reached after Nick has confirmed a proposal — Graph
+// emails the attendee an update, so nothing moves by looking.
+router.post('/reschedule', async (req, res) => {
+  try {
+    const { person, eventId, start, end, reason } = req.body || {};
+    if (!person || !eventId || !start || !end) {
+      return res.status(400).json({ ok: false, error: 'person, eventId, start and end are required' });
+    }
+    const result = await booking.reschedule({ person, eventId, start, end, reason });
+    res.json(result);
+  } catch (e) {
+    console.error('[1to1/reschedule]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// How often this person's 1-2-1 has been moved. Read-only; feeds the Team card.
+router.get('/moves/:person', (req, res) => {
+  try {
+    const moves = booking.movesFor(req.params.person);
+    res.json({ ok: true, person: req.params.person, moveCount: moves.length, moves });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 router.post('/notes', (req, res) => {
   try {
     const { action, title, date, type, people, body, section, content } = req.body || {};

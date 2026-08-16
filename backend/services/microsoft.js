@@ -979,6 +979,51 @@ async function createCalendarEvent({
   };
 }
 
+// Move an existing event. PATCH, deliberately — never cancel-and-recreate. Graph
+// mails attendees an UPDATE ("this meeting has moved"), where a cancellation
+// followed by a fresh invite reads to the other person as the meeting being
+// dropped, and loses the thread, the body and anything attached to it.
+//
+// Same naive local wall-clock + timezone-name contract as createCalendarEvent:
+// no code here converts offsets by hand.
+async function updateCalendarEvent(eventId, { start, end, subject } = {}) {
+  if (!eventId) return { updated: false, reason: 'no_event_id' };
+
+  const payload = {};
+  if (start) payload.start = { dateTime: start, timeZone: EVENT_TIMEZONE };
+  if (end) payload.end = { dateTime: end, timeZone: EVENT_TIMEZONE };
+  if (subject) payload.subject = String(subject).trim();
+  if (!Object.keys(payload).length) return { updated: false, reason: 'nothing_to_change' };
+
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (e) {
+    console.warn('[Calendar] Update auth failed:', e.message);
+    return { updated: false, reason: 'auth' };
+  }
+  if (!token) return { updated: false, reason: 'auth' };
+
+  const result = await graphWrite(`/me/events/${encodeURIComponent(eventId)}`, 'PATCH', payload, token);
+  if (!result.ok) {
+    console.warn(`[Calendar] Update failed for ${eventId}: ${result.reason} ${result.detail || ''}`);
+    return { updated: false, reason: result.reason, detail: result.detail || null };
+  }
+
+  const ev = result.data || {};
+  console.log(`[Calendar] Moved "${ev.subject || subject || eventId}" to ${start || '(unchanged)'}`);
+  return {
+    updated: true,
+    event: {
+      id: ev.id || eventId,
+      subject: ev.subject || subject || null,
+      start: ev.start?.dateTime || start || null,
+      end: ev.end?.dateTime || end || null,
+      webLink: ev.webLink || null,
+    },
+  };
+}
+
 /**
  * Fetch one calendar event in full. The calendar cache stores no body, and
  * adding a column would collide with work in flight — but agenda checks run
@@ -1123,6 +1168,7 @@ module.exports = {
   startDeviceCodeFlow,
   fetchCalendarEvents,
   createCalendarEvent,
+  updateCalendarEvent,
   fetchEventById,
   respondToEvent,
   fetchRecentEmails,

@@ -349,13 +349,20 @@ async function book({ person, start, end, email, subject, durationMinutes, skipC
     return { ok: false, error: `Calendar create failed: ${result.reason}`, detail: result.detail || null };
   }
 
-  // The booking is the commitment, so record the next due date against it. The
-  // last-1-2-1 date is NOT touched — that only moves when a note proves the
-  // meeting actually happened, which is the whole point of the detector.
+  // Record WHAT IS IN THE DIARY, in its own field. This used to write the
+  // booked date into `next-1-2-1-due`, but the detector writes that field as
+  // "when the next one is OWED" (last held + cadence) and both readers — the
+  // nudge and the Team board — read it that way. So every booking stamped a
+  // reminder to make the booking that had just been made, and turned into
+  // "these need booking now" the day after the meeting.
+  //
+  // `last-1-2-1` is still NOT touched — that only moves when a note proves the
+  // meeting actually happened, which is the whole point of the detector. A
+  // booked date that passes with no note reads as `unwritten`, not as held.
   try {
-    require('./obsidian').updatePersonNote(person, { next121Due: start.split('T')[0] });
+    require('./obsidian').updatePersonNote(person, { booked121: start.split('T')[0] });
   } catch (e) {
-    console.warn('[1-2-1] Could not stamp next-1-2-1-due:', e.message);
+    console.warn('[1-2-1] Could not stamp 1-2-1-booked:', e.message);
   }
 
   return {
@@ -365,6 +372,247 @@ async function book({ person, start, end, email, subject, durationMinutes, skipC
     invited: Boolean(email),
     durationMinutes: durationMinutes || DEFAULT_DURATION_MIN,
   };
+}
+
+// ── Rescheduling ────────────────────────────────────────────────────────────
+//
+// Moving a 1-2-1 is not booking a new one, and the difference matters socially:
+// the attendee has already accepted. So this finds the meeting that EXISTS —
+// including ones booked by hand in Outlook, which is most of them — rather than
+// only ones NEURO created. book() never stored a Graph event id, and storing one
+// from here on would still leave every historic 1-2-1 unreachable.
+//
+// The move itself is a PATCH (see microsoft.updateCalendarEvent) so the invitee
+// gets "moved", not "cancelled" then "invited".
+
+const MOVES_KEY = 'one_to_one_moves';
+const MOVE_HISTORY_LIMIT = 20;
+
+/**
+ * A synthesised id (from the ICS/bridge fallback) cannot address a real event.
+ * Refusing loudly beats a PATCH that 404s after Nick has confirmed a move.
+ */
+function isRealEventId(id) {
+  return Boolean(id) && !String(id).startsWith('graph-');
+}
+
+function moveHistory() {
+  try {
+    const raw = require('../db/database').getState(MOVES_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+/** Every recorded move for a person, newest first. */
+function movesFor(name) {
+  const all = moveHistory();
+  return Array.isArray(all[name]) ? all[name] : [];
+}
+
+/**
+ * Record that a 1-2-1 moved. This is the point of the feature, not bookkeeping:
+ * `one-to-one-detect` catches a 1-2-1 that hasn't HAPPENED, but one slid three
+ * times looks healthy in the calendar right up until it's 40 days overdue.
+ * Nothing recorded that it moved, so nothing could say so.
+ *
+ * KV rather than a table, following standup-session and focus-session — a schema
+ * migration on the live DB costs more than the query convenience is worth.
+ */
+function recordMove(name, { from, to, reason = null }) {
+  try {
+    const db = require('../db/database');
+    const all = moveHistory();
+    const list = Array.isArray(all[name]) ? all[name] : [];
+    list.unshift({ from, to, reason, at: new Date().toISOString() });
+    all[name] = list.slice(0, MOVE_HISTORY_LIMIT);
+    db.setState(MOVES_KEY, JSON.stringify(all));
+    return all[name];
+  } catch (e) {
+    console.warn('[1-2-1] Could not record move:', e.message);
+    return movesFor(name);
+  }
+}
+
+/**
+ * The next 1-2-1 with this person in the diary. Attendee email is the strong
+ * match and is tried first; subject is the fallback, because a hand-booked
+ * "Catch up - Nick/Hope" may carry no attendee NEURO can resolve.
+ */
+async function findOneToOne(name, { from = new Date(), days = SEARCH_DAYS } = {}) {
+  if (!name) return { ok: false, error: 'person is required' };
+
+  const attendee = await resolveAttendee(name);
+  const first = name.split(' ')[0].toLowerCase();
+
+  let events;
+  try {
+    const microsoft = require('./microsoft');
+    events = await microsoft.fetchCalendarEvents(dateStr(from), dateStr(addDays(from, days)));
+  } catch (e) {
+    return { ok: false, error: `Could not read the calendar: ${e.message}` };
+  }
+
+  const candidates = (events || [])
+    .filter(e => !['cancelled'].includes(String(e.showAs || 'busy').toLowerCase()))
+    .filter(e => !e.isAllDay)
+    .filter((e) => {
+      const looks121 = ONE_TO_ONE_SUBJECT.test(String(e.subject || ''));
+      const byEmail = attendee.email
+        && (e.attendees || []).some(a => String(a.email || '').toLowerCase() === attendee.email.toLowerCase());
+      // A meeting naming them in the subject counts only if it also reads as a
+      // 1-2-1 — "Team Meeting Hope handover" is not one.
+      const bySubject = looks121 && String(e.subject || '').toLowerCase().includes(first);
+      return byEmail ? looks121 || (e.attendees || []).length <= 2 : bySubject;
+    })
+    .sort((a, b) => String(a.start).localeCompare(String(b.start)));
+
+  if (!candidates.length) {
+    return { ok: false, error: `No upcoming 1-2-1 with ${name} found in the next ${days} days`, searched: days };
+  }
+
+  const event = candidates[0];
+  return {
+    ok: true,
+    person: name,
+    event: {
+      id: event.id,
+      subject: event.subject,
+      start: event.start,
+      end: event.end,
+      date: event.date,
+      attendees: event.attendees || [],
+    },
+    addressable: isRealEventId(event.id),
+    alsoFound: candidates.length - 1,
+    matchedBy: attendee.email
+      && (event.attendees || []).some(a => String(a.email || '').toLowerCase() === attendee.email.toLowerCase())
+      ? 'attendee' : 'subject',
+  };
+}
+
+/**
+ * Propose where a 1-2-1 should move TO. Reads only — moves nothing.
+ *
+ * The existing event is removed from the working calendar before the search, or
+ * it clashes with itself and every slot on its own day is refused.
+ */
+async function proposeReschedule(name, { after = null, durationMinutes = null } = {}) {
+  const found = await findOneToOne(name);
+  if (!found.ok) return found;
+  if (!found.addressable) {
+    return { ok: false, error: 'That meeting has no addressable Graph id (calendar came from the ICS fallback) — it cannot be moved from here.', current: found.event };
+  }
+
+  const current = found.event;
+  const minutes = durationMinutes
+    || Math.max(15, toMinutes(current.end) - toMinutes(current.start))
+    || DEFAULT_DURATION_MIN;
+
+  // Never today, and never back onto the slot it already has.
+  const earliest = after ? new Date(`${after}T12:00:00`) : addDays(new Date(), 1);
+
+  let events;
+  try {
+    events = await fetchWindow(earliest);
+  } catch (e) {
+    return { ok: false, error: `Could not read the calendar: ${e.message}` };
+  }
+
+  const without = (events || []).filter(e => e.id !== current.id);
+  const slot = findSlot(without, earliest, minutes);
+  if (!slot) {
+    return { ok: false, error: `No free ${minutes}-minute slot in the next ${SEARCH_DAYS} days`, current };
+  }
+
+  const attendee = await resolveAttendee(name);
+  const priorMoves = movesFor(name);
+  return {
+    ok: true,
+    person: name,
+    current,
+    proposed: { start: slot.start, end: slot.end, date: slot.date, window: slot.window },
+    durationMinutes: minutes,
+    attendee,
+    eventId: current.id,
+    moveCount: priorMoves.length,
+    previousMoves: priorMoves.slice(0, 5),
+    // Surfaced so the confirm screen can say it out loud rather than NEURO
+    // quietly moving the same 1-2-1 for the fourth time.
+    warning: priorMoves.length >= 2
+      ? `This 1-2-1 has already been moved ${priorMoves.length} times.`
+      : null,
+  };
+}
+
+/**
+ * Move the event. Only ever called after Nick has seen the proposal.
+ *
+ * `1-2-1-booked` follows the meeting to its new date; `last-1-2-1` does NOT —
+ * same rule as book(). Only a written-up note proves a 1-2-1 actually happened.
+ */
+async function reschedule({ person, eventId, start, end, reason = null, skipClashCheck = false }) {
+  if (!person || !eventId || !start || !end) {
+    return { ok: false, error: 'person, eventId, start and end are required' };
+  }
+  if (!isRealEventId(eventId)) {
+    return { ok: false, error: 'That event id cannot address a real calendar event' };
+  }
+
+  // Re-check right before writing: the proposal may have sat on screen a while.
+  // The event being moved is excluded, or it always clashes with itself.
+  if (!skipClashCheck) {
+    const clash = await findClashExcluding(start, end, eventId);
+    if (clash) return { ok: false, error: `That slot clashes with "${clash}"` };
+  }
+
+  let previousStart = null;
+  try {
+    const found = await findOneToOne(person);
+    if (found.ok && found.event.id === eventId) previousStart = found.event.start;
+  } catch { /* best effort — the move matters more than the audit line */ }
+
+  const microsoft = require('./microsoft');
+  const result = await microsoft.updateCalendarEvent(eventId, { start, end });
+  if (!result.updated) {
+    return { ok: false, error: `Calendar update failed: ${result.reason}`, detail: result.detail || null };
+  }
+
+  try {
+    require('./obsidian').updatePersonNote(person, { booked121: start.split('T')[0] });
+  } catch (e) {
+    console.warn('[1-2-1] Could not stamp 1-2-1-booked:', e.message);
+  }
+
+  const moves = recordMove(person, { from: previousStart, to: start, reason });
+  console.log(`[1-2-1] Moved ${person}: ${previousStart || '(unknown)'} -> ${start} (move ${moves.length})`);
+
+  return {
+    ok: true,
+    person,
+    event: result.event,
+    movedFrom: previousStart,
+    moveCount: moves.length,
+    previousMoves: moves.slice(0, 5),
+  };
+}
+
+/** findClash, but blind to one event — used when that event is the one moving. */
+async function findClashExcluding(start, end, exceptId) {
+  const day = start.split('T')[0];
+  let events;
+  try {
+    const microsoft = require('./microsoft');
+    events = await microsoft.fetchCalendarEvents(day, day);
+  } catch {
+    return null; // best-effort: never block on a failed read
+  }
+  const from = toMinutes(start);
+  const to = toMinutes(end);
+  const hit = (events || [])
+    .filter(e => e.date === day && e.id !== exceptId)
+    .filter(e => !['free', 'cancelled'].includes(String(e.showAs || 'busy').toLowerCase()))
+    .find(e => (e.isAllDay ? true : from < toMinutes(e.end) && to > toMinutes(e.start)));
+  return hit ? (hit.subject || 'an existing meeting') : null;
 }
 
 /**
@@ -445,10 +693,15 @@ module.exports = {
   planAll,
   book,
   bookAll,
+  findOneToOne,
+  proposeReschedule,
+  reschedule,
+  movesFor,
   // exported for tests
   _internals: {
     findGapInWindow, countOneToOnes, findSlot, reserve, subjectFor,
     dateStr, isWorkingDay, earliestDate, toMinutes,
+    isRealEventId, recordMove, findClashExcluding, MOVES_KEY,
     PM_WINDOW, AM_WINDOW, MAX_PER_DAY, SEARCH_DAYS,
   },
 };
