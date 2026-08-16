@@ -2,16 +2,26 @@
 'use strict';
 
 /**
- * Tier 3 smoke test — read-only + tmp-vault writes only.
- * Evidence Register and 90 Day Plan tests hit the REAL vault but only read.
- * Person profile and KB article writes go to a throwaway /tmp vault.
+ * Tier 3 smoke script — read-only + tmp-vault writes only. NOT a test; it
+ * asserts nothing. Named `smoke-` so `node --test` does not discover it (see
+ * smoke-tier1.js for why that mattered).
+ *
+ * Evidence Register and 90 Day Plan sections read the caller's vault. Person
+ * profile and KB article writes go to a throwaway mkdtemp vault.
+ *
+ * Run with: OBSIDIAN_VAULT_PATH="..." node scripts/smoke-tier3.js
  */
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const REAL_VAULT = 'C:\\Users\\NickW\\Documents\\Nicks knowledge base';
+if (!process.env.OBSIDIAN_VAULT_PATH) {
+  console.error('Refusing to run: set OBSIDIAN_VAULT_PATH explicitly. There is no default.');
+  process.exit(1);
+}
+
+const REAL_VAULT = process.env.OBSIDIAN_VAULT_PATH;
 
 function section(t) { console.log('\n' + '='.repeat(60) + '\n' + t + '\n' + '='.repeat(60)); }
 

@@ -10,7 +10,12 @@
  *
  * Prep generation was removed on 14 Aug 2026 — NOVA owns 1-2-1 prep now. Keeping
  * a second generator here would have produced competing prep docs for the same
- * meeting. `services/one-to-one-prep.js` is retained but no longer routed.
+ * meeting. `services/one-to-one-prep.js` is retained but no longer routed — and
+ * as of 16 Aug it has ZERO code consumers anywhere in the repo, not just no
+ * route. `scripts/smoke-tier1.js` was the last one and was still EXECUTING it
+ * against the real vault on every `npm test` (#119); that is gone. Deleting the
+ * service is now a no-op change, waiting only on NOVA being confirmed to cover
+ * prep end to end (#21) — which is blocked behind #116.
  */
 
 const express = require('express');

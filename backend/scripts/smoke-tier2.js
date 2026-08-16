@@ -2,12 +2,17 @@
 'use strict';
 
 /**
- * Smoke test for Tier 2 services against the real vault.
+ * Smoke script for Tier 2 services. NOT a test; it asserts nothing. Named
+ * `smoke-` so `node --test` does not discover it (see smoke-tier1.js for why).
  * Read-only — does not write anything.
+ *
+ * Run with: OBSIDIAN_VAULT_PATH="..." node scripts/smoke-tier2.js
  */
 
-process.env.OBSIDIAN_VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH ||
-  'C:\\Users\\NickW\\Documents\\Nicks knowledge base';
+if (!process.env.OBSIDIAN_VAULT_PATH) {
+  console.error('Refusing to run: set OBSIDIAN_VAULT_PATH explicitly. There is no default.');
+  process.exit(1);
+}
 
 const personTimeline = require('../services/person-timeline');
 const teamHealth = require('../services/team-health');
