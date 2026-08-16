@@ -3,6 +3,49 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db/database');
+const stressScore = require('../services/stress-score');
+
+// Metrics kept as a time series in health_samples. Everything else still only
+// lands in the daily KV blob — a stress baseline needs history, a body weight
+// does not.
+const SERIES_METRICS = [
+  'hrv', 'rhr', 'heartRate', 'steps', 'activeEnergy', 'respiratoryRate'
+];
+
+// Store UTC as 'YYYY-MM-DD HH:MM:SS' so string comparison in the baseline
+// queries is also chronological comparison.
+function toSqlUtc(input) {
+  const d = input ? new Date(input) : new Date();
+  if (isNaN(d.getTime())) return new Date().toISOString().replace('T', ' ').slice(0, 19);
+  return d.toISOString().replace('T', ' ').slice(0, 19);
+}
+
+// Two shapes are accepted, because the phone side is not settled yet:
+//   1. a `samples` array of {metric, value, recordedAt} — real per-reading
+//      timestamps, which is what a proper baseline wants
+//   2. the existing flat keys, stamped with one timestamp for the whole post
+// Both funnel into the same INSERT OR IGNORE, so overlapping posts fold.
+function recordSamples(payload) {
+  let written = 0;
+
+  if (Array.isArray(payload.samples)) {
+    for (const s of payload.samples) {
+      if (!s || !SERIES_METRICS.includes(s.metric)) continue;
+      const v = Number(s.value);
+      if (!isFinite(v)) continue;
+      if (db.insertHealthSample(s.metric, v, toSqlUtc(s.recordedAt), 'ingest')) written++;
+    }
+    return written;
+  }
+
+  const stamp = toSqlUtc(payload.timestamp);
+  for (const metric of SERIES_METRICS) {
+    const v = Number(payload[metric]);
+    if (!isFinite(v) || payload[metric] === null || payload[metric] === undefined) continue;
+    if (db.insertHealthSample(metric, v, stamp, 'ingest')) written++;
+  }
+  return written;
+}
 
 // POST /api/health/ingest — receive Apple Health data from iOS Shortcut
 // Secured with a simple token (INGEST_SECRET env var, same as used elsewhere)
@@ -38,22 +81,48 @@ router.post('/ingest', (req, res) => {
       activeEnergy: payload.activeEnergy || null,        // kcal
       vo2max: payload.vo2max || null,                    // mL/kg/min
       respiratoryRate: payload.respiratoryRate || null,  // breaths/min
+      heartRate: payload.heartRate || null,              // bpm — current, not resting
       bodyWeight: payload.bodyWeight || null,            // kg
       timestamp: new Date().toISOString()
     };
 
-    // Store keyed by date so today's data overwrites stale data
+    // Store keyed by date so today's data overwrites stale data.
+    // MERGE rather than replace: at a 30-minute polling cadence most posts carry
+    // only some metrics (the watch samples HRV a handful of times a day), and a
+    // straight overwrite would null out this morning's HRV every half hour.
     const stateKey = `health_data_${entry.date}`;
-    db.setState(stateKey, JSON.stringify(entry));
+    let merged = entry;
+    try {
+      const prevRaw = db.getState(stateKey);
+      if (prevRaw) {
+        const prev = JSON.parse(prevRaw);
+        if (prev && prev.date === entry.date) {
+          merged = { ...prev };
+          for (const [k, v] of Object.entries(entry)) {
+            if (v !== null && v !== undefined) merged[k] = v;
+          }
+        }
+      }
+    } catch { /* corrupt previous blob — fall back to this post alone */ }
+
+    db.setState(stateKey, JSON.stringify(merged));
 
     // Also store as 'health_latest' for quick access without knowing the date
-    db.setState('health_latest', JSON.stringify(entry));
+    db.setState('health_latest', JSON.stringify(merged));
+
+    // Append to the time series that backs the stress baseline
+    const seriesWritten = recordSamples(payload);
 
     console.log(`[Health] Ingested data for ${entry.date}:`,
       `HRV=${entry.hrv}ms RHR=${entry.rhr}bpm sleep=${entry.sleepDuration}h steps=${entry.steps}`
     );
 
-    res.json({ success: true, date: entry.date, received: Object.keys(entry).filter(k => entry[k] !== null).length + ' fields' });
+    res.json({
+      success: true,
+      date: entry.date,
+      received: Object.keys(entry).filter(k => entry[k] !== null).length + ' fields',
+      samplesStored: seriesWritten
+    });
   } catch (e) {
     console.error('[Health] Ingest error:', e.message);
     res.status(500).json({ error: e.message });
@@ -90,6 +159,16 @@ router.get('/history', (req, res) => {
       }
     }
     res.json({ history: results, days });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/health/stress — current stress score against a rolling personal baseline.
+// Returns status 'calibrating' until there is enough history to mean anything.
+router.get('/stress', (req, res) => {
+  try {
+    res.json(stressScore.computeStressScore());
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
