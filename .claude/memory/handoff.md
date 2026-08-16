@@ -1,3 +1,72 @@
+# Session Handoff — 2026-08-16 evening
+
+## Nine shipped today. Suite **373 local / 373 Pi — the gap is CLOSED.**
+`6512027` #94 · `ca1c032` #56 · `e18183b` #83 · `27f4e83` #44 · `792fc1d` #109 ·
+`312c446` #111 · `3f23506` #110 · `d6a95a7` #105 · `6b8d979`+`4c16177` #70 · `c271653` #112
+Pi clean at origin/main, `unstable_restarts` 0. **There are no parked files left** — #44
+was the 9-test gap and Nick authorised shipping it.
+
+## ⏳ STILL PENDING, no action needed — fires Monday 08:00
+`briefing.checkEscalationAlerts` backfills its seen-list on its first widened run and its
+cron is `*/5 8-18 * * 1-5` — **weekdays only, and today was Sunday**. So
+`escalation_alert_wide_seeded` is still null and 11 keys are still absent from
+`alert_seen_ids`. Monday 08:00 it records them silently and pushes **0**. Verified by
+rehearsal against the real seen-list. **If a session sees that flag unset, that is normal
+until Monday — do not "fix" it, and do not widen anything else in that file first.**
+
+## Three places the ticket was wrong, and the measurement that caught each
+- **#94** — feared "17 escalations waiting on you". Once `comment` is actually requested,
+  Nick had **already replied to 12 of 17**; five surface. And the real push hazard was
+  **`briefing.js`**, not the nudge: it pushes once PER ticket and `escalation_alert` IS in
+  `ALWAYS_DELIVER`, with 11 of 17 absent from its seen list.
+- **#110** — "VITE_BUILD_LABEL is unset". It was **set**, in the committed
+  `.env.production`, to the static `prod-mobile`. Identical on every build, so it could
+  never answer its own question; the UI fix the ticket asked for would have been just as
+  static. Now derived from `COMMIT_REF`. **Verified `prod-mobile` is gone from the live
+  bundle** rather than assumed.
+- **#39** — "a transcription slip in one meeting note, one-line fix". It is a **FILENAME**
+  (`Meetings/2026/04/2026-04-30 – 1-2-1 Meeting Naomi Winkworth`), a real 1-2-1 with Naomi
+  **Wentworth**. Rename + re-link, and `Decision Log/vault-moves.md` is history that must
+  NOT be rewritten. Left undone, deliberately.
+
+## #56 was worse than its ticket too
+"Degrades to near-keyword matching" — no. Fallback vectors are **128-dim** against Voyage's
+**1024**, and `cosineSimilarity` returns **0** on a length mismatch, so those rows were
+**unreachable**, and the real content hash made the rebuild skip them forever. **74 rows
+across 32 files**, including one transcript's entire 16 chunks. **Now 0** — sweep found
+exactly 32 files, re-embedded 148 chunks, 0 errors.
+
+## What did NOT get done, and why — do not assume these are close
+- **#69** (replies leave no trace) — real design work, not a small fix. Untouched.
+- **#25** holiday awareness, **#26** phone standup, **#28** render logged decisions — all
+  genuine builds. Untouched.
+- **#21** delete `one-to-one-prep.js` — **gated, not skipped.** Its own precondition is
+  "once NOVA is confirmed to cover everything", and NOVA's Graph token is expired (#116).
+  It is also still required by `backend/scripts/test-tier1.js`. Deleting a fallback while
+  the replacement is unverified is the wrong trade.
+- **#32** — the 12 empty folders are gone; the **5 with real notes are untouched** (Arman,
+  Hope ×2, Naomi Wentworth, Nathan, Sebastian — including Nathan's 14 Aug holding note,
+  and one of Hope's is the only evidence of her 30 Apr 1-2-1). **"Dead folder tree" is not
+  licence to delete the rest.**
+
+## One bug I introduced and caught
+`GET /api/email/triage/feedback` returned `{"ok":false,"error":"Email not found"}` — it was
+registered **after** `/triage/:emailId`, and Express matches in registration order. The
+suite was green throughout: it exercises the service, not the routing table. Fixed in
+`4c16177`. Lesson is in `mistakes.md`.
+
+## NEXT — still on Nick, not code
+- **#40 Apple Health transport is the single biggest unblock** and it is now a research
+  task, not a decision: **HA Companion is ruled out by measurement** (the phone publishes
+  29 entities, all CoreMotion/battery/network/focus/location — the iOS Companion app does
+  not read HealthKit at all). A deep-research prompt for free alternatives was handed over
+  in chat. Until then `/api/health/stress` correctly reads `calibrating`.
+- **The 5 escalations are real and unanswered** — NT-21284 is 65 days old.
+- **#106** approve the one `draft_reply` (sends nothing, gate 1 of 2, executor never run).
+- **Write up the Nathan/Stephen 1-2-1s**, or the board keeps calling them overdue.
+- **#2** Teams consent on an office day; **#116** NOVA re-auth (gates #115/#117/#118);
+  **#59** off-site backup.
+
 # Session Handoff — 2026-08-16 14:00
 
 ## Shipped all three queued items, deployed + verified live
