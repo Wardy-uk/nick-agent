@@ -870,6 +870,30 @@ function getPendingSaraActions(limit = 10) {
   return rows;
 }
 
+/**
+ * Pending actions OF ONE TYPE, bounded.
+ *
+ * #83 — the todos route asked for 1,000 pending actions of every type and then
+ * threw away everything that was not a `capture_todo`. The cap therefore had to
+ * absorb the whole queue to be safe, and when the queue passed it the tail
+ * vanished with no error: at the 930-action peak a genuine capture_todo could
+ * be pushed out by 900 actions the caller was about to discard. Asking for the
+ * type means the bound is over the rows actually wanted.
+ */
+function getPendingSaraActionsByType(type, limit = 100) {
+  const rows = all(
+    'SELECT * FROM sara_actions WHERE status = ? AND type = ? ORDER BY confidence DESC, created_at DESC LIMIT ?',
+    ['pending', type, limit]
+  );
+  for (const row of rows) row.payload = JSON.parse(row.payload || '{}');
+  return rows;
+}
+
+function countPendingSaraActionsByType(type) {
+  const row = get('SELECT COUNT(*) as count FROM sara_actions WHERE status = ? AND type = ?', ['pending', type]);
+  return row ? row.count : 0;
+}
+
 function getSaraAction(id) {
   const row = get('SELECT * FROM sara_actions WHERE id = ?', [id]);
   if (row) row.payload = JSON.parse(row.payload || '{}');
@@ -1054,6 +1078,8 @@ module.exports = {
   // SARA Actions
   createSaraAction,
   getPendingSaraActions,
+  getPendingSaraActionsByType,
+  countPendingSaraActionsByType,
   getSaraAction,
   updateSaraActionStatus,
   updateSaraActionPayload,

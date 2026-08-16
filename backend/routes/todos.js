@@ -7,6 +7,11 @@ const todoIntelligence = require('../services/todo-intelligence');
 const taskStore = require('../services/task-store');
 const microsoft = require('../services/microsoft');
 
+// How many pending capture_todo suggestions the todos payload will carry. The
+// queue hit 930 in August and collapsed to single figures once #108 made it
+// reachable, so this is a render bound, not a storage one.
+const SUGGESTION_CAP = 200;
+
 // GET /api/todos — reads tasks from Obsidian vault + 90-day plan
 router.get('/', (req, res) => {
   try {
@@ -86,10 +91,21 @@ router.get('/', (req, res) => {
     // summary and the meeting note built from it, say. Show it once, and carry
     // the twins' ids so approving/dismissing resolves the whole set.
     const bySignature = new Map();
-    // The limit spans every pending action type, not just capture_todo, so it
-    // has to be generous or the queue silently drops the tail.
-    for (const action of db.getPendingSaraActions(1000)) {
-      if (action.type !== 'capture_todo') continue;
+    // #83 — this used to ask for 1,000 pending actions of EVERY type and then
+    // discard all but capture_todo, so the bound had to swallow the whole queue
+    // to be safe and silently dropped the tail once it did not. Ask the DB for
+    // the type instead: the cap now bounds the rows actually rendered, and it
+    // cuts by confidence rather than by whatever else happened to be pending.
+    // Small on purpose — this is a review list, not an archive; #108's filtered
+    // /api/actions is the way to reach past it.
+    const pending = db.getPendingSaraActionsByType('capture_todo', SUGGESTION_CAP);
+    const pendingTotal = db.countPendingSaraActionsByType('capture_todo');
+    if (pending.length >= SUGGESTION_CAP) {
+      // Loud, because a capped list looks exactly like a complete one.
+      console.warn(`[Todos] Suggestion list capped at ${SUGGESTION_CAP} of ${pendingTotal} pending `
+        + `capture_todo actions — the rest are reachable via /api/actions?type=capture_todo`);
+    }
+    for (const action of pending) {
       const text = action.payload?.text || action.reason || 'Suggested task';
       const signature = action.payload?.semanticSignature || text.toLowerCase();
       const seen = bySignature.get(signature);
@@ -110,7 +126,16 @@ router.get('/', (req, res) => {
     }
     const suggested = [...bySignature.values()];
 
-    res.json({ todos: enriched, suggested, todayLane });
+    // suggested.length is post-dedupe and post-cap, so it is not a count of
+    // what is waiting. Send the real total rather than letting the screen imply
+    // one — the same reason /api/actions carries pendingTotal (#97).
+    res.json({
+      todos: enriched,
+      suggested,
+      todayLane,
+      suggestedTotal: pendingTotal,
+      suggestedCapped: pending.length >= SUGGESTION_CAP,
+    });
   } catch (e) {
     console.error('[Todos] Error parsing vault todos:', e);
     res.status(500).json({ error: 'Failed to parse vault todos' });
