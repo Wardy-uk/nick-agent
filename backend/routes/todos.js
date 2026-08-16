@@ -304,22 +304,38 @@ router.get('/moscow', (req, res) => {
   }
 });
 
-// POST /api/todos/moscow — set MoSCoW. A task NEURO owns is a plain DB write; a
-// file-backed line still uses the legacy path key, since there is no row to update.
+// POST /api/todos/moscow — set MoSCoW on a task NEURO owns. Requires a taskId.
+//
+// #50: this used to fall through to a legacy path-keyed `task_moscow` row when
+// no taskId was given, so that file-backed mirrors (Microsoft, daily notes)
+// could be rated too. Nothing ever read those back for anything editable, so
+// rating a mirror returned `{ok:true}` and then did nothing — the failure
+// species this codebase keeps naming, in miniature: a write that reports
+// success into a place with no readers.
+//
+// Measured before removing: the fallback wrote **one** row in the system's
+// life (13 Aug, a Microsoft Tasks line), and it has had no caller since
+// `/moscow/review` was scoped to NEURO-owned tasks — the swipe review is the
+// only writer and every row it offers carries a task_id. Refusing loudly is
+// better than a silent no-op, so an unowned line now gets a reason rather than
+// a cheerful ok. The GET still surfaces the historical row, and DELETE still
+// clears it, so nothing already recorded is stranded.
 router.post('/moscow', (req, res) => {
   try {
-    const { taskId, filePath, lineNumber, text, moscow } = req.body;
+    const { taskId, moscow } = req.body;
     if (!moscow || !['must', 'should', 'could', 'wont'].includes(moscow)) {
       return res.status(400).json({ error: 'moscow must be: must, should, could, wont' });
     }
-    if (taskId) {
-      const task = taskStore.updateTask(Number(taskId), { moscow });
-      if (!task) return res.status(404).json({ error: 'Task not found' });
-      return res.json({ ok: true, taskId: task.id, moscow: task.moscow });
+    if (!taskId) {
+      return res.status(400).json({
+        error: 'taskId is required — only tasks NEURO owns can be rated. '
+          + 'A file-backed line (Microsoft, a daily note) has no row to hold the rating, '
+          + 'so this used to save nowhere and report success.',
+      });
     }
-    if (!text) return res.status(400).json({ error: 'text or taskId required' });
-    const key = db.setTaskMoscow(filePath, lineNumber, text, moscow);
-    res.json({ ok: true, key, moscow });
+    const task = taskStore.updateTask(Number(taskId), { moscow });
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    res.json({ ok: true, taskId: task.id, moscow: task.moscow });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

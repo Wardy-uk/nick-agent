@@ -83,13 +83,10 @@ function MoscowReview({ onClose }) {
       await fetch(apiUrl('/api/todos/moscow'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskId: current.task_id,
-          filePath: current.filePath,
-          lineNumber: current.lineNumber,
-          text: current.text,
-          moscow,
-        })
+        // Only the id — the review is scoped to NEURO-owned tasks, so every row
+        // here has one, and the path fields it used to send were always null
+        // anyway (#50).
+        body: JSON.stringify({ taskId: current.task_id, moscow })
       });
     } catch {}
     setSaving(false);
