@@ -238,6 +238,11 @@ CREATE TABLE IF NOT EXISTS sara_actions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sara_actions_status ON sara_actions(status);
+-- #107(b) — the scoped dedupe reads filter on type and on the payload's
+-- sourcePath, and both were falling back to a full scan of 16k rows.
+CREATE INDEX IF NOT EXISTS idx_sara_actions_type ON sara_actions(type);
+CREATE INDEX IF NOT EXISTS idx_sara_actions_source_path
+  ON sara_actions(json_extract(payload, '$.sourcePath'));
 
 -- Location visit history (Phase 5)
 CREATE TABLE IF NOT EXISTS location_visits (

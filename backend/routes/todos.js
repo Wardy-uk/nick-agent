@@ -48,41 +48,13 @@ router.get('/', (req, res) => {
       createdAt: t.createdAt || null,
     }));
 
-    // Inject 90-day plan tasks (CACHED)
-    try {
-      const plan = vaultCache.getPlan();
-      if (plan) {
-        const planTasks = plan.allTasks || [];
-        const planPath = plan.filePath || null;
-        const OUTCOMES = {
-          1: 'Visibility & BI', 2: 'Tiered Model', 3: 'Quality & CX',
-          4: 'People & Culture', 5: 'Cross-functional', 6: 'Production'
-        };
-        let planId = mapped.length + 1;
-        for (const t of planTasks) {
-          if (t.isCheckpoint) continue;
-          const isDone = t.status === 'x';
-          if (!showDone && isDone) continue;
-          const isOverdue = t.day > 0 && t.day < plan.currentDay && !isDone;
-          const outcomeLabel = t.outcome ? OUTCOMES[t.outcome] || '' : '';
-          mapped.push({
-            id: planId++,
-            text: t.text,
-            priority: isOverdue ? 'high' : (t.day === plan.currentDay ? 'normal' : 'low'),
-            due_date: t.calendarDate || null,
-            source: `90-Day Plan${outcomeLabel ? ` (${outcomeLabel})` : ''}`,
-            done: isDone ? 1 : 0,
-            ms_id: null,
-            vault_task: true,
-            filePath: planPath,
-            lineNumber: t.lineNumber != null ? t.lineNumber : null,
-            planDay: t.day
-          });
-        }
-      }
-    } catch (e) {
-      console.error('[Todos] 90-day plan parse error:', e.message);
-    }
+    // The 90-day plan injection that used to sit here is gone (#52). The plan
+    // ended in July and its folder was archived on 12 Aug, so
+    // `parseNinetyDayPlan()` returns null and this block has been mapping an
+    // empty list ever since — while still walking the vault looking for the
+    // archived folder on EVERY request, because a null result is not cached.
+    // Verified against the live vault before removing: getPlan() -> null,
+    // getPlanTasks() -> [].
 
     const enriched = mapped.map((task) => todoIntelligence.decorateTask(task));
     const todayLane = todoIntelligence.buildTodayLane(rankTasks(enriched.filter((task) => !task.done), new Date().toISOString().split('T')[0]));
@@ -174,35 +146,9 @@ router.get('/focus', async (req, res) => {
         lineNumber: t.lineNumber != null ? t.lineNumber : null,
       }));
 
-      // Inject 90-day plan tasks (CACHED)
-      try {
-        const plan = vaultCache.getPlan();
-        if (plan) {
-          const OUTCOMES = {
-            1: 'Visibility & BI', 2: 'Tiered Model', 3: 'Quality & CX',
-            4: 'People & Culture', 5: 'Cross-functional', 6: 'Production'
-          };
-          let planId = tasks.length + 1;
-          for (const t of (plan.allTasks || [])) {
-            if (t.isCheckpoint || t.status === 'x') continue;
-            const isOverdue = t.day > 0 && t.day < plan.currentDay;
-            const outcomeLabel = t.outcome ? OUTCOMES[t.outcome] || '' : '';
-            tasks.push({
-              id: planId++,
-              text: t.text,
-              priority: isOverdue ? 'high' : (t.day === plan.currentDay ? 'normal' : 'low'),
-              due_date: t.calendarDate || null,
-              source: `90-Day Plan${outcomeLabel ? ` (${outcomeLabel})` : ''}`,
-              done: 0,
-              ms_id: null,
-              vault_task: true,
-              filePath: plan.filePath || null,
-              lineNumber: t.lineNumber != null ? t.lineNumber : null,
-              planDay: t.day,
-            });
-          }
-        }
-      } catch {}
+      // The second copy of the 90-day plan injection is gone too (#52) — this
+      // one was on /focus, so the dead vault walk ran on the hottest path in
+      // the app.
 
       // Apply filter
       if (filter === 'overdue') {

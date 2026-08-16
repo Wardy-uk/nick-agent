@@ -65,44 +65,20 @@ async function refresh() {
     let todos = null;
     try { todos = vaultCache.getTodos(); } catch {}
 
-    // 90-day plan (CACHED — only re-parses if file changed)
-    let ninetyDayPlan = null;
-    try { ninetyDayPlan = vaultCache.getPlan(); } catch (e) { console.warn('[WorkingMemory] getPlan failed:', e.message); }
-
-    // Merge in ONLY the plan tasks that are actionable this fortnight.
+    // The 90-day plan is over and its folder was archived on 12 Aug, so
+    // `parseNinetyDayPlan()` returns null (#52). This is cut at the SOURCE
+    // rather than at each reader: every downstream consumer — chat-context-v2,
+    // claude.js's context block, standup-session, routes/focus — already guards
+    // on `wm.ninetyDayPlan` being present, so they have all been reading null
+    // since 12 Aug regardless. Removing the fetch changes nothing at runtime; it
+    // only stops the vault walk that ran on every chat turn looking for a folder
+    // that is not there, because a null result was never cached.
     //
-    // Tasks/Task System Boundary.md (10 Jul 2026) is explicit: plan deliverables
-    // are tracked in the plan and reach the task queue "only if actionable this
-    // fortnight". Merging the plan wholesale took overdue from 7 to 101 and
-    // recreated the failure that doc was written to fix — "a list of 1,161 items
-    // is functionally a list of zero items".
-    //
-    // A finished plan's leftovers are not 73 tasks, they're one unmade decision;
-    // collectPlanClosure() in the decision engine raises that separately.
-    let planSummary = null;
-    try {
-      const planTasks = vaultCache.getPlanTasks();
-      const windowMs = 14 * 86400000;
-      const todayMs = new Date(dateKey).getTime();
-      const actionable = planTasks.filter((t) => {
-        if (!t.due_date) return false;
-        const due = new Date(t.due_date.split('T')[0]).getTime();
-        return Math.abs(due - todayMs) <= windowMs;
-      });
-      if (todos && actionable.length) {
-        todos = { ...todos, active: [...(todos.active || []), ...actionable] };
-      }
-
-      const totalDays = ninetyDayPlan?.totalDays || 90;
-      const currentDay = ninetyDayPlan?.currentDay || 0;
-      planSummary = {
-        over: Boolean(ninetyDayPlan) && currentDay > totalDays,
-        unfinished: planTasks.length,
-        surfaced: actionable.length,
-        currentDay,
-        totalDays,
-      };
-    } catch (e) { console.warn('[WorkingMemory] plan task merge failed:', e.message); }
+    // The guarded readers in those files are now unreachable and should come out
+    // with them — deliberately not touched here, a second session is holding
+    // claude.js and standup-session.js modified.
+    const ninetyDayPlan = null;
+    const planSummary = null;
 
     // Jira queue (fast — SQLite). Four consumers read ctx.queueSummary — chat
     // context, the SARA tone builder and the Focus stats — and none of them ever

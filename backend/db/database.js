@@ -122,6 +122,31 @@ async function init() {
     console.error('[DB] health_samples migration check failed:', e.message);
   }
 
+  // #107(b) — sara_actions is scanned, not indexed.
+  //
+  // The only index on a 16,282-row table was `status`, so the scoped reads added
+  // in #103 ("has this note already been actioned?", "of this type") came out as
+  // SCAN sara_actions, confirmed by EXPLAIN QUERY PLAN. A full nightly sweep is
+  // ~813ms across 206 notes today and the cost is rows x notes.
+  //
+  // Two indexes: `type`, and an EXPRESSION index on the payload's sourcePath —
+  // SQLite supports indexing json_extract, and sourcePath is the key those
+  // dedupe checks actually filter on. It is the expression that must match the
+  // query's exactly, character for character, or the planner ignores the index
+  // and the scan comes back silently.
+  //
+  // Note the growth this was filed against has already stopped: creation went
+  // 7,096/day on 14 Aug to 4 and then 1, once persistSuggestions gained its
+  // write-side dedupe guard. So this is now ordinary debt rather than the
+  // unbounded problem the ticket describes — worth having, not urgent.
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_sara_actions_type ON sara_actions(type)');
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_sara_actions_source_path
+             ON sara_actions(json_extract(payload, '$.sourcePath'))`);
+  } catch (e) {
+    console.error('[DB] sara_actions index migration failed:', e.message);
+  }
+
   console.log('[DB] Initialized');
 }
 
