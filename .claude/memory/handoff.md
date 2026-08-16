@@ -1,3 +1,125 @@
+# Session Handoff — 2026-08-16 evening (health check, #122, #30 measured, #50)
+
+## Shipped, deployed, verified live
+`4df925c` #122 · `343f535` #50. Pi **463/463**, backend online, Pi at `343f535`.
+Local **468** vs Pi 463 is still the other session's uncommitted `prompt-parity.test.js`
+— the same 5-test gap as the last two sessions, not a regression.
+
+## ⚠ The second session is STILL uncommitted — third session running
+Same ~14 files, unchanged again: `CLAUDE.md`, `routes/{capture,imports,journal,standup}.js`,
+`services/{ai-provider,briefing,claude,decision-engine,imports,nudges,scheduler,
+standup-session}.js`, `prompt-parity.test.js`, `sara/app/src/views/{Focus,Tasks}.jsx`,
+`services/sara-voice.js`.
+
+**`CLAUDE.md` is OWED for a FOURTH session** — #26/#40/#41/#42, #119/#21/#38/#114/#59/
+#52/#107b, and now #122/#50. I did not write it, for the same reason as the last two:
+it is one of their modified files. Nothing I touched overlapped theirs.
+The 90-day-plan readers in `claude.js`/`standup-session.js` are still unreachable and
+still waiting on their work to land.
+
+---
+
+## 1. THE HEALTH DATA — checked, one real bug, and it was worse than the ticket
+
+The sync is genuinely finished: **1,048,465 samples / 66 metrics**, count identical to
+the figure measured at completion. DB 447 MiB.
+
+### #122 — the staged sleep breakdown, `4df925c`
+The ticket read it as a rollup PREFERENCE. It was, but underneath sat a plain **name
+mismatch**: the ingest writes Apple's own labels (`sleep_asleep_core_hours`), and the
+route, the rollup's stage sets AND the card were all written against a guessed
+`sleep_core_hours`. **A wrong metric name returns zero rows, not an error** — so the
+staged rows were never fetched at all, and the card's stage bar was empty by
+construction. `asleepHours` fell through to the only source that did match.
+
+**The old tests used the invented names too**, which is how they stayed green over a
+feature dead for **725 of 728 nights**.
+
+Measured before fixing — of the 324 nights carrying both sources, the whole-night
+sample disagrees with the staged sum by >0.5h on **241**, in BOTH directions:
+over-stating by up to 3.4h, under-stating by up to **9.7h** (2025-05-24 recorded 0.33h
+against 10.08h staged). It was never a usable whole-night figure.
+
+Fixed: `sleepStage()` canonicalises the aliases once rather than teaching three places
+the same mapping; the rollup keeps the two totals apart, **prefers staged**, falls back
+only when there is no staged sleep at all (3 nights of 728), and names the choice in
+`asleepSource`; the route fetches by **PREFIX** via a new `db.getSleepSamples`, which
+retires the guessed-name class of bug outright; the card draws one flat desaturated bar
+for an unstaged night rather than inventing a shape from one number. **Ingest untouched.**
+Live: 16 Aug now reads **9.42h staged** (core 6.8 + rem 1.71 + deep 0.93), was 10.42h.
+
+### The other four checks — nothing else to do
+- **Stress 19 is believable, and thin.** `currentHrv()` already medians the last 3
+  readings in a 6h window, and baseline median 17.4ms matches the reported
+  `baselineMs: 17` — the arithmetic is right. But HRV swings **9.9 → 37.1 within one
+  hour** (last 10 readings), so a median of 3 is weak protection; had the sync stopped
+  17 min earlier the current value would have been 15.2, *below* baseline, and the label
+  would have flipped. Diurnal variation is NOT the problem (13.8–24.4 by hour). **Not
+  retuned** — that is a design change and should fail `stress-score.test.js` deliberately,
+  not drift in as a side effect of a bug fix.
+- **`efficiency: null`, `inBedHours: 0`, `currentHr: null` are all still by design.**
+  There is no In Bed metric in the 66 at all, so efficiency can never be honest.
+- **Backups: 1.9 GB across 29 copies, not the 12.5 GB projected — yet.** The rotation
+  still holds pre-doubling copies (74 MB on 15 Aug → 246 MB on 16 Aug). It *will* reach
+  ~12.5 GB as they cycle. 422 GB free, so it is a decision, not a problem.
+- **66 metrics, almost nothing consumes them. Left alone**, per #43's lesson.
+
+---
+
+## 2. #30 — MEASURED, and deliberately NOT built
+
+`backend/scripts/measure-121-drift.js` (read-only, runs on the Pi) checked all **12**
+People notes carrying a `1-2-1-booked` date against the live calendar through
+`one-to-one-booking.findOneToOne`: **12 agree, 0 moved, 0 missing**, every one matched by
+attendee email. The failure this ticket describes **has not happened once.**
+
+The mechanism is real — nothing reconciles the field after booking — but the population
+is three days old and every booking sits inside the next nine days, so the case has had
+no chance to occur. **Zero here means "untested", not "impossible".** Two things argue
+for waiting: `cadenceState` already hedges the cancellation half (a passed booking with
+no note reads `unwritten` → *"write it up, or rebook if it was cancelled"*, which is the
+right prompt for a cancelled meeting), and #43 has just shown that waiting can be the
+correct answer.
+
+**Re-run the script after a fortnight of real diary churn.** Still zero → close it. A
+move → build the cheap version and **reuse `findOneToOne`**, do not write a second matcher.
+
+---
+
+## 3. #50 — a rating that saved nowhere, `343f535`
+POST `/api/todos/moscow` fell through to a legacy path-keyed `task_moscow` row when given
+no taskId. Measured: **one** row in the system's life (13 Aug, a Microsoft Tasks line),
+and **no caller at all** since `/moscow/review` was scoped to NEURO-owned tasks — the
+swipe review is the only writer and every row it offers carries a `task_id`. So the
+fallback is gone and an unowned line gets a 400 saying *why*, instead of `{ok:true}`.
+Nothing recorded is stranded (GET still surfaces it, DELETE still clears it). This makes
+CLAUDE.md's "`task_moscow` is no longer written" true for the first time.
+
+⚠ **Left deliberately:** `TodoPanel` fetches GET /moscow into a `moscowRatings` state
+**nothing renders** — same species one level up, but it is the only thing keeping the
+legacy ratings reachable, so removing it is a separate call.
+
+## ⚠ A deploy silently landed on the wrong commit — read this
+I scp'd the measure script into the Pi's repo working tree to run it, then committed the
+same path. The next `git pull --ff-only` refused (untracked file would be overwritten),
+but the command was `git pull 2>&1 | tail -1` — **a pipeline's exit status is the last
+command**, so `tail` succeeded, the `&&` chain carried on, and the Pi built, tested and
+restarted at the PREVIOUS commit. Only the test count gave it away (460 where 463 was
+expected). Never pipe a deploy step to `head`/`tail`; confirm with `git log --oneline -1`
+on the target. Logged in `mistakes.md`.
+
+## NEXT
+**Nick, not code:** #116 NOVA msgraph re-auth (2 min, unblocks #115/#117/#118 — still the
+best ratio on the board) · #2 Teams consent · #99 the 287 · #106 approve the pending
+`draft_reply` · #59 aftercare (crypt password off the Pi, regenerate the B2 master key).
+
+**Code, in order:** **#36** (people-gap review UI) · **#31** (stale `Areas/1-2-1 Tracker.md`)
+· **#39** (Naomi Winkworth rename — #38 already fixed it in DATA via the alias, so only the
+file rename and its wikilinks remain) · then the NOVA trio behind #116.
+**And `CLAUDE.md` the moment the other session's work lands.**
+
+---
+
 # Session Handoff — 2026-08-17 (re-prioritise, then #119/#21, #38, #114, #59, #52, #107b)
 
 ## Shipped, deployed, verified live
