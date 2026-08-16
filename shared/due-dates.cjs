@@ -14,29 +14,15 @@
 
 const DAY_MS = 86400000;
 
-// Local getters throughout, never toISOString() — the Pi runs UTC, which rolls
-// the date forward an hour early on a BST evening.
-function toDateStr(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function addDays(d, n) {
-  const out = new Date(d);
-  out.setDate(out.getDate() + n);
-  return out;
-}
-
-function isWorkingDay(d) {
-  const day = d.getDay();
-  return day >= 1 && day <= 5;
-}
-
-/** The next working day strictly after `from`. */
-function nextWorkingDay(from) {
-  let d = addDays(from, 1);
-  while (!isWorkingDay(d)) d = addDays(d, 1);
-  return d;
-}
+// One shared predicate rather than a local copy (#25). `nonWorking` is optional
+// here and both frontends omit it: they import this file directly, so they have
+// no route to the bank-holiday list, which lives behind the DB in
+// `backend/services/working-days.js`. That is a deliberate limit — a preset
+// button offering the wrong day at Christmas is a much smaller problem than a
+// calendar invite on one, and that half is fixed.
+const {
+  toDateStr, addDays, isWorkingDay, nextWorkingDay,
+} = require('./working-days.cjs');
 
 /** Monday of the week after `from`. */
 function nextMonday(from) {

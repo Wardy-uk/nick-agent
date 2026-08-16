@@ -66,10 +66,11 @@ function clear(kind, dateKey = _today()) {
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-function _isWorkingDay(d) {
-  const day = d.getDay();
-  return day >= 1 && day <= 5;
-}
+// The one shared predicate (#25). This was a bare Mon-Fri check, so the standup
+// would plan Nick a full day on a bank holiday — it knew the weekday and had no
+// idea about the calendar.
+const _workingDays = require('./working-days');
+const _isWorkingDay = (d) => _workingDays.isWorkingDay(d);
 
 // Local getters, never toISOString() — the Pi may run in UTC, which would roll
 // the date forward an hour early on a BST evening. Same rule as everywhere else.
@@ -94,22 +95,32 @@ function buildSchedule(now = new Date()) {
   let next = tomorrow;
   while (!_isWorkingDay(next)) next = _addDays(next, 1);
   return {
-    today: { name: DAY_NAMES[now.getDay()], date: _dateStr(now), working: _isWorkingDay(now) },
-    tomorrow: { name: DAY_NAMES[tomorrow.getDay()], date: _dateStr(tomorrow), working: _isWorkingDay(tomorrow) },
+    today: { name: DAY_NAMES[now.getDay()], date: _dateStr(now), working: _isWorkingDay(now), reason: _workingDays.nonWorkingReason(now) },
+    tomorrow: { name: DAY_NAMES[tomorrow.getDay()], date: _dateStr(tomorrow), working: _isWorkingDay(tomorrow), reason: _workingDays.nonWorkingReason(tomorrow) },
     nextWorkingDay: { name: DAY_NAMES[next.getDay()], date: _dateStr(next) },
   };
+}
+
+/** "the weekend" / "a bank holiday" — a plan has to say which, or it reads wrong. */
+function _whyNotWorking(day) {
+  if (day.reason === 'holiday') {
+    const h = _workingDays.holidayOn(day.date);
+    return h ? `a bank holiday (${h.title})` : 'a bank holiday';
+  }
+  if (day.reason === 'leave') return 'leave';
+  return 'the weekend';
 }
 
 function _renderSchedule(s) {
   if (!s) return null;
   const lines = [
-    `TODAY: ${s.today.name} ${s.today.date}${s.today.working ? '' : ' — a NON-working day'}.`,
+    `TODAY: ${s.today.name} ${s.today.date}${s.today.working ? '' : ` — a NON-working day (${_whyNotWorking(s.today)})`}.`,
   ];
   if (s.tomorrow.working) {
     lines.push(`Tomorrow is ${s.tomorrow.name} ${s.tomorrow.date}, a working day.`);
   } else {
-    lines.push(`Tomorrow is ${s.tomorrow.name} ${s.tomorrow.date} — NOT a working day. Nick works Monday to Friday.`);
-    lines.push(`The next working day is ${s.nextWorkingDay.name} ${s.nextWorkingDay.date}. Say "${s.nextWorkingDay.name}", never "tomorrow" or "first thing in the morning", and never give a task a weekend due date.`);
+    lines.push(`Tomorrow is ${s.tomorrow.name} ${s.tomorrow.date} — NOT a working day: ${_whyNotWorking(s.tomorrow)}. Nick works Monday to Friday.`);
+    lines.push(`The next working day is ${s.nextWorkingDay.name} ${s.nextWorkingDay.date}. Say "${s.nextWorkingDay.name}", never "tomorrow" or "first thing in the morning", and never give a task a due date on a weekend or a bank holiday.`);
   }
   return lines.join('\n');
 }

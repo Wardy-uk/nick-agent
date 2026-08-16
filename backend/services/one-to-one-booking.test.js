@@ -179,6 +179,38 @@ test('a batch skips the weekend', () => {
   }
 });
 
+// #25 — bookAll() creates real Graph events and emails real invites to Nick's
+// direct reports, and isWorkingDay meant nothing more than Mon-Fri. With
+// SEARCH_DAYS at 21, the 31 Aug Summer bank holiday sat inside the live booking
+// window on the day this was found.
+test('a batch never books on a bank holiday', () => {
+  // Search from the Thursday before, so 31 Aug is the third day considered and
+  // a Mon-Fri-only predicate would fill it first.
+  const from = new Date('2026-08-27T12:00:00');
+  const events = [];
+  const dates = [];
+  for (let i = 0; i < 6; i++) {
+    const slot = findSlot(events, from, 30);
+    assert.ok(slot, 'a slot must still be findable — this must not just refuse everything');
+    reserve(events, `Person ${i}`, slot);
+    dates.push(slot.date);
+  }
+  assert.ok(!dates.includes('2026-08-31'), `Summer bank holiday was offered: ${dates.join(', ')}`);
+  assert.ok(dates.includes('2026-09-01'), 'the day after the holiday is still bookable');
+});
+
+test('a batch never books on a day Nick is on leave', () => {
+  // The leave must come from the events the search already holds — an all-day
+  // OOF block, which is how Graph reports a week off.
+  const events = [{
+    start: '2026-08-17T00:00:00', end: '2026-08-19T00:00:00',
+    isAllDay: true, showAs: 'oof', subject: 'Annual leave',
+  }];
+  const slot = findSlot(events, MONDAY, 30);
+  assert.ok(slot, 'leave must move the booking on, not refuse it outright');
+  assert.ok(!['2026-08-17', '2026-08-18'].includes(slot.date), `booked on leave: ${slot.date}`);
+});
+
 test('a batch still obeys the time-of-day rules', () => {
   const plan = planFor(Array.from({ length: 6 }, (_, i) => `Person ${i}`));
   for (const p of plan) {

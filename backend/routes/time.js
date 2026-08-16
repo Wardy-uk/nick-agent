@@ -108,4 +108,29 @@ router.get('/what-fits', (req, res) => {
   }
 });
 
+/**
+ * What the working-day predicate is running on (#25).
+ *
+ * Follows #65's rule: report what was OBSERVED, not what was configured. A
+ * bank-holiday list that has quietly frozen is indistinguishable from a correct
+ * one until the day it books a meeting on Christmas, so `source` and `ageDays`
+ * are the answer, not a bare boolean.
+ */
+router.get('/working-days', (req, res) => {
+  try {
+    const wd = require('../services/working-days');
+    const today = new Date();
+    res.json({
+      ...wd.status(),
+      today: {
+        date: require('../../shared/working-days.cjs').toDateStr(today),
+        working: wd.isWorkingDay(today),
+        reason: wd.nonWorkingReason(today),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

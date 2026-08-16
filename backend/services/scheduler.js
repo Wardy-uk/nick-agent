@@ -217,6 +217,16 @@ function start() {
   // it fetches NOVA /api/public/training-export and POSTs to NEURO
   // /api/training/apply-matrix. No NEURO-side cron needed.
 
+  // Monday 6:05am — refresh the gov.uk bank-holiday list (#25). Deliberately NOT
+  // in state-of-play's TRACKED_JOBS: the feed is a static publication covering
+  // years ahead and the service carries a compiled-in floor, so a missed week is
+  // harmless — and a board that warns about a benign lapse is one nobody reads.
+  // A failed fetch is loud in the log and visible on GET /api/time/working-days.
+  scheduleWeekly('bank-holidays', '5 6 * * 1', 1, 6, 5, () => {
+    require('./working-days').refresh().catch(e =>
+      console.error('[Scheduler] Bank-holiday refresh failed:', e.message));
+  });
+
   // Friday 4:30pm — snapshot the week's outcomes, then generate the review.
   // Snapshot FIRST so the review can read a stored week rather than recomputing
   // one, and so the number is fixed at the moment it was taken.

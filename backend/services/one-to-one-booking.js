@@ -15,6 +15,7 @@
  */
 
 const detect = require('./one-to-one-detect');
+const workingDays = require('./working-days');
 
 // Nick's booking rules (14 Aug 2026), expressed as the only two windows a 1-2-1
 // may sit in. Everything outside them is off-limits by construction rather than
@@ -64,10 +65,15 @@ function earliestDate(person) {
   return tomorrow;
 }
 
-function isWorkingDay(d) {
-  const day = d.getDay();
-  return day >= 1 && day <= 5;
-}
+/**
+ * Mon-Fri was the whole of this check until 16 Aug 2026 (#25), which meant
+ * bookAll() would email real invites to real direct reports on a bank holiday —
+ * and with SEARCH_DAYS at 21, the 31 Aug Summer bank holiday was inside the
+ * live window when that was found. Now the one shared predicate, which also
+ * takes the events already in hand so a day Nick is on leave (showAs 'oof') is
+ * not offered either.
+ */
+const isWorkingDay = workingDays.isWorkingDay;
 
 // Anything that reads as an existing 1-2-1 in the calendar, however it was named.
 const ONE_TO_ONE_SUBJECT = /1-2-1|1:1|(^|[^\d-])1-1([^\d-]|$)|one[- ]to[- ]one|one[- ]on[- ]one/i;
@@ -139,7 +145,7 @@ function minutesToClock(dayStr, minutes) {
 function findSlot(events, from, durationMinutes) {
   for (let i = 0; i <= SEARCH_DAYS; i++) {
     const day = addDays(from, i);
-    if (!isWorkingDay(day)) continue;
+    if (!isWorkingDay(day, events)) continue;
     if (countOneToOnes(day, events) >= MAX_PER_DAY) continue;
     for (const window of [PM_WINDOW, AM_WINDOW]) {
       const gap = findGapInWindow(day, events, window, durationMinutes);
