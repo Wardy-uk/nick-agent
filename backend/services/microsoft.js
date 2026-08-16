@@ -591,7 +591,72 @@ async function fetchTodoLists() {
 // The vault only records a bare <!--id:...--> for Microsoft tasks, so completing
 // a To-Do needs its list back. Every sync pass fills this in; a cold start falls
 // back to searching the lists.
-const _todoListByTask = new Map();
+//
+// That cache lived only in memory until #71, which made the cold-start walk the
+// NORMAL path rather than the exception: the backend restarts several times a
+// day (deploys, not crashes), so the first completion after each restart hit
+// Graph once per list before it could PATCH anything. Persisted to agent_state,
+// the walk costs once per task instead of once per restart.
+const TODO_LIST_CACHE_KEY = 'ms_todo_list_by_task';
+let _todoListByTask = null;
+
+// Lazy require: database.js is loaded by the server bootstrap, and microsoft.js
+// is pulled in from several services — resolving it at module load would fix an
+// import order this file has never had to care about.
+function _todoListCache() {
+  if (_todoListByTask) return _todoListByTask;
+  _todoListByTask = new Map();
+  try {
+    const raw = require('../db/database').getState(TODO_LIST_CACHE_KEY);
+    if (raw) {
+      for (const [taskId, listId] of Object.entries(JSON.parse(raw))) {
+        if (taskId && listId) _todoListByTask.set(taskId, listId);
+      }
+    }
+  } catch (e) {
+    console.warn('[ToDo] list cache load failed:', e.message);
+  }
+  return _todoListByTask;
+}
+
+function _saveTodoListCache() {
+  try {
+    // setState stores a primitive — stringify, never hand it the object.
+    require('../db/database').setState(
+      TODO_LIST_CACHE_KEY,
+      JSON.stringify(Object.fromEntries(_todoListCache()))
+    );
+  } catch (e) {
+    console.warn('[ToDo] list cache save failed:', e.message);
+  }
+}
+
+/**
+ * Re-key an entire list rather than appending to it. A task that has been
+ * completed or deleted must fall OUT of the map, or a persisted cache grows
+ * without bound and — worse — never self-corrects, which the in-memory one got
+ * for free by dying every restart. Size stays at "tasks currently open".
+ */
+function _rekeyTodoList(cache, listId, taskIds) {
+  const current = new Set(taskIds);
+  let changed = false;
+  for (const [taskId, cachedList] of cache) {
+    if (cachedList === listId && !current.has(taskId)) { cache.delete(taskId); changed = true; }
+  }
+  for (const taskId of current) {
+    if (cache.get(taskId) !== listId) { cache.set(taskId, listId); changed = true; }
+  }
+  return changed;
+}
+
+function _rememberTodoList(listId, taskIds) {
+  if (_rekeyTodoList(_todoListCache(), listId, taskIds)) _saveTodoListCache();
+}
+
+function _forgetTodoList(taskId) {
+  const cache = _todoListCache();
+  if (cache.delete(taskId)) _saveTodoListCache();
+}
 
 // Fetch To-Do tasks for a specific list
 async function fetchTodoTasks(listId) {
@@ -602,7 +667,7 @@ async function fetchTodoTasks(listId) {
     try {
       const data = await graphFetchAll(`/me/todo/lists/${listId}/tasks?$top=100&$filter=status ne 'completed'`, token);
       if (data && data.value) {
-        data.value.forEach(t => { if (t.id) _todoListByTask.set(t.id, listId); });
+        _rememberTodoList(listId, data.value.map(t => t.id).filter(Boolean));
         return data.value;
       }
     } catch (err) {
@@ -725,15 +790,17 @@ async function graphWrite(urlPath, method, body, token, extraHeaders = {}) {
 }
 
 // Which To-Do list holds this task? Cache first, then walk the lists.
-async function _resolveTodoList(taskId, token) {
-  if (_todoListByTask.has(taskId)) return _todoListByTask.get(taskId);
+async function _resolveTodoList(taskId, token, { skipCache = false } = {}) {
+  const cache = _todoListCache();
+  if (!skipCache && cache.has(taskId)) return cache.get(taskId);
   const lists = await fetchTodoLists();
   if (!Array.isArray(lists)) return null;
   for (const list of lists) {
     try {
       const task = await graphFetch(`/me/todo/lists/${list.id}/tasks/${encodeURIComponent(taskId)}`, token);
       if (task?.id) {
-        _todoListByTask.set(taskId, list.id);
+        cache.set(taskId, list.id);
+        _saveTodoListCache();
         return list.id;
       }
     } catch { /* 404 in this list — keep looking */ }
@@ -748,12 +815,24 @@ async function completeTodoTask(taskId, listId = null) {
   const resolved = listId || await _resolveTodoList(taskId, token);
   if (!resolved) return { completed: false, reason: 'list_not_found' };
 
-  const result = await graphWrite(
-    `/me/todo/lists/${resolved}/tasks/${encodeURIComponent(taskId)}`,
+  const patch = (list) => graphWrite(
+    `/me/todo/lists/${list}/tasks/${encodeURIComponent(taskId)}`,
     'PATCH',
     { status: 'completed' },
     token
   );
+
+  let result = await patch(resolved);
+  // A cached list survives restarts now, so it can also be WRONG across them —
+  // move a task between lists and the stored mapping points at nothing. That
+  // used to self-heal on the next deploy; now it has to say so. One re-walk.
+  if (!result.ok && result.status === 404 && !listId) {
+    console.warn(`[ToDo] Cached list ${resolved} no longer holds ${taskId} — re-resolving`);
+    _forgetTodoList(taskId);
+    const rewalked = await _resolveTodoList(taskId, token, { skipCache: true });
+    if (!rewalked) return { completed: false, reason: 'list_not_found' };
+    result = await patch(rewalked);
+  }
   if (!result.ok) {
     console.warn(`[ToDo] Complete failed for ${taskId}: ${result.reason} ${result.detail || ''}`);
     return { completed: false, reason: result.reason };
@@ -1188,5 +1267,7 @@ module.exports = {
   completePlannerTask,
   completeMicrosoftTask,
   graphFetch,
-  graphWrite
+  graphWrite,
+  // pure, exported for the tests — the map surgery is the part worth pinning
+  _rekeyTodoList
 };
