@@ -10,6 +10,7 @@ import Today from './views/Today';
 import Tasks from './views/Tasks';
 import Chat from './views/Chat';
 import MeetingPrep from './views/MeetingPrep';
+import Standup from './views/Standup';
 import BrainManagement from './views/BrainManagement';
 import actionSurfaces from '../../../shared/action-surfaces.cjs';
 import DeploymentGuard from './components/DeploymentGuard';
@@ -28,6 +29,10 @@ const TABS = [
   { id: 'voice', label: 'Voice', icon: '🎙️', Component: Capture }, // jumps straight into recording
   { id: 'chat', label: 'Chat', icon: '💬', Component: Chat },
   { id: 'prep', label: 'Prep', icon: '📅', Component: MeetingPrep },
+  // #26 — the standup was reachable ONLY by tapping a notification, and what
+  // that opened was the retired stepper. Handles EOD too; the view picks which
+  // is outstanding and shows a toggle either way.
+  { id: 'standup', label: 'Ritual', icon: '📝', Component: Standup },
   { id: 'brain', label: 'Brain', icon: '🧠', Component: BrainManagement },
 ];
 
@@ -84,6 +89,11 @@ export default function App() {
   const [authed, setAuthed] = useState(() => !!getPin());
   const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'today');
   const [actionIntent, setActionIntent] = useState(() => readLaunchIntent());
+  // Which ritual a notification meant, when it routed straight to a tab. The
+  // resolved TAB is the same for standup and EOD ('standup'), so without this
+  // the kind is dropped and a 5pm EOD nudge opens the morning standup. Cleared
+  // on any manual navigation so it can't go stale behind a tab switch.
+  const [intentKind, setIntentKind] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   usePushSubscription(authed);
   const wakeLock = useWakeLock(authed);
@@ -91,8 +101,10 @@ export default function App() {
   useEffect(() => {
     const intent = readLaunchIntent();
     if (!intent) return;
+    const plan = resolveSaraLitePlan(intent);
     setActive(intent.tab);
-    setActionIntent(resolveSaraLitePlan(intent).presentation === 'tab' ? null : intent);
+    setIntentKind(plan.presentation === 'tab' ? plan.kind : null);
+    setActionIntent(plan.presentation === 'tab' ? null : intent);
     clearLaunchIntentFromUrl();
   }, []);
 
@@ -112,13 +124,22 @@ export default function App() {
         body: data.notificationBody || null,
         payload: data.notificationData || {},
       };
+      const plan = resolveSaraLitePlan(intent);
       setActive(intent.tab);
-      setActionIntent(resolveSaraLitePlan(intent).presentation === 'tab' ? null : intent);
+      setIntentKind(plan.presentation === 'tab' ? plan.kind : null);
+      setActionIntent(plan.presentation === 'tab' ? null : intent);
     }
 
     navigator.serviceWorker.addEventListener('message', onMessage);
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
   }, []);
+
+  // Any navigation that did not come from a notification drops the remembered
+  // kind — a 5pm EOD nudge must not still be steering the Ritual tab tomorrow.
+  function goTab(tab) {
+    setActive(tab);
+    setIntentKind(null);
+  }
 
   async function refreshApp() {
     if (refreshing) return;
@@ -185,14 +206,18 @@ export default function App() {
           <NotificationActionCard
             intent={actionIntent}
             onDismiss={() => setActionIntent(null)}
-            onNavigate={(tab) => setActive(tab)}
+            onNavigate={goTab}
           />
         )}
-        {/* key forces a fresh mount when switching Capture↔Voice so autoRecord re-fires */}
+        {/* key forces a fresh mount when switching Capture↔Voice so autoRecord
+            re-fires — and on intentKind so an EOD nudge tapped while already
+            sitting on the Ritual tab re-opens it as EOD instead of being
+            ignored by the view's mount-time default. */}
         <ActiveView
-          key={active}
+          key={`${active}:${intentKind || ''}`}
           autoRecord={active === 'voice'}
-          onNavigate={setActive}
+          intentKind={intentKind}
+          onNavigate={goTab}
           onActionIntent={setActionIntent}
         />
       </main>
@@ -204,7 +229,7 @@ export default function App() {
             type="button"
             className={`navbtn${active === t.id ? ' navbtn--on' : ''}`}
             aria-current={active === t.id ? 'page' : undefined}
-            onClick={() => setActive(t.id)}
+            onClick={() => goTab(t.id)}
           >
             <span className="navbtn__icon" aria-hidden="true">{t.icon}</span>
             <span className="navbtn__label">{t.label}</span>

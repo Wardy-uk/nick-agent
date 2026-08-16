@@ -46,9 +46,11 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
       try {
         let data = null;
 
-        if (kind === 'standup') data = await apiFetch('/api/standup/questions');
-        else if (kind === 'eod') data = await apiFetch('/api/standup/eod/questions');
-        else if (kind === 'journal') data = await apiFetch('/api/journal/prompts');
+        // #26 — standup/eod are no longer handled here. They resolve to
+        // presentation 'tab' now, so App never renders this card for them and
+        // the Ritual tab drives /api/standup-session/* instead of the retired
+        // /api/standup/questions + /submit-guided stepper this used to call.
+        if (kind === 'journal') data = await apiFetch('/api/journal/prompts');
         else if (kind === 'todo') data = await apiFetch('/api/todos/focus?filter=overdue&limit=5');
         else if (kind === 'meeting') {
           const eventId = intent?.payload?.eventId;
@@ -59,9 +61,6 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
 
         if (!active) return;
 
-        if (kind === 'standup' || kind === 'eod') {
-          setAnswers(new Array((data.questions || []).length).fill(''));
-        }
         if (kind === 'journal') {
           setAnswers((data.prompts || []).map(() => ''));
         }
@@ -87,17 +86,7 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
   async function submitGuided() {
     setSaving(true);
     try {
-      if (kind === 'standup') {
-        await apiFetch('/api/standup/submit-guided', {
-          method: 'POST',
-          body: JSON.stringify({ answers }),
-        });
-      } else if (kind === 'eod') {
-        await apiFetch('/api/standup/eod/submit-guided', {
-          method: 'POST',
-          body: JSON.stringify({ answers }),
-        });
-      } else if (kind === 'journal') {
+      if (kind === 'journal') {
         const entries = (state.data?.prompts || []).map((prompt, index) => ({
           prompt,
           response: answers[index] || '',
@@ -174,57 +163,11 @@ export default function NotificationActionCard({ intent, onDismiss, onNavigate }
         </div>
       )}
 
-      {!state.loading && !state.error && handledInSara && kind === 'standup' && (
-        <div className="notif__body">
-          <p className="notif__lede">{state.data?.briefing || 'Morning standup ready.'}</p>
-          {trimItems(state.data?.questions, 3).map((question, index) => (
-            <label className="notif__field" key={question}>
-              <span>{question}</span>
-              <textarea
-                value={answers[index] || ''}
-                onChange={(event) => {
-                  const next = answers.slice();
-                  next[index] = event.target.value;
-                  setAnswers(next);
-                }}
-                rows={3}
-              />
-            </label>
-          ))}
-          <div className="notif__actions">
-            <button type="button" className="notif__btn notif__btn--primary" disabled={!canSubmit || saving} onClick={submitGuided}>
-              {saving ? 'Saving…' : state.data?.completed ? 'Saved' : 'Write standup'}
-            </button>
-            <button type="button" className="notif__btn" onClick={() => onNavigate('focus')}>Focus tab</button>
-          </div>
-        </div>
-      )}
-
-      {!state.loading && !state.error && handledInSara && kind === 'eod' && (
-        <div className="notif__body">
-          <p className="notif__lede">{state.data?.briefing || 'End-of-day wrap-up ready.'}</p>
-          {trimItems(state.data?.questions, 3).map((question, index) => (
-            <label className="notif__field" key={question}>
-              <span>{question}</span>
-              <textarea
-                value={answers[index] || ''}
-                onChange={(event) => {
-                  const next = answers.slice();
-                  next[index] = event.target.value;
-                  setAnswers(next);
-                }}
-                rows={3}
-              />
-            </label>
-          ))}
-          <div className="notif__actions">
-            <button type="button" className="notif__btn notif__btn--primary" disabled={!canSubmit || saving} onClick={submitGuided}>
-              {saving ? 'Saving…' : state.data?.completed ? 'Saved' : 'Write EOD'}
-            </button>
-            <button type="button" className="notif__btn" onClick={() => onNavigate('focus')}>Focus tab</button>
-          </div>
-        </div>
-      )}
+      {/* #26 — the standup and EOD arms lived here and ran the retired
+          three-question stepper. Both kinds now resolve to presentation 'tab',
+          so App switches to the Ritual tab and never mounts this card for them.
+          Deleted rather than left dark: a second standup flow on the same phone
+          is how the two silently disagree about what today's standup was. */}
 
       {!state.loading && !state.error && handledInSara && kind === 'journal' && (
         <div className="notif__body">

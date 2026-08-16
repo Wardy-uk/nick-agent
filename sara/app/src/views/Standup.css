@@ -1,0 +1,204 @@
+/* Standup / EOD on the phone — #26.
+   Deliberately built on Chat's shapes: it is the same kind of surface (a thread
+   plus a composer), and two chat-like screens that look different on one phone
+   is friction for no gain. */
+
+.su {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.su__status {
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-align: center;
+  margin: auto 0;
+}
+
+.su__toggle {
+  display: flex;
+  gap: 0.4rem;
+  padding-bottom: 0.6rem;
+}
+.su__toggle-btn {
+  flex: 1;
+  padding: 0.45rem 0.6rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.su__toggle-btn--on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #04121f;
+  font-weight: 600;
+}
+.su__toggle-btn:disabled { opacity: 0.55; cursor: default; }
+
+.su__banner {
+  background: #3a2f14;
+  border: 1px solid #6b5520;
+  color: #ffd98a;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  margin-bottom: 0.6rem;
+}
+
+.su__thread {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.25rem 0 1rem;
+}
+
+.su__msg {
+  max-width: 85%;
+  padding: 0.6rem 0.8rem;
+  border-radius: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.su__msg--user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #04121f;
+  border-bottom-right-radius: 4px;
+}
+.su__msg--assistant {
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-bottom-left-radius: 4px;
+}
+.su__typing { color: var(--muted); }
+
+/* An error must never read as a dead end — it always carries a way forward and
+   the reassurance that the transcript is on the Pi. */
+.su__error {
+  background: #3a1a1a;
+  border: 1px solid #6b2b2b;
+  border-radius: 10px;
+  padding: 0.7rem 0.8rem;
+  margin-bottom: 0.6rem;
+}
+.su__error-msg { color: #ffb4b4; font-size: 0.85rem; line-height: 1.4; }
+.su__error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.6rem 0 0.4rem;
+}
+.su__error-note { color: var(--muted); font-size: 0.75rem; }
+
+.su__ready {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.8rem;
+  margin-bottom: 0.6rem;
+}
+.su__ready-title { font-weight: 600; margin-bottom: 0.4rem; }
+.su__ready-list {
+  margin: 0 0 0.7rem;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.su__done {
+  margin: auto 0;
+  text-align: center;
+  padding: 1.5rem 0;
+}
+.su__done-tick {
+  font-size: 2rem;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 0.5rem;
+}
+.su__done-title { font-weight: 600; margin-bottom: 0.2rem; }
+.su__done-sub { color: var(--muted); font-size: 0.85rem; }
+.su__done-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.su__btn {
+  padding: 0.5rem 0.9rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.su__btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #04121f;
+  font-weight: 600;
+}
+.su__btn:disabled { opacity: 0.5; cursor: default; }
+
+.su__composer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+  background: var(--bg);
+}
+.su__input {
+  flex: 1;
+  padding: 0.75rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  color: var(--text);
+  font: inherit;
+  resize: none;
+}
+.su__send {
+  flex: 0 0 auto;
+  width: 2.8rem;
+  height: 2.8rem;
+  align-self: flex-end;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #04121f;
+  font-size: 1.2rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.su__send:disabled { opacity: 0.45; cursor: default; }
+
+.su__foot {
+  display: flex;
+  gap: 1rem;
+  padding: 0.6rem 0 0.2rem;
+}
+.su__link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.su__link:disabled { opacity: 0.5; cursor: default; }

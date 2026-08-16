@@ -1,6 +1,10 @@
 'use strict';
 
-const SARA_LITE_TABS = new Set(['today', 'focus', 'tasks', 'capture', 'voice', 'chat', 'prep', 'brain']);
+// Must stay in step with TABS in sara/app/src/App.jsx — an id here with no tab
+// there routes to a screen that does not exist, and a tab there missing from
+// here silently falls back to Focus. Pinned in both directions by
+// backend/services/action-surfaces.test.js, because neither half errors.
+const SARA_LITE_TABS = new Set(['today', 'focus', 'tasks', 'capture', 'voice', 'chat', 'prep', 'standup', 'brain']);
 
 function lower(value) {
   return String(value || '').trim().toLowerCase();
@@ -61,6 +65,7 @@ function resolveSaraLiteTab(raw = {}) {
   if (SARA_LITE_TABS.has(tab)) return tab;
 
   const kind = resolveActionKind(raw);
+  if (['standup', 'eod'].includes(kind)) return 'standup';
   if (kind === 'meeting') return 'prep';
   if (['journal', 'brain'].includes(kind)) return 'brain';
   if (kind === 'capture') return 'capture';
@@ -77,13 +82,24 @@ function resolveSaraLitePlan(raw = {}) {
     return { kind, canHandle: true, presentation: 'external', tab: resolveSaraLiteTab(raw) };
   }
 
-  if (['standup', 'eod', 'journal', 'meeting', 'brain'].includes(kind)) {
+  if (['journal', 'meeting', 'brain'].includes(kind)) {
     return { kind, canHandle: true, presentation: 'sheet', tab: resolveSaraLiteTab(raw) };
   }
 
   // 'todo' used to be a sheet because there was nowhere to send it. It has a real
   // tab now, and the full list beats a five-item card pulled from a notification.
-  if (['capture', 'chat', 'todo'].includes(kind)) {
+  //
+  // #26 — 'standup'/'eod' moved out of the sheet for a stronger reason than
+  // screen size. The sheet ran the RETIRED fixed three-question stepper
+  // (/api/standup/submit-guided), which holds every answer in browser state
+  // until one final POST and loses the lot when that POST fails — the exact
+  // failure standup-session.js exists to end. The tab drives
+  // /api/standup-session/*, where the transcript is saved before and after every
+  // turn. Two flows on one phone would disagree about what today's standup was,
+  // so there is now one. Note this branch is ordered AFTER the sheet branch in
+  // the original file for a reason: the sheet list is checked first, so leaving
+  // the ids in both would have kept the sheet and made adding the tab a no-op.
+  if (['capture', 'chat', 'todo', 'standup', 'eod'].includes(kind)) {
     return { kind, canHandle: true, presentation: 'tab', tab: resolveSaraLiteTab(raw) };
   }
 

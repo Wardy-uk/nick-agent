@@ -27,14 +27,25 @@ export function apiUrl(path) {
   return `${API_BASE}${path}`;
 }
 
-// Fetch wrapper — attaches PIN auth (+ vault key for vault routes) and parses JSON.
-// Throws on non-2xx so views can show a clear error instead of rendering bad data.
-export async function apiFetch(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-
+// The auth every call needs. Exported because apiFetch flattens a non-2xx body
+// into an Error MESSAGE, which is fine for a view that only wants to say "it
+// broke" — but loses structured fields. The standup session returns 503 with
+// `retryable` and the SAVED SESSION in the body so the client can retry without
+// Nick retyping; that contract cannot survive being stringified, so Standup.jsx
+// does its own fetch and needs the headers from one place rather than a copy
+// that drifts the next time auth changes.
+export function authHeaders(path, extra = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extra };
   const pin = getPin();
   if (pin) headers['X-Neuro-Pin'] = pin;
   if (path.startsWith('/api/vault') && VAULT_API_KEY) headers['X-Api-Key'] = VAULT_API_KEY;
+  return headers;
+}
+
+// Fetch wrapper — attaches PIN auth (+ vault key for vault routes) and parses JSON.
+// Throws on non-2xx so views can show a clear error instead of rendering bad data.
+export async function apiFetch(path, options = {}) {
+  const headers = authHeaders(path, options.headers);
 
   const res = await fetch(apiUrl(path), { ...options, headers });
   if (!res.ok) {
