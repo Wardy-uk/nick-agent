@@ -98,6 +98,59 @@ function walk(dir, acc = []) {
   return acc;
 }
 
+// `walk()` skips `_about.md` by design, so any [[_about]] link is unresolvable by
+// construction — a linter defect, not a vault defect. Never counted as broken.
+const ABOUT_TARGET = '_about';
+
+// Every `Archive` folder in the tree, not just the top-level one (#81). The notes
+// that produced 60 of the 69 false positives live in `Projects/Archive/90 Day Plan
+// (retired 2026-08-12)/`, so a top-level-only lookup classified them as missing.
+// EXCLUDE_DIRS still applies to everything else, which is what keeps `.stversions`
+// and `Scripts/.lint-backups` — both full of Archive-shaped copies — out.
+function collectArchiveDirs(root, acc = []) {
+  if (!fs.existsSync(root)) return acc;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(root, entry.name);
+    if (entry.name === 'Archive') { acc.push(full); continue; } // don't descend; indexed whole
+    if (EXCLUDE_DIRS.has(entry.name)) continue;
+    collectArchiveDirs(full, acc);
+  }
+  return acc;
+}
+
+// Every .md under an archive dir. No EXCLUDE_DIRS here — everything below an
+// `Archive` folder is archived, including the nested `Archive/_toDelete/Archive`.
+function collectArchivedFiles(dir, acc = []) {
+  if (!fs.existsSync(dir)) return acc;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) collectArchivedFiles(full, acc);
+    else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) acc.push(full);
+  }
+  return acc;
+}
+
+/**
+ * Index of archived note basenames → path. Takes the normaliser so each caller
+ * matches archive targets exactly the way it matches active ones — `lint` is
+ * case-only, `fixPlan` uses the aggressive `norm`. Mixing them would let a
+ * punctuation variant resolve to Archive while an active note existed.
+ *
+ * Values are ABSOLUTE paths, matching what `buildFixModel` has always stored —
+ * `fixPlan` wraps them in `rel()` itself and `fixApply` re-joins against root.
+ */
+function buildArchiveIndex(root, normalise) {
+  const index = new Map();
+  for (const dir of collectArchiveDirs(root)) {
+    for (const f of collectArchivedFiles(dir)) {
+      const key = normalise(path.basename(f, '.md'));
+      if (!index.has(key)) index.set(key, f);
+    }
+  }
+  return index;
+}
+
 // Loose YAML alias parse (inline [a, b] and list forms). No deps.
 function parseAliases(text) {
   const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -260,17 +313,30 @@ function lint(root, { write = true } = {}) {
 
   const broken = [];
   const brokenSeen = new Set(); // dedup distinct (from → target) pairs
+  // Archiving a note is correct behaviour, and lint used to report every inbound
+  // link to it as a defect (#81) — 54 for `90 Day Plan`, 6 for `Evidence Register`,
+  // burying the ~100 real ones. A link into the bin IS a signal ("this now points
+  // at retired content"), just a different one, so it gets its own class rather
+  // than being dropped.
+  const archiveIndex = buildArchiveIndex(root, (s) => s.toLowerCase());
+  const archivedTargets = [];
+
   for (const [file, n] of notes) {
     const seen = new Set();
     for (const target of n.outgoing) {
       const hit = resolveIndex.get(target.toLowerCase());
       if (hit) {
         if (hit !== file && !seen.has(hit)) { notes.get(hit).inCount += 1; seen.add(hit); }
-      } else {
-        const fromRel = rel(root, file);
-        const key = `${fromRel} ${target}`;
-        if (!brokenSeen.has(key)) { brokenSeen.add(key); broken.push({ from: fromRel, target }); }
+        continue;
       }
+      if (target.toLowerCase() === ABOUT_TARGET) continue; // broken by construction, not by content
+      const fromRel = rel(root, file);
+      const key = `${fromRel} ${target}`;
+      if (brokenSeen.has(key)) continue;
+      brokenSeen.add(key);
+      const archived = archiveIndex.get(target.toLowerCase());
+      if (archived) archivedTargets.push({ from: fromRel, target, archivePath: rel(root, archived) });
+      else broken.push({ from: fromRel, target });
     }
   }
 
@@ -294,12 +360,12 @@ function lint(root, { write = true } = {}) {
   broken.sort((a, b) => a.from.localeCompare(b.from));
 
   let reportPath = null;
-  if (write) reportPath = writeLintReport(root, { scanned: notes.size, broken, orphans, underlinkedPeople, stale, staleDays });
+  if (write) reportPath = writeLintReport(root, { scanned: notes.size, broken, archivedTargets, orphans, underlinkedPeople, stale, staleDays });
 
-  return { scanned: notes.size, broken, orphans, underlinkedPeople, stale, reportPath };
+  return { scanned: notes.size, broken, archivedTargets, orphans, underlinkedPeople, stale, reportPath };
 }
 
-function writeLintReport(root, { scanned, broken, orphans, underlinkedPeople, stale, staleDays }) {
+function writeLintReport(root, { scanned, broken, archivedTargets = [], orphans, underlinkedPeople, stale, staleDays }) {
   const today = todayStr();
   const L = [];
   L.push('---', 'type: reference', `created: ${today}`, 'tags: [vault, lint, audit]', 'author: NEURO vault-hygiene', '---');
@@ -307,6 +373,7 @@ function writeLintReport(root, { scanned, broken, orphans, underlinkedPeople, st
   L.push(`Scanned **${scanned}** notes (excluding ${[...EXCLUDE_DIRS].join(', ')}).`, '');
   L.push('| Check | Count |', '|---|---|');
   L.push(`| Broken links | ${broken.length} |`);
+  L.push(`| Links to archived notes | ${archivedTargets.length} |`);
   L.push(`| Orphans (no links in or out) | ${orphans.length} |`);
   L.push(`| Under-linked People notes | ${underlinkedPeople.length} |`);
   L.push(`| Stale (> ${staleDays} days) | ${stale.length} |`, '');
@@ -314,6 +381,14 @@ function writeLintReport(root, { scanned, broken, orphans, underlinkedPeople, st
   L.push('## Broken links');
   if (!broken.length) L.push('> [!success] None — every wikilink resolves.');
   else { L.push('> [!bug] These `[[targets]]` resolve to no note or alias. Fix the link or create the note.', ''); for (const b of broken) L.push(`- \`${b.from}\` → \`[[${b.target}]]\``); }
+  L.push('');
+
+  L.push('## Links to archived notes');
+  if (!archivedTargets.length) L.push('> [!success] None — no link points into an Archive folder.');
+  else {
+    L.push('> [!info] These resolve to a note in an `Archive` folder. Not broken — archiving was deliberate — but worth knowing the link now points at retired content. Repoint it or leave it.', '');
+    for (const a of archivedTargets) L.push(`- \`${a.from}\` → \`[[${a.target}]]\` — archived at \`${a.archivePath}\``);
+  }
   L.push('');
 
   L.push('## Orphans');
@@ -485,13 +560,10 @@ function buildFixModel(root) {
     fuzzyAggressive: config.fuzzyAggressive || 0.70,
   };
   const active = walk(root);                                   // EXCLUDE_DIRS skips Archive
-  const archiveDir = path.join(root, 'Archive');
-  const archive = fs.existsSync(archiveDir) ? walk(archiveDir) : [];
 
   const notes = new Map();
   const resolveIndex = new Map();    // normalized base/alias -> path (active)
   const normBaseToPaths = new Map(); // normalized base -> [active paths]
-  const archiveIndex = new Map();    // normalized base -> archive path
 
   for (const f of active) {
     const text = fs.readFileSync(f, 'utf8');
@@ -504,7 +576,8 @@ function buildFixModel(root) {
     normBaseToPaths.get(nb).push(f);
     for (const a of aliases) resolveIndex.set(norm(a), f);
   }
-  for (const f of archive) { const nb = norm(path.basename(f, '.md')); if (!archiveIndex.has(nb)) archiveIndex.set(nb, f); }
+  // Same nested-Archive discovery lint uses, with fixPlan's aggressive normaliser.
+  const archiveIndex = buildArchiveIndex(root, norm);
 
   for (const [f, n] of notes) {
     const seen = new Set();
@@ -1360,5 +1433,5 @@ module.exports = {
   dedupSummaries,
   nightlySweep,
   // exported for tests / reuse
-  _internal: { walk, parseAliases, extractLinks, linkedSet, cleanProse, buildPeopleIndex, proposeContextualLinks, similarity, norm, dice, EXCLUDE_DIRS },
+  _internal: { walk, collectArchiveDirs, buildArchiveIndex, parseAliases, extractLinks, linkedSet, cleanProse, buildPeopleIndex, proposeContextualLinks, similarity, norm, dice, EXCLUDE_DIRS },
 };

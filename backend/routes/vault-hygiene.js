@@ -37,11 +37,13 @@ router.get('/lint', (req, res) => {
       scanned: r.scanned,
       counts: {
         broken: r.broken.length,
+        archivedTargets: r.archivedTargets.length,
         orphans: r.orphans.length,
         underlinkedPeople: r.underlinkedPeople.length,
         stale: r.stale.length,
       },
       broken: r.broken,
+      archivedTargets: r.archivedTargets,
       orphans: r.orphans,
       underlinkedPeople: r.underlinkedPeople,
       stale: r.stale,

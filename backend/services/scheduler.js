@@ -236,7 +236,9 @@ function start() {
       const hygiene = require('./vault-hygiene');
       const lintRes = hygiene.lint(vaultRoot);
       const planRes = hygiene.contextualLinkPlan(vaultRoot);
-      console.log(`[Scheduler] Weekly hygiene: ${lintRes.broken.length} broken, ${lintRes.orphans.length} orphans; ${planRes.total} link cards across ${planRes.notesTouched} notes.`);
+      // Archived-target count is logged but deliberately kept OUT of the push: it is
+      // informational, and a second number on the banner is nudge noise (#17).
+      console.log(`[Scheduler] Weekly hygiene: ${lintRes.broken.length} broken, ${lintRes.archivedTargets.length} into Archive, ${lintRes.orphans.length} orphans; ${planRes.total} link cards across ${planRes.notesTouched} notes.`);
       if (planRes.total > 0 || lintRes.broken.length > 0) {
         require('./webpush').sendToAll('NEURO — Vault Hygiene',
           `${lintRes.broken.length} broken links, ${lintRes.orphans.length} orphans, ${planRes.total} link cards to review in Vault Audit.`,
