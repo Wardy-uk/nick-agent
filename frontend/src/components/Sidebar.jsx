@@ -39,6 +39,10 @@ const SECONDARY_ITEMS = [
   { id: 'standup',    label: 'Standup',   icon: '✎' },
   { id: 'standups',   label: 'Standup history', icon: '>' },
   { id: 'journal',    label: 'Journal',   icon: '>' },
+  // #28 — the route and the table both existed and nothing read them. A panel
+  // with no menu entry is the same hole one step later (see 'todos'), so it
+  // gets one here rather than being routable-but-unreachable.
+  { id: 'decisions',  label: 'Decisions', icon: '>' },
   { id: 'imports',    label: 'Imports',   icon: '>' },
   { id: 'recent',     label: 'Recent',    icon: '>' },
   { id: 'insights',   label: 'Insights',  icon: '◈' },

@@ -553,20 +553,62 @@ ${queueSummary.at_risk_tickets.length > 0 ? '### At-Risk Tickets\n' + queueSumma
 
 // ── Post-response processing (shared by both backends) ──
 
+/**
+ * Decision markers in a model response, in order, deduped.
+ *
+ * Pure and exported so the marker contract is pinned without a DB or a vault —
+ * the same split used by `pi-health.assess()` and `cadenceState()`.
+ */
+function parseDecisions(fullResponse) {
+  const patterns = [
+    /\[DECISION:\s*([^\]]+)\]/g,  // documented, and bounded by the closing bracket
+    /\[DECISION\]\s*([^\n]+)/g,   // legacy
+  ];
+  const seen = new Set();
+  const out = [];
+  for (const re of patterns) {
+    let m;
+    while ((m = re.exec(String(fullResponse || ''))) !== null) {
+      // A captured "- foo" wrote "- - foo" into the vault log, which is how the
+      // one historical entry got its doubled bullet.
+      const text = m[1].trim().replace(/^[-*]\s+/, '');
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      out.push(text);
+    }
+  }
+  return out;
+}
+
 // NOTE: does NOT save the assistant message — both callers already did, and
 // saving here too put every reply in the history twice, which then fed back in
 // as duplicated context on the next turn.
 function handleResponse(conversationId, fullResponse) {
-  const decisionRegex = /\[DECISION\]\s*(.*?)(?:\n|$)/g;
-  let match;
-  while ((match = decisionRegex.exec(fullResponse)) !== null) {
-    db.saveDecision(conversationId, match[1].trim());
+  // [DECISION: text] — log a decision to the DB and the vault.
+  //
+  // #28 was filed as "logged decisions render nowhere". Nothing was ever
+  // logged: BOTH system prompts document `[DECISION: text]`, and this matched
+  // `[DECISION] text` — the colon form could never fire. Its three siblings
+  // below are all `\[X:\s*(.+?)\]`; DECISION was the only one wrong, and the
+  // only one with an empty table. Measured before changing anything: `decisions`
+  // held 0 rows, and `Decision Log/decisions.md` held ONE entry in five months
+  // ("Just confirming we're both on the same page – weekend mode activated!"),
+  // which is a pleasantry, not a decision.
+  //
+  // The legacy bare form is still accepted rather than deleted — it is what the
+  // code expected, so a model that emits it is not wrong — but it is now bounded
+  // to a single line, which is what let that one entry swallow a whole sentence
+  // of chat. Deduped, because a response using both forms is one decision.
+  for (const text of parseDecisions(fullResponse)) {
+    db.saveDecision(conversationId, text);
     try {
-      obsidian.appendDecision(match[1].trim());
+      obsidian.appendDecision(text);
     } catch (e) {
       console.error('[AI] Failed to write decision to vault:', e.message);
     }
   }
+
+  let match;
 
   // [ADD TODO: text] — add to Master Todo inbox
   const todoRegex = /\[ADD TODO:\s*(.+?)\]/g;
@@ -869,4 +911,5 @@ module.exports = {
   isConfigured,
   streamChat,
   syncChat,
+  _internals: { parseDecisions },
 };
