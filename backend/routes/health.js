@@ -214,11 +214,27 @@ router.get('/metrics', (req, res) => {
         : null,
     }));
 
+    // All-time context alongside the window, because during a backfill they
+    // disagree wildly and the window alone is misleading. Measured live: 161,637
+    // rows spanning Aug 2024 → Nov 2025 while the 30-day window was EMPTY,
+    // because the app backfills forward chronologically and had not yet reached
+    // the present. Reporting only the window would have said "no data" over a
+    // table with 161k rows in it — indistinguishable from a broken feed.
+    const all = db.getHealthMetricSummary(null);
+    const newestAt = all.reduce((m, r) => (!m || r.last_at > m ? r.last_at : m), null);
+    const oldestAt = all.reduce((m, r) => (!m || r.first_at < m ? r.first_at : m), null);
+
     res.json({
       windowDays: days,
       metricCount: metrics.length,
       totalSamples: metrics.reduce((n, m) => n + m.samples, 0),
       metrics,
+      allTime: {
+        metricCount: all.length,
+        samples: all.reduce((n, r) => n + r.samples, 0),
+        oldestAt,
+        newestAt,
+      },
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

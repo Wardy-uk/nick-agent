@@ -157,12 +157,30 @@ export default function HealthCard() {
           Data arriving
           <span className="hc-sub-note">
             {series?.metricCount || 0} metrics · {(series?.totalSamples || 0).toLocaleString()} samples / {series?.windowDays || 30}d
+            {series?.allTime?.samples > 0 && (
+              <> · {series.allTime.samples.toLocaleString()} all-time</>
+            )}
           </span>
         </div>
 
-        {metrics.length === 0 && (
+        {/* An empty window over a full table is what a backfill in progress
+            looks like — the app syncs forward chronologically, so it can hold
+            160k rows and still have nothing from the last 30 days. Saying
+            "nothing in the window" there would read as a broken feed. */}
+        {metrics.length === 0 && (series?.allTime?.samples > 0) && (
           <div className="hc-quiet">
-            Nothing in the window. iOS decides when the phone syncs, so a gap isn’t
+            Nothing in the last {series.windowDays} days, but{' '}
+            <strong>{series.allTime.samples.toLocaleString()}</strong> samples are on file
+            across {series.allTime.metricCount} metrics, newest{' '}
+            {String(series.allTime.newestAt || '').slice(0, 10)}. The first sync backfills
+            forward from {String(series.allTime.oldestAt || '').slice(0, 10)}, so this fills
+            in as it catches up.
+          </div>
+        )}
+
+        {metrics.length === 0 && !(series?.allTime?.samples > 0) && (
+          <div className="hc-quiet">
+            Nothing yet. iOS decides when the phone syncs, so a gap isn’t
             necessarily a fault — but nothing at all usually means the app was force-quit.
           </div>
         )}
