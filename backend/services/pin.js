@@ -22,10 +22,15 @@
  * Immediate effect comes from also setting `process.env.NEURO_PIN` in memory, so
  * no restart is needed; the file write is what survives one.
  *
- * ⚠ The backup goes to the OS temp dir, never beside `.env`. A `.env.bak-…` in
- * the backend folder is not matched by the `.env` gitignore rule, so it is one
- * `git add` away from committing the OLD PIN to the public repo — the precise
- * failure #123 and the #59 crypt-secret leak were both instances of.
+ * ⚠ The backup goes to the OS temp dir, never beside `.env`, and the checked
+ * reason matters. `.gitignore` covers `.env` and — by a general `*.bak-*` rule —
+ * the hand-made `.env.bak-…` files already sitting in `backend/`. It does NOT
+ * cover the names this file would generate: `git check-ignore` says both
+ * `neuro-env-backup-<ts>` and `.env.tmp-<pid>-<ts>` are committable. So a
+ * secret written beside `.env` here would have been one `git add -A` from the
+ * public repo — the failure #123 and the #59 crypt-secret leak were both
+ * instances of. `.env.tmp-*` is now also gitignored as a second line of
+ * defence, for the case where a crash between write and rename strands one.
  */
 
 const fs = require('fs');

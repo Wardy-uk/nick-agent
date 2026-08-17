@@ -166,9 +166,10 @@ test('the backup never lands beside .env — that is one git add from a leak', a
   await withEnv(SAMPLE_ENV, async (_file, dir) => {
     const out = pin.change({ currentPin: '140277', newPin: '528193' });
     const beside = fs.readdirSync(dir).filter(f => f !== '.env');
-    // A `.env.bak-*` in backend/ is NOT matched by the `.env` gitignore rule,
-    // so the old PIN would be one `git add` from the public repo — exactly
-    // how #123 and the #59 crypt-secret leak happened.
+    // Verified with `git check-ignore`: `neuro-env-backup-<ts>` and
+    // `.env.tmp-<pid>-<ts>` are NOT ignored, so a secret written beside .env
+    // here would be one `git add -A` from the public repo — exactly how #123
+    // and the #59 crypt-secret leak happened.
     assert.deepEqual(beside, [], 'nothing but .env in the env directory');
     if (out.backup) {
       assert.ok(!out.backup.startsWith(dir), 'backup is outside the env directory');

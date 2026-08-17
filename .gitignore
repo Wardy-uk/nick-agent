@@ -1,6 +1,13 @@
 node_modules/
 dist/
 .env
+# Anything holding a copy of .env. The `.env` rule above does NOT match these —
+# `git check-ignore` confirms both were committable — and services/pin.js writes
+# exactly these names when rotating the PIN. A stranded copy after a crash is
+# one `git add -A` from publishing a live credential (#123).
+.env.tmp-*
+.env.bak*
+neuro-env-backup-*
 *.db
 *.db-journal
 *.db-wal
