@@ -188,3 +188,36 @@ test('nonsense pagination falls back to the default rather than the nearest lega
   const page = wins.feed({ limit: -5, offset: -3 });
   assert.ok(page.wins.length > 1);
 });
+
+test('one standup is one win, however many rows it wrote', () => {
+  // Found on the live ledger within an hour of deploying: "Standup done" twice
+  // in one afternoon. standup_done is logged from four call sites (three in
+  // routes/standup.js, plus nudges.js and standup-session.js) and a single
+  // standup routinely writes more than one row. Counting each is how the number
+  // stops being true, which is the only property it has.
+  db.getDb().prepare('DELETE FROM wins').run();
+  db.logActivity('standup_done', { hour: 9 }, '2026-08-15');
+  db.logActivity('standup_done', { hour: 9 }, '2026-08-15');
+  db.logActivity('eod_done', {}, '2026-08-15');
+  wins.sync({ since: '2026-08-01', until: '2026-08-31' });
+
+  const rituals = wins.feed({ dateKey: '2026-08-15' }).wins.filter(w => w.source === 'ritual');
+  assert.equal(rituals.length, 2, 'one standup and one EOD, not three rows');
+  assert.equal(rituals.filter(r => r.kind === 'standup_done').length, 1);
+
+  // A ritual on a DIFFERENT day is still its own win.
+  db.logActivity('standup_done', { hour: 9 }, '2026-08-16');
+  wins.sync({ since: '2026-08-01', until: '2026-08-31' });
+  assert.equal(wins.feed({ dateKey: '2026-08-16' }).wins.filter(w => w.kind === 'standup_done').length, 1);
+});
+
+test('the feed formats local time itself, so no caller has to', () => {
+  // /api/wins served `time: undefined` to everything that was not the Today
+  // tab, because the conversion lived in adhd-dashboard. And it is a
+  // CONVERSION, never a slice of the ISO string — slicing shows BST an hour
+  // early, which is the bug every calendar time in NEURO used to have.
+  db.getDb().prepare('DELETE FROM wins').run();
+  wins.logManual('Something worth remembering', new Date(2026, 7, 15, 14, 37, 0));
+  const [win] = wins.feed({ dateKey: '2026-08-15' }).wins;
+  assert.equal(win.time, '14:37', 'local wall-clock, not the UTC slice');
+});

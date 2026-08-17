@@ -264,6 +264,17 @@ function collect({ since, until } = {}) {
       }
 
       const at = parseDbTime(row.created_at) || new Date(`${row.date_key}T12:00:00`);
+      const key = row.date_key || dateKey(at);
+
+      // A ritual is at most ONE win per day, keyed on the day rather than the
+      // activity row. `standup_done` is logged from four separate call sites
+      // (routes/standup.js three times, nudges.js, standup-session.js) and a
+      // single standup routinely writes more than one row — the live ledger
+      // showed "Standup done" twice on its first afternoon. Counting each is
+      // how the number stops being true, which is the only property it has.
+      const isRitual = row.event_type === 'standup_done' || row.event_type === 'eod_done';
+      const dedupeKey = isRitual ? `ritual:${row.event_type}:${key}` : `activity:${row.id}`;
+
       rows.push({
         // row.date_key is the DAY OF RECORD and wins follows it, rather than
         // re-deriving the day from created_at. Two reasons: it is the key every
@@ -277,14 +288,14 @@ function collect({ since, until } = {}) {
         // done between midnight and 1am local is keyed to the previous day.
         // That is activity_log's convention system-wide, and one ledger
         // agreeing with it beats a second convention that disagrees.
-        dateKey: row.date_key || dateKey(at),
+        dateKey: key,
         occurredAt: at,
-        source: row.event_type === 'standup_done' || row.event_type === 'eod_done' ? 'ritual' : 'activity',
+        source: isRitual ? 'ritual' : 'activity',
         kind: row.event_type,
         text,
         evidence: `activity:${row.id}`,
         count: 1,
-        dedupeKey: `activity:${row.id}`,
+        dedupeKey,
       });
     }
   } catch (e) {
@@ -528,6 +539,13 @@ function summary(anchor = new Date()) {
   };
 }
 
+/** Local HH:MM from a stored UTC ISO timestamp. */
+function _hhmm(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 /** The scrollable log. Newest first, paginated — this is the `git log` half. */
 function feed({ limit = 50, offset = 0, source = null, dateKey: onDate = null } = {}) {
   const lim = Number.isInteger(limit) && limit > 0 && limit <= 200 ? limit : 50;
@@ -550,6 +568,12 @@ function feed({ limit = 50, offset = 0, source = null, dateKey: onDate = null } 
       id: r.id,
       dateKey: r.date_key,
       occurredAt: r.occurred_at,
+      // Formatted here rather than by each caller. occurred_at is stored as UTC
+      // ISO, so slicing HH:MM out of the string shows BST times an hour early —
+      // the bug every calendar time in NEURO had before Prefer: outlook.timezone.
+      // The first cut left this to adhd-dashboard, so /api/wins served
+      // `time: undefined` to everything that was not the Today tab.
+      time: _hhmm(r.occurred_at),
       source: r.source,
       kind: r.kind,
       text: r.text,

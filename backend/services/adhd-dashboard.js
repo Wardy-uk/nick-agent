@@ -111,17 +111,11 @@ function _momentum(dateKey) {
  * assertion, and an assertion is what the old tickbox already was.
  */
 function _winsToday(dateKey) {
-  // occurred_at is stored as UTC ISO, so the time is FORMATTED to local rather
-  // than sliced out of the string. Slicing is how every calendar time in NEURO
-  // read an hour early through the whole of BST.
-  const hhmm = (iso) => {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return '';
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  };
-
+  // `time` is formatted by the ledger, not here — it is local HH:MM off a UTC
+  // ISO timestamp, and two copies of that conversion is how one of them ends up
+  // slicing the string and reading an hour early through the whole of BST.
   return require('./wins').winsForDate(dateKey).map(w => ({
-    time: hhmm(w.occurredAt),
+    time: w.time,
     text: w.text,
     kind: w.kind,
     source: w.source,
