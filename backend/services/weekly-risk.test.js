@@ -542,3 +542,11 @@ test('a CONFIRMED People HR gap does reach the report, and says it is confirmed'
   assert.ok(f);
   assert.match(f.title, /confirmed NOT logged/);
 });
+
+test('queueSend dedupes on the week — a second press must not queue a second send', () => {
+  const src = weeklyRisk.queueSend.toString();
+  assert.match(src, /getPendingSaraActionsByType/, 'it looks for an existing pending send');
+  assert.match(src, /payload\?\.week !== week/, 'matched on the week, not the body');
+  assert.match(src, /alreadyQueued: true/, 'and hands back the same action');
+  assert.match(src, /updateSaraActionPayload/, 'refreshing the words so the card is not stale');
+});

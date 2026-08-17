@@ -102,7 +102,10 @@ router.post('/queue-send', async (req, res) => {
       actionId: result.actionId,
       recipient: result.recipient,
       subject: result.subject,
-      note: 'Queued for approval — nothing has been sent. Approve it in Actions.',
+      alreadyQueued: Boolean(result.alreadyQueued),
+      note: result.alreadyQueued
+        ? 'Already queued for this week — refreshed the existing card rather than adding a second. Approve it in Actions.'
+        : 'Queued for approval — nothing has been sent. Approve it in Actions.',
     });
   } catch (err) { fail(res, err); }
 });

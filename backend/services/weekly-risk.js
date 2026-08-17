@@ -1016,6 +1016,32 @@ async function queueSend({ week = weekCommencing(), to = null, force = false } =
   if (blockers.length) return { ok: false, blockers, report };
 
   const subject = `Weekly Risk & Anomaly Summary — w/c ${formatUk(week)}`;
+
+  // One pending send per week. Without this, every press of the button queued
+  // another identical outbound email to Nick's manager — and the approval queue
+  // shows them as separate cards, so approving "the send" twice sends the report
+  // twice. Deduping on the WEEK rather than on the body is deliberate: a rebuilt
+  // report has different numbers but is still the same send, and two cards
+  // differing only in a percentage is worse than one.
+  const existing = db.getPendingSaraActionsByType
+    ? db.getPendingSaraActionsByType('send_weekly_risk_report', 50)
+    : [];
+  for (const action of existing || []) {
+    let payload;
+    try { payload = JSON.parse(action.payload); } catch { continue; }
+    if (payload?.week !== week) continue;
+    // Refresh the words and the address so the card is not stale, then hand
+    // back the SAME action rather than minting a second one.
+    try {
+      db.updateSaraActionPayload(action.id, {
+        ...payload, to: [recipient], subject, body: report.markdown,
+        escalateCount: report.escalateCount, snapshotDate: report.snapshotDate,
+        vaultPath: publishedAt(week)?.path || null,
+      });
+    } catch { /* a refresh failure is not a reason to duplicate the send */ }
+    return { ok: true, actionId: action.id, recipient, subject, report, alreadyQueued: true };
+  }
+
   const id = require('./suggestion-engine').queueAction(
     'send_weekly_risk_report',
     {
