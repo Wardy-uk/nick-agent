@@ -131,24 +131,51 @@ async function init() {
       console.log('[DB] management_log.task_id added');
     }
     // hr_logged was NOT NULL DEFAULT 0, which made "never asked" identical to
-    // "confirmed missing". Every existing 0 was a default, not an answer — so
-    // they become NULL (unknown). A confirmed 1 is a real answer and is kept.
-    // SQLite cannot drop NOT NULL in place, and the constraint is harmless once
-    // the values are right, so only the values are migrated.
-    if (cols.length && !cols.includes('hr_logged_tristate_done')) {
-      const zeros = db.prepare("SELECT COUNT(*) c FROM management_log WHERE hr_logged = 0").get()?.c || 0;
-      if (zeros) {
-        try {
-          db.exec('UPDATE management_log SET hr_logged = NULL WHERE hr_logged = 0');
-          console.log(`[DB] management_log.hr_logged: ${zeros} defaulted 0s reset to unknown`);
-        } catch {
-          // A NOT NULL constraint on the old column blocks this. Rebuild is not
-          // worth it — assess() treats 0 as unknown when nothing was ever
-          // confirmed, so the report stays honest either way.
-          console.log('[DB] management_log.hr_logged tri-state migration skipped (NOT NULL constraint)');
-        }
+    // "confirmed missing" — and that difference is the whole point of the
+    // column, because the finding built on it goes to the person who does the
+    // People HR spot-checks.
+    //
+    // SQLite cannot drop NOT NULL in place, so this is the standard rebuild.
+    // It is worth doing properly rather than working around: leaving the
+    // constraint and reinterpreting 0 in `assess()` would mean a genuine
+    // "confirmed not logged" could never be recorded at all.
+    const hrCol = db.prepare('PRAGMA table_info(management_log)').all().find(c => c.name === 'hr_logged');
+    if (hrCol && hrCol.notnull === 1) {
+      const before = db.prepare('SELECT COUNT(*) c FROM management_log').get()?.c || 0;
+      db.exec('BEGIN');
+      try {
+        db.exec(`
+          CREATE TABLE management_log_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entry_date TEXT NOT NULL, logged_at TEXT NOT NULL, type TEXT NOT NULL,
+            person TEXT, summary TEXT NOT NULL, action TEXT, owner TEXT, due_date TEXT,
+            status TEXT NOT NULL DEFAULT 'open', resolved_date TEXT,
+            hr_logged INTEGER, source TEXT, notes TEXT, task_id INTEGER,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+          );
+          -- Every existing 0 was a DEFAULT, never an answer, so it becomes NULL.
+          -- A 1 was set deliberately and is kept.
+          INSERT INTO management_log_new
+            (id, entry_date, logged_at, type, person, summary, action, owner, due_date,
+             status, resolved_date, hr_logged, source, notes, task_id, created_at, updated_at)
+          SELECT id, entry_date, logged_at, type, person, summary, action, owner, due_date,
+                 status, resolved_date, CASE WHEN hr_logged = 1 THEN 1 ELSE NULL END,
+                 source, notes, task_id, created_at, updated_at
+          FROM management_log;
+          DROP TABLE management_log;
+          ALTER TABLE management_log_new RENAME TO management_log;
+          CREATE INDEX IF NOT EXISTS idx_mgmt_log_due ON management_log(due_date);
+          CREATE INDEX IF NOT EXISTS idx_mgmt_log_status ON management_log(status);
+          CREATE INDEX IF NOT EXISTS idx_mgmt_log_entry ON management_log(entry_date DESC);
+        `);
+        const after = db.prepare('SELECT COUNT(*) c FROM management_log').get()?.c || 0;
+        if (after !== before) throw new Error(`row count changed ${before} → ${after}`);
+        db.exec('COMMIT');
+        console.log(`[DB] management_log.hr_logged rebuilt as tri-state (${after} rows preserved)`);
+      } catch (e) {
+        db.exec('ROLLBACK');
+        console.error('[DB] management_log hr_logged rebuild failed, rolled back:', e.message);
       }
-      db.exec('ALTER TABLE management_log ADD COLUMN hr_logged_tristate_done INTEGER DEFAULT 1');
     }
   } catch (e) {
     console.error('[DB] management_log migration check failed:', e.message);
