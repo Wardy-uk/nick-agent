@@ -1,6 +1,13 @@
 // Phase 3: Anthropic SDK removed. Chat now routes through ai-provider.
 const db = require('../db/database');
 const obsidian = require('./obsidian');
+// The direct-reports block in SYSTEM_PROMPT is derived from People/ frontmatter
+// (#13) rather than typed out — it named Arman three days after he left the
+// business. Read at module load, so a roster change lands on the next backend
+// restart; the alternative is rebuilding the prompt per request for a list that
+// changes when someone joins or leaves. It degrades to an empty block rather
+// than inventing names, which is also what keeps `npm test` vault-free (#119).
+const teamRoster = require('./team-roster');
 
 // Reverse geocode lat/lng to a human-readable place name
 // Uses OSM Nominatim — free, no key required
@@ -182,10 +189,7 @@ Jira Service Management (primary queue), SQL Server (reporting), Grafana (metric
 
 If it's worth doing, capture it. Don't just mention things — use the markers.
 
-## Nick's direct reports
-2nd Line: Abdi Mohamed, Arman Shazad, Luke Scaife, Stephen Mitchell, Willem Kruger, Nathan Rutland
-1st Line: Adele Norman-Swift, Heidi Power, Hope Goodall, Maria Pappa, Naomi Wentworth, Sebastian Broome, Zoe Rees
-Digital Design: Isabel Busk, Kayleigh Russell
+${teamRoster.promptBlock()}
 
 ## Drafting from vault
 When Nick asks you to draft something for a person or situation:
