@@ -388,25 +388,41 @@ function collect({ since, until } = {}) {
   //    `one_two_one_done` event, because that tracker has no callers anywhere
   //    in the codebase — while the detector reads them off the meeting notes
   //    and has attribution rules that have already been argued out.
+  //
+  //    ⚠ The first cut called `getRecent()` with NO ARGUMENTS. Its signature is
+  //    `getRecent(name, limit)` and it returns `index.byPerson[name]`, so it was
+  //    reading `byPerson[undefined]` and returning [] on every run — this source
+  //    produced ZERO wins from the day it was written and reported that as "no
+  //    1-2-1s happened" rather than "we never asked". Exactly the failure this
+  //    whole module exists to remove, reintroduced inside it.
+  //
+  //    The shape-tolerant reading around it (`recent?.recent || recent?.items`)
+  //    was the smell: code written to accept any shape cannot notice it got the
+  //    wrong one. It now uses the real API, `getIndex()`, and reads the index
+  //    it actually returns.
   try {
-    const detect = require('./one-to-one-detect');
-    const recent = typeof detect.getRecent === 'function' ? detect.getRecent() : null;
-    const list = Array.isArray(recent) ? recent : (recent?.recent || recent?.items || []);
-    for (const item of list) {
-      const when = item?.date || item?.lastOneToOne || item?.['last-1-2-1'];
-      const who = item?.person || item?.name;
-      if (!when || !who) continue;
-      if (when < from || when > to) continue;
-      rows.push({
-        dateKey: when,
-        occurredAt: new Date(`${when}T12:00:00`),
-        source: 'one-to-one',
-        kind: '1-2-1',
-        text: `1-2-1 with ${who}`,
-        evidence: item?.path ? `note:${item.path}` : `1-2-1:${who}:${when}`,
-        count: 1,
-        dedupeKey: `1-2-1:${who}:${when}`,
-      });
+    const index = require('./one-to-one-detect').getIndex();
+    if (!index || index.ok === false) {
+      // scan() returns ok:false with a reason when the vault or Meetings/ is
+      // missing, or the roster is empty. That is not "no 1-2-1s were held".
+      gaps.push(`1-2-1s not counted — ${index?.error || 'no index available'}`);
+    } else {
+      for (const [who, items] of Object.entries(index.byPerson || {})) {
+        for (const item of items || []) {
+          const when = item?.date;
+          if (!when || when < from || when > to) continue;
+          rows.push({
+            dateKey: when,
+            occurredAt: new Date(`${when}T12:00:00`),
+            source: 'one-to-one',
+            kind: '1-2-1',
+            text: `1-2-1 with ${who}`,
+            evidence: item?.path ? `note:${item.path}` : `1-2-1:${who}:${when}`,
+            count: 1,
+            dedupeKey: `1-2-1:${who}:${when}`,
+          });
+        }
+      }
     }
   } catch (e) {
     gaps.push(`1-2-1 detection unavailable — ${e.message}`);
@@ -418,6 +434,77 @@ function collect({ since, until } = {}) {
   for (const f of failed) gaps.push(`git unreadable — ${f}`);
 
   return { rows, gaps, from, to };
+}
+
+// ── Meetings held ────────────────────────────────────────────────────────────
+
+/**
+ * Meetings Nick actually sat in, recorded from the events calendar-sync already
+ * holds.
+ *
+ * This is the biggest single category of finished work in his week and the
+ * ledger's first cut counted NONE of it, on a reason that was wrong: I wrote
+ * that `attendeesOther()` "cannot reach" the data because `calendar_cache` has
+ * no attendees column. plaud-admin-blocks does not read that table — it is
+ * handed the freshly fetched Graph events by `calendar-sync`, and those carry
+ * attendees, isOrganizer and responseStatus. So the filter was already running
+ * against exactly the data needed, weekly, and had been measured on 96 real
+ * events: 25 meetings, 23 solo focus blocks correctly rejected.
+ *
+ * A push rather than a pull for the same reason plaud-admin-blocks is: this is
+ * the one place a fresh calendar exists, and `collect()` staying free of
+ * network I/O is what keeps a sync fast and offline-safe.
+ *
+ * The filters are IMPORTED, never re-implemented — half Nick's diary is time
+ * blocked out to work alone, and a second copy of "is this a real meeting"
+ * would drift from the one he has already corrected.
+ *
+ * Everything unknowable fails CLOSED, exactly as it does there: no signed-in
+ * address means nothing qualifies, and an unanswered invite is not a yes.
+ */
+function recordMeetingsHeld(events, { me, now = new Date() } = {}) {
+  if (!Array.isArray(events) || !events.length) return { added: 0, considered: 0 };
+  if (!me) return { added: 0, considered: 0, skipped: 'identity-unknown' };
+
+  const { attendeesOther, createdOrAccepted } = require('./plaud-admin-blocks')._internals;
+  let added = 0;
+  let considered = 0;
+
+  for (const ev of events) {
+    try {
+      if (!ev || ev.isCancelled) continue;
+      if (ev.isAllDay) continue;
+      // Time Nick marked free is not a meeting he attended.
+      if (String(ev.showAs || '').toLowerCase() === 'free') continue;
+      // A meeting that has not FINISHED is not a win yet — the whole ledger is
+      // finished work, and a diary is a plan until it has happened.
+      const end = ev.end ? new Date(ev.end) : null;
+      if (!end || Number.isNaN(end.getTime()) || end > now) continue;
+      if (!createdOrAccepted(ev)) continue;
+      const others = attendeesOther(ev, me);
+      if (others.length === 0) continue;
+
+      considered++;
+      const subject = String(ev.subject || 'Meeting').trim();
+      const id = ev.id || `${ev.start}|${subject}`;
+      const res = db.run(
+        `INSERT OR IGNORE INTO wins
+           (date_key, occurred_at, source, kind, text, evidence, count, dedupe_key, created_at)
+         VALUES (?, ?, 'meeting', 'meeting_held', ?, ?, 1, ?, ?)`,
+        [
+          dateKey(end),
+          end.toISOString(),
+          `Meeting: ${subject}${others.length > 1 ? ` (${others.length + 1} people)` : ''}`.slice(0, 500),
+          `event:${id}`,
+          `meeting:${id}`,
+          new Date().toISOString(),
+        ]
+      );
+      if (res && res.changes) added++;
+    } catch { /* one malformed event must not cost the rest of the run */ }
+  }
+
+  return { added, considered };
 }
 
 // ── Sync ─────────────────────────────────────────────────────────────────────
@@ -633,6 +720,7 @@ function logManual(text, at = new Date()) {
 module.exports = {
   sync,
   collect,
+  recordMeetingsHeld,
   summary,
   headline,
   feed,
