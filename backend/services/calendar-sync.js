@@ -106,22 +106,6 @@ async function sync({ days = 14, checkArrivals = true } = {}) {
     console.warn('[CalendarSync] Plaud admin blocks failed:', e.message);
   }
 
-  // Meetings Nick actually sat in, folded into the wins ledger. Hooked here for
-  // the same reason the block planner is: this is the one place a fresh
-  // calendar exists, and these events carry the attendees / isOrganizer /
-  // responseStatus that `calendar_cache` does not — which is precisely what
-  // "was this a real meeting or an hour you blocked out to work" needs.
-  //
-  // Above the cold-start return, and equally not gated on `newEventIds`: a
-  // meeting that HAPPENED is not a new event, and the ledger's own dedupe_key
-  // is what stops repeats. Never allowed to fail the sync.
-  try {
-    const me = await microsoft.getSignedInAddress().catch(() => null);
-    const { added, considered } = require('./wins').recordMeetingsHeld(events, { me });
-    if (added) console.log(`[CalendarSync] Wins: +${added} meeting(s) held (of ${considered} qualifying)`);
-  } catch (e) {
-    console.warn('[CalendarSync] Meeting wins failed:', e.message);
-  }
 
   // First run has no history, so everything looks new. Reporting 50 "new"
   // meetings would queue a chaser for each — treat a cold cache as a baseline.

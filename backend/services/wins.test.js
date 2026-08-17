@@ -222,61 +222,9 @@ test('1-2-1s that cannot be read are a NAMED gap, not a silent zero', () => {
   assert.ok(!rows.some(r => r.source === 'one-to-one'), 'and no invented 1-2-1 rows');
 });
 
-test('a meeting Nick sat in is a win; an hour he blocked out is not', () => {
-  db.getDb().prepare('DELETE FROM wins').run();
-  const me = 'nickw@nurtur.tech';
-  const now = new Date('2026-08-17T18:00:00Z');
-  const ev = (over) => ({
-    id: 'e1', subject: 'Support sync', isAllDay: false, isCancelled: false,
-    showAs: 'busy', isOrganizer: true,
-    start: '2026-08-17T09:00:00Z', end: '2026-08-17T10:00:00Z',
-    attendees: [{ email: me }, { email: 'stephen@nurtur.tech' }],
-    ...over,
-  });
-
-  const res = wins.recordMeetingsHeld([
-    ev({}),
-    // Half the diary is time blocked out to work alone. Nick's own distinction,
-    // measured on 96 real events: 23 of them were this.
-    ev({ id: 'e2', subject: 'Deep work', attendees: [{ email: me }] }),
-    ev({ id: 'e3', subject: 'Cancelled thing', isCancelled: true }),
-    // Outlook often does NOT set isCancelled on a cancelled occurrence — it
-    // just renames the subject. Two real ones ("Canceled: UAT Testing",
-    // "Canceled: Support Team Processes") sailed through the flag check in the
-    // backfill dry run and would have been counted as meetings that never
-    // happened. Graph returns the US spelling on a UK tenant, so both.
-    ev({ id: 'e7', subject: 'Canceled: UAT Testing' }),
-    ev({ id: 'e8', subject: 'Cancelled: Tech Leadership' }),
-    ev({ id: 'e4', subject: 'Marked free', showAs: 'free' }),
-    // A diary is a plan until it has happened — the ledger is finished work.
-    ev({ id: 'e5', subject: 'Later today', end: '2026-08-17T23:00:00Z' }),
-    // An unanswered invite is not a yes. Fails closed, same as plaud.
-    ev({ id: 'e6', subject: 'Never responded', isOrganizer: null, responseStatus: null }),
-  ], { me, now });
-
-  assert.equal(res.added, 1, 'only the real, finished, accepted meeting counts');
-  const rows = wins.feed({ dateKey: '2026-08-17' }).wins;
-  assert.equal(rows.length, 1);
-  assert.match(rows[0].text, /Support sync/);
-  assert.equal(rows[0].source, 'meeting');
-  assert.ok(rows[0].evidence.startsWith('event:'), 'the calendar event is what proves it');
-
-  // Idempotent: calendar-sync runs every few minutes.
-  assert.equal(wins.recordMeetingsHeld([ev({})], { me, now }).added, 0);
-});
-
-test('no signed-in address means no meetings counted, not all of them', () => {
-  // Fail closed. Without an identity nothing can tell Nick's own attendee entry
-  // from anyone else's, so every solo focus block would read as a meeting.
-  db.getDb().prepare('DELETE FROM wins').run();
-  const res = wins.recordMeetingsHeld([{
-    id: 'x', subject: 'Anything', isOrganizer: true, showAs: 'busy',
-    start: '2026-08-17T09:00:00Z', end: '2026-08-17T10:00:00Z',
-    attendees: [{ email: 'a@b.c' }, { email: 'd@e.f' }],
-  }], { me: null, now: new Date('2026-08-17T18:00:00Z') });
-  assert.equal(res.added, 0);
-  assert.equal(res.skipped, 'identity-unknown');
-});
+// The meeting source moved to services/meeting-notes-source.js and is covered
+// by its own suite. It is driven by PLAUD NOTES now, not by calendar events:
+// a meeting in the diary does not mean Nick attended it.
 
 test('the headline states the day, and says nothing at all about zero', () => {
   // Pure — a summary in, a string out. Shared by the tick acknowledgement in

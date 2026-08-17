@@ -54,7 +54,7 @@
  * events. So the LARGEST category of finished work in the week was dropped, and
  * the ledger read 17/week against a much bigger real week: true, and small
  * enough to read as "you did almost nothing" — which is the same uselessness as
- * the tickbox, just better sourced. See `recordMeetingsHeld`.
+ * the tickbox, just better sourced. And then wrong AGAIN in the other direction: the first fix counted every accepted, finished, multi-person event — but a meeting in the diary does not mean Nick attended it. What proves attendance AND that the meeting was processed is the Plaud note, so the source reads notes now. See services/meeting-notes-source.js.
  *
  * Still not sourced, each for a stated reason (see KNOWN_GAPS): Jira
  * resolutions, emails merely dismissed, and vault writes — 2,229 in thirty
@@ -430,113 +430,42 @@ function collect({ since, until } = {}) {
     gaps.push(`1-2-1 detection unavailable — ${e.message}`);
   }
 
-  // 6. Commits.
+  // 6. Meetings, evidenced by a PLAUD NOTE rather than by the calendar.
+  //
+  //    Nick's rule, and it is the right one: a meeting in the diary does not
+  //    mean he attended it. See services/meeting-notes-source.js for why the
+  //    calendar-driven version was wrong twice over — it counted meetings he
+  //    never sat in, and it checked for a note at calendar-sync time when
+  //    plaud-sync lands one up to thirty minutes later, so a late note would
+  //    never have been seen and nothing would have said so.
+  try {
+    const { rows: meetingRows, error } = require('./meeting-notes-source').collectMeetingNotes(from, to);
+    if (error) {
+      // A missing vault is not "no meetings were held".
+      gaps.push(`meetings not counted — ${error}`);
+    } else {
+      // A 1-2-1 note IS a Plaud meeting note, and one-to-one-detect walks the
+      // same tree. Without this the same note lands twice, once per source,
+      // silently doubling every 1-2-1 in the count.
+      const claimed = new Set(
+        rows.filter(r => r.source === 'one-to-one')
+          .map(r => String(r.evidence || '').replace(/^note:/, ''))
+      );
+      for (const row of meetingRows) {
+        if (row.notePath && claimed.has(row.notePath)) continue;
+        rows.push(row);
+      }
+    }
+  } catch (e) {
+    gaps.push(`meetings not counted — ${e.message}`);
+  }
+
+  // 7. Commits.
   const { commits, failed } = readCommits(from);
   for (const row of foldCommits(commits.filter(c => c.dateKey >= from && c.dateKey <= to))) rows.push(row);
   for (const f of failed) gaps.push(`git unreadable — ${f}`);
 
   return { rows, gaps, from, to };
-}
-
-// ── Meetings held ────────────────────────────────────────────────────────────
-
-/**
- * Meetings Nick actually sat in, recorded from the events calendar-sync already
- * holds.
- *
- * This is the biggest single category of finished work in his week and the
- * ledger's first cut counted NONE of it, on a reason that was wrong: I wrote
- * that `attendeesOther()` "cannot reach" the data because `calendar_cache` has
- * no attendees column. plaud-admin-blocks does not read that table — it is
- * handed the freshly fetched Graph events by `calendar-sync`, and those carry
- * attendees, isOrganizer and responseStatus. So the filter was already running
- * against exactly the data needed, weekly, and had been measured on 96 real
- * events: 25 meetings, 23 solo focus blocks correctly rejected.
- *
- * A push rather than a pull for the same reason plaud-admin-blocks is: this is
- * the one place a fresh calendar exists, and `collect()` staying free of
- * network I/O is what keeps a sync fast and offline-safe.
- *
- * The filters are IMPORTED, never re-implemented — half Nick's diary is time
- * blocked out to work alone, and a second copy of "is this a real meeting"
- * would drift from the one he has already corrected.
- *
- * Everything unknowable fails CLOSED, exactly as it does there: no signed-in
- * address means nothing qualifies, and an unanswered invite is not a yes.
- */
-/**
- * Why this event is not a meeting Nick held, or null if it is.
- *
- * A reason rather than a boolean, following plaud-admin-blocks' `skipReason`:
- * "77 skipped" says nothing, "88 marked free, 53 not accepted, 77 solo blocks"
- * is a review. Exported so the backfill's dry run asks THIS rather than
- * restating the conditions — the first cut of that script re-listed them, which
- * is the drift the comment above it was warning about.
- */
-function meetingSkipReason(ev, me, now) {
-  if (!ev) return 'empty';
-  if (!me) return 'identity-unknown';
-  if (ev.isCancelled) return 'cancelled';
-
-  // Outlook does not always set isCancelled — on a cancelled occurrence it
-  // often just RENAMES the subject. Two of these ("Canceled: UAT Testing",
-  // "Canceled: Support Team Processes") sailed through the flag check and would
-  // have been counted as meetings that never happened. Both spellings, because
-  // Graph returns the US one on a UK tenant.
-  if (/^\s*cancell?ed:/i.test(String(ev.subject || ''))) return 'cancelled';
-
-  if (ev.isAllDay) return 'all-day';
-  // Time Nick marked free is not a meeting he attended.
-  if (String(ev.showAs || '').toLowerCase() === 'free') return 'marked-free';
-
-  // A meeting that has not FINISHED is not a win yet — the ledger is finished
-  // work, and a diary is a plan until it has happened.
-  const end = ev.end ? new Date(ev.end) : null;
-  if (!end || Number.isNaN(end.getTime())) return 'no-end-time';
-  if (end > now) return 'not-finished';
-
-  const { attendeesOther, createdOrAccepted } = require('./plaud-admin-blocks')._internals;
-  if (!createdOrAccepted(ev)) return 'not-accepted';
-  if (attendeesOther(ev, me).length === 0) return 'no-other-attendees';
-
-  return null;
-}
-
-function recordMeetingsHeld(events, { me, now = new Date() } = {}) {
-  if (!Array.isArray(events) || !events.length) return { added: 0, considered: 0 };
-  if (!me) return { added: 0, considered: 0, skipped: 'identity-unknown' };
-
-  const { attendeesOther } = require('./plaud-admin-blocks')._internals;
-  let added = 0;
-  let considered = 0;
-
-  for (const ev of events) {
-    try {
-      if (meetingSkipReason(ev, me, now)) continue;
-      const end = new Date(ev.end);
-      const others = attendeesOther(ev, me);
-
-      considered++;
-      const subject = String(ev.subject || 'Meeting').trim();
-      const id = ev.id || `${ev.start}|${subject}`;
-      const res = db.run(
-        `INSERT OR IGNORE INTO wins
-           (date_key, occurred_at, source, kind, text, evidence, count, dedupe_key, created_at)
-         VALUES (?, ?, 'meeting', 'meeting_held', ?, ?, 1, ?, ?)`,
-        [
-          dateKey(end),
-          end.toISOString(),
-          `Meeting: ${subject}${others.length > 1 ? ` (${others.length + 1} people)` : ''}`.slice(0, 500),
-          `event:${id}`,
-          `meeting:${id}`,
-          new Date().toISOString(),
-        ]
-      );
-      if (res && res.changes) added++;
-    } catch { /* one malformed event must not cost the rest of the run */ }
-  }
-
-  return { added, considered };
 }
 
 // ── Sync ─────────────────────────────────────────────────────────────────────
@@ -780,8 +709,6 @@ function logManual(text, at = new Date()) {
 module.exports = {
   sync,
   collect,
-  recordMeetingsHeld,
-  meetingSkipReason,
   summary,
   headline,
   feed,
