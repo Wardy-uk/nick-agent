@@ -217,7 +217,27 @@ function createdOrAccepted(event) {
  * than a boolean is what makes the dry run readable — "18 skipped" says nothing,
  * "11 solo blocks, 4 not accepted, 3 already done" is a review.
  */
-function skipReason(event, { me, now, ledger }) {
+/**
+ * Is there already a block for this meeting on the calendar?
+ *
+ * Belt and braces behind the ledger, and it closes a class the lock cannot:
+ * a lost or restored agent.db, or a failed ledger write, would otherwise make
+ * a pass recreate every block it had already made. Matched on DATE + SUBJECT
+ * because that is the duplicate unit — the two competing passes of 17 Aug
+ * produced blocks for the same meeting *minutes apart* (11:45 and 11:55),
+ * since the second saw the first's blocks as busy and moved along, so an
+ * exact-time match would not have caught them.
+ *
+ * This can only ever cause a SKIP, never a create, so it cannot resurrect a
+ * block Nick deleted — that stays the ledger's job.
+ */
+function hasBlockAlready(event, events) {
+  const wanted = `${SUBJECT_PREFIX}${String(event.subject || '(No subject)').trim()}`;
+  const day = eventDate(event);
+  return events.some(e => eventDate(e) === day && String(e.subject || '') === wanted);
+}
+
+function skipReason(event, { me, now, ledger, events = [] }) {
   if (!event || !event.id || !event.start || !event.end) return 'incomplete';
   if (isOurBlock(event)) return 'is-admin-block';
   if (event.isAllDay) return 'all-day';
@@ -233,6 +253,7 @@ function skipReason(event, { me, now, ledger }) {
   if (!(end > now)) return 'already-ended';
 
   if (ledger[event.id]) return 'already-handled';
+  if (hasBlockAlready(event, events)) return 'block-exists';
 
   if (!createdOrAccepted(event)) {
     return event.isOrganizer === null && !event.responseStatus ? 'response-unknown' : 'not-accepted';
@@ -374,7 +395,9 @@ async function plan({ days = WINDOW_DAYS, events = null, now = new Date() } = {}
     .sort((a, b) => String(a.start || '').localeCompare(String(b.start || '')));
 
   for (const event of ordered) {
-    const reason = skipReason(event, { me, now, ledger });
+    // `working`, not `list` — so a block this pass has already placed also
+    // counts, and two occurrences in one batch cannot both slip through.
+    const reason = skipReason(event, { me, now, ledger, events: working });
     if (reason) {
       skipped[reason] = (skipped[reason] || 0) + 1;
       continue;
@@ -545,6 +568,7 @@ module.exports = {
     firstGap,
     pruneLedger,
     blockFor,
+    hasBlockAlready,
     acquireLock,
     releaseLock,
     LOCK_KEY,

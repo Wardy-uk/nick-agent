@@ -132,6 +132,49 @@ test('a handled meeting is never revisited, even if the block was deleted', () =
   assert.equal(why(meeting(), { 'evt-1': { blockId: 'x' } }), 'already-handled');
 });
 
+// ── The calendar-side guard ─────────────────────────────────────────────────
+// Behind the ledger, and it closes a class the lock cannot: a lost or restored
+// agent.db would otherwise make a pass recreate every block it had made.
+
+test('an existing block for the same meeting stops a second one', () => {
+  const existing = {
+    id: 'blk', subject: 'Plaud admin — Integration sync',
+    start: '2026-08-18T14:30:00', end: '2026-08-18T14:35:00', showAs: 'busy', isAllDay: false,
+  };
+  assert.equal(
+    skipReason(meeting(), { me: ME, now: NOW, ledger: {}, events: [meeting(), existing] }),
+    'block-exists'
+  );
+});
+
+test('the guard matches on the DAY, not the exact minute', () => {
+  // The 17 Aug duplicates sat minutes apart (11:45 and 11:55), because the
+  // second pass saw the first's blocks as busy and moved along. An exact-time
+  // match would have missed every one of them.
+  const late = {
+    id: 'blk', subject: 'Plaud admin — Integration sync',
+    start: '2026-08-18T16:20:00', end: '2026-08-18T16:25:00', showAs: 'busy', isAllDay: false,
+  };
+  assert.equal(service._internals.hasBlockAlready(meeting(), [late]), true);
+});
+
+test('a block on a different day does not block a fresh occurrence', () => {
+  // A recurring meeting must still earn a block each day it happens.
+  const yesterday = {
+    id: 'blk', subject: 'Plaud admin — Integration sync',
+    start: '2026-08-17T14:30:00', end: '2026-08-17T14:35:00', showAs: 'busy', isAllDay: false,
+  };
+  assert.equal(service._internals.hasBlockAlready(meeting(), [yesterday]), false);
+});
+
+test('a block for a DIFFERENT meeting is not a match', () => {
+  const other = {
+    id: 'blk', subject: 'Plaud admin — Tech Leadership',
+    start: '2026-08-18T14:30:00', end: '2026-08-18T14:35:00', showAs: 'busy', isAllDay: false,
+  };
+  assert.equal(service._internals.hasBlockAlready(meeting(), [other]), false);
+});
+
 // ── Placement ───────────────────────────────────────────────────────────────
 
 test('the block goes straight after the meeting when the slot is free', () => {
