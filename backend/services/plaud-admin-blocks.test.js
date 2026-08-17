@@ -13,8 +13,12 @@ process.env.NEURO_DB_PATH = path.join(
 );
 
 const service = require('./plaud-admin-blocks');
+const db = require('../db/database');
 const { skipReason, placeBlock, attendeesOther, createdOrAccepted, firstGap, pruneLedger, blockFor } =
   service._internals;
+
+// The lock lives in agent_state, so it needs a real (scratch) DB behind it.
+test.before(async () => { await db.init(); });
 
 const ME = 'nickw@nurtur.tech';
 const NOW = new Date('2026-08-18T09:00:00'); // a Tuesday
@@ -255,6 +259,63 @@ test('the sync hook does nothing while disabled', async () => {
   const result = await service.syncHook([meeting()]);
   assert.equal(result.skipped, 'disabled');
   assert.equal(result.created, 0);
+});
+
+// ── The run lock ────────────────────────────────────────────────────────────
+// This is the bug that actually bit: the first live run created 52 blocks where
+// 27 were wanted, because the scheduler's calendar-sync pass overlapped a manual
+// apply and both planned against an empty ledger.
+
+test('a second pass cannot start while one is running', () => {
+  const { acquireLock, releaseLock } = service._internals;
+  releaseLock();
+  assert.equal(acquireLock('calendar-sync').ok, true);
+  const second = acquireLock('manual');
+  assert.equal(second.ok, false);
+  assert.equal(second.heldBy, 'calendar-sync');
+  releaseLock();
+  assert.equal(acquireLock('manual').ok, true, 'released, so the next pass may run');
+  releaseLock();
+});
+
+test('a lock left behind by a dead pass is taken, not honoured forever', () => {
+  const { acquireLock, releaseLock, LOCK_TTL_MS } = service._internals;
+  releaseLock();
+  const longAgo = Date.now() - LOCK_TTL_MS - 1000;
+  assert.equal(acquireLock('crashed', longAgo).ok, true);
+  // A restart mid-run would otherwise wedge the feature until someone noticed.
+  assert.equal(acquireLock('calendar-sync').ok, true);
+  releaseLock();
+});
+
+test('a locked apply refuses instead of creating a second set', async () => {
+  const { acquireLock, releaseLock } = service._internals;
+  process.env.PLAUD_ADMIN_BLOCKS_ENABLED = 'true';
+  releaseLock();
+  acquireLock('calendar-sync');
+  try {
+    const result = await service.apply({ events: [meeting()], now: NOW, dryRun: false });
+    assert.equal(result.created, 0);
+    assert.equal(result.skipped, 'locked');
+    assert.equal(result.heldBy, 'calendar-sync');
+  } finally {
+    releaseLock();
+    delete process.env.PLAUD_ADMIN_BLOCKS_ENABLED;
+  }
+});
+
+test('a dry run never contends for the lock', async () => {
+  // Looking must always be possible, including while a pass is mid-flight.
+  const { acquireLock, releaseLock } = service._internals;
+  releaseLock();
+  acquireLock('calendar-sync');
+  try {
+    const result = await service.apply({ events: [meeting()], now: NOW });
+    assert.equal(result.dryRun, true);
+    assert.notEqual(result.skipped, 'locked');
+  } finally {
+    releaseLock();
+  }
 });
 
 test('plan() is read-only and apply() defaults to a dry run', async () => {

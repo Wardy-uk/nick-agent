@@ -67,6 +67,26 @@ const STATE_KEY = 'plaud_admin_blocks';
 const PRUNE_AFTER_DAYS = 60;
 
 /**
+ * The run lock, and it is not optional — it was found the hard way.
+ *
+ * The first live run created 52 blocks where 27 were wanted, because the
+ * scheduler's calendar-sync pass overlapped a manual apply: both planned
+ * against an empty ledger, and the ledger was only written at the END of a run,
+ * so neither could see the other. A pass makes ~25 sequential Graph creates and
+ * calendar-sync fires every few minutes, so overlap is the normal case, not a
+ * rare one.
+ *
+ * `acquireLock` is deliberately SYNCHRONOUS with no await between reading the
+ * key and writing it. Both contenders live in the same Node process
+ * (scheduler and route alike) and better-sqlite3 is synchronous, so a sync
+ * read-modify-write genuinely cannot interleave — this is a real mutex here,
+ * not an optimistic guess. It would NOT be safe across processes.
+ */
+const LOCK_KEY = 'plaud_admin_blocks_lock';
+/** A pass that has held the lock longer than this has died; take it. */
+const LOCK_TTL_MS = 10 * 60 * 1000;
+
+/**
  * Subjects that never earn a block even with other people on them. Empty by
  * default and deliberately so — this is the escape hatch for a daily standup or
  * a recurring all-hands where the answer is "no write-up", and Nick should fill
@@ -128,6 +148,28 @@ function readLedger() {
 function writeLedger(ledger) {
   // setState takes a primitive — an object throws "unknown type".
   db.setState(STATE_KEY, JSON.stringify(ledger));
+}
+
+/** Sync throughout — see LOCK_KEY. An await in here would defeat the point. */
+function acquireLock(holder, now = Date.now()) {
+  let held = null;
+  try {
+    const raw = db.getState(LOCK_KEY);
+    held = raw ? JSON.parse(raw) : null;
+  } catch { held = null; }
+
+  if (held && Number.isFinite(held.at) && now - held.at < LOCK_TTL_MS) {
+    return { ok: false, heldBy: held.holder || 'unknown', ageMs: now - held.at };
+  }
+  if (held) {
+    console.warn(`[PlaudAdmin] Taking a stale lock from ${held.holder} (${Math.round((now - held.at) / 1000)}s old)`);
+  }
+  db.setState(LOCK_KEY, JSON.stringify({ holder, at: now }));
+  return { ok: true };
+}
+
+function releaseLock() {
+  try { db.setState(LOCK_KEY, ''); } catch { /* a stale lock times out anyway */ }
 }
 
 function pruneLedger(ledger, now) {
@@ -376,60 +418,78 @@ async function plan({ days = WINDOW_DAYS, events = null, now = new Date() } = {}
  * retried. A meeting is written to the ledger ONLY on a successful create, so a
  * failure is picked up by the next pass rather than silently lost.
  */
-async function apply({ days = WINDOW_DAYS, events = null, now = new Date(), dryRun = true } = {}) {
-  const planned = await plan({ days, events, now });
-  if (!planned.ok) return { ...planned, created: 0, dryRun };
+async function apply({ days = WINDOW_DAYS, events = null, now = new Date(), dryRun = true, holder = 'manual' } = {}) {
+  // A dry run reads and writes nothing, so it never contends for the lock.
+  if (dryRun) {
+    const planned = await plan({ days, events, now });
+    return { ...planned, created: 0, dryRun: true };
+  }
 
-  if (dryRun) return { ...planned, created: 0, dryRun: true };
+  const lock = acquireLock(holder);
+  if (!lock.ok) {
+    // Refusing is the whole point: the pass already running will do this work,
+    // and running anyway is exactly how 27 blocks became 52.
+    console.log(`[PlaudAdmin] Skipped — a pass is already running (${lock.heldBy}, ${Math.round(lock.ageMs / 1000)}s)`);
+    return { ok: true, created: 0, skipped: 'locked', heldBy: lock.heldBy, dryRun: false };
+  }
 
-  const microsoft = require('./microsoft');
-  const ledger = pruneLedger(readLedger(), now);
-  const created = [];
-  const failed = [];
+  try {
+    const planned = await plan({ days, events, now });
+    if (!planned.ok) return { ...planned, created: 0, dryRun: false };
 
-  for (const block of planned.candidates) {
-    let result;
-    try {
-      result = await microsoft.createCalendarEvent({
-        subject: block.subject,
+    const microsoft = require('./microsoft');
+    let ledger = pruneLedger(readLedger(), now);
+    const created = [];
+    const failed = [];
+
+    for (const block of planned.candidates) {
+      let result;
+      try {
+        result = await microsoft.createCalendarEvent({
+          subject: block.subject,
+          start: block.start,
+          end: block.end,
+          body: block.body,
+          attendees: [],
+        });
+      } catch (e) {
+        result = { created: false, reason: e.message };
+      }
+
+      if (!result?.created) {
+        failed.push({ meetingId: block.meetingId, subject: block.subject, reason: result?.reason || 'unknown' });
+        console.warn(`[PlaudAdmin] Create failed for "${block.subject}": ${result?.reason}`);
+        continue;
+      }
+
+      ledger[block.meetingId] = {
+        blockId: result.event?.id || null,
+        meetingSubject: block.meetingSubject,
+        meetingDate: block.meetingDate,
         start: block.start,
-        end: block.end,
-        body: block.body,
-        attendees: [],
-      });
-    } catch (e) {
-      result = { created: false, reason: e.message };
+        createdAt: new Date().toISOString(),
+      };
+      created.push({ ...block, blockId: result.event?.id || null });
+
+      // Written per create, not batched at the end. The event already exists in
+      // Nick's calendar the instant Graph answers, so anything that stops the
+      // loop after this point — a crash, a restart mid-deploy — must not leave
+      // a created block unrecorded and duplicable.
+      try {
+        writeLedger(ledger);
+      } catch (e) {
+        console.error('[PlaudAdmin] Ledger write FAILED — this block may be duplicated next pass:', e.message);
+      }
     }
 
-    if (!result?.created) {
-      failed.push({ meetingId: block.meetingId, subject: block.subject, reason: result?.reason || 'unknown' });
-      console.warn(`[PlaudAdmin] Create failed for "${block.subject}": ${result?.reason}`);
-      continue;
+    if (created.length) {
+      console.log(`[PlaudAdmin] Created ${created.length} admin block(s)${failed.length ? `, ${failed.length} failed` : ''}`);
     }
 
-    ledger[block.meetingId] = {
-      blockId: result.event?.id || null,
-      meetingSubject: block.meetingSubject,
-      meetingDate: block.meetingDate,
-      start: block.start,
-      createdAt: new Date().toISOString(),
-    };
-    created.push({ ...block, blockId: result.event?.id || null });
+    return { ...planned, created: created.length, blocks: created, failed, dryRun: false };
+  } finally {
+    releaseLock();
   }
-
-  if (created.length || Object.keys(ledger).length !== Object.keys(readLedger()).length) {
-    try { writeLedger(ledger); } catch (e) {
-      // The blocks exist; losing the ledger means the next pass would duplicate
-      // them, so this is worth shouting about rather than swallowing.
-      console.error('[PlaudAdmin] Ledger write FAILED — blocks may be duplicated next pass:', e.message);
-    }
-  }
-
-  if (created.length) {
-    console.log(`[PlaudAdmin] Created ${created.length} admin block(s)${failed.length ? `, ${failed.length} failed` : ''}`);
-  }
-
-  return { ...planned, created: created.length, blocks: created, failed, dryRun: false };
 }
 
 /**
@@ -440,7 +500,7 @@ async function apply({ days = WINDOW_DAYS, events = null, now = new Date(), dryR
 async function syncHook(events) {
   if (!isEnabled()) return { ok: true, skipped: 'disabled', created: 0 };
   try {
-    return await apply({ events, dryRun: false });
+    return await apply({ events, dryRun: false, holder: 'calendar-sync' });
   } catch (e) {
     console.warn('[PlaudAdmin] Pass failed:', e.message);
     return { ok: false, reason: e.message, created: 0 };
@@ -485,6 +545,10 @@ module.exports = {
     firstGap,
     pruneLedger,
     blockFor,
+    acquireLock,
+    releaseLock,
+    LOCK_KEY,
+    LOCK_TTL_MS,
     BLOCK_MINUTES,
     SUBJECT_PREFIX,
     BLOCK_MARKER,

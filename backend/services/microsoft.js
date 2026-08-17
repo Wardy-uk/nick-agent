@@ -1257,6 +1257,30 @@ async function updateCalendarEvent(eventId, { start, end, subject } = {}) {
 }
 
 /**
+ * Delete a calendar event. Graph mails a cancellation to any attendee, so this
+ * is only safe on events NEURO created for Nick alone — never on a meeting with
+ * other people in it, where updateCalendarEvent is the right tool.
+ */
+async function deleteCalendarEvent(eventId) {
+  if (!eventId) return { deleted: false, reason: 'no_event_id' };
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (e) {
+    return { deleted: false, reason: 'auth', detail: e.message };
+  }
+  if (!token) return { deleted: false, reason: 'auth' };
+
+  const result = await graphWrite(`/me/events/${encodeURIComponent(eventId)}`, 'DELETE', undefined, token);
+  if (!result.ok) {
+    // A 404 means it is already gone, which is the outcome the caller wanted.
+    if (result.status === 404) return { deleted: true, alreadyGone: true };
+    return { deleted: false, reason: result.reason, detail: result.detail || null };
+  }
+  return { deleted: true };
+}
+
+/**
  * Fetch one calendar event in full. The calendar cache stores no body, and
  * adding a column would collide with work in flight — but agenda checks run
  * over a handful of upcoming meetings, so fetching fresh detail is cheap and
@@ -1401,6 +1425,7 @@ module.exports = {
   isDeviceCodeUsable,
   fetchCalendarEvents,
   createCalendarEvent,
+  deleteCalendarEvent,
   updateCalendarEvent,
   fetchEventById,
   respondToEvent,
