@@ -7,17 +7,28 @@
  * Suggestions navigate the user to real actions, not task creation.
  *
  * Action types:
- *   - open_ticket  → navigate to Jira ticket
- *   - open_task    → navigate to top overdue task in TodoPanel
- *   - open_email   → navigate to inbox
- *   - open_standup → navigate to standup
- *   - draft_reply  → (future: open draft composer)
+ *   - open_ticket       → navigate to Jira ticket
+ *   - open_task         → navigate to top overdue task in TodoPanel
+ *   - open_email        → navigate to inbox
+ *   - open_standup      → navigate to standup
+ *   - open_meeting_prep → navigate to meeting prep
+ *   - draft_reply       → (future: open draft composer)
+ *
+ * A navigation action gets its OWN type per destination. The meeting-prep nudge
+ * spent months reusing `open_task` with `navigate: 'meeting-prep'` in the
+ * payload, and since the presenter keys on the type, every one of them rendered
+ * as "Open tasks — jump to your task list": six cards on the approval screen,
+ * identical above their reason line, all naming a destination they did not go
+ * to. The destination is the entire content of a navigation card.
  *
  * Each suggestion returns a navigation target so the frontend
  * can immediately move the user to the right place.
  */
 
 const db = require('../db/database');
+// Only for its `kind` classification — the presenter does not require this file
+// back (its test reads the source as text), so there is no cycle here.
+const actionPresenter = require('./action-presenter');
 
 const SARA_MODE = process.env.SARA_MODE || 'suggest';
 const JIRA_BASE = process.env.JIRA_BASE_URL || '';
@@ -151,14 +162,20 @@ const SUGGESTION_RULES = [
     }),
   },
   {
-    // Meeting imminent → open calendar
+    // Meeting imminent → open meeting prep
     match: (item) => item.type === 'meeting' && item.meta?.minutesAway != null && item.meta.minutesAway <= 15,
     generate: (item) => ({
-      type: 'open_task',
+      type: 'open_meeting_prep',
       confidence: 0.8,
       reason: `"${item.title}" starts in ${item.meta.minutesAway} min — prep now`,
       payload: {
         navigate: 'meeting-prep',
+        title: item.title || null,
+        // The START, not minutesAway. A stored relative time is wrong the minute
+        // after it is written, and it is what tells the expiry sweep the moment
+        // has passed — a prep card for a meeting that began two hours ago can
+        // only ever be rejected.
+        start: item.meta.start || null,
       },
     }),
   },
@@ -172,6 +189,11 @@ const SUGGESTION_RULES = [
  */
 function generateSuggestions(focusItems) {
   if (SARA_MODE === 'off') return [];
+
+  // Before the dedupe read, not after: a spent shortcut left pending would also
+  // block today's fresh one for the same focus item.
+  expireStaleNavigation();
+
   if (!focusItems || focusItems.length === 0) return [];
 
   const suggestions = [];
@@ -247,6 +269,85 @@ function persistSuggestions(suggestions) {
   return created;
 }
 
+// ── Navigation shortcuts go out of date; nothing was retiring them ───────────
+//
+// A navigate action is a shortcut to somewhere useful RIGHT NOW. Nothing ever
+// aged one out, so the approval screen accumulated them: a meeting-prep card for
+// a 09:45 meeting was still asking to be approved at 11:40, and an "open the
+// standup" card outlives the day it was raised for. Neither can be acted on any
+// more — the only honest thing left to do with either is reject it, which is
+// work the screen was creating for itself.
+//
+// Two rules, and the SECOND is the general one:
+//   1. The payload names a moment (a meeting start) and it has passed.
+//   2. It was raised on an earlier day. "Now" is the entire premise of a
+//      shortcut, so a shortcut does not survive the day it was raised on.
+//
+// What counts as navigation is `action-presenter`'s call, never a list of type
+// names kept here — the same rule that keeps three places agreeing on what
+// "leaves the building" means. Writes and outbound are untouched: a drafted
+// reply or a queued chase is still worth approving next week.
+
+const NAV_READ_ALL = 100000;
+
+/** SQLite hands back "YYYY-MM-DD HH:MM:SS" in UTC with no zone marker. */
+function parseSqlTimestamp(value) {
+  const s = String(value || '').trim();
+  if (!s) return null;
+  const d = new Date(s.replace(' ', 'T') + (/[Zz]|[+-]\d\d:?\d\d$/.test(s) ? '' : 'Z'));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Local calendar day — never toISOString(); the Pi may run in UTC. */
+function localDay(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * Why this navigation shortcut is spent, or null if it still stands.
+ *
+ * Pure: takes the action and "now", touches no DB and no clock, so the rule can
+ * be pinned without a database or a particular time of day.
+ */
+function navigationExpiry(action, now = new Date()) {
+  if (!action) return null;
+  if (actionPresenter.describe(action).kind !== actionPresenter.NAVIGATE) return null;
+
+  const start = parseSqlTimestamp(action.payload?.start) || null;
+  if (start && start <= now) return 'the meeting it was prepping for has already started';
+
+  const created = parseSqlTimestamp(action.created_at);
+  if (created && localDay(created) !== localDay(now)) return 'a shortcut to "now", raised on an earlier day';
+
+  return null;
+}
+
+/**
+ * Retire every pending navigation action whose moment has passed.
+ *
+ * `expired` rather than `rejected`: Nick did not decide anything about these, and
+ * the rejection history is a record of what he turned down. Follows the
+ * `superseded` status action-candidates already uses for the same reason.
+ */
+function expireStaleNavigation(now = new Date()) {
+  const expired = [];
+  try {
+    for (const action of db.getPendingSaraActions(NAV_READ_ALL)) {
+      const reason = navigationExpiry(action, now);
+      if (!reason) continue;
+      db.updateSaraActionStatus(action.id, 'expired');
+      expired.push({ id: action.id, type: action.type, reason });
+    }
+  } catch (e) {
+    console.warn('[Suggestion] Navigation expiry failed:', e.message);
+  }
+  if (expired.length) {
+    console.log(`[Suggestion] Expired ${expired.length} navigation action(s): ${expired.map(e => `#${e.id} ${e.type}`).join(', ')}`);
+  }
+  return expired;
+}
+
 /**
  * Execute an approved action.
  *
@@ -268,7 +369,8 @@ async function executeAction(action) {
     case 'open_ticket':
     case 'open_task':
     case 'open_email':
-    case 'open_standup': {
+    case 'open_standup':
+    case 'open_meeting_prep': {
       // Navigation actions — the frontend handles the actual navigation.
       // We just log and return the target.
       return {
@@ -724,4 +826,6 @@ module.exports = {
   executeAction,
   logActionExecution,
   queueAction,
+  navigationExpiry,
+  expireStaleNavigation,
 };

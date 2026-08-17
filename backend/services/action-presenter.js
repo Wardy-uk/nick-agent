@@ -44,6 +44,17 @@ function addressOf(person) {
   return person.email || person.address || null;
 }
 
+/**
+ * The clock time out of a calendar start, by slicing rather than parsing.
+ * `fetchCalendarEvents` asks Graph for Europe/London, so start_time is already
+ * naive local wall-clock — parsing it to a Date and formatting it back is how
+ * the Pi's UTC clock gets a say in what Nick's diary says.
+ */
+function clockOf(value) {
+  const m = trimmed(value).match(/T(\d{2}:\d{2})/);
+  return m ? m[1] : null;
+}
+
 function field(label, value, opts = {}) {
   const v = trimmed(value);
   return v ? { label, value: v, mono: Boolean(opts.mono) } : null;
@@ -59,12 +70,21 @@ const PRESENTERS = {
     fields: [field('Ticket', p.ticketKey, { mono: true }), field('Filter', p.filter)],
   }),
 
-  open_task: (p) => ({
-    label: 'Open tasks',
-    kind: NAVIGATE,
-    summary: `Jump to ${p.filter ? `tasks (${p.filter})` : 'your task list'}`,
-    fields: [field('Filter', p.filter)],
-  }),
+  // Rows created before `open_meeting_prep` existed carry navigate:'meeting-prep'
+  // under THIS type, and there are pending ones in the queue now. Say where the
+  // approve button actually goes rather than asserting "your task list" — a
+  // navigation card that names the wrong destination has no content left.
+  open_task: (p) => {
+    const elsewhere = trimmed(p.navigate) && p.navigate !== 'todos';
+    return {
+      label: elsewhere ? `Open ${p.navigate}` : 'Open tasks',
+      kind: NAVIGATE,
+      summary: elsewhere
+        ? `Jump to ${p.navigate}`
+        : `Jump to ${p.filter ? `tasks (${p.filter})` : 'your task list'}`,
+      fields: [field('Destination', elsewhere ? p.navigate : null), field('Filter', p.filter)],
+    };
+  },
 
   open_email: (p) => ({
     label: 'Open inbox',
@@ -78,6 +98,16 @@ const PRESENTERS = {
     kind: NAVIGATE,
     summary: 'Jump to the standup',
     fields: [],
+  }),
+
+  // The stored start is rendered as a clock time, never as "in N min": the
+  // payload is written once and read whenever the card is looked at, so a
+  // relative time is a number that goes quietly wrong.
+  open_meeting_prep: (p) => ({
+    label: 'Open meeting prep',
+    kind: NAVIGATE,
+    summary: p.title ? `Prep for "${p.title}"` : 'Jump to meeting prep',
+    fields: [field('Meeting', p.title), field('Starts', clockOf(p.start))],
   }),
 
   // ── outbound: these leave the building ──────────────────────────────────

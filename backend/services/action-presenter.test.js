@@ -113,9 +113,26 @@ test('an unknown type still gets a card, and it cannot be approved', () => {
 });
 
 test('navigation actions are approvable and marked as changing nothing', () => {
-  for (const type of ['open_ticket', 'open_task', 'open_email', 'open_standup']) {
+  for (const type of ['open_ticket', 'open_task', 'open_email', 'open_standup', 'open_meeting_prep']) {
     const d = presenter.describe({ type, payload: {} });
     assert.equal(d.kind, presenter.NAVIGATE, `${type} changes nothing`);
     assert.equal(d.canApprove, true);
   }
+});
+
+test('a navigation card names the destination it actually goes to', () => {
+  const prep = presenter.describe({
+    type: 'open_meeting_prep',
+    payload: { navigate: 'meeting-prep', title: 'Team Standup', start: '2026-08-17T09:45:00.0000000' },
+  });
+  assert.match(prep.summary, /Team Standup/, 'the meeting is the whole content of the card');
+  assert.ok(prep.fields.some(f => f.label === 'Starts' && f.value === '09:45'), 'clock time, sliced not parsed');
+
+  // The rows already in the queue: a meeting-prep nudge stored under open_task,
+  // which used to render as "jump to your task list" and go somewhere else.
+  const legacy = presenter.describe({ type: 'open_task', payload: { navigate: 'meeting-prep' } });
+  assert.match(legacy.summary, /meeting-prep/, 'must not claim it opens the task list');
+
+  const real = presenter.describe({ type: 'open_task', payload: { navigate: 'todos', filter: 'overdue' } });
+  assert.match(real.summary, /tasks \(overdue\)/);
 });

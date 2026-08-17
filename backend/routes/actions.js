@@ -117,6 +117,12 @@ function buildFacets(all) {
 // "that's everything", which is how a queue of 930 looked like a queue of 10.
 router.get('/', (req, res) => {
   try {
+    // Retire spent navigation shortcuts before reading. It also runs on the
+    // Focus path, but this screen is where they pile up visibly, and opening it
+    // should not show a prep card for a meeting that started two hours ago just
+    // because nothing has loaded Focus since.
+    suggestionEngine.expireStaleNavigation();
+
     const decorate = (a) => ({ ...a, presentation: actionPresenter.describe(a) });
 
     const all = db.getPendingSaraActions(READ_ALL).map(decorate);
