@@ -43,6 +43,10 @@ const SECONDARY_ITEMS = [
   // with no menu entry is the same hole one step later (see 'todos'), so it
   // gets one here rather than being routable-but-unreachable.
   { id: 'decisions',  label: 'Decisions', icon: '>' },
+  // The Monday report to Chris. It has a deadline and a named recipient, so it
+  // gets a menu entry rather than being reachable only from the 07:30 push —
+  // which is the failure this list already documents twice above.
+  { id: 'weekly-risk', label: 'Weekly Risk', icon: '▲' },
   { id: 'imports',    label: 'Imports',   icon: '>' },
   { id: 'recent',     label: 'Recent',    icon: '>' },
   { id: 'insights',   label: 'Insights',  icon: '◈' },

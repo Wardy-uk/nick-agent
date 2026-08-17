@@ -341,7 +341,9 @@ function start() {
         parts.length
           ? `Draft ready for Chris by midday: ${parts.join(', ')}.`
           : 'Draft ready for Chris by midday. Nothing flagged for escalation — confirm and send.',
-        { type: 'weekly_risk', url: '/weekly-risk' },
+        // `?view=` — App.jsx reads the query param, never the pathname, so a
+        // bare '/weekly-risk' silently lands on Briefing.
+        { type: 'weekly_risk', url: '/?view=weekly-risk' },
       ).catch(() => {});
       console.log(`[Scheduler] Weekly risk report built: ${report.escalateCount} escalations, ${report.blockers.length} blockers.`);
     } catch (e) {

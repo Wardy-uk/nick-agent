@@ -16,6 +16,7 @@ import QATab from './components/QATab';
 import EscalationPanel from './components/EscalationPanel';
 import ActionsPanel from './components/ActionsPanel';
 import DecisionsPanel from './components/DecisionsPanel';
+import WeeklyRiskPanel from './components/WeeklyRiskPanel';
 import ImportsPanel from './components/ImportsPanel';
 import CapturePanel from './components/CapturePanel';
 import RecentPanel from './components/RecentPanel';
@@ -286,6 +287,7 @@ function AuthenticatedApp() {
       case 'escalations': return <EscalationPanel />;
       case 'actions': return <ActionsPanel onNavigate={handleNavigate} />;
       case 'decisions': return <DecisionsPanel />;
+      case 'weekly-risk': return <WeeklyRiskPanel />;
       case 'journal': return <JournalPanel />;
       case 'standups': return <StandupsPanel />;
       case 'insights': return <InsightsPanel onNavigate={handleNavigate} />;
