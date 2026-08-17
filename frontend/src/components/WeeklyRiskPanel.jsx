@@ -65,6 +65,16 @@ export default function WeeklyRiskPanel() {
   const [showLog, setShowLog] = useState(false);
   const [preview, setPreview] = useState(null);
   const [copied, setCopied] = useState(false);
+  // Per-button confirmation. The notice alone was not enough: it renders at the
+  // top of the panel and the buttons sit near the bottom, so a click produced a
+  // message off-screen above and looked like nothing had happened.
+  const [done, setDone] = useState(null);
+
+  function confirmOn(key, text) {
+    setDone({ key, text });
+    setTimeout(() => setDone(d => (d?.key === key ? null : d)), 4000);
+  }
+  const labelFor = (key, idle) => (done?.key === key ? `✓ ${done.text}` : idle);
 
   const load = useCallback(async () => {
     setError(null);
@@ -139,7 +149,8 @@ export default function WeeklyRiskPanel() {
     };
     const out = await post('/api/weekly-risk/manual', patch, 'save');
     if (out) {
-      setNotice({ tone: 'ok', text: 'Saved.' });
+      confirmOn('save', 'Saved');
+      setNotice({ tone: 'ok', text: `Saved. ${out.blockers.length ? `${out.blockers.length} section(s) still needed before this can be sent.` : 'All sections complete — ready to publish and send.'}` });
       load();
     }
   }
@@ -147,7 +158,8 @@ export default function WeeklyRiskPanel() {
   async function doPublish() {
     const out = await post('/api/weekly-risk/publish', {}, 'publish');
     if (out?.ok) {
-      setNotice({ tone: 'ok', text: `Published to ${out.path}` });
+      confirmOn('publish', 'Published');
+      setNotice({ tone: 'ok', text: `Published to the vault: ${out.path}` });
       load();
     }
   }
@@ -161,6 +173,7 @@ export default function WeeklyRiskPanel() {
         body: JSON.stringify({ hrLogged: inPeopleHr }),
       });
       if (!res.ok) throw new Error('Could not save');
+      setNotice({ tone: 'ok', text: `Recorded: ${inPeopleHr ? 'in People HR' : 'NOT in People HR — this will go in the report'}.` });
       load();
     } catch (e) {
       setNotice({ tone: 'bad', text: e.message });
@@ -171,15 +184,19 @@ export default function WeeklyRiskPanel() {
 
   async function doTestSend() {
     const out = await post('/api/weekly-risk/test-send', {}, 'test');
-    if (out?.ok) setNotice({ tone: 'ok', text: `${out.note} (${out.to})` });
+    if (out?.ok) {
+      confirmOn('test', 'Sent to you');
+      setNotice({ tone: 'ok', text: `${out.note} (${out.to})` });
+    }
   }
 
   async function doQueueSend() {
     const out = await post('/api/weekly-risk/queue-send', {}, 'send');
     if (out?.ok) {
+      confirmOn('send', 'Queued');
       setNotice({
         tone: 'ok',
-        text: `Queued for ${out.recipient?.email}. Nothing has been sent — approve it in Actions.`,
+        text: `Queued for ${out.recipient?.email}. NOTHING HAS BEEN SENT — approve it in Actions to send.`,
       });
     }
   }
@@ -240,15 +257,6 @@ export default function WeeklyRiskPanel() {
         </div>
         <button className="wr-refresh" onClick={load} type="button">Rebuild</button>
       </header>
-
-      {notice && (
-        <div className={`wr-notice wr-notice-${notice.tone}`}>
-          {notice.text}
-          {notice.blockers?.length > 0 && (
-            <ul>{notice.blockers.map((b, i) => <li key={i}>{b}</li>)}</ul>
-          )}
-        </div>
-      )}
 
       {/* The gate, first. These block publication, so they are not a footnote. */}
       {blockers.length > 0 && (
@@ -346,28 +354,40 @@ export default function WeeklyRiskPanel() {
         </div>
 
         <div className="wr-actions">
-          <button type="button" onClick={saveManual} disabled={busy === 'save'}>
-            {busy === 'save' ? 'Saving…' : 'Save'}
+          <button type="button" className={done?.key === 'save' ? 'wr-confirmed' : undefined} onClick={saveManual} disabled={busy === 'save'}>
+            {busy === 'save' ? 'Saving…' : labelFor('save', 'Save')}
           </button>
-          <button type="button" onClick={doPublish} disabled={!ready || busy === 'publish'} title={ready ? '' : 'Finish your sections first'}>
-            {busy === 'publish' ? 'Publishing…' : 'Publish to vault'}
+          <button type="button" className={done?.key === 'publish' ? 'wr-confirmed' : undefined} onClick={doPublish} disabled={!ready || busy === 'publish'} title={ready ? '' : 'Finish your sections first'}>
+            {busy === 'publish' ? 'Publishing…' : labelFor('publish', 'Publish to vault')}
           </button>
           <button
-            type="button" className="wr-send"
+            type="button" className={`wr-send${done?.key === 'send' ? ' wr-confirmed' : ''}`}
             onClick={doQueueSend} disabled={!ready || busy === 'send'}
             title={ready ? 'Queues for approval — sends nothing' : 'Finish your sections first'}
           >
-            {busy === 'send' ? 'Queueing…' : 'Queue send to Chris'}
+            {busy === 'send' ? 'Queueing…' : labelFor('send', 'Queue send to Chris')}
           </button>
           {/* Not gated on `ready` — seeing an unfinished report in an inbox is
               the point, and the mail itself says which sections are missing. */}
-          <button type="button" onClick={doTestSend} disabled={busy === 'test'}>
-            {busy === 'test' ? 'Sending…' : 'Test send to me'}
+          <button type="button" className={done?.key === 'test' ? 'wr-confirmed' : undefined} onClick={doTestSend} disabled={busy === 'test'}>
+            {busy === 'test' ? 'Sending…' : labelFor('test', 'Test send to me')}
           </button>
           <button type="button" onClick={loadPreview} disabled={busy === 'preview'}>
             {busy === 'preview' ? 'Loading…' : preview !== null ? 'Hide preview' : 'Preview note'}
           </button>
         </div>
+        {/* The outcome renders HERE, immediately under the buttons that caused
+            it. It used to sit at the top of the panel, several screens above
+            the controls, so every click looked like it had done nothing. */}
+        {notice && (
+          <div className={`wr-notice wr-notice-${notice.tone}`}>
+            {notice.text}
+            {notice.blockers?.length > 0 && (
+              <ul>{notice.blockers.map((b, i) => <li key={i}>{b}</li>)}</ul>
+            )}
+          </div>
+        )}
+
         <p className="wr-hint">
           Queueing sends nothing. It creates an approval card in <strong>Actions</strong> showing the full report and the exact address.
         </p>

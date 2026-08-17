@@ -329,3 +329,11 @@
 }
 .wr-hr-buttons button:hover:not(:disabled) { color: var(--text); border-color: var(--text-muted); }
 .wr-hr-buttons button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Confirmation sits with the buttons, not at the top of the page. */
+.wr-actions + .wr-notice,
+.wr-notice { margin-top: 10px; margin-bottom: 12px; }
+.wr-actions button.wr-confirmed {
+  border-color: var(--success);
+  color: var(--success);
+}
