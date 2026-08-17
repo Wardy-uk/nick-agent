@@ -103,7 +103,12 @@ Inside the same **Get Contents of URL** action:
 
 `Content-Type` = `application/json`
 
-`X-Neuro-Pin` = `140277`
+`X-Neuro-Pin` = `<YOUR-NEURO-PIN>`
+
+> The real value is `NEURO_PIN` in `backend/.env` on the Pi — it is **never**
+> written into this repo. It was committed here in plaintext on 15 July 2026
+> (#123) and this repo is public, so treat any PIN that has ever appeared in
+> these docs as compromised regardless of what the current history looks like.
 
 #### Part 5: Add the JSON body
 
@@ -174,7 +179,7 @@ Expected result:
 
 If it fails:
 - check Tailscale is connected on the phone
-- check the PIN header is exactly `140277`
+- check the PIN header is exactly `<YOUR-NEURO-PIN>`
 - check the URL is exactly:
   `https://pi5.tailecb90f.ts.net/api/capture/siri-note`
 
