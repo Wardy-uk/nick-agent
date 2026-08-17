@@ -217,9 +217,30 @@ function isComplianceKpi(name) {
   return /compliance/i.test(name || '');
 }
 
-/** RAG letter → bucket, tolerating the several spellings NOVA has used. */
+/**
+ * RAG → bucket.
+ *
+ * `jira_kpi_daily.rag` is **numeric**: 1 green, 2 amber, 3 red. Verified
+ * against the live snapshot rather than assumed — every KPI meeting its target
+ * came back 1 (CSAT 100 vs 80, Production FRT 100 vs 95) and every one below it
+ * came back 3 (Tier 2 FRT 40 vs 95, AI Resolution Rate 0 vs 50).
+ *
+ * Getting this wrong is silent and total: the first cut only handled letters,
+ * so all 111 rows fell to `unrated`, `rated` was 0, and the headline Chris
+ * reads first rendered "—" on a week with 63 red KPIs. Letters are still
+ * accepted because nothing guarantees the column stays numeric, and a mapping
+ * that handles both cannot break on the day it changes.
+ */
 function ragBucket(rag) {
-  const v = String(rag || '').trim().toLowerCase();
+  if (rag === null || rag === undefined || rag === '') return 'unrated';
+  const n = Number(rag);
+  if (Number.isFinite(n)) {
+    if (n === 1) return 'green';
+    if (n === 2) return 'amber';
+    if (n === 3) return 'red';
+    return 'unrated';
+  }
+  const v = String(rag).trim().toLowerCase();
   if (v.startsWith('g')) return 'green';
   if (v.startsWith('r')) return 'red';
   if (v.startsWith('a') || v.startsWith('o')) return 'amber';

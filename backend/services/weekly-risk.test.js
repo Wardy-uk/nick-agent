@@ -276,3 +276,50 @@ test('a clean week warns before approval — it reports an all-clear to Chris', 
   });
   assert.ok(p.warnings.some(w => /clean week/.test(w)));
 });
+
+// ── RAG mapping (measured against the live snapshot, 17 Aug 2026) ────────────
+
+test('RAG is numeric in jira_kpi_daily — 1 green, 2 amber, 3 red', () => {
+  assert.equal(weeklyRisk.ragBucket(1), 'green');
+  assert.equal(weeklyRisk.ragBucket(2), 'amber');
+  assert.equal(weeklyRisk.ragBucket(3), 'red');
+  assert.equal(weeklyRisk.ragBucket('1'), 'green', 'JSON may hand it back as a string');
+});
+
+test('letter RAG still maps, so a column type change cannot break this silently', () => {
+  assert.equal(weeklyRisk.ragBucket('Green'), 'green');
+  assert.equal(weeklyRisk.ragBucket('RED'), 'red');
+  assert.equal(weeklyRisk.ragBucket('Amber'), 'amber');
+});
+
+test('an absent RAG is unrated, and unrated is excluded from the percentages', () => {
+  assert.equal(weeklyRisk.ragBucket(null), 'unrated');
+  assert.equal(weeklyRisk.ragBucket(''), 'unrated');
+  assert.equal(weeklyRisk.ragBucket(0), 'unrated');
+  const a = weeklyRisk.assess(baseSnapshot({
+    kpi: {
+      date: '2026-08-17', ageDays: 0,
+      rows: [
+        { KPI: 'a', RAG: 1 }, { KPI: 'b', RAG: 1 }, { KPI: 'c', RAG: 3 }, { KPI: 'd', RAG: null },
+      ],
+    },
+  }));
+  assert.equal(a.rag.green, 2);
+  assert.equal(a.rag.red, 1);
+  assert.equal(a.rag.unrated, 1);
+  assert.equal(a.rag.rated, 3);
+  assert.equal(a.rag.greenPct, 67, 'percentages are of RATED rows, not of all rows');
+});
+
+test('the live 17 Aug shape produces a real headline, not a dash', () => {
+  // 47 green / 1 amber / 63 red — the actual counts from the live snapshot.
+  const rows = [
+    ...Array.from({ length: 47 }, (_, i) => ({ KPI: `g${i}`, RAG: 1 })),
+    { KPI: 'a0', RAG: 2 },
+    ...Array.from({ length: 63 }, (_, i) => ({ KPI: `r${i}`, RAG: 3 })),
+  ];
+  const a = weeklyRisk.assess(baseSnapshot({ kpi: { date: '2026-08-17', ageDays: 0, rows } }));
+  assert.equal(a.rag.rated, 111);
+  assert.equal(a.rag.greenPct, 42);
+  assert.equal(a.rag.redPct, 57);
+});
