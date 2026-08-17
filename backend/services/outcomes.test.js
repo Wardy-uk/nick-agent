@@ -87,7 +87,10 @@ test('a snapshot is stored per week and read back rather than recomputed', () =>
 });
 
 test('weeks with no snapshot are reported missing, not back-filled', () => {
-  const weeks = outcomes.recent(4);
+  // Anchored to the fixture week, not the wall clock. Unanchored, the snapshot
+  // the test above stores lands in the CURRENT week today and a PAST week next
+  // week, so this assertion silently changes meaning every Monday.
+  const weeks = outcomes.recent(4, WED);
   assert.equal(weeks.length, 4);
   // The current week is always computed live so the view is never a week behind.
   assert.equal(weeks[weeks.length - 1].missing, undefined);
@@ -95,8 +98,21 @@ test('weeks with no snapshot are reported missing, not back-filled', () => {
 });
 
 test('the trend refuses to draw a line through a single point', () => {
-  const t = outcomes.trend(5);
+  const t = outcomes.trend(5, WED);
   assert.equal(t.enough, false);
+});
+
+// The guard for the bug the two tests above kept hitting: `recent`/`trend` used
+// to resolve "now" themselves while `computeWeek`/`snapshot` took an anchor, so
+// a pinned fixture only half-pinned the module and the suite broke on a date
+// rollover rather than on a code change. Asserting the anchor is HONOURED means
+// a silent revert to `new Date()` fails here, in the week it is written, rather
+// than at some future Monday.
+test('recent honours its anchor rather than the wall clock', () => {
+  const thisWeek = outcomes.recent(2, WED);
+  const yearBefore = outcomes.recent(2, new Date('2025-08-12T00:00:00'));
+  assert.notEqual(thisWeek[1].week, yearBefore[1].week, 'a different anchor must yield a different week');
+  assert.equal(thisWeek[1].week, outcomes.weekKey(WED), 'and the current week must be the anchor’s own');
 });
 
 test('the report states facts without passing judgement on Nick', () => {

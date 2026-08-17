@@ -184,20 +184,29 @@ function snapshot(anchor = new Date()) {
  * The last `n` weeks, oldest first. Stored snapshots where they exist, computed
  * live for the current week so the view is never a week behind.
  */
-function recent(n = 8) {
+// `anchor` exists so a caller that pins a date pins the WHOLE module. It used
+// to resolve `new Date()` itself while its siblings `computeWeek`/`snapshot`
+// took one, and that asymmetry is a bug generator: the tests pinned a fixture
+// week, stored a snapshot into it, and passed — until the wall clock moved on a
+// week and that stored snapshot stopped being the current week and started
+// showing up as a past one. A test that pins a date must be able to pass it to
+// every call it makes.
+function recent(n = 8, anchor = new Date()) {
   const out = [];
-  const now = new Date();
   for (let i = n - 1; i >= 0; i--) {
-    const anchor = _addDays(weekStart(now), -7 * i);
-    const key = weekKey(anchor);
-    if (i === 0) { out.push(computeWeek(anchor)); continue; }
+    // Named for what it is — the parameter was being shadowed here, so the
+    // outer anchor survived only because it had been copied to another name
+    // first. That reads as a bug even when it isn't one.
+    const weekAnchor = _addDays(weekStart(anchor), -7 * i);
+    const key = weekKey(weekAnchor);
+    if (i === 0) { out.push(computeWeek(weekAnchor)); continue; }
     try {
       const raw = db.getState(`outcomes_${key}`);
       if (raw) { out.push(JSON.parse(raw)); continue; }
     } catch {}
     // No snapshot for that week — say so rather than back-filling a computed
     // number that would look like a reading nobody actually took.
-    out.push({ week: key, from: _dateStr(anchor), missing: true });
+    out.push({ week: key, from: _dateStr(weekAnchor), missing: true });
   }
   return out;
 }
@@ -206,8 +215,8 @@ function recent(n = 8) {
  * Compare this week to the last few, and say what moved. Direction is what
  * matters here — a single week's number means very little on its own.
  */
-function trend(n = 5) {
-  const weeks = recent(n).filter(w => !w.missing);
+function trend(n = 5, anchor = new Date()) {
+  const weeks = recent(n, anchor).filter(w => !w.missing);
   if (weeks.length < 2) return { enough: false, weeks: weeks.length };
 
   const current = weeks[weeks.length - 1];
