@@ -129,6 +129,32 @@ six #13 sites are landed.
 the code for is how CLAUDE.md drifts, which is the thing it keeps getting caught
 by. That debt is still open and now needs a session that re-reads those changes.
 
+## #123 — PIN ROTATED, history rewrite deliberately deferred
+**The leaked PIN is dead.** Rotated in `backend/.env` AND `sara/backend/.env`
+(both held it), both services restarted, verified **new → 200, old → 401**.
+Backups at `/tmp/pin-rotate-20260817/` on the Pi.
+
+Also done: value out of `docs/sara-watch-siri-mvp.md` at HEAD (`13d38aa`,
+placeholder + a note that the real value lives only in `.env`); Windows MCP
+configs updated (`claude_desktop_config.json`, `.claude.json`); and the two other
+affected branches deleted — `origin/pi-local-snapshot-20260630` (held the PIN
+inside a committed **SQLite file**, the only copy outside main) and
+`origin/pi-reconcile` (fully merged, 0 unique commits). The snapshot branch is
+bundled to `/tmp/nuero-branch-backup/pi-local-snapshot-20260630.bundle`,
+verified as a complete history, before deletion.
+
+⚠ **Still in main's history: 248 commits** (`4d0f691` → `13d38aa`). Deferred by
+decision — a rewrite force-pushes every SHA since 15 July while two other Claude
+sessions are live, and it still would not undo a month of public exposure
+(GitHub serves unreachable commits by SHA until Support purges them; clones and
+forks keep copies). **Do it when no other session is running**, and remember the
+value it removes is already worthless.
+
+⚠ **NICK MUST STILL RE-ENTER THE NEW PIN** on: the Watch/Siri shortcut, both
+PWAs, and any n8n flow using the PIN rather than `X-NEURO-API-TOKEN`. Claude
+Desktop needs a restart to pick up the new MCP config. **The new value was given
+in chat and is deliberately not written into this repo or the vault.**
+
 ## NEXT
 **Code:** the `outcomes.test.js` date-rollover fix (pass the date in — small, and
 it is currently the only red in the suite) · the older CLAUDE.md debt · then the
