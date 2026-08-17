@@ -423,3 +423,45 @@ CREATE TABLE IF NOT EXISTS sent_replies (
 
 CREATE INDEX IF NOT EXISTS idx_sent_replies_sent ON sent_replies(sent_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sent_replies_email ON sent_replies(email_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Management Actions & Conversations Log — PIP competencies 3 and 4.
+--
+-- Competency 3: every management conversation, concern or action logged within
+-- TWO WORKING DAYS, each with an owner and a due date, followed to resolution.
+-- Competency 4: the count of OVERDUE management actions, baselined at
+-- 27 Jul 2026, to reach zero by the 60-day review (11 Sep 2026) and thereafter
+-- nothing overdue by more than five working days.
+--
+-- The baseline is deliberately NOT a stored number. A hand-agreed integer is
+-- unfalsifiable a month later and cannot be recomputed when a row turns out to
+-- have been miscounted; derived from due_date and resolved_date it can be
+-- re-run against any date and always agrees with the rows underneath it.
+--
+-- `logged_at` is separate from `entry_date` because the two-working-day rule is
+-- a fact about the GAP between them. Collapsing them into one column would make
+-- the one thing competency 3 is measured on impossible to evidence.
+CREATE TABLE IF NOT EXISTS management_log (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_date    TEXT NOT NULL,              -- when the conversation/concern happened
+  logged_at     TEXT NOT NULL,              -- when it was written down (the compliance clock)
+  type          TEXT NOT NULL,              -- conversation | concern | action
+  person        TEXT,                       -- canonical first name, matching waiting_on
+  summary       TEXT NOT NULL,
+  action        TEXT,
+  owner         TEXT,
+  due_date      TEXT,
+  status        TEXT NOT NULL DEFAULT 'open',   -- open | in-progress | blocked | done
+  resolved_date TEXT,
+  -- Chris spot-checks People HR, so whether an item also reached People HR is a
+  -- distinct fact from whether NEURO knows about it. Never inferred.
+  hr_logged     INTEGER NOT NULL DEFAULT 0,
+  source        TEXT,                       -- vault path, plaud id, '1-2-1', 'manual'
+  notes         TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mgmt_log_due ON management_log(due_date);
+CREATE INDEX IF NOT EXISTS idx_mgmt_log_status ON management_log(status);
+CREATE INDEX IF NOT EXISTS idx_mgmt_log_entry ON management_log(entry_date DESC);

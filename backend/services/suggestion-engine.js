@@ -350,6 +350,49 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
       return { ok: true, detail: `Reply sent: "${payload.subject || payload.emailId}"`, navigate: 'inbox' };
     }
 
+    // The weekly risk report going to Chris. Gate 2 of 2 — the report was built
+    // and the recipient resolved at queue time; this is the approval that
+    // actually releases it. Deliberately NOT written in SARA's voice: this mail
+    // sends under Nick's name to the manager assessing his PIP, and the same
+    // rule holds here as for chase messages and 1-2-1 invites.
+    case 'send_weekly_risk_report': {
+      const recipients = Array.isArray(payload.to) ? payload.to.filter(r => r?.email) : [];
+      if (!recipients.length) return { ok: false, detail: 'No recipient stored — nothing to send to' };
+      if (!payload.body || !String(payload.body).trim()) {
+        return { ok: false, detail: 'No report body stored — nothing to send' };
+      }
+
+      const result = await require('./email-sender').sendMail({
+        to: recipients,
+        subject: payload.subject || `Weekly Risk & Anomaly Summary — w/c ${payload.week}`,
+        body: String(payload.body),
+      });
+
+      if (!result.sent) {
+        const reasons = {
+          auth: 'Not signed in to Microsoft — reconnect 365.',
+          scope: 'Mail.Send not granted — re-consent to Microsoft.',
+          no_recipients: 'No recipients resolved.',
+          empty_body: 'The report body was empty.',
+        };
+        return { ok: false, detail: reasons[result.reason] || `Send failed (${result.reason})` };
+      }
+
+      // Close the log row that tracks the Monday cadence, so the commitment
+      // Nick made on 12 Aug is evidenced by the send rather than by memory.
+      try {
+        const log = require('./management-log');
+        const open = log.list({ limit: 500 }).find(r =>
+          r.status !== 'done' && /weekly team risk .* report to Chris/i.test(r.summary));
+        if (open) log.update(open.id, { status: 'done' });
+      } catch { /* bookkeeping must never fail a send that already happened */ }
+
+      return {
+        ok: true,
+        detail: `Weekly risk report for w/c ${payload.week} sent to ${recipients.map(r => r.email).join(', ')}`,
+      };
+    }
+
     // Ticking a task off. NEURO-owned tasks go to the task store; Microsoft-owned
     // ones push over Graph. A Graph refusal is reported, not swallowed — the
     // local state still changes so the task stops nagging either way.

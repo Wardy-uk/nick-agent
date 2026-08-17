@@ -155,6 +155,43 @@ const PRESENTERS = {
     };
   },
 
+  // The PIP report. Outbound, and the highest-stakes recipient in the queue —
+  // the manager assessing the plan. The full report goes on the card verbatim
+  // for the same reason every other outbound body does: the screen must show
+  // what sends, and a summary here would be a summary of a summary.
+  send_weekly_risk_report: (p) => {
+    const recipients = Array.isArray(p.to) ? p.to.filter(r => r?.email) : [];
+    const blockers = [];
+    if (!recipients.length) blockers.push('No recipient stored — there is nowhere to send it.');
+    if (!trimmed(p.body)) blockers.push('No report body stored — there is nothing to send.');
+    return {
+      label: 'Send the weekly risk report',
+      kind: OUTBOUND,
+      summary: `Send the w/c ${p.week} risk summary to ${recipients.map(r => r.name || r.email).join(', ') || 'Chris'}`,
+      fields: [
+        field('Week commencing', p.week),
+        { label: 'To', value: recipients.map(r => r.email).join(', ') || 'unknown', mono: recipients.length > 0 },
+        field('Subject', p.subject),
+        field('Data as at', p.snapshotDate),
+        field('Flagged to escalate', p.escalateCount === 0 ? 'nothing' : p.escalateCount),
+        field('Vault copy', p.vaultPath),
+      ],
+      body: trimmed(p.body) || null,
+      bodyLabel: 'This is what will be sent, in full',
+      blockers,
+      // Both of these are true-and-fine states, not defects — but they change
+      // what Chris is being told, so they belong in front of the approve.
+      warnings: [
+        recipients.some(r => r.source === 'manual')
+          ? 'Address was set by hand, not resolved from the directory.' : null,
+        p.escalateCount === 0
+          ? 'Nothing is flagged for escalation this week — this reports a clean week.' : null,
+        !p.vaultPath
+          ? 'Not published to the vault yet, so there is no filed copy of what was sent.' : null,
+      ].filter(Boolean),
+    };
+  },
+
   chase_agenda: (p) => {
     const email = addressOf(p.organizer);
     const blockers = [];

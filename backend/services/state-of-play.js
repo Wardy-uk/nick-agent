@@ -35,6 +35,10 @@ const TRACKED_JOBS = [
   { name: 'weekly-review', cadence: 'weekly' },
   { name: 'weekly-hygiene', cadence: 'weekly' },
   { name: 'knowledge-reflection', cadence: 'weekly' },
+  // Unlike bank-holidays — deliberately untracked because a missed week is
+  // harmless — a missed weekly risk report is a missed PIP deliverable with a
+  // named recipient and a midday deadline. This is the case the board exists for.
+  { name: 'weekly-risk-report', cadence: 'weekly' },
 ];
 
 // Local, not UTC. The Pi may run in UTC and a date built with toISOString()

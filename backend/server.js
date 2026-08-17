@@ -183,6 +183,7 @@ app.use('/api/kb-article', require('./routes/kb-article'));
 app.use('/api/email', require('./routes/email-triage'));
 app.use('/api/pi-health', require('./routes/pi-health'));
 app.use('/api/state-of-play', require('./routes/state-of-play'));
+app.use('/api/weekly-risk', require('./routes/weekly-risk'));
 app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/calendar', require('./routes/calendar'));
 app.use('/api/adhd', require('./routes/adhd'));

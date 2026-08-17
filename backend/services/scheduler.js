@@ -319,6 +319,36 @@ function start() {
     }
   });
 
+  // Monday 7:30am — build the Weekly Risk & Anomaly Summary.
+  //
+  // Nick owes this to Chris by MIDDAY every Monday (agreed at the 1-2-1 on
+  // 12 Aug 2026, PIP competency 2), so it is built early enough to leave a
+  // working morning for the manual sections. It BUILDS and notifies; it never
+  // publishes or sends. Overtime, the escalation list and the data-quality
+  // judgements are Nick's to state, and a report that auto-sent itself with
+  // those blank would be a false all-clear to the person assessing the PIP.
+  scheduleWeekly('weekly-risk-report', '30 7 * * 1', 1, 7, 30, async () => {
+    try {
+      const weeklyRisk = require('./weekly-risk');
+      const report = await weeklyRisk.build();
+      const parts = [];
+      if (report.escalateCount) parts.push(`${report.escalateCount} to escalate`);
+      if (report.blockers.length) parts.push(`${report.blockers.length} section${report.blockers.length === 1 ? '' : 's'} need you`);
+      const failed = report.sources.filter(s => !s.ok).length;
+      if (failed) parts.push(`${failed} data source${failed === 1 ? '' : 's'} down`);
+      await require('./webpush').sendToAll(
+        'SARA — Weekly risk report',
+        parts.length
+          ? `Draft ready for Chris by midday: ${parts.join(', ')}.`
+          : 'Draft ready for Chris by midday. Nothing flagged for escalation — confirm and send.',
+        { type: 'weekly_risk', url: '/weekly-risk' },
+      ).catch(() => {});
+      console.log(`[Scheduler] Weekly risk report built: ${report.escalateCount} escalations, ${report.blockers.length} blockers.`);
+    } catch (e) {
+      console.error('[Scheduler] Weekly risk report failed:', e.message);
+    }
+  });
+
   // Weekdays 10 minutes after the main intake cycles — consolidate raw intake into working notes
   cron.schedule('40 * * * 1-5', () => {
     require('./knowledge-memory').consolidateAllImports({ limit: 30 }).catch((e) => {
