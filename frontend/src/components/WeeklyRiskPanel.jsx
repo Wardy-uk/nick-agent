@@ -389,6 +389,32 @@ export default function WeeklyRiskPanel() {
       </section>
 
       <section className="wr-section">
+        <h3>My task position</h3>
+        {report.tasks?.available ? (
+          <>
+            <div className="wr-stats">
+              <Stat label="Open tasks" value={report.tasks.open} />
+              <Stat
+                label="Overdue" value={report.tasks.overdue}
+                tone={report.tasks.open && report.tasks.overdue / report.tasks.open > 0.25 ? 'bad' : report.tasks.overdue ? 'warn' : 'good'}
+                sub={report.tasks.open ? `${Math.round((report.tasks.overdue / report.tasks.open) * 100)}% of open` : null}
+              />
+              <Stat
+                label="Closed last week" value={report.tasks.closedLastWeek}
+                tone={report.tasks.closedLastWeek ? 'good' : 'neutral'}
+                sub={report.tasks.droppedLastWeek ? `${report.tasks.droppedLastWeek} dropped` : null}
+              />
+              <Stat label="No due date" value={report.tasks.undated} tone="neutral" sub="cannot be chased" />
+            </div>
+            <p className="wr-hint" style={{ marginTop: 12, marginBottom: 0 }}>
+              Closed counts the previous full week ({fmtUk(report.tasks.lastWeek.from)} to {fmtUk(report.tasks.lastWeek.to)}), not a rolling seven days.
+              Dropped is counted separately — both leave the list, only one is work finished.
+            </p>
+          </>
+        ) : <p className="wr-empty">Task counts unavailable.</p>}
+      </section>
+
+      <section className="wr-section">
         <h3>Findings</h3>
         {findings.length === 0
           ? <p className="wr-empty">Nothing flagged. The sources answered and no rule fired.</p>

@@ -152,7 +152,14 @@ function briefToHtml(brief) {
  * This one goes to other people, so it takes explicit recipients and refuses
  * without them rather than defaulting anywhere.
  */
-async function sendMail({ to, subject, body, cc = null }) {
+/**
+ * `html: true` switches the content type. Default stays Text, because the
+ * original callers here are short human messages — a chase, a question — and
+ * HTML invites formatting that makes a one-line question look like a mailshot.
+ * A rendered REPORT is the opposite case: as plain text its tables arrive as
+ * pipe soup.
+ */
+async function sendMail({ to, subject, body, cc = null, html = false }) {
   const recipients = (Array.isArray(to) ? to : []).filter(r => r?.email);
   if (!recipients.length) return { sent: false, reason: 'no_recipients' };
   if (!String(body || '').trim()) return { sent: false, reason: 'empty_body' };
@@ -168,9 +175,7 @@ async function sendMail({ to, subject, body, cc = null }) {
 
   const message = {
     subject: subject || '(no subject)',
-    // Text, not HTML: these are short human messages, and HTML invites the kind
-    // of formatting that makes a one-line question look like a mailshot.
-    body: { contentType: 'Text', content: String(body) },
+    body: { contentType: html ? 'HTML' : 'Text', content: String(body) },
     toRecipients: recipients.map(r => ({ emailAddress: { address: r.email, name: r.name || undefined } })),
   };
   if (Array.isArray(cc) && cc.length) {

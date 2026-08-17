@@ -362,10 +362,15 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
         return { ok: false, detail: 'No report body stored — nothing to send' };
       }
 
+      // HTML, converted from the same markdown the vault note holds. As plain
+      // text the report's tables arrive as pipe soup and its frontmatter leads
+      // the mail — and the test send renders identically, so what Nick checks
+      // is what Chris gets.
       const result = await require('./email-sender').sendMail({
         to: recipients,
         subject: payload.subject || `Weekly Risk & Anomaly Summary — w/c ${payload.week}`,
-        body: String(payload.body),
+        body: require('./weekly-risk').toEmailHtml(String(payload.body)),
+        html: true,
       });
 
       if (!result.sent) {

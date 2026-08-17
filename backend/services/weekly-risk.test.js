@@ -349,5 +349,138 @@ test('a test send is marked as one in the subject and the body', () => {
   const src = weeklyRisk.testSend.toString();
   assert.match(src, /\[TEST\]/, 'subject is prefixed, so it cannot be forwarded on as the real thing');
   assert.match(src, /did not go to Chris/, 'the body says who it did not go to');
-  assert.match(src, /NOT FINISHED/, 'an unfinished report names what is missing');
+  assert.match(src, /not finished/i, 'an unfinished report names what is missing');
+  assert.match(src, /blockers\.map/, 'and lists each unanswered section by name');
+});
+
+// ── Email HTML ───────────────────────────────────────────────────────────────
+
+const SAMPLE_MD = [
+  '---',
+  'type: risk-summary',
+  'updated: 2026-08-17',
+  '---',
+  '',
+  '# Weekly Risk & Anomaly Summary',
+  '',
+  '> Standing agenda item. Flagged **ESCALATE**. See [[Nick Ward - PIP Reference]].',
+  '',
+  '## Headline',
+  '',
+  '**41%** of rated KPIs green, **53%** red.',
+  '',
+  '| KPI | This week | Last week |',
+  '|---|---|---|',
+  '| FRT Compliance % (Tier 2) | 40% | 61% |',
+  '| FRT Compliance % (Production) | 100% | 96% |',
+  '',
+  '- Reason capture: 1054 of 1076 as `unknown`',
+  '- [ ] Root-cause the Tier 2 slide',
+  '- [x] Add week-on-week trend',
+  '',
+  '1. First escalation',
+  '2. Second escalation',
+].join('\n');
+
+test('vault frontmatter never reaches the mail', () => {
+  const html = weeklyRisk.toEmailHtml(SAMPLE_MD);
+  assert.doesNotMatch(html, /type: risk-summary/);
+  assert.doesNotMatch(html, /updated: 2026-08-17/);
+});
+
+test('tables become real tables — this is the whole reason plain text failed', () => {
+  const html = weeklyRisk.toEmailHtml(SAMPLE_MD);
+  assert.match(html, /<table/);
+  assert.equal((html.match(/<th /g) || []).length, 3);
+  assert.equal((html.match(/<tr>/g) || []).length, 3, 'header plus two body rows');
+  assert.doesNotMatch(html, /\|\s*FRT Compliance/, 'no pipe soup left');
+});
+
+test('every style is inline — Outlook strips <style> blocks', () => {
+  const html = weeklyRisk.toEmailHtml(SAMPLE_MD);
+  assert.doesNotMatch(html, /<style/i);
+  assert.match(html, /<table style="/);
+  assert.match(html, /<th style="/);
+});
+
+test('inline emphasis, code, checkboxes and lists all convert', () => {
+  const html = weeklyRisk.toEmailHtml(SAMPLE_MD);
+  assert.match(html, /<strong>41%<\/strong>/);
+  assert.match(html, /<code[^>]*>unknown<\/code>/);
+  assert.match(html, /&#9744;/, 'unchecked box');
+  assert.match(html, /&#9745;/, 'checked box');
+  assert.match(html, /<ol/);
+  assert.match(html, /<blockquote/);
+  assert.doesNotMatch(html, /\*\*/, 'no raw markdown markers survive');
+});
+
+test('a vault wikilink is not shown as one — it means nothing in a mail client', () => {
+  const html = weeklyRisk.toEmailHtml(SAMPLE_MD);
+  assert.doesNotMatch(html, /\[\[/);
+  assert.match(html, /<em>Nick Ward - PIP Reference<\/em>/);
+});
+
+test('markup in the report content is escaped, not rendered', () => {
+  const html = weeklyRisk.toEmailHtml('# T\n\nA <script>alert(1)</script> and 5 < 6.');
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /5 &lt; 6/);
+});
+
+test('the real send and the test send render through the same function', () => {
+  const engine = require('./suggestion-engine').executeAction.toString();
+  assert.match(engine, /toEmailHtml/, 'the executor converts rather than sending raw markdown');
+  assert.match(engine, /html:\s*true/);
+  assert.match(weeklyRisk.testSend.toString(), /toEmailHtml/);
+});
+
+// ── Task position ────────────────────────────────────────────────────────────
+
+function taskSnap(tasks) {
+  return baseSnapshot({ tasks: { available: true, lastWeek: { from: '2026-08-10', to: '2026-08-16' }, undated: 0, droppedLastWeek: 0, ...tasks } });
+}
+
+test('the task section renders open, overdue and closed-last-week', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 92, overdue: 14, closedLastWeek: 23, undated: 40 })));
+  assert.match(md, /## 5\. My task position/);
+  assert.match(md, /\| Open tasks \| \*\*92\*\* \|/);
+  assert.match(md, /\| Overdue \| \*\*14\*\* \(15%\) \|/);
+  assert.match(md, /\| Closed w\/c 10 Aug 2026 \| \*\*23\*\* \|/);
+  assert.match(md, /\| No due date \| 40 \|/);
+});
+
+test('closed is the previous FULL week, not a rolling seven days', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 10, overdue: 1, closedLastWeek: 5 })));
+  assert.match(md, /previous full week \(10 Aug 2026 to 16 Aug 2026\)/);
+  assert.match(md, /not a rolling seven days/);
+});
+
+test('dropped is reported separately from done — a clear-out is not a productive week', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 10, overdue: 1, closedLastWeek: 4, droppedLastWeek: 30 })));
+  assert.match(md, /\| Dropped w\/c 10 Aug 2026 \| 30 \|/);
+  assert.match(md, /Dropped is counted separately from done/);
+});
+
+test('a heavily overdue backlog is a finding; a light one is not', () => {
+  const heavy = weeklyRisk.assess(taskSnap({ open: 100, overdue: 40, closedLastWeek: 3 }));
+  const f = heavy.findings.find(x => x.kind === 'task-backlog');
+  assert.ok(f, 'expected a task-backlog finding at 40%');
+  assert.equal(f.severity, 'warn');
+  assert.match(f.title, /40 of 100 open tasks are overdue/);
+
+  const light = weeklyRisk.assess(taskSnap({ open: 100, overdue: 5, closedLastWeek: 3 }));
+  assert.equal(light.findings.find(x => x.kind === 'task-backlog'), undefined,
+    'flagging a small number every week trains him to skip the section');
+});
+
+test('unavailable task counts say so rather than rendering zeros', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(baseSnapshot({ tasks: { available: false } })));
+  assert.match(md, /Task counts unavailable/);
+  assert.doesNotMatch(md, /\| Open tasks \| \*\*0\*\*/);
+});
+
+test('no divide-by-zero on an empty task list', () => {
+  assert.doesNotThrow(() => weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 0, overdue: 0, closedLastWeek: 0 }))));
+  const a = weeklyRisk.assess(taskSnap({ open: 0, overdue: 0, closedLastWeek: 0 }));
+  assert.equal(a.findings.find(x => x.kind === 'task-backlog'), undefined);
 });

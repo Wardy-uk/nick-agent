@@ -156,6 +156,61 @@ function manualBlockers(manual) {
   return out;
 }
 
+// ── Task position ────────────────────────────────────────────────────────────
+
+/**
+ * Open / overdue / closed-last-week, from the task store.
+ *
+ * "Closed last week" is the PREVIOUS Monday-to-Sunday, not a rolling 7 days.
+ * The report is a weekly artefact with a fixed week boundary, and a rolling
+ * window would quietly change what it counted depending on the hour it ran —
+ * which is the one thing a figure sent to a manager must not do.
+ *
+ * `dropped` is counted separately from `done`. Both leave the open list, but
+ * only one of them is work completed, and folding them together would let a
+ * clear-out read as a productive week.
+ */
+function taskCounts(week = weekCommencing()) {
+  const today = todayLocal();
+  const lastWeekStart = previousWeek(week);
+  // Sunday of that week — the day before this week began.
+  const [y, m, d] = week.split('-').map(Number);
+  const lastWeekEnd = todayLocal(new Date(y, m - 1, d - 1));
+
+  const one = (sql, params) => {
+    try { return db.get(sql, params)?.c ?? null; } catch { return null; }
+  };
+
+  const open = one("SELECT COUNT(*) c FROM tasks WHERE status IN ('open','in-progress')");
+  const overdue = one(
+    "SELECT COUNT(*) c FROM tasks WHERE status IN ('open','in-progress') AND due_date IS NOT NULL AND due_date < ?",
+    [today],
+  );
+  const closed = one(
+    "SELECT COUNT(*) c FROM tasks WHERE status = 'done' AND completed_at IS NOT NULL AND DATE(completed_at) BETWEEN ? AND ?",
+    [lastWeekStart, lastWeekEnd],
+  );
+  const dropped = one(
+    "SELECT COUNT(*) c FROM tasks WHERE status = 'dropped' AND completed_at IS NOT NULL AND DATE(completed_at) BETWEEN ? AND ?",
+    [lastWeekStart, lastWeekEnd],
+  );
+  // An open task with no due date cannot be overdue, but it also cannot be
+  // chased. Reported so "3 overdue" is not read as "everything else is on time".
+  const undated = one(
+    "SELECT COUNT(*) c FROM tasks WHERE status IN ('open','in-progress') AND due_date IS NULL",
+  );
+
+  return {
+    open, overdue, undated,
+    closedLastWeek: closed,
+    droppedLastWeek: dropped,
+    lastWeek: { from: lastWeekStart, to: lastWeekEnd },
+    // null anywhere means the query failed, and the report says so rather than
+    // rendering a zero it did not measure.
+    available: open !== null,
+  };
+}
+
 // ── Snapshot ─────────────────────────────────────────────────────────────────
 
 async function pull(name, fn) {
@@ -187,6 +242,13 @@ async function snapshot({ week = weekCommencing(), date } = {}) {
       { name: 'escalation-stats', ok: false, error: 'NOVA bridge not configured', data: null },
     ];
 
+  // Nick's own task position. Competency 4 is about overdue management actions,
+  // but the 12 Aug review also put a number on the personal backlog — 400+ items
+  // since 1 June — so "open / overdue / closed last week" is the movement that
+  // conversation actually asked for. Read straight from the task store, which
+  // is the source of truth for tasks.
+  const tasks = taskCounts(week);
+
   let jiraEscalations = null;
   try {
     jiraEscalations = require('./jira').getUnseenEscalations?.() ?? null;
@@ -201,6 +263,7 @@ async function snapshot({ week = weekCommencing(), date } = {}) {
     trend: trend.data,
     escalationStats: escalationStats.data,
     jiraEscalations,
+    tasks,
     management: managementLog.status(),
     manual: getManual(week),
   };
@@ -432,6 +495,19 @@ function assess(snap) {
     });
   }
 
+  // Nick's own task position. A finding only when the overdue share is large
+  // enough to be the story — a couple of overdue items in a hundred is noise,
+  // and a report that flags it every week trains him to skip the section.
+  const tasks = snap?.tasks || null;
+  if (tasks?.available && tasks.open > 0 && tasks.overdue / tasks.open > 0.25) {
+    findings.push({
+      severity: 'warn',
+      kind: 'task-backlog',
+      title: `${tasks.overdue} of ${tasks.open} open tasks are overdue`,
+      detail: `${Math.round((tasks.overdue / tasks.open) * 100)}% of the open list is past its due date. ${tasks.closedLastWeek} closed last week${tasks.droppedLastWeek ? `, ${tasks.droppedLastWeek} dropped` : ''}.`,
+    });
+  }
+
   // Management log — competency 3/4 carried onto the same page, because the two
   // documents are assessed together and a clean risk report next to an unlogged
   // conversation is not a good week.
@@ -487,6 +563,7 @@ function assess(snap) {
     findings,
     escalateCount: findings.filter(f => f.severity === 'escalate').length,
     management: mgmt || null,
+    tasks,
     jiraEscalations: snap.jiraEscalations,
     sources: snap.sources,
     manual: snap.manual,
@@ -610,7 +687,27 @@ function render(a) {
   }
   lines.push('');
 
-  lines.push('## 5. Management actions & conversations');
+  lines.push('## 5. My task position');
+  lines.push('');
+  if (a.tasks?.available) {
+    const t = a.tasks;
+    lines.push('| Measure | Count |');
+    lines.push('|---|---|');
+    lines.push([
+      `| Open tasks | **${t.open}** |`,
+      `| Overdue | **${t.overdue}**${t.open ? ` (${Math.round((t.overdue / t.open) * 100)}%)` : ''} |`,
+      `| No due date | ${t.undated} |`,
+      `| Closed w/c ${formatUk(t.lastWeek.from)} | **${t.closedLastWeek}** |`,
+      t.droppedLastWeek ? `| Dropped w/c ${formatUk(t.lastWeek.from)} | ${t.droppedLastWeek} |` : null,
+    ].filter(Boolean).join('\n'));
+    lines.push('');
+    lines.push(`_Closed counts the previous full week (${formatUk(t.lastWeek.from)} to ${formatUk(t.lastWeek.to)}), not a rolling seven days. Dropped is counted separately from done — both leave the list, only one is work finished._`);
+  } else {
+    lines.push('_Task counts unavailable._');
+  }
+  lines.push('');
+
+  lines.push('## 6. Management actions & conversations');
   lines.push('');
   if (a.management) {
     const m = a.management;
@@ -670,6 +767,137 @@ function render(a) {
   lines.push('');
 
   return lines.join('\n');
+}
+
+// ── Email rendering ──────────────────────────────────────────────────────────
+
+/**
+ * The report as HTML, for email.
+ *
+ * Converts the markdown `render()` already produces rather than being a second
+ * renderer. That matters more than the few lines it costs: two renderers of the
+ * same report drift, and the one Chris reads would be the one nobody checked.
+ *
+ * It is a small converter for a subset I control, not a general markdown
+ * parser — headings, tables, blockquote, lists, checkboxes, rules and inline
+ * emphasis is the whole vocabulary `render()` emits.
+ *
+ * Every style is INLINE. Outlook strips <style> blocks, which is exactly how a
+ * table ends up rendering as pipe soup.
+ */
+
+const TD = 'padding:6px 10px;border:1px solid #dfe3e8;font-size:13px;vertical-align:top';
+const TH = `${TD};background:#f4f6f8;font-weight:600;text-align:left`;
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Inline emphasis. Runs AFTER escaping, so the markers cannot inject markup. */
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code style="background:#f4f6f8;padding:1px 4px;border-radius:3px;font-size:12px">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[\[([^\]]+)\]\]/g, '<em>$1</em>');   // vault links mean nothing in a mail client
+}
+
+function splitRow(line) {
+  return line.replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+}
+
+function markdownToEmailHtml(md) {
+  // Frontmatter is vault metadata. It is the first thing in the note and the
+  // first thing in the mail, and it means nothing to a reader in Outlook.
+  const body = String(md).replace(/^---\n[\s\S]*?\n---\n/, '');
+  const lines = body.split('\n');
+  const out = [];
+  let list = null;
+
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+
+    // Table: a pipe row followed by a separator row.
+    if (line.startsWith('|') && /^\|[\s\-:|]+\|$/.test(lines[i + 1] || '')) {
+      closeList();
+      const head = splitRow(line);
+      i += 1;
+      const rows = [];
+      while (i + 1 < lines.length && lines[i + 1].startsWith('|')) {
+        i += 1;
+        rows.push(splitRow(lines[i]));
+      }
+      out.push(
+        `<table style="border-collapse:collapse;width:100%;margin:10px 0">`
+        + `<thead><tr>${head.map(h => `<th style="${TH}">${inline(h)}</th>`).join('')}</tr></thead>`
+        + `<tbody>${rows.map(r => `<tr>${r.map(c => `<td style="${TD}">${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody>`
+        + `</table>`,
+      );
+      continue;
+    }
+
+    if (/^#{1,4}\s/.test(line)) {
+      closeList();
+      const level = line.match(/^#+/)[0].length;
+      const text = inline(line.replace(/^#+\s*/, ''));
+      const size = { 1: 20, 2: 16, 3: 14, 4: 13 }[level] || 13;
+      const top = level === 1 ? 0 : 22;
+      out.push(`<h${level} style="font-size:${size}px;margin:${top}px 0 8px;color:#1b1f23">${text}</h${level}>`);
+      continue;
+    }
+
+    if (/^---+$/.test(line.trim())) {
+      closeList();
+      out.push('<hr style="border:none;border-top:1px solid #e1e4e8;margin:22px 0">');
+      continue;
+    }
+
+    if (line.startsWith('> ')) {
+      closeList();
+      out.push(`<blockquote style="margin:10px 0;padding:10px 14px;background:#f6f8fa;border-left:3px solid #d0d7de;font-size:13px;color:#444">${inline(line.slice(2))}</blockquote>`);
+      continue;
+    }
+
+    const check = line.match(/^- \[([ x])\]\s*(.*)$/);
+    if (check) {
+      if (list !== 'ul') { closeList(); out.push('<ul style="margin:8px 0;padding-left:20px">'); list = 'ul'; }
+      out.push(`<li style="font-size:13px;margin:3px 0">${check[1] === 'x' ? '&#9745;' : '&#9744;'} ${inline(check[2])}</li>`);
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      if (list !== 'ul') { closeList(); out.push('<ul style="margin:8px 0;padding-left:20px">'); list = 'ul'; }
+      out.push(`<li style="font-size:13px;margin:3px 0">${inline(line.replace(/^[-*]\s+/, ''))}</li>`);
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(line)) {
+      if (list !== 'ol') { closeList(); out.push('<ol style="margin:8px 0;padding-left:22px">'); list = 'ol'; }
+      out.push(`<li style="font-size:13px;margin:3px 0">${inline(line.replace(/^\d+\.\s+/, ''))}</li>`);
+      continue;
+    }
+
+    if (!line.trim()) { closeList(); continue; }
+
+    closeList();
+    out.push(`<p style="font-size:13px;line-height:1.6;margin:8px 0;color:#24292f">${inline(line)}</p>`);
+  }
+  closeList();
+
+  return out.join('\n');
+}
+
+/** Wrap the converted body in an email shell. `banner` is raw HTML or null. */
+function toEmailHtml(md, banner = null) {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#ffffff">
+<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:820px;margin:0 auto;padding:22px;color:#24292f">
+${banner || ''}
+${markdownToEmailHtml(md)}
+</div></body></html>`;
 }
 
 // ── Build + publish ──────────────────────────────────────────────────────────
@@ -791,22 +1019,19 @@ async function testSend({ week = weekCommencing() } = {}) {
   const report = await build({ week });
   const emailSender = require('./email-sender');
 
-  const banner = [
-    '*** TEST COPY — this did not go to Chris ***',
-    '',
-    `Week commencing ${formatUk(week)}. Sent to you only, from the Weekly Risk panel.`,
-    report.blockers.length
-      ? `\nTHIS REPORT IS NOT FINISHED. ${report.blockers.length} section${report.blockers.length === 1 ? '' : 's'} still unanswered:\n${report.blockers.map(b => `  - ${b}`).join('\n')}`
-      : '\nAll sections are complete — this is what Chris would receive.',
-    '',
-    '─'.repeat(60),
-    '',
-  ].join('\n');
+  const banner = `<div style="background:#fff4e5;border:1px solid #f0b429;border-radius:6px;padding:14px 16px;margin-bottom:20px">
+<div style="font-weight:700;font-size:14px;color:#8a5a00">TEST COPY — this did not go to Chris</div>
+<div style="font-size:13px;color:#6b4a00;margin-top:6px">Week commencing ${formatUk(week)}. Sent to you only, from the Weekly Risk panel.</div>
+${report.blockers.length
+    ? `<div style="font-size:13px;color:#8a1c1c;margin-top:10px"><strong>This report is not finished — ${report.blockers.length} section${report.blockers.length === 1 ? '' : 's'} unanswered:</strong><ul style="margin:6px 0 0;padding-left:20px">${report.blockers.map(b => `<li style="margin:3px 0">${esc(b)}</li>`).join('')}</ul></div>`
+    : '<div style="font-size:13px;color:#1a7f37;margin-top:10px">All sections complete — this is exactly what Chris would receive.</div>'}
+</div>`;
 
   const result = await emailSender.sendMail({
     to: [{ name: 'Nick Ward', email: emailSender.OWN_ADDRESS }],
     subject: `[TEST] Weekly Risk & Anomaly Summary — w/c ${formatUk(week)}`,
-    body: banner + report.markdown,
+    body: toEmailHtml(report.markdown, banner),
+    html: true,
   });
 
   if (!result.sent) {
@@ -835,5 +1060,6 @@ module.exports = {
   snapshot, assess, render, build, publish, publishedAt, queueSend, testSend,
   getManual, setManual, manualBlockers, emptyManual, carryForward,
   weekCommencing, previousWeek, buildTrend, consecutiveBelowTarget, ragBucket,
+  toEmailHtml, markdownToEmailHtml,
   COMPLIANCE_TARGET, SLIDE_WEEKS, UNKNOWN_REASON_ESCALATE_SHARE, SNAPSHOT_STALE_DAYS,
 };
