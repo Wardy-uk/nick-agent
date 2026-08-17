@@ -45,20 +45,21 @@
  *
  * ── Deliberately NOT sourced ────────────────────────────────────────────────
  *
- * MEETINGS. `calendar_cache` carries no attendees column (the same absence
- * people-gap works around by falling back to organizer), so nothing here can
- * tell a real meeting from one of the focus blocks that fill half the diary.
- * plaud-admin-blocks solved that with `attendeesOther()` against the signed-in
- * address, and that filter cannot reach this table. Counting every past
- * calendar entry as a win would inflate the number with time Nick blocked out
- * to work alone — and an inflated wins feed is worse than no feed at all,
- * because it destroys the only property the number has.
+ * MEETINGS WERE excluded here, on a reason that was wrong, and the correction
+ * is worth keeping. The claim was that `calendar_cache` has no attendees column
+ * so `attendeesOther()` "cannot reach" the data. But plaud-admin-blocks does not
+ * read that table — `calendar-sync` hands it freshly fetched Graph events which
+ * carry attendees, isOrganizer and responseStatus. The filter was already
+ * running against exactly the right data, weekly, already measured on 96 real
+ * events. So the LARGEST category of finished work in the week was dropped, and
+ * the ledger read 17/week against a much bigger real week: true, and small
+ * enough to read as "you did almost nothing" — which is the same uselessness as
+ * the tickbox, just better sourced. See `recordMeetingsHeld`.
  *
- * VAULT WRITES. 2,229 in thirty days, overwhelmingly Syncthing and the import
- * pipeline rather than Nick. There is no signal in the row that separates the
- * two.
- *
- * Both are gaps by decision, not oversight, and `KNOWN_GAPS` says so out loud.
+ * Still not sourced, each for a stated reason (see KNOWN_GAPS): Jira
+ * resolutions, emails merely dismissed, and vault writes — 2,229 in thirty
+ * days, overwhelmingly Syncthing and the import pipeline rather than Nick, with
+ * no signal in the row separating the two.
  */
 
 const { execFileSync } = require('child_process');
@@ -104,7 +105,8 @@ const ACTION_LABELS = new Map([
 ]);
 
 const KNOWN_GAPS = Object.freeze([
-  'meetings — calendar_cache has no attendees column, so a meeting and a solo focus block are indistinguishable here',
+  'Jira resolutions — jira.js never writes jira_tickets_cache, so there is no status transition to detect',
+  'emails dealt with — dismissInboxItem stores no reason, so "done" and "not relevant" are indistinguishable (replies are counted, via sent_replies)',
   'vault writes — 2,229 in 30 days, overwhelmingly Syncthing and the import pipeline rather than Nick',
 ]);
 
@@ -462,27 +464,57 @@ function collect({ since, until } = {}) {
  * Everything unknowable fails CLOSED, exactly as it does there: no signed-in
  * address means nothing qualifies, and an unanswered invite is not a yes.
  */
+/**
+ * Why this event is not a meeting Nick held, or null if it is.
+ *
+ * A reason rather than a boolean, following plaud-admin-blocks' `skipReason`:
+ * "77 skipped" says nothing, "88 marked free, 53 not accepted, 77 solo blocks"
+ * is a review. Exported so the backfill's dry run asks THIS rather than
+ * restating the conditions — the first cut of that script re-listed them, which
+ * is the drift the comment above it was warning about.
+ */
+function meetingSkipReason(ev, me, now) {
+  if (!ev) return 'empty';
+  if (!me) return 'identity-unknown';
+  if (ev.isCancelled) return 'cancelled';
+
+  // Outlook does not always set isCancelled — on a cancelled occurrence it
+  // often just RENAMES the subject. Two of these ("Canceled: UAT Testing",
+  // "Canceled: Support Team Processes") sailed through the flag check and would
+  // have been counted as meetings that never happened. Both spellings, because
+  // Graph returns the US one on a UK tenant.
+  if (/^\s*cancell?ed:/i.test(String(ev.subject || ''))) return 'cancelled';
+
+  if (ev.isAllDay) return 'all-day';
+  // Time Nick marked free is not a meeting he attended.
+  if (String(ev.showAs || '').toLowerCase() === 'free') return 'marked-free';
+
+  // A meeting that has not FINISHED is not a win yet — the ledger is finished
+  // work, and a diary is a plan until it has happened.
+  const end = ev.end ? new Date(ev.end) : null;
+  if (!end || Number.isNaN(end.getTime())) return 'no-end-time';
+  if (end > now) return 'not-finished';
+
+  const { attendeesOther, createdOrAccepted } = require('./plaud-admin-blocks')._internals;
+  if (!createdOrAccepted(ev)) return 'not-accepted';
+  if (attendeesOther(ev, me).length === 0) return 'no-other-attendees';
+
+  return null;
+}
+
 function recordMeetingsHeld(events, { me, now = new Date() } = {}) {
   if (!Array.isArray(events) || !events.length) return { added: 0, considered: 0 };
   if (!me) return { added: 0, considered: 0, skipped: 'identity-unknown' };
 
-  const { attendeesOther, createdOrAccepted } = require('./plaud-admin-blocks')._internals;
+  const { attendeesOther } = require('./plaud-admin-blocks')._internals;
   let added = 0;
   let considered = 0;
 
   for (const ev of events) {
     try {
-      if (!ev || ev.isCancelled) continue;
-      if (ev.isAllDay) continue;
-      // Time Nick marked free is not a meeting he attended.
-      if (String(ev.showAs || '').toLowerCase() === 'free') continue;
-      // A meeting that has not FINISHED is not a win yet — the whole ledger is
-      // finished work, and a diary is a plan until it has happened.
-      const end = ev.end ? new Date(ev.end) : null;
-      if (!end || Number.isNaN(end.getTime()) || end > now) continue;
-      if (!createdOrAccepted(ev)) continue;
+      if (meetingSkipReason(ev, me, now)) continue;
+      const end = new Date(ev.end);
       const others = attendeesOther(ev, me);
-      if (others.length === 0) continue;
 
       considered++;
       const subject = String(ev.subject || 'Meeting').trim();
@@ -721,6 +753,7 @@ module.exports = {
   sync,
   collect,
   recordMeetingsHeld,
+  meetingSkipReason,
   summary,
   headline,
   feed,

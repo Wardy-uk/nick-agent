@@ -170,7 +170,12 @@ test('summary counts today, the week and the all-time total', () => {
   // The gaps travel with the summary. Any surface showing the count can show
   // what it could not see, which is the difference between a number and a claim.
   assert.ok(s.knownGaps.length >= 2);
-  assert.ok(s.knownGaps.some(g => /meeting/i.test(g)));
+  // Meetings USED to be listed here, on a reason that turned out to be wrong —
+  // they are a real source now. What remains is gapped for reasons that do
+  // hold: no Jira transition signal, and no stored dismissal reason.
+  assert.ok(!s.knownGaps.some(g => /^meetings —/.test(g)), 'meetings are sourced now');
+  assert.ok(s.knownGaps.some(g => /jira/i.test(g)));
+  assert.ok(s.knownGaps.some(g => /vault writes/i.test(g)));
 });
 
 test('the feed paginates newest first', () => {
@@ -225,6 +230,13 @@ test('a meeting Nick sat in is a win; an hour he blocked out is not', () => {
     // measured on 96 real events: 23 of them were this.
     ev({ id: 'e2', subject: 'Deep work', attendees: [{ email: me }] }),
     ev({ id: 'e3', subject: 'Cancelled thing', isCancelled: true }),
+    // Outlook often does NOT set isCancelled on a cancelled occurrence — it
+    // just renames the subject. Two real ones ("Canceled: UAT Testing",
+    // "Canceled: Support Team Processes") sailed through the flag check in the
+    // backfill dry run and would have been counted as meetings that never
+    // happened. Graph returns the US spelling on a UK tenant, so both.
+    ev({ id: 'e7', subject: 'Canceled: UAT Testing' }),
+    ev({ id: 'e8', subject: 'Cancelled: Tech Leadership' }),
     ev({ id: 'e4', subject: 'Marked free', showAs: 'free' }),
     // A diary is a plan until it has happened — the ledger is finished work.
     ev({ id: 'e5', subject: 'Later today', end: '2026-08-17T23:00:00Z' }),

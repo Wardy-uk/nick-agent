@@ -67,22 +67,16 @@ function localDateKey(d) {
   console.log(`[BackfillMeetings] ${events.length} event(s) fetched`);
 
   if (!APPLY) {
-    // Same filters the recorder uses, imported not re-implemented, so the dry
-    // run cannot disagree with what --apply would do.
-    const { attendeesOther, createdOrAccepted } = require('../services/plaud-admin-blocks')._internals;
+    // Asks the recorder's own predicate rather than restating the conditions.
+    // The first cut re-listed them here and immediately drifted: it missed the
+    // events Outlook CANCELS BY RENAMING, so the dry run promised two meetings
+    // that never happened.
     const would = [];
     const skipped = {};
     for (const ev of events) {
-      let why = null;
-      const end = ev?.end ? new Date(ev.end) : null;
-      if (ev?.isCancelled) why = 'cancelled';
-      else if (ev?.isAllDay) why = 'all-day';
-      else if (String(ev?.showAs || '').toLowerCase() === 'free') why = 'marked-free';
-      else if (!end || Number.isNaN(end.getTime()) || end > now) why = 'not-finished';
-      else if (!createdOrAccepted(ev)) why = 'not-accepted';
-      else if (attendeesOther(ev, me).length === 0) why = 'no-other-attendees';
+      const why = wins.meetingSkipReason(ev, me, now);
       if (why) { skipped[why] = (skipped[why] || 0) + 1; continue; }
-      would.push(`${localDateKey(end)}  ${String(ev.subject || 'Meeting').slice(0, 60)}`);
+      would.push(`${localDateKey(new Date(ev.end))}  ${String(ev.subject || 'Meeting').slice(0, 60)}`);
     }
     console.log(`[BackfillMeetings] would add ${would.length} meeting win(s)`);
     for (const line of would.slice(0, 25)) console.log('   ', line);
