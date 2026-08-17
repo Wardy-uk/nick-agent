@@ -166,7 +166,7 @@ export default function Focus({ onNavigate, onActionIntent }) {
           )}
 
           {(!data.items || data.items.length === 0) && (
-            <div className="card focus__clear">Nothing pressing. You’re clear. 🎉</div>
+            <div className="card focus__clear">Nothing pressing. You’re clear.</div>
           )}
 
           {(data.items || [])

@@ -75,10 +75,10 @@ const STANDUP_MESSAGES = [
     "Just popping by to mention the standup. Again. As I do.",
     "Standup update: still not done. Thank you for attending my TED talk.",
     "I notice the standup remains in a Schrödinger state — neither done nor officially abandoned.",
-    "Friendly reminder that visibility is literally phase 1 of your 90-day plan. Just saying.",
+    "Visibility is phase 1 of your 90-day plan. The standup is the visibility.",
     "The standup is just sitting there. Waiting. It's very patient. I am less so.",
     "Quick check-in: standup status? (The answer is: not done. I already know. I'm asking rhetorically.)",
-    "Still here. Still nudging. Still believing in you. Do the standup.",
+    "Still here. Still nudging. The standup is still three questions.",
     "No standup yet. That's fine. Everything is fine. (Do the standup.)",
   ],
   // Fond — warm and personal. Nag 5+, because by then the problem is not that he forgot.
@@ -89,8 +89,8 @@ const STANDUP_MESSAGES = [
     "You built me to know when you're avoiding things. You are avoiding the standup. I am knowing it loudly.",
     "The 90-day clock is ticking. Visibility is phase 1. You're good at this. Show that you're good at this.",
     "Other people have AI assistants that are polite about this. You chose me. I take that as permission to persist.",
-    "You have 15 direct reports, a growing queue, and a 90-day plan to deliver. Standup is how you hold all of it.",
-    "I genuinely believe you can do this standup. I have believed it for the last two hours. The belief remains.",
+    "You have 13 direct reports, a growing queue, and a 90-day plan to deliver. Standup is how you hold all of it.",
+    "Open the tab and answer the first question. That's the whole ask. The other two follow on their own.",
     "End of day is coming. Future Nick will be annoyed at Past Nick for skipping this. Don't do that to him.",
     "The standup is a small thing that makes everything else smaller. Three minutes. Then everything gets clearer.",
   ],
@@ -124,18 +124,24 @@ const TODO_MESSAGES = [
     "The todos have formed a support group. They meet to discuss their abandonment. You're the topic.",
     "Just one. Pick one todo. The rest can wait. But one cannot. That one is calling to you.",
   ],
-  // Absurdist — playful, never cutting. Nag 5+.
+  // Fond — warm and practical. Nag 5+, because by then it isn't forgetfulness.
+  //
+  // This tier used to be absurdist, which put the comedy routine at exactly the
+  // point the standup pool had already worked out was wrong: five nags in, the
+  // problem is friction, and a joke about sentient todos doesn't reduce any. The
+  // gradient now matches — light, wry, then warm and specific about the next
+  // action. The best of the absurd lines survive one tier up, where they belong.
   [
-    "The todos have been open so long they've started a support group. The agenda item is you.",
-    "At this point the todos are load-bearing. If you complete them, something might shift.",
+    "Five nudges in. So it's not that you forgot. What's actually in the way?",
+    "Pick the smallest one. Do only that. You can stop after it — you won't, but you can.",
     "I've started naming the todos. Gerald has been waiting the longest. Gerald deserves better.",
-    "The todo list is not a museum. The items are not exhibits. They are tasks. Do them.",
-    "I've done the maths: the time you've spent not doing the todos exceeds the todos themselves.",
-    "The todos are watching. Not literally. But energetically.",
-    "Fine. I'll be Gerald. I'm a todo. I've been here for days. Please. Just do something.",
-    "The todo list has achieved sentience through sheer duration. It is now asking for you directly.",
-    "Other apps send one notification. I send escalating passive aggression. You're welcome.",
-    "The todos remain. Time passes. The todos remain. This has become philosophical.",
+    "This isn't a discipline problem. It's an activation problem. Open one todo. That's the whole job.",
+    "You don't have to clear the list. You have to move one thing. Those are very different asks.",
+    "If the todo is too vague to start, that's the actual blocker. Rewrite it as a first step instead.",
+    "The list isn't the problem — the first ten minutes are. Give me those and I'll leave you alone.",
+    "Whatever's at the top: is it real, or does it need dropping? Either answer gets it off the list.",
+    "Something here is bigger than it looks, or duller than it sounds. Which one?",
+    "You've done harder things than this today. Start with one and I'll stop counting.",
   ],
 ];
 

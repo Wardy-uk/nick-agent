@@ -13,6 +13,7 @@ const db = require('../db/database');
 const webpush = require('./webpush');
 const emailSender = require('./email-sender');
 const teams = require('./teams');
+const { VOICE_COMPACT } = require('./sara-voice');
 
 const BRIEF_KEY = 'last_brief';
 const ALERT_SEEN_KEY = 'alert_seen_ids';
@@ -115,7 +116,9 @@ async function _aiSynthesis(buckets, emailSummary, teamsData) {
       extras.push(`${teamsData.mentions.length} Teams @mentions`);
     }
 
-    const prompt = `You are SARA, Nick's executive AI assistant. Write a punchy 2-sentence brief (max 40 words total) telling Nick what to focus on right now. Be direct, no waffle. Don't start with "Nick".
+    const prompt = `${VOICE_COMPACT}
+
+Write a 2-sentence brief (40 words max) telling Nick what to focus on right now. Lead with the thing that matters, not a summary of the list. Don't start with "Nick".
 
 Items:
 ${itemsList}

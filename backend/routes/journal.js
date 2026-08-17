@@ -8,6 +8,7 @@ const path = require('path');
 const obsidian = require('../services/obsidian');
 const nudges = require('../services/nudges');
 const db = require('../db/database');
+const { VOICE_COMPACT } = require('../services/sara-voice');
 
 const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
 
@@ -80,75 +81,48 @@ async function buildJournalContext() {
   return contextSummary;
 }
 
-// Generate prompts from context via Ollama or Claude
+// Generate prompts from context via the AI router.
+//
+// This is one of the three places SARA talks to Nick about his day, and it was
+// the one with no voice at all — a task description that could have been written
+// for any assistant. The questions are hers, so she writes them as herself.
 async function generatePrompts(contextSummary) {
-  const journalPromptText = `Generate exactly 3 evening journal prompts for Nick Ward, Head of Technical Support at Nurtur. He is neurodivergent and uses journalling to process his day.
+  const journalPromptText = `${VOICE_COMPACT}
+
+Nick journals in the evening to process his day. Write exactly 3 prompts for tonight.
 
 Rules:
-- Each prompt is a single question, max 15 words
-- Be specific to today's context where possible
-- If Strava/health data present, reference physical state in one prompt
-- If location data present showing somewhere unusual, ask about it
-- Vary focus: one work/achievement, one feelings/energy, one learning/tomorrow
-- Tone: warm, direct, non-judgemental
-- Output ONLY the 3 questions, one per line, nothing else
+- Each prompt is a single question, max 15 words. Never stack two.
+- Be specific to today's context — a question he could only be asked tonight beats a good generic one.
+- If Strava/health data is present, reference his physical state in one.
+- If location data shows somewhere unusual, ask about it.
+- Vary the focus: one on the work, one on how he's doing, one on what's next.
+- Ask, don't counsel. No "take a moment to reflect on", no gratitude exercises.
+- Output ONLY the 3 questions, one per line, nothing else.
 
 Today's context:
 ${contextSummary}`;
 
-  // Try Ollama first
+  // One routed call, not a hand-rolled Ollama fetch followed by a SECOND,
+  // differently-worded cloud prompt. Two prompts for one feature is two voices
+  // for one feature, and only one of them ever got edited. journal_prompts is
+  // not latency-sensitive, so the router still tries local Ollama first — the
+  // policy is unchanged, it is just no longer bypassed.
   try {
-    const ollamaRes = await fetch(`${process.env.OLLAMA_URL || 'http://localhost:11434'}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.OLLAMA_MODEL || 'qwen2.5:1.5b',
-        prompt: journalPromptText,
-        stream: false,
-        options: { temperature: 0.7, num_ctx: 2048, num_predict: 200 }
-      }),
-      signal: AbortSignal.timeout(300000) // 5 min for pre-warm, no rush
-    });
-
-    if (ollamaRes.ok) {
-      const data = await ollamaRes.json();
-      const text = data.response || '';
-      const prompts = text.split('\n')
+    const aiProvider = require('../services/ai-provider');
+    const result = await aiProvider.generateJournalPrompts(journalPromptText);
+    if (result?.text) {
+      const prompts = result.text.split('\n')
         .map(l => l.replace(/^\d+[\.\)]\s*/, '').trim())
         .filter(l => l.length > 5 && l.endsWith('?'))
         .slice(0, 3);
       if (prompts.length === 3) {
-        console.log('[Journal] Prompts generated via Ollama');
+        console.log(`[Journal] Prompts generated via ${result.provider}`);
         return prompts;
       }
     }
-  } catch (ollamaErr) {
-    console.warn('[Journal] Ollama failed, falling back to Claude:', ollamaErr.message);
-  }
-
-  // Cloud fallback via AI routing (Phase 3)
-  try {
-    const aiProvider = require('../services/ai-provider');
-    const result = await aiProvider.generateJournalPrompts(
-      `You are generating evening journal prompts for Nick Ward, Head of Technical Support at Nurtur.
-He is neurodivergent, in a new senior leadership role, and uses journalling to process his day.
-Generate exactly 3 short, warm, specific journal prompts based on today's context.
-Rules: each prompt is a single question max 15 words. Vary focus: work, feelings, tomorrow. One per line.
-
-Today's context:\n${contextSummary}\n\nGenerate 3 evening journal prompts for Nick.`
-    );
-    if (result.text) {
-      const prompts = result.text.split('\n')
-        .map(l => l.trim())
-        .filter(l => l.length > 5 && l.endsWith('?'))
-        .slice(0, 3);
-      if (prompts.length === 3) {
-        console.log(`[Journal] Prompts generated via ${result.provider} (fallback)`);
-        return prompts;
-      }
-    }
-  } catch (fallbackErr) {
-    console.warn('[Journal] AI fallback also failed:', fallbackErr.message);
+  } catch (err) {
+    console.warn('[Journal] Prompt generation failed:', err.message);
   }
 
   return null;

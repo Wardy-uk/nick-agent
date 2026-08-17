@@ -1366,14 +1366,14 @@ async function autoClassify() {
                   });
                   const webpush = require('./webpush');
                   webpush.sendToAll(
-                    'NEURO — Transcript Processed',
+                    'SARA — Transcript processed',
                     parts.join(' ') || `Transcript filed to ${cls.destination}.`,
                     { type: 'plaud', url: '/imports' }
                   ).catch(() => {});
                 } else {
                   const webpush = require('./webpush');
                   webpush.sendToAll(
-                    'NEURO — PLAUD Transcript Ready',
+                    'SARA — Transcript ready',
                     `Transcript filed to ${cls.destination}. Ready to review.`,
                     { type: 'plaud', url: '/vault' }
                   ).catch(() => {});
@@ -1382,7 +1382,7 @@ async function autoClassify() {
                 console.error('[Imports] Transcript processing error:', tpErr.message);
                 const webpush = require('./webpush');
                 webpush.sendToAll(
-                  'NEURO — PLAUD Transcript Ready',
+                  'SARA — Transcript ready',
                   `Transcript filed to ${cls.destination}. Ready to review.`,
                   { type: 'plaud', url: '/vault' }
                 ).catch(() => {});

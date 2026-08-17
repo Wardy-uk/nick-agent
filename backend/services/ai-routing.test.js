@@ -239,3 +239,87 @@ test('heavy background work skips rather than grinding the interactive Ollama', 
     }
   }
 });
+
+// ── What `fallback` means ─────────────────────────────────────────────────────
+// The flag drives the AI card's headline number, so it has to mean "the provider
+// that SHOULD have served this didn't". Measured on the Pi 17 Aug: 14 calls, 10
+// flagged fallback, 0 failures — a standing 71% on the card with nothing wrong.
+// Nine of the ten were background tasks whose intended provider was a worker
+// retired on 15 Aug, and the tenth real one was flagged clean. Both directions
+// are pinned below, because fixing either alone still leaves the number lying.
+
+test('a worker switched off on purpose is not a fallback', async () => {
+  const pi4 = require('./pi4-worker-client');
+  const openrouter = require('./providers/openrouter-provider');
+
+  const saved = {
+    enabled: pi4.isEnabled,
+    configured: openrouter.isConfigured, generate: openrouter.generate,
+    env: { ...process.env },
+  };
+
+  // The live state since 15 Aug: PI4_WORKER_ENABLED=false, worker retired.
+  pi4.isEnabled = () => false;
+  openrouter.isConfigured = () => true;
+  openrouter.generate = async () => ({ text: 'triaged', usage: { total_tokens: 10 } });
+
+  Object.assign(process.env, {
+    AI_MODE: 'hybrid',
+    OPENROUTER_ENABLED: 'true',
+    OPENROUTER_API_KEY: 'test-key',
+    OPENROUTER_ALLOWED_TASKS: 'all',
+  });
+
+  try {
+    const result = await routing.runTask('email_triage', { prompt: 'x' });
+    assert.equal(result.provider, 'openrouter', 'still routes past the dead worker');
+    assert.equal(result.fallback, false,
+      'a disabled tier is a setting, not a missed attempt — counting it puts a permanent fault on the AI card');
+  } finally {
+    pi4.isEnabled = saved.enabled;
+    openrouter.isConfigured = saved.configured;
+    openrouter.generate = saved.generate;
+    for (const k of ['AI_MODE','OPENROUTER_ENABLED','OPENROUTER_API_KEY','OPENROUTER_ALLOWED_TASKS']) {
+      if (saved.env[k] === undefined) delete process.env[k]; else process.env[k] = saved.env[k];
+    }
+  }
+});
+
+test('a local attempt that THREW still counts as an attempt', async () => {
+  const openrouter = require('./providers/openrouter-provider');
+  const ollama = require('./providers/ollama-provider');
+
+  const saved = {
+    configured: openrouter.isConfigured, generate: openrouter.generate,
+    ollamaGen: ollama.generate,
+    env: { ...process.env },
+  };
+
+  // The 07:16 Focus call: Ollama burned its timeout and aborted, OpenRouter
+  // served the same answer in 1.9s. Counting Ollama only on success reported
+  // that as a clean first-choice hit.
+  ollama.generate = async () => { throw new Error('This operation was aborted'); };
+  openrouter.isConfigured = () => true;
+  openrouter.generate = async () => ({ text: 'enhanced', usage: { total_tokens: 10 } });
+
+  Object.assign(process.env, {
+    AI_MODE: 'hybrid',
+    OPENROUTER_ENABLED: 'true',
+    OPENROUTER_API_KEY: 'test-key',
+    OPENROUTER_ALLOWED_TASKS: 'all',
+  });
+
+  try {
+    const result = await routing.runTask('focus_enhancement', { prompt: 'x' });
+    assert.equal(result.provider, 'openrouter', 'the rescue still has to happen');
+    assert.equal(result.fallback, true,
+      'Ollama was tried and failed — the one case the flag exists for');
+  } finally {
+    openrouter.isConfigured = saved.configured;
+    openrouter.generate = saved.generate;
+    ollama.generate = saved.ollamaGen;
+    for (const k of ['AI_MODE','OPENROUTER_ENABLED','OPENROUTER_API_KEY','OPENROUTER_ALLOWED_TASKS']) {
+      if (saved.env[k] === undefined) delete process.env[k]; else process.env[k] = saved.env[k];
+    }
+  }
+});

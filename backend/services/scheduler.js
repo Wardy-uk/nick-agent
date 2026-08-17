@@ -238,7 +238,7 @@ function start() {
       const obsidian = require('./obsidian');
       const result = obsidian.generateWeeklyReview();
       if (result && !result.skipped) {
-        require('./webpush').sendToAll('NEURO — Weekly Review',
+        require('./webpush').sendToAll('SARA — Weekly review',
           `Your ${result.weekStr} review is ready in Reflections. Take 5 minutes to fill in wins, challenges, and how you're feeling.`,
           { type: 'weekly_review', url: '/vault' }).catch(() => {});
       }
@@ -258,7 +258,7 @@ function start() {
       // informational, and a second number on the banner is nudge noise (#17).
       console.log(`[Scheduler] Weekly hygiene: ${lintRes.broken.length} broken, ${lintRes.archivedTargets.length} into Archive, ${lintRes.orphans.length} orphans; ${planRes.total} link cards across ${planRes.notesTouched} notes.`);
       if (planRes.total > 0 || lintRes.broken.length > 0) {
-        require('./webpush').sendToAll('NEURO — Vault Hygiene',
+        require('./webpush').sendToAll('SARA — Vault hygiene',
           `${lintRes.broken.length} broken links, ${lintRes.orphans.length} orphans, ${planRes.total} link cards to review in Vault Audit.`,
           { type: 'vault_hygiene', url: '/vault' }).catch(() => {});
       }
@@ -309,7 +309,7 @@ function start() {
       const result = require('./knowledge-memory').generateReflection({ write: true });
       if (result?.path) {
         require('./webpush').sendToAll(
-          'NEURO — Knowledge Reflection',
+          'SARA — Knowledge reflection',
           'Your latest knowledge reflection is ready. Review what to promote before the week drifts.',
           { type: 'knowledge_reflection', url: '/insights' }
         ).catch(() => {});
@@ -344,7 +344,7 @@ function start() {
       const scan = require('./action-candidates').scanRecentNotes({ days: 7, dryRun: false, scope: 'meetings', limit: 500 });
       console.log(`[Scheduler] Meeting actions: scanned ${scan.scanned}, created ${scan.created}, pending ${scan.pending}, superseded ${scan.superseded}`);
       if (scan.pending > 0) {
-        require('./webpush').sendToAll('NEURO — Actions to review',
+        require('./webpush').sendToAll('SARA — Actions to review',
           `${scan.pending} new action${scan.pending === 1 ? '' : 's'} from your meetings need a yes/no.`,
           { type: 'todo', url: '/todos' }).catch(() => {});
       }
@@ -380,7 +380,7 @@ function start() {
       if (gap.status === 'ok') {
         console.log(`[Scheduler] People gap: ${gap.candidates.length} candidates, ${gap.belowThreshold.length} seen once`);
         if (gap.candidates.length > 0) {
-          require('./webpush').sendToAll('NEURO — People notes',
+          require('./webpush').sendToAll('SARA — People notes',
             `${gap.candidates.length} ${gap.candidates.length === 1 ? 'person has' : 'people have'} no People note. Review in Vault Audit.`,
             { type: 'vault_hygiene', url: '/people' }).catch(() => {});
         }
@@ -516,7 +516,7 @@ function start() {
       console.error('[Health] Capture system BROKEN:', issues.join(', '));
       try {
         require('./webpush').sendToAll(
-          'NEURO — System Alert',
+          'SARA — System alert',
           `Capture is broken: ${issues.join(', ')}. Notes will not save.`,
           { type: 'system_alert' }
         ).catch(() => {});

@@ -3,6 +3,7 @@ const router = express.Router();
 const obsidianService = require('../services/obsidian');
 const nudges = require('../services/nudges');
 const accountability = require('../services/standup-accountability');
+const { VOICE_COMPACT } = require('../services/sara-voice');
 
 // ── Standup pre-warm cache ──────────────────────────────────────────────
 // Pre-generates the Phase 1 Ollama response before the user opens the standup,
@@ -389,16 +390,18 @@ const questionCache = {
   eod: { date: null, briefing: null, questions: null, warming: false },
 };
 
+// These are what Nick actually reads when every provider is down, so they are
+// SARA's words too — one question each, no stacking, no form-speak.
 const STANDUP_FALLBACK_QUESTIONS = [
-  "What's your main focus today?",
-  "Any blockers or things that need escalating?",
+  "What has to be true by tonight?",
+  "What's in the way?",
   "Anything else before I write this up?"
 ];
 
 const EOD_FALLBACK_QUESTIONS = [
-  "What was your biggest win today?",
-  "Anything that didn't go to plan or got in the way?",
-  "How are you feeling — energy levels, stress, anything to note?"
+  "What actually got done today?",
+  "What didn't go to plan?",
+  "How are you doing?"
 ];
 
 /**
@@ -415,7 +418,9 @@ async function generateStandupQuestions() {
   try { acc = accountability.buildAccountability(); } catch {}
   const stale = (acc?.openCommitments || []).filter(c => c.daysCarried >= 3);
 
-  const prompt = `Generate a morning standup briefing and 3 questions for Nick Ward, Head of Technical Support at Nurtur.
+  const prompt = `${VOICE_COMPACT}
+
+Write Nick's morning standup: a short briefing in your own voice, then 3 questions.
 
 Context:
 ${ctx.mustDoItems?.length ? `Must-dos: ${ctx.mustDoItems.length} non-negotiable items` : 'No must-dos'}
@@ -429,42 +434,26 @@ ${acc?.overdueMustDos?.length ? `Overdue must-dos: ${acc.overdueMustDos.slice(0,
 ${acc?.skippedDays?.length >= 2 ? `Standup skipped on ${acc.skippedDays.length} recent weekdays.` : ''}
 Day: ${dow}${isMonday ? ' (Monday)' : ''}
 
-Tone: direct and accountable. Name what has slipped — do not soften it or add praise.
+Name what has slipped — don't soften it, and don't pad it with praise. Talk to him, not about him.
 
 Output EXACTLY this format, nothing else:
-BRIEFING: [2-3 sentences — lead with what slipped or is still open, then queue/calendar. Be blunt.]
-Q1: [${stale.length ? `a direct question challenging why "${stale[0].text}" is still open after ${stale[0].daysCarried} days` : 'a question about main focus today'}]
+BRIEFING: [2-3 sentences — lead with what slipped or is still open, then queue/calendar. Blunt, and in your voice.]
+Q1: [${stale.length ? `a direct question challenging why "${stale[0].text}" is still open after ${stale[0].daysCarried} days` : 'a question about his main focus today'}]
 Q2: [second question — about blockers or escalations]
-Q3: [third question — ${isMonday ? 'about the week ahead' : 'anything else or how they are feeling'}]`;
+Q3: [third question — ${isMonday ? 'about the week ahead' : 'anything else, or how he is doing'}]`;
 
-  try {
-    const ollamaRes = await fetch(`${process.env.OLLAMA_URL || 'http://localhost:11434'}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.OLLAMA_MODEL || 'qwen2.5:1.5b',
-        prompt,
-        stream: false,
-        options: { temperature: 0.6, num_ctx: 2048, num_predict: 300 }
-      }),
-      signal: AbortSignal.timeout(300000)
-    });
-
-    if (ollamaRes.ok) {
-      const data = await ollamaRes.json();
-      const text = data.response || '';
-      return _parseQuestionResponse(text);
-    }
-  } catch (e) {
-    console.warn('[Standup] Ollama question gen failed:', e.message);
-  }
-
-  // OpenAI fallback
+  // Routed, not hand-rolled. This used to call Ollama directly before ever
+  // consulting ai-routing, which quietly defeated the policy: standup_questions
+  // is in LATENCY_SENSITIVE_TASKS precisely so it goes to OpenRouter first, and
+  // a 1.5b local model cannot hold a voice however the prompt is written. The
+  // router still falls back to Ollama, so a Pi with no internet keeps working.
   try {
     const aiRouting = require('../services/ai-routing');
-    const result = await aiRouting.runTask('standup_questions', prompt);
+    const result = await aiRouting.runTask('standup_questions', { prompt, maxTokens: 300, temperature: 0.6 });
     if (result?.text) return _parseQuestionResponse(result.text);
-  } catch {}
+  } catch (e) {
+    console.warn('[Standup] Question generation failed:', e.message);
+  }
 
   return null;
 }
@@ -483,7 +472,9 @@ async function generateEodQuestions() {
   const statsMatch = ctx.systemPrompt.match(/Activity today:.*?\./)?.[0] || '';
   const queueMatch = ctx.systemPrompt.match(/Queue at EOD:.*?\./)?.[0] || '';
 
-  const prompt = `Generate an end-of-day briefing and 3 questions for Nick Ward, Head of Technical Support at Nurtur.
+  const prompt = `${VOICE_COMPACT}
+
+Close Nick's day: a short end-of-day summary in your own voice, then 3 questions. He is tired — be shorter than you would be in the morning.
 
 Context:
 ${focusMatch}
@@ -492,38 +483,19 @@ ${queueMatch}
 Day: ${dow}${isFriday ? ' (Friday)' : ''}
 
 Output EXACTLY this format, nothing else:
-BRIEFING: [2-3 sentence EOD summary — what was planned, what happened, queue state]
-Q1: [first question — about biggest win today]
-Q2: [second question — about what didn't go to plan]
-Q3: [third question — ${isFriday ? 'about heading into the weekend' : 'about energy/feelings/stress'}]`;
+BRIEFING: [2-3 sentences — what was planned, what actually happened, queue state. Acknowledge what went right without ceremony.]
+Q1: [first question — what went well today]
+Q2: [second question — what didn't go to plan]
+Q3: [third question — ${isFriday ? 'about heading into the weekend' : 'about energy or how he is doing'}]`;
 
-  try {
-    const ollamaRes = await fetch(`${process.env.OLLAMA_URL || 'http://localhost:11434'}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.OLLAMA_MODEL || 'qwen2.5:1.5b',
-        prompt,
-        stream: false,
-        options: { temperature: 0.6, num_ctx: 2048, num_predict: 300 }
-      }),
-      signal: AbortSignal.timeout(300000)
-    });
-
-    if (ollamaRes.ok) {
-      const data = await ollamaRes.json();
-      const text = data.response || '';
-      return _parseQuestionResponse(text);
-    }
-  } catch (e) {
-    console.warn('[EOD] Ollama question gen failed:', e.message);
-  }
-
+  // Routed rather than hand-rolled — same reason as the morning path above.
   try {
     const aiRouting = require('../services/ai-routing');
-    const result = await aiRouting.runTask('eod_questions', prompt);
+    const result = await aiRouting.runTask('eod_questions', { prompt, maxTokens: 300, temperature: 0.6 });
     if (result?.text) return _parseQuestionResponse(result.text);
-  } catch {}
+  } catch (e) {
+    console.warn('[EOD] Question generation failed:', e.message);
+  }
 
   return null;
 }

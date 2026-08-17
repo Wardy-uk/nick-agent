@@ -127,7 +127,7 @@ export default function Tasks() {
 
       {data && items.length === 0 && (
         <div className="card tasks__clear">
-          {filter === 'overdue' ? 'Nothing overdue. 🎉' : filter === 'today' ? 'Nothing due today.' : 'No open tasks.'}
+          {filter === 'overdue' ? 'Nothing overdue.' : filter === 'today' ? 'Nothing due today.' : 'No open tasks.'}
         </div>
       )}
 

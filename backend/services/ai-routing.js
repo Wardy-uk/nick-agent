@@ -444,6 +444,14 @@ async function _runTaskInner(taskType, payload, options = {}) {
   // 14 Aug), and every email triage and transcript in that window silently did
   // nothing. Now a dead worker falls through to the rest of the stack instead.
   let workerFellBack = false;
+  // Separate from workerFellBack, which only answers "does the worker route this
+  // now" — this answers "was there a provider that SHOULD have served it and
+  // didn't", which is what `fallback` means to the panel. A worker switched off
+  // on purpose is not a missed attempt: the Pi 4 was retired on 15 Aug, so
+  // counting it made every background task a permanent fallback and put a
+  // standing 71% on the AI card for a setting Nick chose. A worker in cooldown
+  // DOES count — that one is failing, not disabled.
+  let workerAttempted = false;
   if (BACKGROUND_TASKS.has(taskType) && !forceLocal) {
     if (!pi4Worker.isEnabled()) {
       console.log(`[AIRouting] ${taskType}: Pi 4 worker not enabled, using cloud`);
@@ -452,6 +460,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
       // Already known to be failing — go straight to the fallback rather than
       // spending another 60s proving it again.
       workerFellBack = true;
+      workerAttempted = true;
     } else {
       try {
         const workerResult = await pi4Worker.runTask(taskType, payload);
@@ -468,6 +477,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
         _recordProviderError('pi4Worker', e.message);
       }
       workerFellBack = true;
+      workerAttempted = true;
     }
   }
 
@@ -494,9 +504,9 @@ async function _runTaskInner(taskType, payload, options = {}) {
     : _providerOrder(taskType);
   // Whichever provider the policy puts first is the intended one; anything after
   // it is a fallback, and the caller is told so via `fallback`.
-  // Starting at 1 when the worker died means whatever serves it is correctly
-  // reported as a fallback — the intended provider was the worker.
-  let attempted = workerFellBack ? 1 : 0;
+  // Starting at 1 when the worker was TRIED and failed means whatever serves it
+  // is correctly reported as a fallback — the intended provider was the worker.
+  let attempted = workerAttempted ? 1 : 0;
 
   for (const provider of order) {
     // Reset per attempt: what we want to know is how long the provider that
@@ -506,10 +516,16 @@ async function _runTaskInner(taskType, payload, options = {}) {
       if (provider === 'ollama') {
         if (forceCloud) continue;
         const model = TASK_MODELS[taskType] || HEAVY_MODEL;
+        // Counted BEFORE the await, like every cloud tier below. Counting it
+        // after meant a local attempt that THREW never incremented, so the
+        // provider that rescued it reported fallback:false — the one case the
+        // flag exists for was the one case it could not see. A Focus call that
+        // burned 14s on an aborted Ollama and was served by OpenRouter in 1.9s
+        // read as a clean first-choice hit.
+        attempted++;
         const text = await _queueOllamaRequest(_getTaskPriority(taskType), () =>
           _runOllama(taskType, { ...payload, model }, options)
         );
-        attempted++;
         if (text && text.trim().length > 0) {
           console.log(`[AIRouting] ${taskType}: ollama (${model})${attempted > 1 ? ' [fallback]' : ''}`);
           return { text, provider: 'ollama', fallback: attempted > 1, model , providerMs: Date.now() - attemptStart };

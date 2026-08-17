@@ -432,7 +432,7 @@ function collectUrgentEmails(ctx) {
         type: 'email',
         id: 'email-delegate',
         title: `${delegateEmails.length} email${delegateEmails.length > 1 ? 's' : ''} to delegate`,
-        reason: 'Consider delegating these',
+        reason: 'These are answerable by someone else',
         score: 45,
         urgency: 'medium',
         source: 'email',
@@ -443,6 +443,20 @@ function collectUrgentEmails(ctx) {
   } catch {}
   return items;
 }
+
+// A nudge type is a slug, not a sentence. Interpolating it raw produced cards
+// reading "121 reminder" and "Complete journal" — SARA naming her own internals
+// at Nick rather than naming the thing he has to do.
+const NUDGE_LABELS = {
+  standup: { title: 'Do your standup', hint: 'Open Standup' },
+  eod: { title: 'End-of-day not done', hint: 'Open EOD' },
+  journal: { title: 'Journal not written', hint: 'Open Journal' },
+  todo: { title: 'Overdue tasks waiting', hint: 'Pick one' },
+  email: { title: 'Emails need answering', hint: 'Open Inbox' },
+  escalation: { title: 'Escalations unanswered', hint: 'Open Focus' },
+  '121': { title: '1-2-1s need booking', hint: 'Open Team' },
+  plan_milestone: { title: '90-day plan milestone due', hint: 'Open Plan' },
+};
 
 function collectNudges(ctx) {
   const items = [];
@@ -462,14 +476,12 @@ function collectNudges(ctx) {
     items.push({
       type: 'nudge',
       id: `nudge-${nudge.id}`,
-      title: isStandup ? 'Do your standup' :
-             isEod ? 'End-of-day not done' :
-             `${nudge.type} reminder`,
+      title: NUDGE_LABELS[nudge.type]?.title || 'Something is waiting on you',
       reason: isStandup && standupCritical ? '2 minutes — do it before anything else' : nudge.message,
       score: standupCritical ? 93 : score,
       urgency: standupCritical ? 'critical' : (nagCount >= 4 ? 'high' : nagCount >= 2 ? 'medium' : 'low'),
       source: 'neuro',
-      actionHint: isStandup ? 'Open Standup' : isEod ? 'Open EOD' : `Complete ${nudge.type}`,
+      actionHint: NUDGE_LABELS[nudge.type]?.hint || 'Open NEURO',
       meta: { nagCount, type: nudge.type },
       _unsuppressable: standupCritical,
     });

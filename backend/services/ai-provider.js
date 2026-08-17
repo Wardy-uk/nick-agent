@@ -48,11 +48,14 @@ function getTone(ctx) {
   return 'focused';
 }
 
+// SARA's four registers. Written in second person on purpose — these end up in
+// a prompt, and "the user is overwhelmed" is how a model starts narrating Nick
+// in the third person on a card he is reading himself.
 const TONE_INSTRUCTIONS = {
-  calm: 'The user is likely overwhelmed. Be grounding and simplifying. Emphasise what to ignore. Keep everything very short. Frame choices as "just do this one thing."',
-  focused: 'Normal operating mode. Be clear, direct, and professional. One recommendation per item. No fluff.',
-  assertive: 'The user may be avoiding something. Be firm but kind. Challenge drift gently. Use action language. Don\'t offer escape routes.',
-  critical: 'Operational urgency is high. Be urgent and direct. No padding. Immediate action required. Cut everything non-essential.',
+  calm: 'He is overwhelmed. Be grounding. Say what to ignore. Very short. Name one thing to do, not a plan.',
+  focused: 'Normal operating mode. Clear and direct. One recommendation per item. No fluff.',
+  assertive: 'He is avoiding something. Name the drift as a fact, not a failing, and give him the smallest first move. No escape routes, no lecture.',
+  critical: 'Urgency is real. Direct, no padding. Say what has to happen now and cut everything else.',
 };
 
 
@@ -101,7 +104,14 @@ JSON only:`;
       messages: [{ role: 'user', content: userMessage }],
       maxTokens: 80,
       temperature: 0.3,
-    }, { timeout: 14000 }); // Must complete within Focus route's 15s timeout
+      // 14000 sat INSIDE this task's own latency spread on the Pi — measured
+      // 16 Aug: qwen2.5:1.5b p50 13.5s, p95 16.7s — so roughly every other call
+      // burned the full 14s, aborted, and then paid OpenRouter for the same
+      // answer. Nothing waits on this: enhanceFocus is fire-and-forget
+      // pre-generation for the NEXT request and the current one always renders
+      // buildDeterministicSara instantly, so the old "must fit the route's 15s
+      // timeout" was never true. Sized above p95 to let the local model finish.
+    }, { timeout: 25000 });
 
     if (!result.text || result.provider === 'none') return null;
 

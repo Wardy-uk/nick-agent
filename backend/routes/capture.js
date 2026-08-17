@@ -85,7 +85,7 @@ router.post('/note', (req, res) => {
       console.error(`[Capture] VERIFICATION FAILED — file not found after write: ${filePath}`);
       try {
         require('../services/webpush').sendToAll(
-          'NEURO — Capture Failed',
+          'SARA — Capture failed',
           `Note "${(title || content.substring(0, 30))}" did not save. Check vault path.`,
           { type: 'capture_failed' }
         ).catch(() => {});
