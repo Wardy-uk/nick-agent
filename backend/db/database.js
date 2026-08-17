@@ -130,6 +130,26 @@ async function init() {
       db.exec('ALTER TABLE management_log ADD COLUMN task_id INTEGER');
       console.log('[DB] management_log.task_id added');
     }
+    // hr_logged was NOT NULL DEFAULT 0, which made "never asked" identical to
+    // "confirmed missing". Every existing 0 was a default, not an answer — so
+    // they become NULL (unknown). A confirmed 1 is a real answer and is kept.
+    // SQLite cannot drop NOT NULL in place, and the constraint is harmless once
+    // the values are right, so only the values are migrated.
+    if (cols.length && !cols.includes('hr_logged_tristate_done')) {
+      const zeros = db.prepare("SELECT COUNT(*) c FROM management_log WHERE hr_logged = 0").get()?.c || 0;
+      if (zeros) {
+        try {
+          db.exec('UPDATE management_log SET hr_logged = NULL WHERE hr_logged = 0');
+          console.log(`[DB] management_log.hr_logged: ${zeros} defaulted 0s reset to unknown`);
+        } catch {
+          // A NOT NULL constraint on the old column blocks this. Rebuild is not
+          // worth it — assess() treats 0 as unknown when nothing was ever
+          // confirmed, so the report stays honest either way.
+          console.log('[DB] management_log.hr_logged tri-state migration skipped (NOT NULL constraint)');
+        }
+      }
+      db.exec('ALTER TABLE management_log ADD COLUMN hr_logged_tristate_done INTEGER DEFAULT 1');
+    }
   } catch (e) {
     console.error('[DB] management_log migration check failed:', e.message);
   }

@@ -160,7 +160,7 @@ function create(entry = {}) {
       entry.dueDate || null,
       status,
       entry.resolvedDate || null,
-      entry.hrLogged ? 1 : 0,
+      entry.hrLogged === undefined || entry.hrLogged === null ? null : (entry.hrLogged ? 1 : 0),
       entry.source || 'manual',
       entry.notes || null,
       now,
@@ -185,7 +185,7 @@ function update(id, patch = {}) {
   for (const [key, col] of Object.entries(PATCHABLE)) {
     if (!(key in patch)) continue;
     let value = patch[key];
-    if (key === 'hrLogged') value = value ? 1 : 0;
+    if (key === 'hrLogged') value = value === null || value === undefined ? null : (value ? 1 : 0);
     if (key === 'type' && !TYPES.includes(String(value).toLowerCase())) continue;
     if (key === 'status' && !STATUSES.includes(String(value).toLowerCase())) continue;
     sets.push(`${col} = ?`);
@@ -327,6 +327,7 @@ function assess(rows = [], { today = todayLocal(), baselineDate = BASELINE_DATE,
   const missingOwner = [];
   const missingDue = [];
   const hrGap = [];
+  const hrUnknown = [];
 
   for (const row of rows) {
     // Overdue now, with the working-day figure the five-day standard is stated in.
@@ -359,10 +360,15 @@ function assess(rows = [], { today = todayLocal(), baselineDate = BASELINE_DATE,
       if (!row.due_date) missingDue.push({ id: row.id, summary: row.summary });
     }
 
-    // Chris spot-checks People HR. A conversation or concern that never reached
-    // it is a finding regardless of whether the action behind it is on time.
-    if ((row.type === 'conversation' || row.type === 'concern') && !row.hr_logged) {
-      hrGap.push({ id: row.id, summary: row.summary, person: row.person, entryDate: row.entry_date });
+    // Chris spot-checks People HR, so a conversation or concern that never
+    // reached it is a real finding. But NOT ASKED is a third state, and folding
+    // it in put three unmeasured accusations in a report going to the person
+    // who does the spot-checking. Only a confirmed 0 is a gap; NULL is a
+    // question for Nick, never a claim to Chris.
+    if (row.type === 'conversation' || row.type === 'concern') {
+      const entry = { id: row.id, summary: row.summary, person: row.person, entryDate: row.entry_date };
+      if (row.hr_logged === 0) hrGap.push(entry);
+      else if (row.hr_logged === null || row.hr_logged === undefined) hrUnknown.push(entry);
     }
   }
 
@@ -400,6 +406,9 @@ function assess(rows = [], { today = todayLocal(), baselineDate = BASELINE_DATE,
     missingOwner,
     missingDue,
     hrGap,
+    // Not a finding. Nick answers these in the panel; they never reach Chris
+    // as a gap, because nothing measured them.
+    hrUnknown,
     totals: {
       rows: rows.length,
       open: rows.filter(r => !isClosed(r)).length,

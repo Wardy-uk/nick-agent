@@ -297,3 +297,35 @@
   color: var(--text);
   background: var(--bg-card);
 }
+
+/* ── People HR: unknown is a question, not a claim ─────────────────────── */
+
+.wr-hr-ask {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm, 6px);
+  padding: 10px 12px;
+  margin: 10px 0 14px;
+}
+.wr-hr-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+}
+.wr-hr-row:first-of-type { border-top: none; }
+.wr-hr-buttons { display: flex; gap: 6px; flex: 0 0 auto; }
+.wr-hr-buttons button {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+}
+.wr-hr-buttons button:hover:not(:disabled) { color: var(--text); border-color: var(--text-muted); }
+.wr-hr-buttons button:disabled { opacity: 0.5; cursor: not-allowed; }

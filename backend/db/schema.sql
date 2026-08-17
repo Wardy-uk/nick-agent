@@ -455,7 +455,14 @@ CREATE TABLE IF NOT EXISTS management_log (
   resolved_date TEXT,
   -- Chris spot-checks People HR, so whether an item also reached People HR is a
   -- distinct fact from whether NEURO knows about it. Never inferred.
-  hr_logged     INTEGER NOT NULL DEFAULT 0,
+  --
+  -- THREE states, and the third is the point: NULL = not asked, 0 = confirmed
+  -- NOT in People HR, 1 = confirmed in. The first cut was a NOT NULL boolean
+  -- defaulting to 0, which made "we never asked" indistinguishable from "it is
+  -- missing" — so the seeded batch reported three People HR gaps that had never
+  -- been measured, in a report going to the manager who spot-checks People HR.
+  -- Same lesson as state-of-play's `never` vs `stale`: unknown is not broken.
+  hr_logged     INTEGER,
   source        TEXT,                       -- vault path, plaud id, '1-2-1', 'manual'
   -- The task this action is mirrored into, when it is something Nick has to DO.
   -- The log is the compliance record; the task store is where work is looked

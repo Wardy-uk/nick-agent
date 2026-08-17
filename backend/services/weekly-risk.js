@@ -531,11 +531,15 @@ function assess(snap) {
         detail: mgmt.lateLogged.slice(0, 3).map(l => `"${l.summary}" (${l.workingDays} working days)`).join('; '),
       });
     }
+    // Only a CONFIRMED gap. `hrUnknown` is deliberately not a finding: nothing
+    // measured it, and an unmeasured accusation in the report is worse than a
+    // silent one, because the person reading it is the one who spot-checks
+    // People HR. It surfaces in the panel as a question for Nick instead.
     if (mgmt.hrGap?.length) {
       findings.push({
         severity: 'warn',
         kind: 'people-hr-gap',
-        title: `${mgmt.hrGap.length} conversation/concern not marked as logged in People HR`,
+        title: `${mgmt.hrGap.length} conversation/concern confirmed NOT logged in People HR`,
         detail: 'Chris spot-checks People HR. NEURO holding the record is not the same as People HR holding it.',
       });
     }

@@ -179,3 +179,28 @@ test('a task-store failure never loses the log entry', () => {
   assert.match(log.ensureTask.toString(), /catch/);
   assert.match(log.ensureTask.toString(), /return row/);
 });
+
+// ── People HR is three states, not two ───────────────────────────────────────
+
+test('unknown is not a gap — nothing measured it', () => {
+  const rows = [
+    row({ id: 1, type: 'concern', hr_logged: null }),        // never asked
+    row({ id: 2, type: 'conversation', hr_logged: 0 }),      // confirmed absent
+    row({ id: 3, type: 'conversation', hr_logged: 1 }),      // confirmed present
+  ];
+  const a = log.assess(rows, { today: '2026-08-17' });
+  assert.deepEqual(a.hrGap.map(h => h.id), [2], 'only a confirmed 0 is a finding');
+  assert.deepEqual(a.hrUnknown.map(h => h.id), [1], 'unknown is a question for Nick');
+});
+
+test('an undefined flag is unknown, not absent', () => {
+  const a = log.assess([row({ id: 1, type: 'concern', hr_logged: undefined })], { today: '2026-08-17' });
+  assert.deepEqual(a.hrGap, []);
+  assert.equal(a.hrUnknown.length, 1);
+});
+
+test('a plain action is neither — People HR is about people', () => {
+  const a = log.assess([row({ id: 1, type: 'action', hr_logged: null })], { today: '2026-08-17' });
+  assert.deepEqual(a.hrGap, []);
+  assert.deepEqual(a.hrUnknown, []);
+});

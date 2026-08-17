@@ -152,6 +152,23 @@ export default function WeeklyRiskPanel() {
     }
   }
 
+  async function setHr(id, inPeopleHr) {
+    setBusy(`hr${id}`);
+    try {
+      const res = await fetch(apiUrl(`/api/weekly-risk/log/${id}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hrLogged: inPeopleHr }),
+      });
+      if (!res.ok) throw new Error('Could not save');
+      load();
+    } catch (e) {
+      setNotice({ tone: 'bad', text: e.message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function doTestSend() {
     const out = await post('/api/weekly-risk/test-send', {}, 'test');
     if (out?.ok) setNotice({ tone: 'ok', text: `${out.note} (${out.to})` });
@@ -478,8 +495,26 @@ export default function WeeklyRiskPanel() {
             )}
             {log.hrGap.length > 0 && (
               <p className="wr-warn-line">
-                {log.hrGap.length} conversations/concerns not marked as logged in People HR.
+                {log.hrGap.length} conversation{log.hrGap.length === 1 ? '' : 's'}/concern{log.hrGap.length === 1 ? '' : 's'} confirmed <strong>not</strong> in People HR — this goes in the report.
               </p>
+            )}
+            {/* Unknown is a question, never a claim. It is asked here and does
+                not appear in anything Chris receives. */}
+            {log.hrUnknown?.length > 0 && (
+              <div className="wr-hr-ask">
+                <p className="wr-hint" style={{ marginBottom: 8 }}>
+                  Is this in People HR? NEURO has never been told, so it says nothing in the report either way.
+                </p>
+                {log.hrUnknown.map(h => (
+                  <div key={h.id} className="wr-hr-row">
+                    <span>{h.person ? `${h.person} — ` : ''}{h.summary}</span>
+                    <span className="wr-hr-buttons">
+                      <button type="button" onClick={() => setHr(h.id, true)} disabled={busy === `hr${h.id}`}>Yes</button>
+                      <button type="button" onClick={() => setHr(h.id, false)} disabled={busy === `hr${h.id}`}>No</button>
+                    </span>
+                  </div>
+                ))}
+              </div>
             )}
             <table className="wr-table">
               <thead>
