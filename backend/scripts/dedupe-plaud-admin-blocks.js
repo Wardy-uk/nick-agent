@@ -55,12 +55,18 @@ function dateStr(d) {
     Object.values(readLedger(db)).map(e => e && e.blockId).filter(Boolean)
   );
 
-  // Group on the slot the block occupies, normalised — Graph returns fractional
-  // seconds on some reads and not others, and a mismatch here would hide a
-  // duplicate rather than fail loudly.
+  // Group on DATE + SUBJECT, not on the exact start time.
+  //
+  // The first cut keyed on the slot and missed half the mess. The two competing
+  // passes did not produce identical events: the second fetched the calendar
+  // after the first had already created some blocks, saw them as busy, and
+  // placed its copies in the NEXT free slot. So the duplicates sit minutes
+  // apart — 11:45 and 11:55 for the same standup — and a slot key cannot see
+  // them. The duplicate unit is the MEETING, and the block's own subject
+  // carries the meeting title.
   const groups = new Map();
   for (const b of blocks) {
-    const key = `${String(b.start).slice(0, 19)}|${b.subject}`;
+    const key = `${String(b.start).slice(0, 10)}|${b.subject}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(b);
   }
@@ -71,13 +77,26 @@ function dateStr(d) {
     if (group.length < 2) { singles++; continue; }
     const keeper = group.find(b => ledgerIds.has(b.id)) || group[0];
     for (const b of group) {
-      if (b.id !== keeper.id) doomed.push({ ...b, key });
+      if (b.id !== keeper.id) doomed.push({ ...b, key, start: b.start });
     }
+  }
+
+  // Independent cross-check. The ledger records exactly the blocks NEURO
+  // believes it created, so anything not in it is by definition surplus. If
+  // the two methods disagree, the grouping is wrong and this must not delete —
+  // the whole risk here is removing a block that was the real one.
+  const orphans = blocks.filter(b => !ledgerIds.has(b.id));
+  const doomedIds = new Set(doomed.map(d => d.id));
+  const agree = orphans.length === doomed.length && orphans.every(o => doomedIds.has(o.id));
+  console.log(`Cross-check — ledger orphans: ${orphans.length}, grouped duplicates: ${doomed.length} → ${agree ? 'agree' : 'DISAGREE'}`);
+  if (!agree) {
+    console.error('The two methods disagree. Refusing to delete anything — investigate by hand.');
+    process.exit(1);
   }
 
   console.log(`${groups.size} distinct slot(s): ${singles} clean, ${groups.size - singles} duplicated.`);
   console.log(`${doomed.length} block(s) to delete.\n`);
-  for (const d of doomed) console.log(`   - ${d.key.replace('|', '  ')}`);
+  for (const d of doomed) console.log(`   - ${String(d.start).slice(0, 16).replace('T', ' ')}  ${d.subject}`);
 
   if (!APPLY) {
     console.log('\nDRY RUN — nothing deleted. Re-run with --apply.');
