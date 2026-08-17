@@ -457,6 +457,12 @@ CREATE TABLE IF NOT EXISTS management_log (
   -- distinct fact from whether NEURO knows about it. Never inferred.
   hr_logged     INTEGER NOT NULL DEFAULT 0,
   source        TEXT,                       -- vault path, plaud id, '1-2-1', 'manual'
+  -- The task this action is mirrored into, when it is something Nick has to DO.
+  -- The log is the compliance record; the task store is where work is looked
+  -- for. A management action that lives only here is one nobody sees, which is
+  -- exactly how the first seeded batch produced three overdue items that could
+  -- not be found in Tasks, Focus or on the phone.
+  task_id       INTEGER,
   notes         TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL

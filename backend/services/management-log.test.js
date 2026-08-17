@@ -152,3 +152,30 @@ test('assess needs no database, no vault and no network', () => {
   assert.deepEqual(a.totals, { rows: 0, open: 0, closed: 0 });
   assert.equal(a.baseline.count, 0);
 });
+
+// ── Mirroring into the task store ────────────────────────────────────────────
+
+test('only Nick-owned items mirror — an action owned by Chris is tracked, not done', () => {
+  assert.equal(log.ownedByNick({ owner: 'Nick' }), true);
+  assert.equal(log.ownedByNick({ owner: 'nick' }), true);
+  assert.equal(log.ownedByNick({ owner: 'Chris' }), false,
+    "putting Chris's commitments on Nick's task list makes his own list lie about what is his");
+  assert.equal(log.ownedByNick({ owner: null }), false);
+  assert.equal(log.ownedByNick({}), false);
+});
+
+test('closure travels both ways — said in whichever place Nick is looking', () => {
+  const src = log.reconcileTasks.toString();
+  assert.match(src, /taskClosed && !isClosed\(row\)/, 'a ticked task closes the log row');
+  assert.match(src, /isClosed\(row\) && !taskClosed/, 'a closed log row closes the task');
+});
+
+test('a deleted task is forgotten rather than pointed at', () => {
+  assert.match(log.reconcileTasks.toString(), /SET task_id = NULL/);
+});
+
+test('a task-store failure never loses the log entry', () => {
+  // The log is the compliance record. If only one half can survive, it is this one.
+  assert.match(log.ensureTask.toString(), /catch/);
+  assert.match(log.ensureTask.toString(), /return row/);
+});

@@ -122,6 +122,18 @@ async function init() {
     console.error('[DB] health_samples migration check failed:', e.message);
   }
 
+  // management_log.task_id — added after the table shipped, so CREATE TABLE IF
+  // NOT EXISTS will not put it on an existing DB.
+  try {
+    const cols = db.prepare('PRAGMA table_info(management_log)').all().map(r => r.name);
+    if (cols.length && !cols.includes('task_id')) {
+      db.exec('ALTER TABLE management_log ADD COLUMN task_id INTEGER');
+      console.log('[DB] management_log.task_id added');
+    }
+  } catch (e) {
+    console.error('[DB] management_log migration check failed:', e.message);
+  }
+
   // #107(b) — sara_actions is scanned, not indexed.
   //
   // The only index on a 16,282-row table was `status`, so the scoped reads added

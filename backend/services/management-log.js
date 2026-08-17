@@ -167,7 +167,7 @@ function create(entry = {}) {
       now,
     ],
   );
-  return get(res.lastInsertRowid);
+  return ensureTask(get(res.lastInsertRowid));
 }
 
 const PATCHABLE = {
@@ -212,6 +212,92 @@ function remove(id) {
   if (!row) return false;
   db.run('DELETE FROM management_log WHERE id = ?', [id]);
   return true;
+}
+
+// ── Mirroring into the task store ────────────────────────────────────────────
+
+/**
+ * The log is a RECORD; the task store is where work is looked for.
+ *
+ * Those are different jobs, which is why this is a mirror rather than a merge.
+ * The log carries what tasks has no use for — when a conversation happened
+ * versus when it was written down, whether it reached People HR, who owns it —
+ * and all of that is what competencies 3 and 4 are measured on. But a row that
+ * Nick has to ACT on and that lives only here is a row nobody sees: the first
+ * seeded batch produced three overdue actions that could not be found in Tasks,
+ * Focus, or on the phone, because this table has no presence in any of them.
+ *
+ * Only Nick's own items mirror. An action owned by Chris is something to track,
+ * not something to do, and putting it on Nick's task list makes his own list
+ * lie about what is his.
+ */
+function ownedByNick(row) {
+  return /^nick\b/i.test(String(row.owner || '').trim());
+}
+
+/** Create the mirrored task, if this row should have one and does not. */
+function ensureTask(row) {
+  if (!row || row.task_id || !ownedByNick(row) || isClosed(row)) return row;
+  try {
+    const taskStore = require('./task-store');
+    const { id } = taskStore.createTask({
+      text: row.summary,
+      due_date: row.due_date || null,
+      source: 'management-log',
+      notes: row.action || null,
+    });
+    db.run('UPDATE management_log SET task_id = ?, updated_at = ? WHERE id = ?', [id, nowIso(), row.id]);
+    return get(row.id);
+  } catch (e) {
+    // A task-store failure must never lose the log entry — the log is the
+    // compliance record and is the half that matters if only one survives.
+    console.warn('[ManagementLog] Could not mirror to task store:', e.message);
+    return row;
+  }
+}
+
+/**
+ * Pull the two back into agreement.
+ *
+ * Deliberately pull-based, run at the head of `status()`, rather than a hook on
+ * the task store: ticking a task off happens on the phone, in Focus and in
+ * three routes, and a hook on each is four places to forget. The same shape as
+ * `entities.pruneExcludedEntities()` running at the head of the nightly sweep.
+ *
+ * Closure travels BOTH ways — closing the log closes the task, and ticking the
+ * task closes the log — because "I did that" is said in whichever place Nick
+ * happens to be looking.
+ */
+function reconcileTasks() {
+  let changed = 0;
+  let taskStore;
+  try { taskStore = require('./task-store'); } catch { return 0; }
+
+  for (const row of list({ limit: 2000 })) {
+    // Mirror anything new that should have a task.
+    if (!row.task_id && !isClosed(row) && ownedByNick(row)) { ensureTask(row); changed += 1; continue; }
+    if (!row.task_id) continue;
+
+    let task;
+    try { task = taskStore.getTask(row.task_id); } catch { task = null; }
+
+    // The task was deleted out from under the log. Forget it rather than
+    // pointing at nothing; the next reconcile makes a fresh one.
+    if (!task) {
+      db.run('UPDATE management_log SET task_id = NULL WHERE id = ?', [row.id]);
+      changed += 1;
+      continue;
+    }
+
+    const taskClosed = task.status === 'done' || task.status === 'dropped';
+    if (taskClosed && !isClosed(row)) {
+      update(row.id, { status: 'done', resolvedDate: (task.completed_at || nowIso()).slice(0, 10) });
+      changed += 1;
+    } else if (isClosed(row) && !taskClosed) {
+      try { taskStore.setStatus(row.task_id, 'done'); changed += 1; } catch { /* nothing to do */ }
+    }
+  }
+  return changed;
 }
 
 // ── Judgement ────────────────────────────────────────────────────────────────
@@ -324,6 +410,9 @@ function assess(rows = [], { today = todayLocal(), baselineDate = BASELINE_DATE,
 
 /** Read + judge in one call, with the real bank-holiday set applied. */
 function status(opts = {}) {
+  // Bring the mirror into agreement before judging, so a task ticked off on the
+  // phone is not still reported here as an overdue management action.
+  try { reconcileTasks(); } catch (e) { console.warn('[ManagementLog] reconcile failed:', e.message); }
   const rows = list({ limit: 2000 });
   let nonWorking;
   try { nonWorking = require('./working-days').holidaySet(); } catch { nonWorking = undefined; }
@@ -333,6 +422,7 @@ function status(opts = {}) {
 module.exports = {
   create, update, remove, list, get,
   assess, status, workingDaysBetween,
+  reconcileTasks, ensureTask, ownedByNick,
   BASELINE_DATE, REVIEW_DATE, LOG_WITHIN_WORKING_DAYS, OVERDUE_TOLERANCE_WORKING_DAYS,
   TYPES, STATUSES,
 };
