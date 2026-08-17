@@ -163,6 +163,10 @@ app.use('/api/actions', actionsRoutes);
 app.use('/api/ha', haRoutes);
 app.use('/api/plaud', plaudRoutes);
 app.use('/api/ai/settings', require('./routes/ai-settings'));
+// Changing the PIN from Settings. Sits under the /api auth middleware on
+// purpose: you must already know the current PIN to reach it, and the route
+// asks for it again as a second gate.
+app.use('/api/pin', require('./routes/pin'));
 app.use('/api/meeting-prep', require('./routes/meeting-prep-view'));
 app.use('/api/person', require('./routes/person-detail'));
 app.use('/api/activity', require('./routes/activity'));

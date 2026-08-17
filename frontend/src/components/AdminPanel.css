@@ -333,3 +333,64 @@
 .ai-status-warn {
   color: var(--warning);
 }
+
+/* Change PIN (Security) */
+.admin-pin {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 420px;
+}
+
+.admin-pin-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.admin-pin-input {
+  padding: 8px 10px;
+  font-size: 16px;          /* 16px stops iOS zooming the page on focus */
+  font-family: inherit;
+  letter-spacing: 0.25em;   /* a masked PIN is easier to count in groups */
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  color: inherit;
+}
+
+.admin-pin-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.admin-pin-done {
+  padding: 10px 12px;
+  border-left: 2px solid #4caf50;
+  background: rgba(76, 175, 80, 0.08);
+  font-size: 13px;
+}
+
+/* Deliberately not styled as an error: this is the expected consequence of a
+   successful change, and it is the half people forget. */
+.admin-pin-warn-title {
+  margin-top: 6px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.admin-pin-consumers {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  opacity: 0.85;
+}
+
+.admin-pin-consumers strong { opacity: 1; }

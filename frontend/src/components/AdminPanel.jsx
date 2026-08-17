@@ -1,7 +1,134 @@
 import React, { useState, useEffect } from 'react';
-import { apiUrl } from '../api';
+import { apiUrl, setPin as storePin } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import './AdminPanel.css';
+
+/**
+ * Change the NEURO PIN.
+ *
+ * Until this existed the only way to rotate was editing backend/.env over SSH
+ * and restarting — which is why, when the PIN turned out to have been in a
+ * public repo since 15 July (#123), rotating it stayed outstanding for days.
+ *
+ * Two things this has to get right or it does more harm than the manual route.
+ * On success it MUST write the new PIN into localStorage, because the global
+ * fetch interceptor signs every request with it — miss that and the app logs
+ * itself out the instant the change lands, on the very screen that changed it.
+ * And it has to say plainly what else breaks: the change is instant and every
+ * other client keeps sending the old PIN until Nick goes and updates it.
+ */
+function ChangePinSection() {
+  const [status, setStatus] = useState(null);
+  const [currentPin, setCurrentPin] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(null);
+
+  const load = () => {
+    fetch(apiUrl('/api/pin'))
+      .then(r => r.json())
+      .then(d => { if (d?.ok) setStatus(d); })
+      .catch(() => {});
+  };
+  useEffect(load, []);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    // Checked here as well as server-side so the mismatch is caught before a
+    // request that would otherwise succeed with a PIN Nick mistyped twice.
+    if (newPin !== confirmPin) { setError('The two new PINs do not match.'); return; }
+
+    setBusy(true);
+    try {
+      const res = await fetch(apiUrl('/api/pin'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPin, newPin }),
+      });
+      const data = await res.json();
+      if (!data.ok) { setError(data.error || 'Could not change the PIN.'); setBusy(false); return; }
+
+      // Before anything else: keep this browser signed in. The interceptor
+      // reads localStorage on every request and the old PIN is already dead.
+      storePin(newPin);
+      setDone(data);
+      setCurrentPin(''); setNewPin(''); setConfirmPin('');
+      load();
+    } catch (err) {
+      setError(err.message || 'Could not reach the server.');
+    }
+    setBusy(false);
+  };
+
+  if (done) {
+    return (
+      <div className="admin-pin">
+        <div className="admin-pin-done">
+          PIN changed — {done.length} digits, live now. This browser has been updated
+          automatically.
+        </div>
+        <div className="admin-pin-warn-title">Everything else still sends the old PIN:</div>
+        <ul className="admin-pin-consumers">
+          {(done.consumers || []).filter(c => !c.automatic).map(c => (
+            <li key={c.id}><strong>{c.label}</strong> — {c.action}</li>
+          ))}
+        </ul>
+        <button className="admin-ms-connect-btn" onClick={() => setDone(null)}>Done</button>
+      </div>
+    );
+  }
+
+  return (
+    <form className="admin-pin" onSubmit={submit}>
+      <div className="admin-ms-desc">
+        Guards every <code>/api</code> route. Changing it takes effect immediately —
+        no restart — and signs out every other device until you update it there too.
+        {status?.lastChanged && (
+          <> Last changed {new Date(status.lastChanged).toLocaleString('en-GB')}.</>
+        )}
+      </div>
+
+      <label className="admin-pin-label">
+        Current PIN
+        <input
+          className="admin-pin-input" type="password" inputMode="numeric" autoComplete="current-password"
+          value={currentPin} onChange={e => setCurrentPin(e.target.value)} required
+        />
+      </label>
+      <label className="admin-pin-label">
+        New PIN
+        <input
+          className="admin-pin-input" type="password" inputMode="numeric" autoComplete="new-password"
+          value={newPin} onChange={e => setNewPin(e.target.value)}
+          minLength={status?.minLength || 4} maxLength={status?.maxLength || 12} required
+        />
+      </label>
+      <label className="admin-pin-label">
+        Confirm new PIN
+        <input
+          className="admin-pin-input" type="password" inputMode="numeric" autoComplete="new-password"
+          value={confirmPin} onChange={e => setConfirmPin(e.target.value)} required
+        />
+      </label>
+
+      {error && <div className="admin-error">{error}</div>}
+
+      <button className="admin-ms-connect-btn" type="submit" disabled={busy}>
+        {busy ? 'Changing…' : 'Change PIN'}
+      </button>
+
+      <div className="admin-pin-warn-title">This will need re-entering on:</div>
+      <ul className="admin-pin-consumers">
+        {(status?.consumers || []).filter(c => !c.automatic).map(c => (
+          <li key={c.id}><strong>{c.label}</strong> — {c.action}</li>
+        ))}
+      </ul>
+    </form>
+  );
+}
 
 function StravaActivities({ onDisconnect }) {
   const [activities, setActivities] = useState(null);
@@ -613,6 +740,11 @@ export default function AdminPanel({ pushState = {} }) {
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="admin-section">
+        <div className="admin-section-title">Security</div>
+        <ChangePinSection />
       </div>
 
       <div className="admin-section">
