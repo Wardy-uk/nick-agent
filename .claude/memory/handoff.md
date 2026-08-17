@@ -1,3 +1,154 @@
+# Session Handoff — 2026-08-17 (#36, #31, #39, #13, #66, #104 — all six measured)
+
+## Shipped, deployed, verified live
+`23aa204` #66+#104 · `5984fc4` #13 · `37c8a96` #31. Pi at `37c8a96`, backend online,
+`unstable_restarts` 0.
+
+**Pi 521 tests / 519 pass / 2 fail — and local now agrees exactly.** The 5-test
+local/Pi gap that ran for three sessions is gone: the other session's work landed.
+
+⚠ **The 2 failures are PRE-EXISTING and not mine.** `outcomes.test.js` —
+"weeks with no snapshot are reported missing" and "the trend refuses to draw a
+line through a single point". Verified by stashing my changes and re-running:
+still 2 failures. The suite was 486/486 green earlier the same day, so this is a
+**midnight date rollover** — the fixtures pin `WED = 2026-08-12` but
+`outcomes.recent(4)` / `trend(5)` resolve "now" themselves, so the fixture week
+has fallen out of the window. Same species as the 15 Aug standup-session lesson
+in `mistakes.md`. **Fix is to pass the date in, not to re-pin the fixture.**
+
+## The headline: two of the six were correctly NOT built
+
+**Every ticket premise has been wrong** is now thirteen in a row.
+
+### #36 — measured empty, deliberately not built
+`people-gap` returns **zero candidates at 90, 180 AND 365 days**. #35 was right
+and gating on it was correct. A review screen over that renders "nothing to
+review" forever and looks finished — the exact failure #36 exists to fix, one
+level up. **Verified it is not a pass-by-absence**: all three sources fire (the
+meetings walk surfaces "Naomi Winkworth" at count 1, under the 2-sighting
+threshold), and every name seen twice already matches one of the 41 People notes.
+Backend is complete and correct; the population is genuinely empty.
+**Re-measure after a few weeks of triage** — email is its only live source.
+
+### #104 — mechanism real, incidence zero
+NOVA's log holds **exactly TWO manual escalations over its entire life**, both
+raised 15 Aug. Widening 90 → 3650 days moves 1,935 rows to 2,352 and finds **the
+same 2**. Widened anyway (silent caps are the fifth of their species here) but
+**the load-bearing half is the honesty**: `/active` now returns
+`urgency: {state, windowDays, logRows, manual}`.
+Live: `{"state":"ok","windowDays":3650,"logRows":2352,"manual":2}`.
+
+⚠ **NOVA ignores the `type` query param** — verified at both widths. The
+client-side `manual` filter is load-bearing, not belt-and-braces. Now pinned.
+
+## #13 was six files, not one — and the vault was right about all four drifts
+
+Filed as "`seed.js` hardcodes a departed employee". The same roster was typed out
+in **six** places: `team-health.TEAMS`, `email-priority.DIRECT_REPORTS`,
+`meeting-prep-view.TEAM_MEMBERS`, `ChatPanel.detectPersonDraft`, the chat
+`SYSTEM_PROMPT`, and the kiosk seed — while CLAUDE.md already said "nothing
+hardcodes a name list".
+
+Four drifts, **vault correct on every one**: Arman left, Willem moved teams,
+Nathan Rutland listed 2nd Line (vault: 1st), Sebastian Broome 1st (vault: 2nd).
+`team-health.js` even carried a comment reading *"if this goes stale, hoist it
+into settings"*.
+
+New `services/team-roster.js`. `entities.getRoster()` was **deliberately not
+enough** — it knows all 41 names including Nick's manager and externals; "is this
+one of Nick's people, and on which team" is only in the frontmatter.
+Live: **13 reports, 12 unambiguous first names**, exactly matching PeopleBoard.
+
+Two latent bugs fixed in passing:
+- `meeting-prep-view` matched "any name part >2 chars, anywhere in the string",
+  so with Hope Goodall on the roster, **"Hope this works" in a subject named a
+  person in every meeting that said it**. Now whole-word.
+- `?team=Nope` answered **ok:true with all 39 issues** and `team:"Nope"` in the
+  body — `allPeople()` falls back to everyone when the filter misses, so the
+  guard could only fire on an empty roster and the "Unknown team" message was
+  unreachable. Now errors, naming the valid teams.
+
+⚠ **`PeopleBoard.jsx` keeps its hardcoded copy on purpose** — PeopleHR ids and
+display notes no People note holds — and it was the ONE copy that had not
+drifted. Commented as a copy the vault wins over. **Seventh copy; still a risk.**
+
+## #31 — generated (your call), not retired
+`services/one-to-one-tracker.js` renders the table between markers. Cadence
+Rules, Status Key, Open Actions and Related all survive untouched. The header's
+two false claims ("single source of truth", "read by Morning Standup" — nothing
+has ever parsed it) corrected by hand.
+
+- Renders **only what NEURO can know**. "Invite Sent?" / "PeopleHR Updated?"
+  dropped rather than emitted as ❌, which would state a fact nothing checked.
+- Hooked onto **`syncPeopleNotes({apply:true})`, not the scheduler** — the one
+  place the stamps change, so it cannot render dates about to move. (Also
+  avoided editing `scheduler.js`, which was one of theirs.)
+- Live: 13 reports, 12 booked, Adele correctly excluded on `cadence: n/a`.
+  Re-running via the route returns `changed:false` — idempotent across the
+  Syncthing round-trip.
+- Added to `vault-exclusions`, **measured**: it was holding **37
+  `extracted_entities` rows** (16 person, 18 mention) + 3 embedding chunks.
+
+⚠ **#33's "81 NUL bytes in the tracker" was STALE** — the file has 0 NULs and
+was rewritten 14 Aug. Don't reach for the NUL-safe editing workaround here.
+
+## #39 — narrow (your call), and it had two hidden dependents
+Measured **34 active files / 243 mentions / 4 filenames**, far past "one line" —
+but most are Plaud transcripts (verbatim mis-transcription) and generated Vault
+Audit reports, both *records of what was said*, same class as `vault-moves.md`.
+
+Renamed the meeting note only, fixed `title:`/`Participants:`, re-pointed both
+Daily links. **The `transcript_path` / `Transcript:` links were deliberately left
+saying Winkworth** — they point at a file keeping that name.
+
+The rename surfaced two dangling references the ticket did not know about:
+1. the transcript's own `Summary:` back-link;
+2. **task 134's `origin_path` in the DB** — the task export is generated, so
+   editing the file would not have held. Updated in the DB, export regenerated
+   (147 tasks, 0 hits).
+
+`vault-moves.md` appended, not rewritten. **The `Naomi Winkworth` alias is kept
+and verified still resolving** — the transcripts still say it, so it is still
+load-bearing.
+
+## The concurrent session — resolved itself mid-session
+Their ~14 files were **staged in the index** when I started committing. A plain
+`git commit` would have swept all of it into my message — which is exactly the
+mistake they logged against themselves at `82804bd`. I used
+`git commit -- <paths>` throughout and verified the index was byte-identical
+afterwards.
+
+They have since committed everything (`82804bd`, `3809eda`, `8e69b29`). Note
+`3809eda` — their commit of `claude.js` used the index version and undid my
+uncommitted roster edit; **they spotted it and re-applied it verbatim.** So all
+six #13 sites are landed.
+
+**`CLAUDE.md` is finally unblocked and I have written the parts I verified**:
+#13, #31, #66, #104. I did **not** write up the older backlog (#26/#40/#41/#42,
+#119/#21/#38/#114/#59/#52/#107b, #122/#50) — documenting work I have not read
+the code for is how CLAUDE.md drifts, which is the thing it keeps getting caught
+by. That debt is still open and now needs a session that re-reads those changes.
+
+## NEXT
+**Code:** the `outcomes.test.js` date-rollover fix (pass the date in — small, and
+it is currently the only red in the suite) · the older CLAUDE.md debt · then the
+NOVA trio behind #116.
+
+**Nick, not code:** **#123 the PIN is still in public git history — rotate it**
+(nothing about it changed this session) · #116 NOVA msgraph re-auth (still the
+best ratio on the board) · #2 Teams consent · #99 the 287 · #106 approve the
+pending `draft_reply`.
+
+⚠ Spotted, not actioned: `Tasks/NEURO Tasks (export).sync-conflict-20260816-192001-FSW6YOT.md`
+is a live Syncthing conflict file on the task export. Harmless (already excluded
+by `.sync-conflict-`) but it means the export was written from two sides at once.
+
+## Deploy sequence — unchanged, and the traps still bite
+`git pull --ff-only` → `cd frontend && npm run build` → `cd ../backend && npm test`
+→ `pm2 restart neuro-backend --update-env`.
+Node **22.22.2** on PATH for any pm2 command. Never pipe a deploy step to
+`head`/`tail`. Confirm with `git log --oneline -1` on the target.
+Scratch scripts go in `/tmp`, never the repo working tree.
 # Session Handoff — 2026-08-16 evening (health check, #122, #30 measured, #50)
 
 ## Shipped, deployed, verified live
