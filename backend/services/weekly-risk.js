@@ -1027,8 +1027,13 @@ async function queueSend({ week = weekCommencing(), to = null, force = false } =
     ? db.getPendingSaraActionsByType('send_weekly_risk_report', 50)
     : [];
   for (const action of existing || []) {
-    let payload;
-    try { payload = JSON.parse(action.payload); } catch { continue; }
+    // getPendingSaraActionsByType ALREADY parses payload into an object. The
+    // first cut called JSON.parse on it again, threw, and a defensive
+    // `catch { continue }` swallowed the throw — so the dedupe skipped every
+    // row and silently never fired. Accept either shape; never swallow.
+    const payload = typeof action.payload === 'string'
+      ? JSON.parse(action.payload)
+      : action.payload;
     if (payload?.week !== week) continue;
     // Refresh the words and the address so the card is not stale, then hand
     // back the SAME action rather than minting a second one.

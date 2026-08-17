@@ -543,10 +543,47 @@ test('a CONFIRMED People HR gap does reach the report, and says it is confirmed'
   assert.match(f.title, /confirmed NOT logged/);
 });
 
-test('queueSend dedupes on the week — a second press must not queue a second send', () => {
-  const src = weeklyRisk.queueSend.toString();
-  assert.match(src, /getPendingSaraActionsByType/, 'it looks for an existing pending send');
-  assert.match(src, /payload\?\.week !== week/, 'matched on the week, not the body');
-  assert.match(src, /alreadyQueued: true/, 'and hands back the same action');
-  assert.match(src, /updateSaraActionPayload/, 'refreshing the words so the card is not stale');
+/**
+ * Behaviour, not source text.
+ *
+ * The first version of this test asserted that queueSend's SOURCE contained
+ * `getPendingSaraActionsByType` and `alreadyQueued`. It did — and the dedupe was
+ * broken anyway, because the payload was double-parsed and a defensive catch
+ * swallowed the throw. A test that reads the code cannot catch the code being
+ * wrong, so this one drives the real thing against a scratch DB.
+ */
+test('queueSend dedupes on the week — a second press returns the SAME action', async (t) => {
+  const path = require('path');
+  const os = require('os');
+  const fs = require('fs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-dedupe-'));
+  process.env.NEURO_DB_PATH = path.join(dir, 'scratch.db');
+
+  // Fresh module registry so the DB path is picked up.
+  for (const k of Object.keys(require.cache)) delete require.cache[k];
+  const db = require('../db/database');
+  await db.init();
+  const wr = require('./weekly-risk');
+  const engine = require('./suggestion-engine');
+
+  const week = '2026-08-17';
+  const payload = { week, to: [{ email: 'chris@nurtur.tech' }], subject: 's', body: 'b' };
+  const first = engine.queueAction('send_weekly_risk_report', payload, 'test');
+
+  const pending = db.getPendingSaraActionsByType('send_weekly_risk_report', 50);
+  assert.equal(pending.length, 1);
+  assert.equal(typeof pending[0].payload, 'object',
+    'the db helper parses payload — re-parsing it is what broke the dedupe');
+  assert.equal(pending[0].payload.week, week);
+
+  // The matching logic itself, against exactly what the helper hands back.
+  const match = pending.find(a => (typeof a.payload === 'string' ? JSON.parse(a.payload) : a.payload)?.week === week);
+  assert.ok(match, 'an existing pending send for this week must be found');
+  assert.equal(match.id, first);
+
+  // A different week must NOT match, or every week would reuse one card.
+  const other = pending.find(a => (typeof a.payload === 'string' ? JSON.parse(a.payload) : a.payload)?.week === '2026-08-10');
+  assert.equal(other, undefined);
+
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 });
