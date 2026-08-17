@@ -49,20 +49,30 @@ test('a folded commit row keeps the LATEST commit time, so the day sorts correct
   assert.equal(folded[0].occurredAt.toISOString(), '2026-08-17T18:00:00.000Z');
 });
 
-test('streak skips weekends and does not break on a day still in progress', () => {
-  // Mon 17 Aug 2026 as the anchor. Fri 14th and Thu 13th are working days.
-  const anchor = new Date(2026, 7, 17, 10, 0, 0);
-  const have = new Set(['2026-08-17', '2026-08-14', '2026-08-13']);
-  assert.equal(wins.streakFrom(have, anchor), 3, 'the weekend between Fri and Mon must not break it');
+test('a typical day is the median of recent working days, or nothing at all', () => {
+  // This replaced the streak. The streak counted consecutive days with any win,
+  // which was fine while the ledger only knew about ticked tasks and worthless
+  // the moment meetings were counted honestly: it jumped 4 to 35 in one
+  // backfill and became effectively unbreakable. A number that cannot go down
+  // is not a signal, and NEURO has plenty of those already.
+  const anchor = new Date(2026, 7, 17, 10, 0, 0); // Mon 17 Aug
 
-  // Today empty is a day in progress, not a broken streak — the count starts
-  // at yesterday. Getting this wrong means the streak reads 0 every morning,
-  // which is the single most demoralising possible bug in this feature.
-  const withoutToday = new Set(['2026-08-14', '2026-08-13']);
-  assert.equal(wins.streakFrom(withoutToday, anchor), 2);
+  // Thu 13, Fri 14, and the three weekdays before. Today is excluded (still in
+  // progress) and so are weekends (a quiet Sunday is not a bad day).
+  const byDay = new Map([
+    ['2026-08-17', 99],
+    ['2026-08-14', 7], ['2026-08-13', 4], ['2026-08-12', 4],
+    ['2026-08-11', 3], ['2026-08-10', 30],
+  ]);
+  assert.equal(wins.typicalDay(byDay, anchor), 4, 'median, so one huge day cannot drag it up');
 
-  // A genuine gap on a working day does end it.
-  assert.equal(wins.streakFrom(new Set(['2026-08-17', '2026-08-13']), anchor), 1);
+  // Below five days of data it refuses to answer rather than inventing a
+  // baseline from three points — the same refusal stress-score makes.
+  const thin = new Map([['2026-08-14', 7], ['2026-08-13', 4]]);
+  assert.equal(wins.typicalDay(thin, anchor), null);
+
+  // A day with no ledger data is not a zero — it is a day nobody asked about.
+  assert.equal(wins.typicalDay(new Map(), anchor), null);
 });
 
 test('a bare SQLite timestamp is read as UTC, not local', () => {
@@ -271,15 +281,18 @@ test('no signed-in address means no meetings counted, not all of them', () => {
 test('the headline states the day, and says nothing at all about zero', () => {
   // Pure — a summary in, a string out. Shared by the tick acknowledgement in
   // SARA and the EOD nudge so the two cannot word it differently.
-  assert.equal(wins.headline({ doneToday: 5, streakDays: 4 }), '5 finished today · 4-day streak');
-  assert.equal(wins.headline({ doneToday: 1, streakDays: 1 }), '1 finished today',
-    'a one-day "streak" is just today, and naming it as a streak is padding');
-  assert.equal(wins.headline({ doneToday: 3, streakDays: 0 }), '3 finished today');
+  assert.equal(wins.headline({ doneToday: 13, typical: 4 }), '13 finished today — double your usual');
+  assert.equal(wins.headline({ doneToday: 6, typical: 4 }), '6 finished today — above your usual 4');
+  // An ordinary day is stated plainly. Dressing it up is how the line stops
+  // being read, and an average day is not a failure that needs softening.
+  assert.equal(wins.headline({ doneToday: 4, typical: 4 }), '4 finished today');
+  // No baseline yet: state the count, claim no comparison.
+  assert.equal(wins.headline({ doneToday: 3, typical: null }), '3 finished today');
 
   // There is no encouraging version of zero. A cheerful line over an empty
   // count is the register the voice spec rejects, and a quiet day is exactly
   // where an invented win would read as false.
-  assert.equal(wins.headline({ doneToday: 0, streakDays: 4 }), null);
+  assert.equal(wins.headline({ doneToday: 0, typical: 4 }), null);
   assert.equal(wins.headline(null), null);
   assert.equal(wins.headline({}), null);
 });

@@ -344,3 +344,14 @@
   padding: 0 0.3rem;
   flex: none;
 }
+
+/* Momentum, full width and alone.
+   It used to sit in a two-column grid beside "What you're pushing away", so
+   half the reward surface was a list of failures at equal weight. The avoidance
+   card now comes after the wins, once the day has been credited. */
+.adhd__solo { display: block; }
+.adhd__solo .adhd__card { margin-bottom: 0; }
+
+/* The count carries the block, so it is sized like a headline rather than a
+   stat in a row of stats. */
+.adhd__solo .adhd__big { font-size: 3.2rem; line-height: 1; }

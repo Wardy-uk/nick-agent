@@ -238,7 +238,15 @@ export default function AdhdPanel({ onNavigate }) {
         )}
       </section>
 
-      <div className="adhd__grid">
+      {/*
+        Momentum is full width and alone. It used to share a two-column grid
+        row with "What you're pushing away", so half the reward surface was a
+        list of what Nick had failed to do — same eyeline, same weight. You
+        cannot feed dopamine and administer guilt on one line. The avoidance
+        card still exists and still matters; it now sits BELOW the wins, after
+        the day has been credited.
+      */}
+      <div className="adhd__solo">
         {/* ── Momentum ── */}
         <section className="adhd__card">
           <h3 className="adhd__h">Momentum</h3>
@@ -246,7 +254,17 @@ export default function AdhdPanel({ onNavigate }) {
             <div className="adhd__big">{momentum.doneToday}</div>
             <div className="adhd__big-label">
               finished today
-              {momentum.streakDays > 0 && <span className="adhd__streak">{momentum.streakDays}-day streak</span>}
+              {/*
+                Compared with his own median working day, not with zero and not
+                with a streak. The streak counted consecutive days with any win
+                and was unbreakable the moment meetings were counted honestly
+                (4 to 35 in one backfill) — a number that cannot go down is
+                wallpaper. Shown only when real: typical is null until there are
+                five working days of ledger to take a median of.
+              */}
+              {momentum.typical > 0 && momentum.doneToday > momentum.typical && (
+                <span className="adhd__streak">above your usual {momentum.typical}</span>
+              )}
             </div>
           </div>
 
@@ -298,23 +316,6 @@ export default function AdhdPanel({ onNavigate }) {
           )}
         </section>
 
-        {/* ── Avoidance radar ── */}
-        <section className="adhd__card">
-          <h3 className="adhd__h">What you're pushing away</h3>
-          {avoidance.signals.length === 0 ? (
-            <p className="adhd__empty">Nothing's been sitting. Good week.</p>
-          ) : (
-            <ul className="adhd__avoid">
-              {avoidance.signals.map((s, i) => (
-                <li className="adhd__avoid-item" key={i}>
-                  <span className="adhd__avoid-label">{s.label}</span>
-                  <span className="adhd__avoid-detail">{s.detail}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="adhd__note">Stated so you can decide, not so you feel bad. Dropping one is a valid answer.</p>
-        </section>
       </div>
 
       {/* ── Quick wins ── */}
@@ -371,6 +372,30 @@ export default function AdhdPanel({ onNavigate }) {
           />
           <button className="adhd__logwin-btn" type="submit" disabled={!win.trim()}>Log</button>
         </form>
+      </section>
+
+      {/*
+        Below the wins, deliberately. This card is honest and it matters, but
+        it was sharing a grid row with Momentum — reward and reproach at equal
+        weight in one eyeline. It reads completely differently once the day has
+        already been credited above it.
+      */}
+      {/* ── Avoidance radar ── */}
+      <section className="adhd__card">
+        <h3 className="adhd__h">What you're pushing away</h3>
+        {avoidance.signals.length === 0 ? (
+          <p className="adhd__empty">Nothing's been sitting. Good week.</p>
+        ) : (
+          <ul className="adhd__avoid">
+            {avoidance.signals.map((s, i) => (
+              <li className="adhd__avoid-item" key={i}>
+                <span className="adhd__avoid-label">{s.label}</span>
+                <span className="adhd__avoid-detail">{s.detail}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="adhd__note">Stated so you can decide, not so you feel bad. Dropping one is a valid answer.</p>
       </section>
     </div>
   );

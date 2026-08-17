@@ -90,7 +90,7 @@ function localDateKey(d) {
   console.log(`[BackfillMeetings] added ${added} of ${considered} qualifying meeting(s)`);
 
   const s = wins.summary();
-  console.log(`[BackfillMeetings] ledger now — today ${s.doneToday}, week ${s.doneThisWeek}, total ${s.total}, streak ${s.streakDays}`);
+  console.log(`[BackfillMeetings] ledger now — today ${s.doneToday}, week ${s.doneThisWeek}, total ${s.total}, typical day ${s.typical ?? "calibrating"}`);
   console.log('[BackfillMeetings] by source (week):', JSON.stringify(s.bySource));
 })().catch((e) => {
   console.error('[BackfillMeetings] Failed:', e.message);

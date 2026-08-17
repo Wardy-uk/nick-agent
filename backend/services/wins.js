@@ -593,26 +593,46 @@ function sync({ since, until } = {}) {
 // ── Reading ──────────────────────────────────────────────────────────────────
 
 /**
- * Consecutive days back from today with at least one win.
+ * A typical working day, as the MEDIAN of recent ones. Null until there is
+ * enough history to mean anything.
  *
- * Kept identical to the rule adhd-dashboard already used so the two cannot
- * drift: weekends do not break a work streak, and today being still empty is a
- * day in progress rather than a broken streak — so the count starts at
- * yesterday when today has nothing yet.
+ * This replaced the streak, and the reason is worth keeping. The streak counted
+ * consecutive days with any win — fine when the ledger only knew about ticked
+ * tasks, and worthless the moment meetings were counted honestly: it jumped
+ * from 4 to 35 and became effectively unbreakable, because Nick has a meeting
+ * or a commit nearly every working day. A number that cannot go down is not a
+ * signal, and it is exactly the kind of number NEURO already has too many of.
  *
- * Pure: takes a Set of date keys and an anchor, touches no DB and no clock.
+ * A median gives the card the one thing a bare count lacks: something to be
+ * compared WITH. And the comparison is Nick against his own normal, never
+ * against zero or against anyone else.
+ *
+ * Median, not mean — one 13-win Monday would drag a mean up and make every
+ * ordinary day read as a failure. Weekends are excluded (a quiet Sunday is not
+ * a bad day) and so is today, which is still in progress and would otherwise
+ * compare itself against itself.
+ *
+ * Pure: takes day counts and an anchor, touches no DB and no clock. Returns
+ * null below MIN_DAYS rather than a number built on three data points — the
+ * same refusal stress-score makes when it reports `calibrating`.
  */
-function streakFrom(daysWithWins, anchor = new Date()) {
-  const has = daysWithWins instanceof Set ? daysWithWins : new Set(daysWithWins);
-  let streak = 0;
-  for (let i = has.has(dateKey(anchor)) ? 0 : 1; i < 365; i++) {
+const TYPICAL_MIN_DAYS = 5;
+const TYPICAL_WINDOW_DAYS = 21;
+
+function typicalDay(byDay, anchor = new Date()) {
+  const counts = [];
+  for (let i = 1; i <= TYPICAL_WINDOW_DAYS; i++) {
     const d = addDays(anchor, -i);
     const dow = d.getDay();
     if (dow === 0 || dow === 6) continue;
-    if (!has.has(dateKey(d))) break;
-    streak++;
+    const key = dateKey(d);
+    if (!byDay.has(key)) continue; // a day with no ledger data is not a zero
+    counts.push(byDay.get(key));
   }
-  return streak;
+  if (counts.length < TYPICAL_MIN_DAYS) return null;
+  counts.sort((a, b) => a - b);
+  const mid = Math.floor(counts.length / 2);
+  return counts.length % 2 ? counts[mid] : Math.round((counts[mid - 1] + counts[mid]) / 2);
 }
 
 /**
@@ -650,7 +670,7 @@ function summary(anchor = new Date()) {
     doneToday: byDay.get(today) || 0,
     doneThisWeek: week,
     total,
-    streakDays: streakFrom(new Set(byDay.keys()), anchor),
+    typical: typicalDay(byDay, anchor),
     last7,
     best7: last7.reduce((m, d) => Math.max(m, d.done), 0),
     bySource: bySource.map(r => ({ source: r.source, count: r.n })),
@@ -720,9 +740,17 @@ function feed({ limit = 50, offset = 0, source = null, dateKey: onDate = null } 
 function headline(summary) {
   const done = summary?.doneToday || 0;
   if (!done) return null;
-  const streak = summary?.streakDays || 0;
   const core = `${done} finished today`;
-  return streak > 1 ? `${core} · ${streak}-day streak` : core;
+
+  // Compared with Nick's own normal, not with zero and not with a streak. Only
+  // when the difference is worth remarking on and only when there is enough
+  // history for `typical` to be real — a comparison drawn from three days is
+  // noise wearing the clothes of a fact.
+  const typical = summary?.typical;
+  if (typeof typical !== 'number' || typical <= 0) return core;
+  if (done >= typical * 2) return `${core} — double your usual`;
+  if (done > typical) return `${core} — above your usual ${typical}`;
+  return core;
 }
 
 /** Today's wins, newest first — what the Today tab reads. */
@@ -762,7 +790,7 @@ module.exports = {
   KNOWN_GAPS,
   // exported for tests — pure, no DB, no clock
   foldCommits,
-  streakFrom,
+  typicalDay,
   dateKey,
   parseDbTime,
 };

@@ -88,7 +88,12 @@ function _momentum(dateKey) {
     // that climbs here is a debt: 159 open tasks, 287 waiting-on, the pending
     // actions queue.
     total: summary.total,
-    streakDays: summary.streakDays,
+    // The streak is gone. It counted consecutive days with any win, which was
+    // fine while the ledger only knew about ticked tasks and worthless the
+    // moment meetings were counted honestly: it jumped 4 → 35 and became
+    // unbreakable. `typical` replaces it with something Nick can be compared
+    // WITH — his own median working day, null until there is enough of it.
+    typical: summary.typical,
     rituals,
     last7: summary.last7,
     best7: summary.best7,

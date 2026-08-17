@@ -106,7 +106,9 @@ export default function Today({ onNavigate }) {
         <span className="today__count">{momentum.doneToday}</span>
         <span className="today__count-label">
           finished today
-          {momentum.streakDays > 0 && <span className="today__streak">{momentum.streakDays}-day streak</span>}
+          {momentum.typical > 0 && momentum.doneToday > momentum.typical && (
+            <span className="today__streak">above your usual {momentum.typical}</span>
+          )}
         </span>
         <span className="today__rituals">
           <span className={momentum.rituals.standup ? 'on' : ''}>{momentum.rituals.standup ? '✓' : '○'}</span>

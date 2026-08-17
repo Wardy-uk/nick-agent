@@ -60,8 +60,13 @@ test('the 7-day trend always has 7 days, including the empty ones', () => {
   assert.equal(m.best7, 1);
 });
 
-test('an empty today does not break yesterday\'s streak', () => {
+test('an empty today reads as a quiet day, not a failure', () => {
   // Nothing logged today at all — the day is in progress, not failed.
+  //
+  // This used to assert a STREAK survived the empty morning. The streak is
+  // gone: once meetings were counted honestly it jumped 4 to 35 and could
+  // barely break, and a number that cannot go down is wallpaper. What matters
+  // now is that an empty today is reported as empty and claims nothing.
   for (let i = 1; i <= 3; i++) {
     const key = dayKey(i);
     const day = new Date(key).getDay();
@@ -70,7 +75,9 @@ test('an empty today does not break yesterday\'s streak', () => {
   }
   fold();
   const m = adhd._momentum(today);
-  assert.ok(m.streakDays >= 1, 'a quiet morning should not read as a broken streak');
+  assert.equal(m.streakDays, undefined, 'the streak must not come back by accident');
+  // Too few working days of history to claim a baseline, so it claims none.
+  assert.equal(m.typical, null);
   assert.equal(m.doneToday, 0);
 });
 
