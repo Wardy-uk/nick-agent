@@ -604,7 +604,26 @@ function syncPeopleNotes({ apply = false } = {}) {
     }
   }
 
-  return { ok: true, apply, changes, scanned: index.scanned, skippedPrep: index.skippedPrep };
+  // The generated 1-2-1 tracker follows the notes (#31). Hooked here rather
+  // than in the scheduler because this is the ONE place the stamps change, so
+  // the tracker cannot render dates that are about to move — and every caller
+  // that stamps notes gets a current tracker without having to remember to.
+  //
+  // Only on `apply`: a dry run must stay read-only, which is the whole point of
+  // having one. Never allowed to fail the sync — the stamps are the real work
+  // and a rendering error must not roll them back or report them as failed.
+  let tracker = null;
+  if (apply) {
+    try {
+      tracker = require('./one-to-one-tracker').render({ apply: true });
+      if (!tracker.ok) console.warn('[1-2-1] tracker not written:', tracker.error);
+    } catch (e) {
+      console.error('[1-2-1] tracker render failed:', e.message);
+      tracker = { ok: false, error: e.message };
+    }
+  }
+
+  return { ok: true, apply, changes, scanned: index.scanned, skippedPrep: index.skippedPrep, tracker };
 }
 
 module.exports = {

@@ -52,6 +52,24 @@ router.post('/sync', (req, res) => {
   }
 });
 
+/**
+ * POST /api/1to1/tracker { apply? } — regenerate `Areas/1-2-1 Tracker.md` (#31).
+ *
+ * Dry-run by default, returning the table it WOULD write. The nightly sync
+ * calls this itself via `syncPeopleNotes`; this exists so it can be inspected
+ * and forced without waiting for 10pm.
+ */
+router.post('/tracker', (req, res) => {
+  try {
+    const tracker = require('../services/one-to-one-tracker');
+    const result = tracker.render({ apply: req.body?.apply === true });
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    console.error('[1to1/tracker]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Propose a slot. Reads the calendar; creates nothing.
 router.post('/propose', async (req, res) => {
   try {

@@ -123,6 +123,13 @@ function readPeople({ force = false } = {}) {
           email: fm.email || '',
           status: fm.status || '',
           cadence: fm.cadence || '',
+          // The 1-2-1 fields, read here so the tracker and the board cannot
+          // disagree about what a note says. `1-2-1-booked` and
+          // `next-1-2-1-due` are DIFFERENT questions — one is a diary entry,
+          // the other is when the next one is owed (see CLAUDE.md, 16 Aug).
+          last121: fm['last-1-2-1'] || '',
+          next121Due: fm['next-1-2-1-due'] || '',
+          booked121: fm['1-2-1-booked'] || '',
           directReport: _truthy(fm['direct-report']),
           archived: _truthy(fm.archived),
           archivedReason: fm['archived-reason'] || '',

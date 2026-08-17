@@ -235,8 +235,19 @@ function teamHealthSnapshot({ team, severity = 'high' } = {}) {
   const vault = VAULT_PATH();
   if (!vault) return { status: 'error', error: 'OBSIDIAN_VAULT_PATH not configured' };
 
+  // An unknown team is rejected BEFORE the roster is read, not inferred from an
+  // empty result. `allPeople` falls back to everybody when the filter does not
+  // match, so `!people.length` could only ever be true when the whole roster was
+  // empty — which meant `?team=Nope` answered ok:true with all 39 issues while
+  // labelling itself `team: "Nope"`. A filter that silently widens to everyone
+  // is worse than an error: the caller cannot tell it was ignored.
+  const known = teamRoster.teamNames();
+  if (team && !known.includes(team)) {
+    return { status: 'error', error: `Unknown team: ${team}. Valid: ${known.join(', ')}` };
+  }
+
   const people = allPeople(team);
-  if (!people.length) return { status: 'error', error: `Unknown team: ${team}. Valid: ${teamRoster.teamNames().join(', ')}` };
+  if (!people.length) return { status: 'error', error: 'No people found — is the People/ folder readable?' };
 
   const filter = normaliseSeverityFilter(severity);
   const perPerson = people.map(analysePerson);

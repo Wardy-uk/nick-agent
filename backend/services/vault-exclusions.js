@@ -50,6 +50,12 @@ const GENERATED_FILE_PATTERNS = [
   /^NEURO Tasks \(export\)\.md$/i,
   /^Master Todo\.md$/i,
   /^MoSCoW - Open Actions.*\.md$/i,
+  // The 1-2-1 tracker became generated in #31. Measured before adding it: it
+  // was already holding 37 extracted_entities rows (16 person, 18 mention) and
+  // 3 embedding chunks — a table naming all 13 reports outranks their actual
+  // meetings on any "who is mentioned where" query while saying nothing, which
+  // is exactly what #34 removed for the MoSCoW worksheets.
+  /^1-2-1 Tracker\.md$/i,
   /\.backup-/i,
   /\.sync-conflict-/i,
 ];
