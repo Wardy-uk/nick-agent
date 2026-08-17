@@ -2,23 +2,10 @@
 
 const vaultCache = require('./vault-cache');
 
-const DIRECT_REPORTS = [
-  'Abdi Mohamed',
-  'Arman Shazad',
-  'Luke Scaife',
-  'Stephen Mitchell',
-  'Willem Kruger',
-  'Nathan Rutland',
-  'Adele Norman-Swift',
-  'Heidi Power',
-  'Hope Goodall',
-  'Maria Pappa',
-  'Naomi Wentworth',
-  'Sebastian Broome',
-  'Zoe Rees',
-  'Isabel Busk',
-  'Kayleigh Russell',
-];
+// Derived from People/ frontmatter (#13) rather than typed here. This list had
+// Arman Shazad on it three days after he left the business — which meant mail
+// from a departed colleague still scored as a direct report.
+const teamRoster = require('./team-roster');
 
 const LEADERSHIP_SENDERS = [
   'Chris Middleton',
@@ -163,7 +150,9 @@ function isKnownPerson(fromName) {
 
 function isDirectReport(fromName) {
   const low = words(fromName);
-  return DIRECT_REPORTS.some((name) => low.includes(words(name)));
+  // Matched on the full name, as before — `words()` normalises both sides, and
+  // a bare first name is not an identifier (mistakes.md, 15 Aug).
+  return teamRoster.directReports().some((p) => low.includes(words(p.name)));
 }
 
 function isLeadershipSender(fromName) {

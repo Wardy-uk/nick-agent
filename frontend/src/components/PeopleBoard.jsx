@@ -7,6 +7,12 @@ import './PeopleBoard.css';
 // Current direct reports, grouped for display. Leavers and people who move to
 // another manager come out of here AND get `archived: true` in their People note
 // — the note is what the backend scan reads, this list is what the board draws.
+//
+// This copy was the one kept up to date: when #13 found the same roster typed
+// out in six other places, all six had drifted and this one had not. It is kept
+// hardcoded because it carries PeopleHR ids and display notes that no People
+// note holds — but it is still a copy, so if it ever disagrees with the vault,
+// the vault wins. `GET /api/team-health/roster` is the derived truth.
 const TEAMS = {
   '2nd Line Technical Support': [
     { name: 'Abdi Mohamed', id: 'D2V00471', role: '2nd Line Support Analyst' },

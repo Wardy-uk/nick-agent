@@ -6,6 +6,46 @@ import './ChatPanel.css';
 
 const STORAGE_KEY = 'neuro_last_conversation_id';
 
+/**
+ * The roster, fetched rather than typed (#13).
+ *
+ * This file carried a hardcoded list of fifteen first names that still included
+ * Arman (left the business) and Willem (moved teams). The frontend cannot
+ * require a backend service, which is how it got there — so the roster now
+ * comes from `/api/team-health/roster`, which derives it from People/
+ * frontmatter and does the ambiguous-first-name filtering server-side.
+ *
+ * Module-level so the whole panel shares one fetch, and deliberately never
+ * falls back to a baked-in list: no roster means no draft button, which is a
+ * missing affordance rather than a document filed under a departed colleague.
+ */
+let _rosterCache = null;
+let _rosterPromise = null;
+
+function fetchRoster() {
+  if (_rosterCache) return Promise.resolve(_rosterCache);
+  if (!_rosterPromise) {
+    _rosterPromise = apiFetch('/api/team-health/roster')
+      .then(r => r.json())
+      .then(d => {
+        _rosterCache = d?.ok ? { firstNames: d.firstNames || {}, people: d.people || [] } : { firstNames: {}, people: [] };
+        return _rosterCache;
+      })
+      .catch(() => ({ firstNames: {}, people: [] }));
+  }
+  return _rosterPromise;
+}
+
+function useRoster() {
+  const [roster, setRoster] = useState(_rosterCache);
+  useEffect(() => {
+    let live = true;
+    fetchRoster().then(r => { if (live) setRoster(r); });
+    return () => { live = false; };
+  }, []);
+  return roster;
+}
+
 // Detect if a message contains actionable language
 function extractActionableItems(text) {
   const ACTION_PATTERNS = [
@@ -99,16 +139,25 @@ function TodoSaveButton({ messageContent, apiUrlFn }) {
   );
 }
 
-function detectPersonDraft(userMessage, assistantMessage) {
-  if (!userMessage || !assistantMessage) return null;
-  const TEAM_MEMBERS = [
-    'Abdi', 'Arman', 'Luke', 'Stephen', 'Willem', 'Nathan',
-    'Adele', 'Heidi', 'Hope', 'Maria', 'Naomi', 'Sebastian', 'Zoe',
-    'Isabel', 'Kayleigh'
-  ];
-  const mentionedPerson = TEAM_MEMBERS.find(name =>
-    userMessage.toLowerCase().includes(name.toLowerCase())
-  );
+function detectPersonDraft(userMessage, assistantMessage, roster) {
+  if (!userMessage || !assistantMessage || !roster) return null;
+
+  const low = userMessage.toLowerCase();
+  const hasWord = (term) => {
+    const esc = term.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, 'i').test(low);
+  };
+
+  // Full name first, then a first name that identifies exactly one person. The
+  // server has already dropped the ambiguous ones, so "Nathan" never resolves
+  // while both Nathans exist.
+  let mentionedPerson = (roster.people || []).map(p => p.name).find(hasWord);
+  if (!mentionedPerson) {
+    const entry = Object.entries(roster.firstNames || {}).find(([first]) => hasWord(first));
+    // Resolve to the FULL name: it is what lands in the document's `person:`
+    // frontmatter, and People notes are keyed on full names.
+    mentionedPerson = entry ? entry[1] : null;
+  }
   if (!mentionedPerson) return null;
 
   const isDraft = /draft|write|put together|performance|review|feedback|pip|summary/i.test(userMessage);
@@ -130,7 +179,8 @@ function detectPersonDraft(userMessage, assistantMessage) {
 }
 
 function SaveDocButton({ userMessage, assistantContent }) {
-  const draft = detectPersonDraft(userMessage, assistantContent);
+  const roster = useRoster();
+  const draft = detectPersonDraft(userMessage, assistantContent, roster);
   const [saved, setSaved] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 

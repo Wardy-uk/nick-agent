@@ -19,7 +19,11 @@ function queue() {
       {
         key: 'TECH-4412',
         summary: 'Portal login loop after SSO',
-        assignee: 'Arman',
+        // Names here must be people who currently work for Nick (#13): this
+        // fixture is the OUTAGE fallback, so it is what the kiosk shows on the
+        // day the live sources are unreachable — the worst moment to be naming
+        // someone who left the business.
+        assignee: 'Luke',
         slaMins: 120,
         take: "Customer escalated twice. Picked up, no response logged yet.",
       },
@@ -85,7 +89,7 @@ function people() {
     { name: 'Abdi', role: 'Support Engineer', metric: 'QA 82%', status: 'watch', flag: "carrying 40% of today's queue" },
     { name: 'Adele', role: 'Support Engineer', metric: 'QA 91%', status: 'solid', flag: 'three consecutive green QA scores' },
     { name: 'Nathan', role: 'Support Engineer', metric: 'QA 74%', status: 'slipping', flag: 'no ticket response logged since Wednesday' },
-    { name: 'Arman', role: 'Support Engineer', metric: 'QA 88%', status: 'solid', flag: 'on top of escalations' },
+    { name: 'Luke', role: 'Support Engineer', metric: 'QA 88%', status: 'solid', flag: 'on top of escalations' },
   ];
   const needAttention = members.filter((m) => m.status !== 'solid').length;
   return {

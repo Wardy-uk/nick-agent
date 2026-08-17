@@ -15,14 +15,11 @@ const fs = require('fs');
 
 const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
 
-// Team members for attendee matching
-const TEAM_MEMBERS = [
-  'Abdi Mohamed', 'Arman Shazad', 'Luke Scaife', 'Stephen Mitchell',
-  'Willem Kruger', 'Nathan Rutland', 'Adele Norman-Swift', 'Heidi Power',
-  'Hope Goodall', 'Maria Pappa', 'Naomi Wentworth', 'Sebastian Broome',
-  'Zoe Rees', 'Isabel Busk', 'Kayleigh Russell', 'Chris Middleton',
-  'Beth', 'Paul', 'Damon', 'Ricky'
-];
+// Attendee matching reads People/ frontmatter (#13). The hardcoded list this
+// replaced still carried Arman (left the business) and Willem (moved teams),
+// and four bare first names — 'Beth', 'Paul', 'Damon', 'Ricky' — that no rule
+// could disambiguate.
+const teamRoster = require('../services/team-roster');
 
 // GET /api/meeting-prep — next upcoming meeting with prep
 router.get('/', async (req, res) => {
@@ -445,19 +442,34 @@ function _buildPrep(meeting) {
   return prep;
 }
 
+/**
+ * Which of Nick's people this meeting is about.
+ *
+ * Matching is on the FULL name, or on a first name that identifies exactly one
+ * person — the rule `entities.getRoster().firstNames` already encodes and the
+ * one this file's `_buildPrep` uses for waiting-on enrichment.
+ *
+ * The old rule was "any name part longer than 2 characters, anywhere in the
+ * string", which matched substrings as well as words. Two ways that misfires on
+ * real subjects: a surname fragment inside another word, and — because the
+ * roster contains Hope Goodall — the ordinary English "Hope you're well" or
+ * "Hope this works" naming a person in every meeting that says it. Whole-word
+ * matching costs nothing and removes both.
+ */
 function _matchPeople(subject, organizer) {
   const matched = new Set();
-  const subjectLower = (subject || '').toLowerCase();
-  const organizerLower = (organizer || '').toLowerCase();
+  const haystack = `${subject || ''} ${organizer || ''}`.toLowerCase();
+  const hasWord = (term) => {
+    // Escaped, then bounded: a name may legitimately contain '-' or '.'
+    const esc = term.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, 'i').test(haystack);
+  };
 
-  for (const member of TEAM_MEMBERS) {
-    const parts = member.split(' ');
-    for (const part of parts) {
-      if (part.length > 2 && (subjectLower.includes(part.toLowerCase()) || organizerLower.includes(part.toLowerCase()))) {
-        matched.add(member);
-        break;
-      }
-    }
+  for (const person of teamRoster.directReports()) {
+    if (hasWord(person.name)) matched.add(person.name);
+  }
+  for (const [first, full] of teamRoster.reportFirstNames()) {
+    if (hasWord(first)) matched.add(full);
   }
 
   return [...matched];

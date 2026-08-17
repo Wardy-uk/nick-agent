@@ -13,8 +13,11 @@
  *   med   — elevated: 1:1 due <= 3d, no meeting in 30-45d, goal due < 21d
  *   low   — awareness: stale meeting 45-60d, action overdue < 7d
  *
- * TEAMS list is duplicated from the frontend PeopleBoard by design (speed
- * over purity). If this goes stale, hoist it into settings.
+ * The TEAMS list used to be duplicated from the frontend PeopleBoard "by design
+ * (speed over purity)", with a note saying to hoist it somewhere shared if it
+ * ever went stale. It went stale — see `team-roster.js` for the four ways — so
+ * it is now derived from People/ frontmatter and exposed as `TEAMS` for the
+ * handful of callers that read the labels.
  */
 
 const fs = require('fs');
@@ -25,25 +28,25 @@ const actionItems = require('./action-items');
 
 const VAULT_PATH = () => process.env.OBSIDIAN_VAULT_PATH || '';
 
-// Mirrors frontend/src/components/PeopleBoard.jsx TEAMS
-const TEAMS = {
-  '2nd Line Technical Support': [
-    'Abdi Mohamed', 'Arman Shazad', 'Luke Scaife', 'Stephen Mitchell',
-    'Willem Kruger', 'Nathan Rutland',
-  ],
-  '1st Line Customer Care': [
-    'Adele Norman-Swift', 'Heidi Power', 'Hope Goodall', 'Maria Pappa',
-    'Naomi Wentworth', 'Sebastian Broome', 'Zoe Rees',
-  ],
-  'Digital Design': [
-    'Isabel Busk', 'Kayleigh Russell',
-  ],
-};
+// Derived from People/ frontmatter, never typed here (#13). The array this
+// replaced had drifted four ways: it still carried Arman (left the business)
+// and Willem (moved teams), and had Nathan Rutland and Sebastian Broome on each
+// other's lines. The vault was right about all four.
+//
+// A getter rather than a constant, because the roster is now a live read with
+// its own 5-minute cache — freezing it at module load would reintroduce exactly
+// the staleness this fixes, just with a shorter half-life.
+const teamRoster = require('./team-roster');
+
+function getTeams() {
+  return teamRoster.teams();
+}
 
 function allPeople(teamFilter) {
-  if (teamFilter && TEAMS[teamFilter]) return TEAMS[teamFilter].map(name => ({ name, team: teamFilter }));
+  const teams = getTeams();
+  if (teamFilter && teams[teamFilter]) return teams[teamFilter].map(name => ({ name, team: teamFilter }));
   const out = [];
-  for (const [team, names] of Object.entries(TEAMS)) {
+  for (const [team, names] of Object.entries(teams)) {
     for (const name of names) out.push({ name, team });
   }
   return out;
@@ -233,7 +236,7 @@ function teamHealthSnapshot({ team, severity = 'high' } = {}) {
   if (!vault) return { status: 'error', error: 'OBSIDIAN_VAULT_PATH not configured' };
 
   const people = allPeople(team);
-  if (!people.length) return { status: 'error', error: `Unknown team: ${team}. Valid: ${Object.keys(TEAMS).join(', ')}` };
+  if (!people.length) return { status: 'error', error: `Unknown team: ${team}. Valid: ${teamRoster.teamNames().join(', ')}` };
 
   const filter = normaliseSeverityFilter(severity);
   const perPerson = people.map(analysePerson);
@@ -281,4 +284,10 @@ function teamHealthSnapshot({ team, severity = 'high' } = {}) {
   };
 }
 
-module.exports = { teamHealthSnapshot, TEAMS };
+// `TEAMS` is kept as a getter rather than a plain object: every existing caller
+// reads it as `Object.keys(...)` at request time, and a frozen snapshot is what
+// made the old list wrong in the first place.
+module.exports = {
+  teamHealthSnapshot,
+  get TEAMS() { return getTeams(); },
+};

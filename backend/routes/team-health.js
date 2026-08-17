@@ -27,4 +27,30 @@ router.get('/teams', (_req, res) => {
   res.json({ ok: true, teams: Object.keys(teamHealth.TEAMS) });
 });
 
+/**
+ * GET /api/team-health/roster — the live roster, for clients that were carrying
+ * their own copy of it (#13).
+ *
+ * The frontend cannot require a backend service, which is exactly why
+ * `ChatPanel` ended up with a hardcoded list of fifteen first names. Returns
+ * both the full names and the first names that are unambiguous, so a caller
+ * never has to re-derive that rule and get it wrong.
+ */
+router.get('/roster', (_req, res) => {
+  try {
+    const roster = require('../services/team-roster');
+    res.json({
+      ok: true,
+      teams: roster.teams(),
+      people: roster.directReports().map(p => ({
+        name: p.name, role: p.role, team: p.group, email: p.email,
+      })),
+      firstNames: Object.fromEntries(roster.reportFirstNames()),
+    });
+  } catch (e) {
+    console.error('[team-health/roster]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 module.exports = router;
