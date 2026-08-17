@@ -87,6 +87,25 @@ async function sync({ days = 14, checkArrivals = true } = {}) {
 
   try { require('./working-memory').invalidate('calendar synced'); } catch {}
 
+  // The 5-minute Plaud write-up block after every meeting Nick created or
+  // accepted. Hooked here rather than on its own cron for the same reason the
+  // 1-2-1 tracker hangs off syncPeopleNotes: this is the one place a fresh view
+  // of the calendar exists, so a block can never be placed around a meeting
+  // that has already moved.
+  //
+  // Deliberately ABOVE the cold-start return and deliberately NOT gated on
+  // `newEventIds`. Both would be wrong: accepting an invite that arrived
+  // yesterday is the central case and that event is not new, and a cold cache
+  // (a restored DB) is not a reason to stop writing up meetings. Repeats are
+  // held off by the service's own ledger, not by arrival detection.
+  //
+  // Gated on PLAUD_ADMIN_BLOCKS_ENABLED and never allowed to fail the sync.
+  try {
+    await require('./plaud-admin-blocks').syncHook(events);
+  } catch (e) {
+    console.warn('[CalendarSync] Plaud admin blocks failed:', e.message);
+  }
+
   // First run has no history, so everything looks new. Reporting 50 "new"
   // meetings would queue a chaser for each — treat a cold cache as a baseline.
   const coldStart = known.size === 0;

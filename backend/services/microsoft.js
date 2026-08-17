@@ -456,7 +456,7 @@ async function fetchCalendarEvents(startDate, endDate) {
       // local, which is what "events on the 14th" is supposed to mean.
       // Paged — see graphFetchAll. $top is the PAGE size now, not the answer.
       const data = await graphFetchAll(
-        `/me/calendarView?startDateTime=${start}&endDateTime=${end}&$top=100&$orderby=start/dateTime&$select=id,subject,start,end,location,isAllDay,showAs,isCancelled,attendees,organizer`,
+        `/me/calendarView?startDateTime=${start}&endDateTime=${end}&$top=100&$orderby=start/dateTime&$select=id,subject,start,end,location,isAllDay,showAs,isCancelled,attendees,organizer,isOrganizer,responseStatus,type,seriesMasterId`,
         token,
         { Prefer: `outlook.timezone="${EVENT_TIMEZONE}"` }
       );
@@ -486,6 +486,19 @@ async function fetchCalendarEvents(startDate, endDate) {
               status: a.status?.response || 'none',
             })),
             organizer: event.organizer?.emailAddress?.name || null,
+            organizerEmail: event.organizer?.emailAddress?.address || null,
+            // Whether Nick CREATED or ACCEPTED this, which is a different
+            // question from whether it is in his diary — a not-yet-answered
+            // invite sits in calendarView exactly like an accepted one.
+            // 'organizer' | 'accepted' | 'tentativelyAccepted' | 'declined' |
+            // 'notResponded' | 'none'. The NOVA bridge branch below cannot
+            // supply either, so both stay null there and callers must treat
+            // null as "unknown", never as a no.
+            isOrganizer: typeof event.isOrganizer === 'boolean' ? event.isOrganizer : null,
+            responseStatus: event.responseStatus?.response || null,
+            // 'singleInstance' | 'occurrence' | 'exception' | 'seriesMaster'
+            type: event.type || null,
+            seriesMasterId: event.seriesMasterId || null,
           };
         });
       }
