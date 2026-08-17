@@ -478,3 +478,51 @@ CREATE TABLE IF NOT EXISTS management_log (
 CREATE INDEX IF NOT EXISTS idx_mgmt_log_due ON management_log(due_date);
 CREATE INDEX IF NOT EXISTS idx_mgmt_log_status ON management_log(status);
 CREATE INDEX IF NOT EXISTS idx_mgmt_log_entry ON management_log(entry_date DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Wins — the derived ledger of finished work.
+--
+-- Measured before building: over 30 days NEURO recorded FOUR completions,
+-- against 271 commits, 57 executed SARA actions and a full diary. The Momentum
+-- card on the Today tab read 0 with no streak on every one of the nine visits
+-- it got. The reward surface existed and was starved, because the only thing
+-- feeding it was self-report — a tickbox — and self-report is the first thing
+-- avoidance eats.
+--
+-- So a win is DETECTED, not declared. Same rule the rest of the system already
+-- follows: who reports to Nick is READ not typed, 1-2-1s are detected not
+-- declared, the tracker is generated. This was the last hand-typed ledger.
+--
+-- Rows are materialised rather than derived on read, following sent_replies:
+-- several sources are ROLLING caches (calendar_cache, the triage blob) that
+-- lose their own history, and a counter that shrinks when a cache rolls is
+-- worse than no counter. Materialising also makes the feed scrollable, which
+-- is half of why `git log` feels good.
+--
+-- dedupe_key is UNIQUE so sync() is idempotent: it runs hourly, on startup and
+-- over a backfill range, and a second sighting of the same commit or action
+-- folds rather than inflating the count. Getting that wrong would make the
+-- number climb on its own, which destroys the only property that matters here
+-- — that the number is TRUE.
+CREATE TABLE IF NOT EXISTS wins (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- Local date the work happened, never toISOString() (the Pi may run UTC).
+  date_key     TEXT NOT NULL,
+  occurred_at  TEXT NOT NULL,
+  source       TEXT NOT NULL,   -- git | action | reply | task | ritual | decision | one-to-one | manual
+  kind         TEXT NOT NULL,   -- finer label within a source, e.g. 'reply_email'
+  text         TEXT NOT NULL,
+  -- What proves it: a commit sha, a sara_action id, a task id, a note path.
+  -- A win with no evidence is an assertion, and an assertion is what the old
+  -- tickbox already was. 'manual' is the one source allowed a null here.
+  evidence     TEXT,
+  -- Commits fold to one row per repo per day and carry the count, so git can
+  -- never dominate the feed the way one long transcript once dominated search.
+  count        INTEGER NOT NULL DEFAULT 1,
+  dedupe_key   TEXT NOT NULL UNIQUE,
+  created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wins_date ON wins(date_key DESC);
+CREATE INDEX IF NOT EXISTS idx_wins_occurred ON wins(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_wins_source ON wins(source);

@@ -358,6 +358,25 @@ function start() {
     });
   });
 
+  // Every hour — fold finished work into the wins ledger.
+  //
+  // Deliberately NOT a scheduleDaily/TRACKED_JOBS job. sync() is idempotent and
+  // reads a trailing window, so a missed hour is corrected by the next one and
+  // by the sync-on-read in the route — there is nothing for catch-up to replay
+  // and nothing for state-of-play to warn about. Same call as bank-holidays:
+  // a board that warns about a benign lapse is one nobody reads.
+  cron.schedule('20 * * * *', () => {
+    try {
+      const { added, gaps } = require('./wins').sync();
+      if (added) console.log(`[Scheduler] Wins: +${added}`);
+      // A source that could not be read is logged, never silently treated as a
+      // day with no wins — that silence is the bug this feature exists to fix.
+      for (const g of gaps) console.warn(`[Scheduler] Wins gap — ${g}`);
+    } catch (e) {
+      console.error('[Scheduler] Wins sync failed:', e.message);
+    }
+  });
+
   // 10pm nightly — build daily activity summary + entity extraction + write observations
   scheduleDaily('nightly-rollup', '0 22 * * *', 22, 0, () => {
     console.log('[Scheduler] Running nightly activity rollup...');

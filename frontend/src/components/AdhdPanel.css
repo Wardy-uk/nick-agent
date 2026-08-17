@@ -308,3 +308,39 @@
 .adhd__assumed { color: var(--text-muted); font-style: italic; }
 .adhd__session-int { color: var(--text-muted); font-size: 0.8rem; margin: 0.35rem 0 0; }
 .adhd__session-actions { display: flex; gap: 0.6rem; margin-top: 1.1rem; flex-wrap: wrap; }
+
+/* The counters that only go up — the first place in NEURO where a growing
+   number is good news, rather than a debt. */
+.adhd__totals {
+  display: flex;
+  gap: 1.2rem;
+  margin-top: 0.9rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.adhd__totals strong { color: var(--text-primary); font-size: 1rem; }
+
+.adhd__sources {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* A source that could not be read, said out loud. Silently reporting a smaller
+   number is the bug this card had for months. */
+.adhd__gap {
+  margin: 0.6rem 0 0;
+  font-size: 0.75rem;
+  color: var(--warning);
+}
+
+.adhd__win-src {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  flex: none;
+}

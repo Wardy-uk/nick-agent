@@ -11,17 +11,30 @@ process.env.NEURO_DB_PATH = path.join(root, 'adhd.db');
 process.env.OBSIDIAN_VAULT_PATH = path.join(root, 'vault');
 fs.mkdirSync(path.join(process.env.OBSIDIAN_VAULT_PATH, 'Tasks'), { recursive: true });
 
+// Not a git repo, so the git source reports a gap rather than pulling this
+// checkout's real commits into the assertions below.
+process.env.WINS_GIT_REPOS = path.join(root, 'not-a-repo');
+
 const db = require('../db/database');
 const adhd = require('./adhd-dashboard');
+const wins = require('./wins');
 
-const today = new Date().toISOString().split('T')[0];
-const dayKey = (n) => new Date(Date.now() - n * 86400000).toISOString().split('T')[0];
+// Local dates, matching the ledger. The old UTC-derived keys agreed with it for
+// 23 hours a day and disagreed for the other one.
+const dayKey = (n) => wins.dateKey(new Date(Date.now() - n * 86400000));
+const today = dayKey(0);
 
 test.before(async () => { await db.init(); });
 
 test.beforeEach(() => {
   db.getDb().prepare('DELETE FROM activity_log').run();
+  db.getDb().prepare('DELETE FROM wins').run();
 });
+
+// Momentum reads the materialised wins ledger now, so a test that logs activity
+// has to fold it in first. The alternative — having _momentum re-derive on every
+// read — is what made the count unable to survive a rolling cache.
+const fold = () => wins.sync({ since: dayKey(30) });
 
 test('momentum counts finished work, not captured thoughts', () => {
   db.logActivity('task_done', { text: 'Sent the QA summary' }, today);
@@ -30,6 +43,7 @@ test('momentum counts finished work, not captured thoughts', () => {
   db.logActivity('capture', { type: 'note' }, today);
   db.logActivity('chat_message', { topics: ['queue'] }, today);
 
+  fold();
   const m = adhd._momentum(today);
   assert.equal(m.doneToday, 2);
   assert.equal(m.rituals.standup, true);
@@ -38,6 +52,7 @@ test('momentum counts finished work, not captured thoughts', () => {
 
 test('the 7-day trend always has 7 days, including the empty ones', () => {
   db.logActivity('task_done', { text: 'a' }, dayKey(3));
+  fold();
   const m = adhd._momentum(today);
   assert.equal(m.last7.length, 7);
   assert.equal(m.last7[m.last7.length - 1].date, today);
@@ -53,6 +68,7 @@ test('an empty today does not break yesterday\'s streak', () => {
     if (day === 0 || day === 6) continue;
     db.logActivity('task_done', { text: `day-${i}` }, key);
   }
+  fold();
   const m = adhd._momentum(today);
   assert.ok(m.streakDays >= 1, 'a quiet morning should not read as a broken streak');
   assert.equal(m.doneToday, 0);
@@ -62,10 +78,13 @@ test('wins read back as things you did, newest first', () => {
   db.logActivity('task_done', { text: 'Sent the QA summary' }, today);
   db.logActivity('one_two_one_done', { personName: 'Heidi' }, today);
 
-  const wins = adhd._winsToday(today);
-  assert.equal(wins.length, 2);
-  assert.match(wins[0].text, /Heidi/);
-  assert.match(wins[1].text, /QA summary/);
+  fold();
+  const done = adhd._winsToday(today);
+  assert.equal(done.length, 2);
+  assert.match(done[0].text, /Heidi/);
+  assert.match(done[1].text, /QA summary/);
+  // Every detected win names what proves it.
+  assert.ok(done.every(w => w.evidence), 'a win without evidence is an assertion');
 });
 
 test('avoidance needs a pattern — once or twice is just a busy day', () => {

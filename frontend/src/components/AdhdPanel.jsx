@@ -270,6 +270,32 @@ export default function AdhdPanel({ onNavigate }) {
               {momentum.rituals.eod ? '✓' : '○'} EOD
             </span>
           </div>
+
+          {/*
+            The two counters that only go up. Every other growing number in
+            NEURO is a debt — open tasks, waiting-on, the pending queue — and
+            this is the first place growth is good news, so it is on the card
+            rather than a click away.
+          */}
+          <div className="adhd__totals">
+            <span><strong>{momentum.doneThisWeek ?? 0}</strong> this week</span>
+            <span><strong>{momentum.total ?? 0}</strong> all time</span>
+          </div>
+
+          {momentum.bySource?.length > 0 && (
+            <p className="adhd__sources">
+              {momentum.bySource.map(s => `${s.count} ${s.source}`).join(' · ')}
+            </p>
+          )}
+
+          {/*
+            A source that could not be read is NAMED. Silently reporting a
+            smaller number is the exact bug this card had for months: it showed
+            0 finished on days full of finished work, and looked correct doing it.
+          */}
+          {data.gaps?.length > 0 && (
+            <p className="adhd__gap">Couldn't read: {data.gaps.join('; ')}</p>
+          )}
         </section>
 
         {/* ── Avoidance radar ── */}
@@ -322,9 +348,15 @@ export default function AdhdPanel({ onNavigate }) {
         ) : (
           <ul className="adhd__wins">
             {winsToday.map((w, i) => (
-              <li className="adhd__win" key={i}>
+              /*
+                The source is shown, and `evidence` is the tooltip. A win that
+                cannot say what proves it is an assertion — which is exactly what
+                the tickbox this replaced already was.
+              */
+              <li className="adhd__win" key={i} title={w.evidence || 'logged by hand'}>
                 <span className="adhd__win-time">{w.time}</span>
                 <span className="adhd__win-text">{w.text}</span>
+                {w.source && <span className="adhd__win-src">{w.source}</span>}
               </li>
             ))}
           </ul>

@@ -53,54 +53,47 @@ function _parseData(row) {
 /**
  * What has actually moved, today and over the last week.
  *
- * "Done" counts finished work only — tasks completed, rituals done, 1-2-1s held,
- * escalations resolved. Deliberately NOT captures or chat messages: capturing a
- * thought is valuable but it is not progress, and counting it would let a day of
- * pure input read as a productive one.
+ * Reads `services/wins` rather than counting activity_log directly. It used to
+ * do the latter, over a six-event set that only `task_done` and the two rituals
+ * ever actually fired — and MEASURED on the live DB, that came to four
+ * completions in thirty days, against 271 commits and 57 executed SARA actions.
+ * This card was opened nine times in that window and showed 0 with no streak on
+ * every one of them. It was not wrong about the events; it was wrong about what
+ * counts as evidence that Nick did something, because the only thing feeding it
+ * was self-report.
+ *
+ * The wins ledger DETECTS finished work instead — the same rule as "who reports
+ * to Nick is READ, not typed" and "1-2-1s are detected, not declared". `gaps`
+ * travels with it so a source that could not be read is named on the card
+ * rather than quietly lowering the number, which is the failure mode this whole
+ * change exists to remove.
+ *
+ * `rituals` still comes from activity_log: standup and EOD are binary facts
+ * about today, not a count, and the tick marks read them directly.
  */
 function _momentum(dateKey) {
-  const DONE_EVENTS = new Set([
-    'task_done', 'plan_task_done', 'standup_done', 'eod_done',
-    'one_two_one_done', 'escalation_resolved',
-  ]);
+  const wins = require('./wins');
+  const summary = wins.summary();
 
-  const week = db.getActivityForRange(_daysAgoKey(6), dateKey);
-  const byDay = new Map();
-  for (const row of week) {
-    if (!DONE_EVENTS.has(row.event_type)) continue;
-    byDay.set(row.date_key, (byDay.get(row.date_key) || 0) + 1);
-  }
-
-  const last7 = [];
-  for (let i = 6; i >= 0; i--) {
-    const key = _daysAgoKey(i);
-    last7.push({ date: key, done: byDay.get(key) || 0 });
-  }
-
-  const today = week.filter(r => r.date_key === dateKey);
+  const today = db.getActivityForDate(dateKey);
   const rituals = {
     standup: today.some(r => r.event_type === 'standup_done'),
     eod: today.some(r => r.event_type === 'eod_done'),
   };
 
-  // Streak = consecutive days back from today with any finished work. Today not
-  // counting yet is not a broken streak — it's a day in progress, so the count
-  // starts from yesterday when today is still empty.
-  let streak = 0;
-  for (let i = (byDay.get(dateKey) ? 0 : 1); i < 60; i++) {
-    const key = _daysAgoKey(i);
-    const day = new Date(key).getDay();
-    if (day === 0 || day === 6) continue; // weekends don't break a work streak
-    if (!byDay.get(key)) break;
-    streak++;
-  }
-
   return {
-    doneToday: byDay.get(dateKey) || 0,
-    streakDays: streak,
+    doneToday: summary.doneToday,
+    doneThisWeek: summary.doneThisWeek,
+    // The one counter in NEURO where growth is good news. Every other number
+    // that climbs here is a debt: 159 open tasks, 287 waiting-on, the pending
+    // actions queue.
+    total: summary.total,
+    streakDays: summary.streakDays,
     rituals,
-    last7,
-    best7: last7.reduce((max, d) => Math.max(max, d.done), 0),
+    last7: summary.last7,
+    best7: summary.best7,
+    bySource: summary.bySource,
+    knownGaps: summary.knownGaps,
   };
 }
 
@@ -109,31 +102,32 @@ function _momentum(dateKey) {
 /**
  * Today's finished work, newest first, as things you can read back.
  *
- * Sorted on id rather than reversing the query: several wins can land inside the
- * same second, and created_at ties come back in no guaranteed order.
+ * Now the wins ledger's list rather than a second reading of activity_log, so
+ * the card and the count cannot disagree about what a win is — the same reason
+ * cadenceState, working-days and action-presenter each ended up with exactly
+ * one definition three surfaces share.
+ *
+ * `evidence` travels to the client. A win that cannot say what proves it is an
+ * assertion, and an assertion is what the old tickbox already was.
  */
 function _winsToday(dateKey) {
-  const rows = db.getActivityForDate(dateKey);
-  const wins = [];
+  // occurred_at is stored as UTC ISO, so the time is FORMATTED to local rather
+  // than sliced out of the string. Slicing is how every calendar time in NEURO
+  // read an hour early through the whole of BST.
+  const hhmm = (iso) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
 
-  for (const row of rows) {
-    const data = _parseData(row);
-    const time = (row.created_at || '').slice(11, 16);
-    let text = null;
-
-    switch (row.event_type) {
-      case 'task_done': text = data.text || 'Task completed'; break;
-      case 'plan_task_done': if (data.done) text = `90-day plan: ${data.taskText || 'task'}`; break;
-      case 'standup_done': text = 'Standup done'; break;
-      case 'eod_done': text = 'End of day done'; break;
-      case 'one_two_one_done': text = `1-2-1 with ${data.personName || 'a report'}`; break;
-      case 'escalation_resolved': text = `Escalation resolved: ${data.ticketKey || ''}`.trim(); break;
-      default: break;
-    }
-    if (text) wins.push({ id: row.id, time, text, kind: row.event_type });
-  }
-
-  return wins.sort((a, b) => b.id - a.id).map(({ id, ...win }) => win);
+  return require('./wins').winsForDate(dateKey).map(w => ({
+    time: hhmm(w.occurredAt),
+    text: w.text,
+    kind: w.kind,
+    source: w.source,
+    evidence: w.evidence,
+    count: w.count,
+  }));
 }
 
 // ── Avoidance radar ──────────────────────────────────────────────────────────
@@ -325,6 +319,22 @@ async function build() {
 
   const rightNow = await _rightNow();
 
+  // Fold finished work in before reading it back, so the card is never an hour
+  // stale at the moment it is being looked at. Idempotent and cheap; the hourly
+  // scheduled pass exists for the surfaces that never hit this build.
+  //
+  // `gaps` is carried to the client rather than swallowed: a source that could
+  // not be read must be NAMED. This card spent months showing 0 finished on
+  // days full of finished work and looked perfectly correct doing it, and a
+  // count that cannot say what it failed to see is that same bug wearing a
+  // different number.
+  let winGaps = [];
+  try {
+    winGaps = require('./wins').sync().gaps || [];
+  } catch (e) {
+    winGaps = [`wins ledger unavailable — ${e.message}`];
+  }
+
   // The session container (#88) and the return prompt (#89). This panel named
   // activation energy as the blocker and then only ever answered it with a
   // SMALLER task; a started session is the other answer, and the one that keeps
@@ -348,6 +358,7 @@ async function build() {
     avoidance: _avoidance(dateKey),
     quickWins: _quickWins(todos, dateKey),
     openTasks: todos.length,
+    gaps: winGaps,
   };
 
   console.log(`[ADHD] Built in ${Date.now() - t0}ms — done:${payload.momentum.doneToday} wins:${payload.winsToday.length} avoid:${payload.avoidance.signals.length} quick:${payload.quickWins.length} session:${payload.session ? payload.session.status : 'none'}`);

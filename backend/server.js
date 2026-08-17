@@ -187,6 +187,7 @@ app.use('/api/weekly-risk', require('./routes/weekly-risk'));
 app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/calendar', require('./routes/calendar'));
 app.use('/api/adhd', require('./routes/adhd'));
+app.use('/api/wins', require('./routes/wins'));
 app.use('/api/standup-session', require('./routes/standup-session'));
 app.use('/api/outcomes', require('./routes/outcomes'));
 app.use('/api/waiting-on', require('./routes/waiting-on'));
