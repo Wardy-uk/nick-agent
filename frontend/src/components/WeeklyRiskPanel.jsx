@@ -152,6 +152,11 @@ export default function WeeklyRiskPanel() {
     }
   }
 
+  async function doTestSend() {
+    const out = await post('/api/weekly-risk/test-send', {}, 'test');
+    if (out?.ok) setNotice({ tone: 'ok', text: `${out.note} (${out.to})` });
+  }
+
   async function doQueueSend() {
     const out = await post('/api/weekly-risk/queue-send', {}, 'send');
     if (out?.ok) {
@@ -336,6 +341,11 @@ export default function WeeklyRiskPanel() {
             title={ready ? 'Queues for approval — sends nothing' : 'Finish your sections first'}
           >
             {busy === 'send' ? 'Queueing…' : 'Queue send to Chris'}
+          </button>
+          {/* Not gated on `ready` — seeing an unfinished report in an inbox is
+              the point, and the mail itself says which sections are missing. */}
+          <button type="button" onClick={doTestSend} disabled={busy === 'test'}>
+            {busy === 'test' ? 'Sending…' : 'Test send to me'}
           </button>
           <button type="button" onClick={loadPreview} disabled={busy === 'preview'}>
             {busy === 'preview' ? 'Loading…' : preview !== null ? 'Hide preview' : 'Preview note'}

@@ -767,6 +767,64 @@ async function queueSend({ week = weekCommencing(), to = null, force = false } =
   return { ok: true, actionId: id, recipient, subject, report };
 }
 
+/**
+ * Send Nick a copy of the report, to see how it lands in an inbox.
+ *
+ * **Takes no recipient.** The destination is `email-sender.OWN_ADDRESS`, a
+ * constant, and there is no parameter that can change it — which is precisely
+ * why this does not go through the approval gate. That gate exists because
+ * `queueSend` can reach Nick's manager; a call that can only ever reach Nick
+ * has nothing for it to protect, and making him approve his own test twice a
+ * morning is friction that would just get bypassed.
+ *
+ * It deliberately IGNORES the blockers. The whole point is to look at an
+ * unfinished report — but the mail says so, in a banner naming each unanswered
+ * section, so a half-built copy sitting in the inbox can never be mistaken for
+ * the one that went to Chris. The subject carries [TEST] for the same reason:
+ * the failure worth designing against is forwarding the wrong one on.
+ *
+ * The body goes through the same `sendMail` path and the same plain-text
+ * content type as the real send. A test rendered differently to the thing it is
+ * testing is not a test.
+ */
+async function testSend({ week = weekCommencing() } = {}) {
+  const report = await build({ week });
+  const emailSender = require('./email-sender');
+
+  const banner = [
+    '*** TEST COPY — this did not go to Chris ***',
+    '',
+    `Week commencing ${formatUk(week)}. Sent to you only, from the Weekly Risk panel.`,
+    report.blockers.length
+      ? `\nTHIS REPORT IS NOT FINISHED. ${report.blockers.length} section${report.blockers.length === 1 ? '' : 's'} still unanswered:\n${report.blockers.map(b => `  - ${b}`).join('\n')}`
+      : '\nAll sections are complete — this is what Chris would receive.',
+    '',
+    '─'.repeat(60),
+    '',
+  ].join('\n');
+
+  const result = await emailSender.sendMail({
+    to: [{ name: 'Nick Ward', email: emailSender.OWN_ADDRESS }],
+    subject: `[TEST] Weekly Risk & Anomaly Summary — w/c ${formatUk(week)}`,
+    body: banner + report.markdown,
+  });
+
+  if (!result.sent) {
+    const reasons = {
+      auth: 'Not signed in to Microsoft — reconnect 365.',
+      scope: 'Mail.Send not granted — re-consent to Microsoft.',
+      empty_body: 'The report body was empty.',
+    };
+    return { ok: false, error: reasons[result.reason] || `Send failed (${result.reason})` };
+  }
+
+  return {
+    ok: true,
+    to: emailSender.OWN_ADDRESS,
+    unfinished: report.blockers.length,
+  };
+}
+
 function publishedAt(week = weekCommencing()) {
   const raw = db.getState(PUBLISH_KEY(week));
   if (!raw) return null;
@@ -774,7 +832,7 @@ function publishedAt(week = weekCommencing()) {
 }
 
 module.exports = {
-  snapshot, assess, render, build, publish, publishedAt, queueSend,
+  snapshot, assess, render, build, publish, publishedAt, queueSend, testSend,
   getManual, setManual, manualBlockers, emptyManual, carryForward,
   weekCommencing, previousWeek, buildTrend, consecutiveBelowTarget, ragBucket,
   COMPLIANCE_TARGET, SLIDE_WEEKS, UNKNOWN_REASON_ESCALATE_SHARE, SNAPSHOT_STALE_DAYS,

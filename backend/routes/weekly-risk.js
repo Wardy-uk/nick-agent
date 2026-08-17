@@ -107,6 +107,29 @@ router.post('/queue-send', async (req, res) => {
   } catch (err) { fail(res, err); }
 });
 
+/**
+ * POST /api/weekly-risk/test-send — email Nick a copy, to see how it lands.
+ *
+ * Takes NO recipient, deliberately: the address is a constant in email-sender,
+ * so this route cannot be aimed at anybody. That is what makes it safe without
+ * the approval gate — the gate protects against reaching Chris, and this
+ * cannot. It also ignores the blockers, because looking at an unfinished report
+ * is the entire point; the mail says so in a banner and in the subject.
+ */
+router.post('/test-send', async (req, res) => {
+  try {
+    const result = await weeklyRisk.testSend({ week: req.body?.week || weeklyRisk.weekCommencing() });
+    if (!result.ok) return res.status(502).json({ error: result.error });
+    res.json({
+      ok: true,
+      to: result.to,
+      note: result.unfinished
+        ? `Sent to you. ${result.unfinished} section(s) still unanswered — the mail says so.`
+        : 'Sent to you. This is exactly what Chris would receive.',
+    });
+  } catch (err) { fail(res, err); }
+});
+
 // ── Management log ───────────────────────────────────────────────────────────
 
 /** GET /api/weekly-risk/log — rows plus the competency 3/4 assessment. */

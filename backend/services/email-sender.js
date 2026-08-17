@@ -197,4 +197,8 @@ async function sendMail({ to, subject, body, cc = null }) {
   }
 }
 
-module.exports = { sendBriefEmail, sendMail, briefToHtml };
+// Exported so anything sending Nick a copy of something uses the same address
+// rather than declaring a second one. A test send whose destination is a
+// constant cannot be aimed at anybody else, which is what makes it safe to run
+// without an approval gate.
+module.exports = { sendBriefEmail, sendMail, briefToHtml, OWN_ADDRESS: TO_ADDRESS };

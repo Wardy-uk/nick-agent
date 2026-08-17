@@ -323,3 +323,31 @@ test('the live 17 Aug shape produces a real headline, not a dash', () => {
   assert.equal(a.rag.greenPct, 42);
   assert.equal(a.rag.redPct, 57);
 });
+
+// ── Test send ────────────────────────────────────────────────────────────────
+
+test('testSend takes no recipient — it cannot be aimed at anyone but Nick', () => {
+  // The safety property is structural, not a runtime check: there is no
+  // parameter to pass an address through, which is why this needs no approval
+  // gate. If a `to` is ever added, this test should be the thing that objects.
+  // 0 rather than 1: Function.length stops counting at the first defaulted
+  // parameter, and the single options bag is defaulted. What matters is that
+  // nothing positional follows it.
+  assert.equal(weeklyRisk.testSend.length, 0, 'a single defaulted options bag, nothing else');
+  const src = weeklyRisk.testSend.toString();
+  assert.match(src, /OWN_ADDRESS/, 'destination comes from the shared constant');
+  assert.doesNotMatch(src, /\bto\s*=|opts\.to|options\.to/, 'no caller-supplied recipient');
+});
+
+test('the address constant is the one email-sender already owns', () => {
+  const emailSender = require('./email-sender');
+  assert.equal(typeof emailSender.OWN_ADDRESS, 'string');
+  assert.match(emailSender.OWN_ADDRESS, /@/);
+});
+
+test('a test send is marked as one in the subject and the body', () => {
+  const src = weeklyRisk.testSend.toString();
+  assert.match(src, /\[TEST\]/, 'subject is prefixed, so it cannot be forwarded on as the real thing');
+  assert.match(src, /did not go to Chris/, 'the body says who it did not go to');
+  assert.match(src, /NOT FINISHED/, 'an unfinished report names what is missing');
+});
