@@ -63,6 +63,8 @@ export default function WeeklyRiskPanel() {
   const [notice, setNotice] = useState(null);
   const [draft, setDraft] = useState(null);
   const [showLog, setShowLog] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -157,6 +159,40 @@ export default function WeeklyRiskPanel() {
         tone: 'ok',
         text: `Queued for ${out.recipient?.email}. Nothing has been sent — approve it in Actions.`,
       });
+    }
+  }
+
+  /**
+   * The note itself.
+   *
+   * Deliberately fetched and rendered here rather than linked. `apiUrl()` only
+   * builds a path — the PIN is attached by the global fetch interceptor in
+   * api.js, which a plain <a href> navigation never goes through, so the link
+   * form returned "Authentication required". The obvious repair is `?pin=` on
+   * the href, and it is the wrong one: it writes the PIN into browser history,
+   * the URL bar and any proxy log, to save a fetch.
+   */
+  async function loadPreview() {
+    if (preview !== null) { setPreview(null); return; }
+    setBusy('preview');
+    try {
+      const res = await fetch(apiUrl('/api/weekly-risk/markdown'));
+      if (!res.ok) throw new Error(`Preview failed (${res.status})`);
+      setPreview(await res.text());
+    } catch (e) {
+      setNotice({ tone: 'bad', text: e.message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function copyPreview() {
+    try {
+      await navigator.clipboard.writeText(preview || '');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setNotice({ tone: 'bad', text: 'Could not copy — select the text and copy manually.' });
     }
   }
 
@@ -301,11 +337,23 @@ export default function WeeklyRiskPanel() {
           >
             {busy === 'send' ? 'Queueing…' : 'Queue send to Chris'}
           </button>
-          <a className="wr-link" href={apiUrl('/api/weekly-risk/markdown')} target="_blank" rel="noreferrer">Preview note</a>
+          <button type="button" onClick={loadPreview} disabled={busy === 'preview'}>
+            {busy === 'preview' ? 'Loading…' : preview !== null ? 'Hide preview' : 'Preview note'}
+          </button>
         </div>
         <p className="wr-hint">
           Queueing sends nothing. It creates an approval card in <strong>Actions</strong> showing the full report and the exact address.
         </p>
+
+        {preview !== null && (
+          <div className="wr-preview">
+            <div className="wr-preview-bar">
+              <span>The note as it would be published — {preview.length.toLocaleString()} characters</span>
+              <button type="button" onClick={copyPreview}>{copied ? 'Copied' : 'Copy'}</button>
+            </div>
+            <pre>{preview}</pre>
+          </div>
+        )}
       </section>
 
       <section className="wr-section">
