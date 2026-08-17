@@ -177,7 +177,13 @@ const PRESENTERS = {
         field('Vault copy', p.vaultPath),
       ],
       body: trimmed(p.body) || null,
-      bodyLabel: 'This is what will be sent, in full',
+      // The WORDS are exactly what is sent; the formatting is applied on send.
+      // The executor runs this same string through weekly-risk.toEmailHtml(),
+      // so Chris receives rendered tables rather than the pipe rows shown here.
+      // Saying "this is what will be sent" over raw markdown is the kind of
+      // small dishonesty this module exists to prevent — the card must not
+      // claim more precision than it has.
+      bodyLabel: 'Every word that will be sent — shown as source; tables and emphasis render on send',
       blockers,
       // Both of these are true-and-fine states, not defects — but they change
       // what Chris is being told, so they belong in front of the approve.
