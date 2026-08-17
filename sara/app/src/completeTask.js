@@ -10,6 +10,35 @@ import { apiFetch } from './api';
 //
 // Checked in that order: a NEURO task can also carry ms_id, and the task store
 // is the record that matters.
+/**
+ * What the day comes to, asked for straight after a completion lands.
+ *
+ * This is the immediacy half of the wins work. The ledger made the count TRUE;
+ * this is what makes it arrive at the moment rather than in a panel Nick has to
+ * remember to open — which is the difference between a scoreboard and a reward.
+ *
+ * Deliberately a second request rather than a field on the completion response:
+ * there are three completion routes with three different owners, and threading
+ * the same payload through all of them is how they drift. /api/wins folds a
+ * trailing window on read, so the task just closed is already in it.
+ *
+ * NEVER allowed to fail the completion. The task IS closed by the time this
+ * runs; a bookkeeping error must not surface as "that didn't work" and send
+ * Nick back to tick it again. Same rule as sent-replies recording after a mail
+ * has already left.
+ */
+async function _headlineAfterCompletion() {
+  try {
+    // The WORDS come from the server (wins.headline), not from here. The nudge
+    // and this both say what today came to, and two copies of the phrasing is
+    // how they end up disagreeing about it.
+    const data = await apiFetch('/api/wins');
+    return data?.headline || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function completeTask(item) {
   if (!item) throw new Error('No task given');
 
@@ -28,7 +57,7 @@ export async function completeTask(item) {
         }),
       }).catch(() => {}); // local completion already landed; don't undo it
     }
-    return;
+    return _headlineAfterCompletion();
   }
 
   if (item.ms_id) {
@@ -41,7 +70,7 @@ export async function completeTask(item) {
         lineNumber: item.lineNumber,
       }),
     });
-    return;
+    return _headlineAfterCompletion();
   }
 
   if (item.filePath && item.lineNumber != null) {
@@ -49,7 +78,7 @@ export async function completeTask(item) {
       method: 'POST',
       body: JSON.stringify({ filePath: item.filePath, lineNumber: item.lineNumber }),
     });
-    return;
+    return _headlineAfterCompletion();
   }
 
   throw new Error('This task has no id NEURO can complete');

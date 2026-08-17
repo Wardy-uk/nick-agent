@@ -122,3 +122,10 @@
 .today__avoid { display: flex; flex-direction: column; gap: 0.2rem; }
 .today__avoid-label { font-size: 0.9rem; }
 .today__avoid-detail { color: var(--muted); font-size: 0.76rem; }
+
+/* The running total after a tick — understated on purpose. */
+.today__headline {
+  font-size: 0.9rem;
+  color: var(--accent, #7aa2f7);
+  border-left: 3px solid var(--accent, #7aa2f7);
+}

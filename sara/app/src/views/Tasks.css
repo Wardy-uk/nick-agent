@@ -119,3 +119,11 @@
   font-size: 0.78rem;
   margin-top: 0.75rem;
 }
+
+/* The running total after a tick. Deliberately understated — a statement of
+   fact, not a celebration. */
+.tasks__headline {
+  font-size: 0.9rem;
+  color: var(--accent, #7aa2f7);
+  border-left: 3px solid var(--accent, #7aa2f7);
+}

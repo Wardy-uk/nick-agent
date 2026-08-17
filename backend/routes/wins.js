@@ -26,7 +26,15 @@ router.get('/', (req, res) => {
     try { gaps = wins.sync({ since: wins.dateKey(new Date(Date.now() - 3 * 86400000)) }).gaps; } catch { /* read still works */ }
 
     const summary = wins.summary();
-    res.json({ ...summary, today: wins.winsForDate(summary.dateKey), gaps });
+    res.json({
+      ...summary,
+      // One line stating what today came to, phrased on the SERVER so the tick
+      // acknowledgement in SARA and the EOD nudge cannot word it differently.
+      // Null on an empty day — there is no encouraging version of zero.
+      headline: wins.headline(summary),
+      today: wins.winsForDate(summary.dateKey),
+      gaps,
+    });
   } catch (e) {
     console.error('[WINS] Summary failed:', e);
     res.status(500).json({ error: e.message });

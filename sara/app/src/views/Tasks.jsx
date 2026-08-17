@@ -23,6 +23,7 @@ export default function Tasks() {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [busy, setBusy] = useState({});
   const [done, setDone] = useState({});
+  const [headline, setHeadline] = useState(null);
   const [adding, setAdding] = useState('');
   const [addBusy, setAddBusy] = useState(false);
 
@@ -42,7 +43,13 @@ export default function Tasks() {
     if (busy[item.id]) return;
     setBusy((b) => ({ ...b, [item.id]: true }));
     try {
-      await completeTask(item);
+      // completeTask returns what the day now comes to. This is the immediacy
+      // half of the wins ledger: the count was already true, but it lived in a
+      // panel Nick had to remember to open, and a reward that arrives an hour
+      // later is a scoreboard rather than a reward. Null on an empty day, and
+      // null if the ledger could not be reached — never a fabricated number.
+      const line = await completeTask(item);
+      if (line) setHeadline(line);
       // Strike it through rather than yanking it out — on a phone, a row that
       // vanishes under your thumb reads as "did that work?".
       setDone((d) => ({ ...d, [item.id]: true }));
@@ -115,6 +122,16 @@ export default function Tasks() {
           {addBusy ? '…' : '+'}
         </button>
       </form>
+
+      {/*
+        What the day now comes to, shown the moment a task closes rather than in
+        a panel. Stays put once it appears — it is the running total, not a
+        toast, and something that flashes past is something Nick will miss while
+        looking at the row he just ticked. Plain statement of fact, no
+        celebration: the voice spec rejects that register and an empty day gets
+        no line at all rather than an encouraging one.
+      */}
+      {headline && <div className="card tasks__headline">{headline}</div>}
 
       {loading && <div className="card">Asking the brain…</div>}
 

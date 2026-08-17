@@ -585,6 +585,27 @@ function feed({ limit = 50, offset = 0, source = null, dateKey: onDate = null } 
   };
 }
 
+/**
+ * One line stating what today came to. Pure — takes a summary, no DB, no clock.
+ *
+ * Exists so the tick acknowledgement, the EOD nudge and any later surface all
+ * say the same thing in the same words; three places phrasing it themselves is
+ * how cadenceState, working-days and action-presenter each ended up needing one
+ * definition after the fact.
+ *
+ * Returns null on a day with nothing in it. There is no encouraging version of
+ * zero — SARA states the fact or says nothing, and a cheerful line over an empty
+ * count is exactly the register the voice spec rejects. A quiet day is also the
+ * one where an invented win would be most obviously false.
+ */
+function headline(summary) {
+  const done = summary?.doneToday || 0;
+  if (!done) return null;
+  const streak = summary?.streakDays || 0;
+  const core = `${done} finished today`;
+  return streak > 1 ? `${core} · ${streak}-day streak` : core;
+}
+
 /** Today's wins, newest first — what the Today tab reads. */
 function winsForDate(key = dateKey()) {
   return feed({ dateKey: key, limit: 200 }).wins;
@@ -613,6 +634,7 @@ module.exports = {
   sync,
   collect,
   summary,
+  headline,
   feed,
   winsForDate,
   logManual,

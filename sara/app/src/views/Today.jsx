@@ -14,6 +14,7 @@ import './Today.css';
 export default function Today({ onNavigate }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [busy, setBusy] = useState({});
+  const [headline, setHeadline] = useState(null);
   const [showWins, setShowWins] = useState(false);
 
   const load = useCallback(async () => {
@@ -31,7 +32,10 @@ export default function Today({ onNavigate }) {
     if (busy[index]) return;
     setBusy((b) => ({ ...b, [index]: true }));
     try {
-      await completeTask(item);
+      // The running total, stated the moment the task closes. Null on an empty
+      // day or an unreachable ledger — never a fabricated number.
+      const line = await completeTask(item);
+      if (line) setHeadline(line);
       load();
     } catch (error) {
       setState((s) => ({ ...s, error: error.message }));
@@ -59,6 +63,9 @@ export default function Today({ onNavigate }) {
 
   return (
     <section className="today">
+      {/* What the day comes to, the moment a task closes. Statement of fact,
+          not a celebration — and nothing at all on an empty day. */}
+      {headline && <div className="card today__headline">{headline}</div>}
       <div className="today__head">
         <p className="today__shape">{shape.line}</p>
         <button className="today__refresh" type="button" onClick={load} aria-label="Refresh" title="Refresh">↻</button>

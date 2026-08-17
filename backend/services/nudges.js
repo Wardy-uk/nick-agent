@@ -654,7 +654,27 @@ function triggerEodNudge() {
   const stateKey = `eod_nudge_${dateKey}`;
   if (db.getState(stateKey)) return;
   db.setState(stateKey, new Date().toISOString());
-  const msg = "End of day. Before you close the laptop: one win, one thing that didn't go to plan, how you're feeling. 2 minutes. Standup tab → EOD.";
+  // The EOD nudge already asks for "one win" — and NEURO now knows them, so it
+  // leads with the day rather than only the ask. Deliberately riding THIS
+  // notification instead of adding a wins push of its own: nudge volume is the
+  // one signal allowed to argue against building more, and a second daily
+  // interruption to say "well done" is how the first one stops being read.
+  //
+  // Only when there is something to state. `headline()` returns null on an
+  // empty day and the original wording stands — there is no encouraging version
+  // of zero, and a quiet day is exactly where an invented win reads as false.
+  let opener = '';
+  try {
+    const wins = require('./wins');
+    wins.sync();
+    const line = wins.headline(wins.summary());
+    if (line) opener = `${line}. `;
+  } catch (e) {
+    // A ledger failure must never cost Nick the EOD prompt itself.
+    console.warn('[Nudge] Wins headline unavailable:', e.message);
+  }
+
+  const msg = `${opener}End of day. Before you close the laptop: one win, one thing that didn't go to plan, how you're feeling. 2 minutes. Standup tab → EOD.`;
   broadcast({ type: 'nudge', nudge_type: 'eod', message: msg, nag_count: 0 });
   webpush.sendToAll('SARA', msg, { type: 'eod', url: '/standup' }).catch(() => {});
 }

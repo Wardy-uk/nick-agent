@@ -189,6 +189,22 @@ test('nonsense pagination falls back to the default rather than the nearest lega
   assert.ok(page.wins.length > 1);
 });
 
+test('the headline states the day, and says nothing at all about zero', () => {
+  // Pure — a summary in, a string out. Shared by the tick acknowledgement in
+  // SARA and the EOD nudge so the two cannot word it differently.
+  assert.equal(wins.headline({ doneToday: 5, streakDays: 4 }), '5 finished today · 4-day streak');
+  assert.equal(wins.headline({ doneToday: 1, streakDays: 1 }), '1 finished today',
+    'a one-day "streak" is just today, and naming it as a streak is padding');
+  assert.equal(wins.headline({ doneToday: 3, streakDays: 0 }), '3 finished today');
+
+  // There is no encouraging version of zero. A cheerful line over an empty
+  // count is the register the voice spec rejects, and a quiet day is exactly
+  // where an invented win would read as false.
+  assert.equal(wins.headline({ doneToday: 0, streakDays: 4 }), null);
+  assert.equal(wins.headline(null), null);
+  assert.equal(wins.headline({}), null);
+});
+
 test('one standup is one win, however many rows it wrote', () => {
   // Found on the live ledger within an hour of deploying: "Standup done" twice
   // in one afternoon. standup_done is logged from four call sites (three in
