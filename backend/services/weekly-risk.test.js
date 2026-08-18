@@ -67,6 +67,48 @@ test('an unanswered manual section blocks publication and names what the silence
   assert.ok(a.blockers.some(b => /nothing to escalate/.test(b)));
 });
 
+test('a working overtime log removes the manual overtime blocker', () => {
+  // The whole reason the overtime log was built: this section blocked
+  // publication every week because nothing measured it.
+  const a = weeklyRisk.assess(baseSnapshot({
+    overtime: { available: true, hours: 12, totalClaims: 3, approved: 3, pending: 0, declined: 0,
+      approvedWithoutFullChecklist: 0, checklistOutstanding: 0, overLimit: [] },
+  }));
+  assert.ok(!a.blockers.some(b => /Overtime hours not entered/.test(b)),
+    'a measured figure is not a missing one');
+});
+
+test('an unavailable overtime log still blocks — absent is not nil', () => {
+  const a = weeklyRisk.assess(baseSnapshot({ overtime: { available: false, reason: 'unreadable' } }));
+  assert.ok(a.blockers.some(b => /Overtime hours not entered/.test(b)));
+});
+
+test('an approval recorded without the full checklist escalates', () => {
+  const a = weeklyRisk.assess(baseSnapshot({
+    overtime: { available: true, hours: 40, totalClaims: 5, approved: 5, pending: 0, declined: 0,
+      approvedWithoutFullChecklist: 2, checklistOutstanding: 0, overLimit: [] },
+  }));
+  const f = a.findings.find(x => x.kind === 'overtime-checklist-gap');
+  assert.equal(f.severity, 'escalate', 'this is the exact behaviour competency 1 was written about');
+});
+
+test('over the 48h average escalates without an opt-out, warns with one', () => {
+  const without = weeklyRisk.assess(baseSnapshot({
+    overtime: { available: true, hours: 90, totalClaims: 9, approved: 9, pending: 0, declined: 0,
+      approvedWithoutFullChecklist: 0, checklistOutstanding: 0,
+      overLimit: [{ person: 'Sam', averageHours: 51.2, optoutSigned: false }] },
+  })).findings.find(x => x.kind === 'wtr-limit');
+  assert.equal(without.severity, 'escalate');
+  assert.match(without.detail, /HR involvement now/);
+
+  const with_ = weeklyRisk.assess(baseSnapshot({
+    overtime: { available: true, hours: 90, totalClaims: 9, approved: 9, pending: 0, declined: 0,
+      approvedWithoutFullChecklist: 0, checklistOutstanding: 0,
+      overLimit: [{ person: 'Sam', averageHours: 51.2, optoutSigned: true }] },
+  })).findings.find(x => x.kind === 'wtr-limit');
+  assert.equal(with_.severity, 'warn');
+});
+
 test('an answered-as-zero manual section does NOT block — nil is a claim once stated', () => {
   const manual = weeklyRisk.emptyManual();
   manual.overtime.hours = 0;

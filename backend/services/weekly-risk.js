@@ -36,6 +36,7 @@ const path = require('path');
 const db = require('../db/database');
 const nova = require('./nova-client');
 const managementLog = require('./management-log');
+const overtime = require('./overtime');
 
 /** Compliance KPIs are measured against this unless NOVA says otherwise. */
 const COMPLIANCE_TARGET = 95;
@@ -150,9 +151,15 @@ function setManual(week, patch = {}) {
  * would otherwise be published as fact, so it is obvious what the silence
  * would have claimed.
  */
-function manualBlockers(manual) {
+/**
+ * `overtimeStatus` is the measured position from the overtime log. When it is
+ * available the hours are a FACT and no longer need typing — which is the point
+ * of building that log. When it is not, the old blocker stands: an empty
+ * overtime section reads as nil, and nil is a claim.
+ */
+function manualBlockers(manual, overtimeStatus = null) {
   const out = [];
-  if (manual.overtime.hours === null) {
+  if (manual.overtime.hours === null && !overtimeStatus?.available) {
     out.push('Overtime hours not entered — the report would otherwise read as nil overtime, which is a claim, not an absence of data.');
   }
   if (manual.escalateToChris === null) {
@@ -279,6 +286,12 @@ async function snapshot({ week = weekCommencing(), date } = {}) {
     jiraEscalations,
     tasks,
     management: managementLog.status(),
+    // Competency 1, measured rather than typed. Until this existed the overtime
+    // section was manual and BLOCKED publication every week — see the change to
+    // manualBlockers().
+    overtime: (() => {
+      try { return overtime.status(); } catch { return { available: false, reason: 'overtime log unreadable' }; }
+    })(),
     manual: getManual(week),
   };
 }
@@ -620,6 +633,42 @@ function assess(snap) {
     }
   }
 
+  // ── Overtime (competency 1) ────────────────────────────────────────────────
+  //
+  // The success measure is "all sampled approvals evidence completion of the
+  // five-step checklist with no WTR breach". Both halves are findings here, and
+  // an approval that got through without the full checklist is the more serious
+  // of the two — it is the exact behaviour the competency was written about.
+  const ot = snap?.overtime;
+  if (ot?.available) {
+    if (ot.approvedWithoutFullChecklist > 0) {
+      findings.push({
+        severity: 'escalate',
+        kind: 'overtime-checklist-gap',
+        title: `${ot.approvedWithoutFullChecklist} overtime approval${ot.approvedWithoutFullChecklist === 1 ? '' : 's'} recorded without the full five-step check`,
+        detail: 'PIP competency 1 requires 100% of approvals to evidence the Section 8 checklist. These would fail a manager audit at the next checkpoint.',
+      });
+    }
+    for (const p of ot.overLimit || []) {
+      findings.push({
+        severity: p.optoutSigned ? 'warn' : 'escalate',
+        kind: 'wtr-limit',
+        title: `${p.person} is at ${p.averageHours}h on the 17-week average`,
+        detail: p.optoutSigned
+          ? `Above the 48-hour limit with a signed opt-out on file, so permitted — but worth a look at why the pattern is sustained.`
+          : `Above the 48-hour limit with NO signed opt-out on file. This needs HR involvement now, not at the next checkpoint.`,
+      });
+    }
+    if (ot.checklistOutstanding > 0) {
+      findings.push({
+        severity: 'warn',
+        kind: 'overtime-outstanding',
+        title: `${ot.checklistOutstanding} overtime claim${ot.checklistOutstanding === 1 ? '' : 's'} with the checklist unfinished`,
+        detail: 'Not yet approved, so not yet a compliance gap — but each is a claim someone is waiting on.',
+      });
+    }
+  }
+
   // Nick's own task position. A finding only when the overdue share is large
   // enough to be the story — a couple of overdue items in a hundred is noise,
   // and a report that flags it every week trains him to skip the section.
@@ -712,7 +761,8 @@ function assess(snap) {
     jiraEscalations: snap.jiraEscalations,
     sources: snap.sources,
     manual: snap.manual,
-    blockers: manualBlockers(snap.manual || emptyManual()),
+    overtime: snap.overtime || null,
+    blockers: manualBlockers(snap.manual || emptyManual(), snap.overtime),
   };
 }
 
@@ -899,11 +949,29 @@ function render(a) {
 
   lines.push('## 4. Overtime');
   lines.push('');
-  if (manual.overtime.hours === null) {
-    lines.push('> ⚠️ **NOT ENTERED.** NEURO has no overtime source — this must be stated, not assumed. An empty section here would read as nil.');
-  } else {
-    lines.push(`**${manual.overtime.hours} overtime hours** logged this cycle. Approvals outstanding against the five-step checklist (PIP competency 1): **${manual.overtime.approvalsOutstanding ?? 0}**.`);
+  const ot = a.overtime;
+  if (ot?.available) {
+    // Measured, not typed. Every figure here is a consequence of approvals
+    // actually recorded against the Section 8 checklist, which is what makes it
+    // audit evidence rather than a self-report.
+    lines.push(`**${ot.hours} overtime hours** across **${ot.totalClaims}** claim${ot.totalClaims === 1 ? '' : 's'} — ${ot.approved} approved, ${ot.pending} pending${ot.declined ? `, ${ot.declined} declined` : ''}.`);
+    lines.push('');
+    lines.push('| Competency 1 measure | Count | Target |');
+    lines.push('|---|---|---|');
+    lines.push(`| Approvals missing any of the five checks | **${ot.approvedWithoutFullChecklist}** | 0 |`);
+    lines.push(`| Claims with the checklist unfinished | ${ot.checklistOutstanding} | — |`);
+    lines.push(`| People over the 48h rolling average | ${ot.overLimit.length} | 0 |`);
+    if (ot.overLimit.length) {
+      lines.push('');
+      lines.push(bullet(ot.overLimit, p => `- **${p.person}** — ${p.averageHours}h average${p.optoutSigned ? ' (signed opt-out on file)' : ' — **no opt-out on file**'}`));
+    }
+    lines.push('');
+    lines.push('_From the overtime approval log. Each approval records all five Section 8 checks; the log refuses to mark a claim approved while any check is unanswered._');
+  } else if (manual.overtime.hours !== null) {
+    lines.push(`**${manual.overtime.hours} overtime hours** logged this cycle (entered manually). Approvals outstanding against the five-step checklist: **${manual.overtime.approvalsOutstanding ?? 0}**.`);
     if (manual.overtime.note) { lines.push(''); lines.push(manual.overtime.note); }
+  } else {
+    lines.push('> ⚠️ **NOT ENTERED.** No overtime source available and nothing typed — this must be stated, not assumed. An empty section here would read as nil.');
   }
   lines.push('');
 

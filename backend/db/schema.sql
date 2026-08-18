@@ -480,6 +480,76 @@ CREATE INDEX IF NOT EXISTS idx_mgmt_log_status ON management_log(status);
 CREATE INDEX IF NOT EXISTS idx_mgmt_log_entry ON management_log(entry_date DESC);
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Overtime approvals — PIP competency 1.
+--
+-- The finding was that overtime was approved on headline indicators (ticket
+-- counts, activity status) without cross-checking logged work, and that Working
+-- Time Regulation limits were not considered at the point of approval. The plan
+-- requires that from 27 Jul 2026 EVERY approval follows the five-step checklist
+-- in Section 8 of the WTR briefing, each check recorded, with the line manager
+-- auditing a sample at the 30/60/90-day checkpoints.
+--
+-- So this table is the checklist, one column per step, not a notes field. A free
+-- text box would let an approval be recorded without the checks being done,
+-- which is precisely the behaviour being corrected. `approved_at` cannot be set
+-- while any step is unanswered — enforced in the service, because the point is
+-- to make the evidence a by-product of approving rather than a thing to remember
+-- afterwards.
+--
+-- THREE states per check, as with management_log.hr_logged: NULL = not done,
+-- 0 = done and FAILED, 1 = done and passed. A boolean defaulting to 0 would make
+-- "not yet checked" indistinguishable from "checked and found in breach", and
+-- this record is the one Chris audits.
+CREATE TABLE IF NOT EXISTS overtime_approvals (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  person          TEXT NOT NULL,             -- who worked it
+  work_date       TEXT NOT NULL,             -- the date worked (not the claim date)
+  hours           REAL NOT NULL,
+  reason          TEXT,                      -- why it was needed
+  requested_at    TEXT NOT NULL,             -- when the claim reached Nick
+  logged_at       TEXT NOT NULL,             -- when it was written down here
+
+  -- Step 1: verified against Jira/NOVA systems activity.
+  chk_activity        INTEGER,
+  chk_activity_note   TEXT,                  -- the evidence: tickets touched, solved, comments
+  -- Step 2: cumulative hours checked against the 48-hour rolling 17-week average.
+  chk_48h             INTEGER,
+  rolling_avg_hours   REAL,                  -- computed at approval time and KEPT
+  -- Step 3: valid signed opt-out confirmed, where the average would be exceeded.
+  chk_optout          INTEGER,
+  -- Step 4: rest entitlements checked (11h daily, 24h weekly).
+  chk_rest            INTEGER,
+  -- Step 5: the check recorded. Set when the other four are answered.
+  chk_recorded        INTEGER,
+
+  outcome         TEXT,                      -- approved | declined | pending
+  approved_by     TEXT,
+  approved_at     TEXT,                      -- NULL until all five steps answered
+  declined_reason TEXT,
+  notes           TEXT,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_overtime_person_date ON overtime_approvals(person, work_date DESC);
+CREATE INDEX IF NOT EXISTS idx_overtime_outcome ON overtime_approvals(outcome);
+CREATE INDEX IF NOT EXISTS idx_overtime_work_date ON overtime_approvals(work_date DESC);
+
+-- Contracted weekly hours, needed to turn recorded overtime into a 48-hour
+-- rolling average. Without it the average is computable only if you assume a
+-- standard week, and assuming is the habit this whole table exists to replace.
+CREATE TABLE IF NOT EXISTS working_time_profile (
+  person            TEXT PRIMARY KEY,
+  contracted_hours  REAL NOT NULL,
+  -- NULL = never asked. A missing opt-out is not the same as a refused one, and
+  -- step 3 has to be able to say which.
+  optout_signed     INTEGER,
+  optout_date       TEXT,
+  notes             TEXT,
+  updated_at        TEXT NOT NULL
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Wins — the derived ledger of finished work.
 --
 -- Measured before building: over 30 days NEURO recorded FOUR completions,
