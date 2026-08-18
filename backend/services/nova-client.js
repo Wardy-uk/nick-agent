@@ -20,6 +20,10 @@
  * should read to them, not for what it technically is.
  */
 
+/**
+ * Interactive default. Escalating a ticket happens while Nick is talking to
+ * someone, and a call that takes longer than this has already failed him.
+ */
 const TIMEOUT_MS = 15000;
 
 /**
@@ -47,7 +51,19 @@ function isConfigured() {
   return Boolean(c.url && c.secret);
 }
 
-async function call(path, { method = 'GET', body } = {}) {
+/**
+ * `timeoutMs` overrides the interactive default for batch reads.
+ *
+ * The flow-signals endpoint runs its queries sequentially and under READ
+ * UNCOMMITTED — deliberately, because firing them concurrently starved the
+ * DTU-limited Azure SQL instance and half of them timed out server-side. That
+ * makes it slower than 15s, so the weekly report's pull failed with "operation
+ * aborted due to timeout" and the whole ticket-flow section rendered as absent.
+ *
+ * Honest, but useless. A report built once a week can afford to wait; the
+ * default stays short for the interactive paths that cannot.
+ */
+async function call(path, { method = 'GET', body, timeoutMs = TIMEOUT_MS } = {}) {
   const c = config();
   if (!isConfigured()) throw new Error('NOVA bridge is not configured (NOVA_BRIDGE_URL / NOVA_BRIDGE_SECRET)');
 
@@ -58,7 +74,7 @@ async function call(path, { method = 'GET', body } = {}) {
       'x-neuro-bridge-secret': c.secret,
     },
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   const payload = await res.json().catch(() => ({}));

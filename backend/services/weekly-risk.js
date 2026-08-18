@@ -48,6 +48,8 @@ const SLIDE_WEEKS = 3;
 const SNAPSHOT_STALE_DAYS = 3;
 /** Lookback for the flow signals. 30 days, so a weekly report has a stable base. */
 const FLOW_WINDOW_DAYS = 30;
+/** Flow signals run sequentially against Azure SQL — far slower than a chat call. */
+const FLOW_TIMEOUT_MS = 90_000;
 /** Handback volume rising by more than this share, period on period, is a finding. */
 const HANDBACK_RISE_SHARE = 0.25;
 /** Queue moves before a single ticket is worth naming in the report. */
@@ -253,7 +255,12 @@ async function snapshot({ week = weekCommencing(), date } = {}) {
       // How tickets MOVE. The Support Review was written from these five facts
       // and every one was computable from NOVA on the day it was written — so
       // they cross every week now, whether or not anyone thinks to ask.
-      pull('flow-signals', () => nova.call(`/api/neuro-bridge/flow-signals?days=${FLOW_WINDOW_DAYS}`)),
+      // 90s, not the 15s interactive default. The endpoint runs its queries
+      // sequentially against a DTU-limited instance on purpose — concurrent was
+      // what made them time out server-side — so it is slower than any
+      // conversational call, and the first deploy of this had the whole
+      // ticket-flow section render as absent because of it.
+      pull('flow-signals', () => nova.call(`/api/neuro-bridge/flow-signals?days=${FLOW_WINDOW_DAYS}`, { timeoutMs: FLOW_TIMEOUT_MS })),
     ])
     : [
       { name: 'kpi-snapshot', ok: false, error: 'NOVA bridge not configured', data: null },
