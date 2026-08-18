@@ -555,6 +555,18 @@ function assess(snap) {
     }
 
     const bq = flow.breachesByQueue;
+    // An unpopulated field is not a clean month. If nothing in NOVA's ticket
+    // cache carries the breach flag at all, "0 breaches" is a statement about
+    // the pipeline, and publishing it as performance would be a false all-clear
+    // on the review's single most-cited metric.
+    if (bq?.ok && bq.data?.everBreached === 0) {
+      findings.push({
+        severity: 'escalate',
+        kind: 'breach-data-missing',
+        title: 'SLA breach data is not being captured',
+        detail: `No ticket in NOVA's cache carries \`sla_breached\`, so breach-by-queue cannot be reported. The Support Review counted 1,439 breaches over six months — a zero here is an unwritten field, not a clean month. Needs fixing before any breach figure in this report can be trusted.`,
+      });
+    }
     if (bq?.ok && bq.data?.total > 0) {
       const top = bq.data.byTier[0];
       if (top && top.sharePct !== null && top.sharePct / 100 > BREACH_CONCENTRATION) {
@@ -760,6 +772,10 @@ function flowSection(flow) {
   });
 
   say('SLA breaches by queue', flow.breachesByQueue, d => {
+    if (d.everBreached === 0) {
+      return '**SLA breaches by queue:** _no breach data — `sla_breached` is not set on any ticket in the cache. '
+        + 'This is an unpopulated field, not a clean month, and it is flagged for escalation above._';
+    }
     const rows = (d.byTier || []).slice(0, 6)
       .map(t => `| ${t.tier} | ${t.breaches} | ${t.sharePct === null ? '—' : `${t.sharePct}%`} |`).join('\n');
     // The caveat is not decoration. The cache being behind makes every figure

@@ -198,7 +198,7 @@ function flowPayload(over = {}) {
     window: { days: 30, from: '2026-07-18' },
     handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'T2', to_tier: 'T1', count: 40 }] }),
     pingPong: sig({ threshold: 3, ticketsAffected: 0, worst: [] }),
-    breachesByQueue: sig({ total: 0, byTier: [], coverage: { cachedTickets: 100, lastSync: '2026-08-17T06:00:00Z' } }),
+    breachesByQueue: sig({ total: 0, everBreached: 12, byTier: [], coverage: { cachedTickets: 100, lastSync: '2026-08-17T06:00:00Z' } }),
     unowned: sig({ total: 0, byTier: [] }),
     stalled: sig({ staleDays: 14, total: 0, byTier: [], worst: [] }),
     unavailable: [],
@@ -247,6 +247,36 @@ test('breach concentration is framed as routing, never as the queue underperform
   // team. If this wording ever drifts, the report starts blaming Customer Care.
   assert.match(f.detail, /not a Customer Care performance finding/);
   assert.equal(f.severity, 'warn');
+});
+
+test('an unpopulated breach flag escalates — it is not a clean month', () => {
+  const a = weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({
+      breachesByQueue: {
+        ok: true, error: null,
+        data: { total: 0, everBreached: 0, byTier: [], coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' } },
+      },
+    }),
+  }));
+  const f = a.findings.find(x => x.kind === 'breach-data-missing');
+  assert.equal(f.severity, 'escalate', 'the review counted 1,439 breaches; zero means the field is unwritten');
+
+  const md = weeklyRisk.render(a);
+  assert.match(md, /no breach data/i);
+  assert.doesNotMatch(md, /\*\*0\*\* in the window/, 'a hollow zero must never render as a measured total');
+});
+
+test('a genuine zero in the window still reads as a measurement, not a gap', () => {
+  const a = weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({
+      breachesByQueue: {
+        ok: true, error: null,
+        data: { total: 0, everBreached: 400, byTier: [], coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' } },
+      },
+    }),
+  }));
+  assert.equal(a.findings.find(x => x.kind === 'breach-data-missing'), undefined,
+    'breaches exist in the table, so a quiet window is a real result');
 });
 
 test('a failed sub-signal renders as absent, never as a healthy zero', () => {
