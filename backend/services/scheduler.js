@@ -467,6 +467,30 @@ function start() {
     }
   });
 
+  // Every 10 minutes — release any task block whose outcome note has been
+  // written. This is the mechanism, not a backstop: Nick writes the note in
+  // Obsidian and nothing in that act touches NEURO, and vault-hooks deliberately
+  // do not fire for Syncthing-delivered files (the same reason one-to-one-detect
+  // runs on a TTL). Without the sweep, a task written up this morning stays held
+  // until something else happens to look.
+  //
+  // Deliberately NOT a scheduleDaily/TRACKED_JOBS job: the sweep reads current
+  // state and is idempotent, so a missed run self-corrects on the next one and
+  // there is nothing to replay — the same call bank-holidays and wins made.
+  cron.schedule('*/10 * * * *', () => {
+    try {
+      const result = require('./task-blocks').sweep();
+      // A gap is logged even when nothing completed. A sweep reporting zero
+      // because the vault was unreachable is precisely the silent failure this
+      // feature exists to stop, so it must not look like a quiet success.
+      if (result.gaps.length) {
+        console.warn(`[Scheduler] Task block sweep gaps: ${result.gaps.join('; ')}`);
+      }
+    } catch (e) {
+      console.error('[Scheduler] Task block sweep failed:', e.message);
+    }
+  });
+
   // Hourly — regenerate the read-only task export note. Writes already trigger an
   // export; this is the belt-and-braces pass so the "last exported" stamp in the vault
   // stays current, which is what tells Nick whether the offline copy can be trusted.

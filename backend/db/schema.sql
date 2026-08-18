@@ -526,3 +526,64 @@ CREATE TABLE IF NOT EXISTS wins (
 CREATE INDEX IF NOT EXISTS idx_wins_date ON wins(date_key DESC);
 CREATE INDEX IF NOT EXISTS idx_wins_occurred ON wins(occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_wins_source ON wins(source);
+
+-- ── Task blocks — a task pushed into the O365 calendar (18 Aug 2026) ─────────
+--
+-- Nick's rule, carried over from meetings: a block in the diary is a PLAN, not
+-- finished work. `meeting-notes-source` will not count a meeting Nick attended
+-- until the Plaud note lands, because the note is what proves both that he was
+-- there and that the meeting was processed. A time block has exactly the same
+-- hole and no Plaud recording to close it — nobody records a solo work block —
+-- so the evidence has to be an outcome note Nick writes.
+--
+-- Hence this table rather than a column on `tasks`: the block is a separate
+-- object with its own lifecycle, and the hold on completion is a property of
+-- the BLOCK, not of the task. It also keeps `tasks.status` alone. Adding an
+-- 'awaiting-write-up' value to that CHECK constraint means a full table rebuild
+-- on a live 447MB DB, and 'done' would stop meaning "done" for every existing
+-- reader — both a much bigger risk than one extra table.
+--
+-- status:
+--   scheduled        the block exists; nothing has been claimed about it yet
+--   awaiting-writeup Nick ticked the task done, no qualifying note yet — HELD
+--   complete         a real outcome note landed; the task went done with it
+--   released         closed with no note, by an explicit decision + a reason
+--   dropped          the block was abandoned (task dropped, or plans changed)
+--
+-- The unique index is the idempotency guard, and it is deliberately keyed on
+-- (task, day, start) rather than on the Graph event id: the failure to prevent
+-- is scheduling the same task twice into the same slot, and that must be caught
+-- BEFORE the Graph create, when there is no event id to key on yet. Deleting
+-- the event in Outlook is a DECISION — nothing here rescans the calendar to
+-- recreate it, the same call plaud-admin-blocks made and for the same reason.
+CREATE TABLE IF NOT EXISTS task_blocks (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id         INTEGER NOT NULL,
+  -- NULL only when the Graph create failed; the row is still written so the
+  -- stub note and the failure are both traceable rather than silently lost.
+  event_id        TEXT,
+  event_web_link  TEXT,
+  -- Local date/time, never toISOString() — the Pi may run UTC.
+  date_key        TEXT NOT NULL,
+  start_time      TEXT NOT NULL,   -- HH:MM
+  end_time        TEXT NOT NULL,   -- HH:MM
+  minutes         INTEGER NOT NULL,
+  -- 1 when the length came from time-fit's ASSUMED_MINUTES rather than an
+  -- estimate on the task. Carried all the way to the screen, same rule as #87:
+  -- a guess presented as a measurement is the answer you stop trusting.
+  minutes_assumed INTEGER NOT NULL DEFAULT 0,
+  -- Vault-relative path of the outcome stub. The direct read; a scan by
+  -- task_id in frontmatter is the fallback for a note Nick moved or renamed.
+  note_path       TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'scheduled'
+                    CHECK(status IN ('scheduled','awaiting-writeup','complete','released','dropped')),
+  -- Why it closed without a note. NULL unless status = 'released'.
+  release_reason  TEXT,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  completed_at    TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_blocks_slot ON task_blocks(task_id, date_key, start_time);
+CREATE INDEX IF NOT EXISTS idx_task_blocks_status ON task_blocks(status);
+CREATE INDEX IF NOT EXISTS idx_task_blocks_task ON task_blocks(task_id);

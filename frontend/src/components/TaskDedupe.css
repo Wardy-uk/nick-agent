@@ -1,0 +1,327 @@
+/* Duplicate review — NEURO vs Microsoft, side by side. */
+
+.dedupe-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.dedupe-card-error {
+  border-color: var(--danger);
+}
+
+.dedupe-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.dedupe-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.dedupe-count {
+  background: var(--warning);
+  color: #000;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.05rem 0.42rem;
+  font-family: var(--font-mono);
+}
+
+.dedupe-status {
+  color: var(--danger);
+  font-size: 0.78rem;
+}
+
+.dedupe-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0.2rem 0.6rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.dedupe-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.dedupe-sub {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-top: 0.35rem;
+  line-height: 1.4;
+}
+
+/* The stay-out-of-the-way state: nothing found, nothing linked. */
+.dedupe-quiet {
+  margin-bottom: 0.6rem;
+}
+
+.dedupe-quiet-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  padding: 0.15rem 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dedupe-quiet-btn:hover {
+  color: var(--text-secondary);
+}
+
+/* ── A pair ───────────────────────────────────────────────────────────────── */
+
+.dedupe-pair {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.7rem;
+  margin-top: 0.7rem;
+  background: var(--bg-secondary);
+}
+
+.dedupe-strong {
+  border-left-color: var(--warning);
+}
+
+.dedupe-possible {
+  border-left-color: var(--text-muted);
+}
+
+.dedupe-pair-head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.55rem;
+}
+
+.dedupe-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: var(--radius-sm);
+  padding: 0.1rem 0.4rem;
+}
+
+.dedupe-badge-strong {
+  background: var(--warning);
+  color: #000;
+}
+
+.dedupe-badge-possible {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+/* The shared words are the reviewable part — a score on its own cannot be
+   checked by a person, so it is not shown on its own. */
+.dedupe-shared {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.dedupe-sides {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.dedupe-vs {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+}
+
+.dedupe-side {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.55rem;
+  min-width: 0;
+}
+
+.dedupe-side-neuro {
+  border-color: var(--accent-dim);
+}
+
+.dedupe-side-label {
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.dedupe-side-neuro .dedupe-side-label {
+  color: var(--accent);
+}
+
+.dedupe-side-text {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.dedupe-side-meta {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+
+.dedupe-chip {
+  font-size: 0.66rem;
+  font-family: var(--font-mono);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0.05rem 0.32rem;
+}
+
+.dedupe-chip-quiet {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.dedupe-notes {
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.dedupe-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.dedupe-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0.28rem 0.65rem;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.dedupe-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.dedupe-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dedupe-btn-link {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+  font-weight: 600;
+}
+
+.dedupe-btn-link:hover:not(:disabled) {
+  color: #000;
+  filter: brightness(1.1);
+}
+
+.dedupe-btn-small {
+  padding: 0.15rem 0.45rem;
+  font-size: 0.7rem;
+}
+
+/* Outcomes persist after the pair leaves the list, so a vanished card is never
+   confused with a failed one. */
+.dedupe-outcome {
+  margin-top: 0.6rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+}
+
+.dedupe-outcome.ok {
+  color: var(--success);
+  background: var(--bg-tertiary);
+}
+
+.dedupe-outcome.bad {
+  color: var(--danger);
+  background: var(--bg-tertiary);
+}
+
+/* ── Linked pairs ─────────────────────────────────────────────────────────── */
+
+.dedupe-links {
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.55rem;
+}
+
+.dedupe-links-head {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.dedupe-link-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.22rem 0;
+  font-size: 0.78rem;
+}
+
+.dedupe-link-text {
+  flex: 1;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dedupe-weak {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.7rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .dedupe-sides {
+    grid-template-columns: 1fr;
+  }
+  .dedupe-vs {
+    justify-self: start;
+  }
+}

@@ -94,6 +94,14 @@ async function init() {
       db.exec('ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER');
       console.log('[DB] tasks.estimate_minutes added');
     }
+    // Migration: tasks.ms_source — 'MS Planner' or 'MS ToDo' for a task linked to
+    // a Microsoft one, so completing it knows which API to PATCH. NULL is a real
+    // answer ("we don't know"), and completeMicrosoftTask handles it by trying
+    // Planner then To Do; a guessed hint would send it to the wrong one instead.
+    if (taskColumns.length && !taskColumns.includes('ms_source')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN ms_source TEXT');
+      console.log('[DB] tasks.ms_source added');
+    }
   } catch (e) {
     console.error('[DB] tasks migration check failed:', e.message);
   }
@@ -919,7 +927,8 @@ function deleteTaskMoscow(filePath, lineNumber, text) {
 
 const TASK_FIELDS = [
   'text', 'status', 'moscow', 'moscow_proposed', 'priority', 'due_date', 'source',
-  'origin_path', 'origin_line', 'context', 'notes', 'ms_id', 'estimate_minutes',
+  'origin_path', 'origin_line', 'context', 'notes', 'ms_id', 'ms_source',
+  'estimate_minutes',
 ];
 
 function createTaskRow(task) {
@@ -1003,6 +1012,80 @@ function countTasks() {
        COALESCE(SUM(CASE WHEN status IN ('open', 'in-progress') AND moscow_proposed = 1 THEN 1 ELSE 0 END), 0) AS proposed
      FROM tasks`
   ) || { total: 0, open: 0, done: 0, untriaged: 0, proposed: 0 };
+}
+
+// ── Task blocks ──
+// Callers go through services/task-blocks.js. These are the raw rows.
+
+const TASK_BLOCK_FIELDS = [
+  'event_id', 'event_web_link', 'date_key', 'start_time', 'end_time',
+  'minutes', 'minutes_assumed', 'note_path', 'status', 'release_reason',
+];
+
+function createTaskBlockRow(block) {
+  const now = new Date().toISOString();
+  const info = run(
+    `INSERT INTO task_blocks (task_id, event_id, event_web_link, date_key, start_time,
+                              end_time, minutes, minutes_assumed, note_path, status,
+                              created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      block.task_id, block.event_id || null, block.event_web_link || null,
+      block.date_key, block.start_time, block.end_time, block.minutes,
+      block.minutes_assumed ? 1 : 0, block.note_path, block.status || 'scheduled',
+      now, now,
+    ]
+  );
+  return info.lastInsertRowid;
+}
+
+function getTaskBlockRow(id) {
+  return get('SELECT * FROM task_blocks WHERE id = ?', [id]);
+}
+
+/**
+ * Blocks for one task, newest first.
+ *
+ * `openOnly` means the two states that still owe an outcome note. A task can
+ * legitimately have several blocks — work that needed two sittings — so this
+ * returns a list, never "the block".
+ */
+function listTaskBlockRows({ taskId = null, statuses = null, openOnly = false } = {}) {
+  const where = [];
+  const params = [];
+  if (taskId != null) { where.push('task_id = ?'); params.push(taskId); }
+  if (openOnly) {
+    where.push("status IN ('scheduled', 'awaiting-writeup')");
+  } else if (statuses && statuses.length) {
+    where.push(`status IN (${statuses.map(() => '?').join(', ')})`);
+    params.push(...statuses);
+  }
+  return all(
+    `SELECT * FROM task_blocks${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY date_key DESC, start_time DESC, id DESC`,
+    params
+  );
+}
+
+function updateTaskBlockRow(id, fields) {
+  const sets = [];
+  const params = [];
+  for (const key of TASK_BLOCK_FIELDS) {
+    if (!(key in fields)) continue;
+    sets.push(`${key} = ?`);
+    params.push(fields[key] === '' ? null : fields[key]);
+  }
+  if (!sets.length) return 0;
+  // 'complete' and 'released' both END the block; only one of them earned it,
+  // but both stop owing a note, so both stamp the same field.
+  if ('status' in fields) {
+    sets.push("completed_at = CASE WHEN ? IN ('complete', 'released') THEN datetime('now') ELSE NULL END");
+    params.push(fields.status);
+  }
+  sets.push('updated_at = ?');
+  params.push(new Date().toISOString());
+  params.push(id);
+  return run(`UPDATE task_blocks SET ${sets.join(', ')} WHERE id = ?`, params).changes;
 }
 
 // ── SARA Actions ──
@@ -1228,6 +1311,10 @@ module.exports = {
   getTaskByDedupeKey,
   listTaskRows,
   updateTaskRow,
+  createTaskBlockRow,
+  getTaskBlockRow,
+  listTaskBlockRows,
+  updateTaskBlockRow,
   deleteTaskRow,
   countTasks,
   // MoSCoW (legacy — superseded by tasks.moscow, kept for the importer)

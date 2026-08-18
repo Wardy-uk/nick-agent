@@ -932,3 +932,25 @@
   font-size: 11px;
   cursor: pointer;
 }
+
+/* A tick that was held because the work has not been written up. Deliberately
+   the same weight as the Microsoft warning above it — both say "your tick did
+   not do what you expected", which is the only kind of message that must never
+   be quiet. */
+.todo-hold-notice {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #f59e0b;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.todo-hold-notice code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}

@@ -189,6 +189,11 @@ app.use('/api/pi-health', require('./routes/pi-health'));
 app.use('/api/state-of-play', require('./routes/state-of-play'));
 app.use('/api/weekly-risk', require('./routes/weekly-risk'));
 app.use('/api/tasks', require('./routes/tasks'));
+// Its own mount, deliberately NOT under /api/tasks — a sibling registered after
+// the parameterised /api/tasks/:id would have "task-dedupe" parsed as an id.
+app.use('/api/task-dedupe', require('./routes/task-dedupe'));
+// Same reason, same trap.
+app.use('/api/task-blocks', require('./routes/task-blocks'));
 app.use('/api/calendar', require('./routes/calendar'));
 app.use('/api/adhd', require('./routes/adhd'));
 app.use('/api/wins', require('./routes/wins'));

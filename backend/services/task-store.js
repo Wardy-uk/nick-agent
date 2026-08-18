@@ -291,6 +291,33 @@ function updateTask(id, fields = {}) {
     patch.status = fields.status;
   }
 
+  // A task blocked into the calendar is not finished until it has been written
+  // up (18 Aug 2026). The hold lives HERE rather than in the route because this
+  // is the only writer — the SARA completion funnel, the MCP tool, the chat tool
+  // and every route all arrive through this function, and a check in any one of
+  // them would be a check the other three walk straight past.
+  //
+  // Held means held at 'in-progress', not refused: the tick was a real statement
+  // about the work and throwing it away would make Nick tick twice. Only the
+  // 'done' claim waits for its evidence. 'dropped' is never held — abandoning
+  // something is not a claim that needs proving.
+  let held = null;
+  if (patch.status === 'done' && row.status !== 'done' && fields.force !== true) {
+    const taskBlocks = require('./task-blocks');
+    const blocker = taskBlocks.checkHold(id);
+    if (blocker) {
+      taskBlocks.markAwaiting(blocker.id);
+      patch.status = 'in-progress';
+      held = {
+        blockId: blocker.id,
+        notePath: blocker.note_path,
+        dateKey: blocker.date_key,
+        startTime: blocker.start_time,
+        reason: blocker.holdReason || 'no write-up yet',
+      };
+    }
+  }
+
   db.updateTaskRow(id, patch);
 
   // Finishing something is the one event the activity log never recorded, which
@@ -311,7 +338,14 @@ function updateTask(id, fields = {}) {
   }
 
   scheduleExport();
-  return db.getTaskRow(id);
+
+  const updated = db.getTaskRow(id);
+  // `held` rides on the returned row rather than changing the return shape:
+  // every existing caller reads columns off it and is unaffected, while the ones
+  // that need to SAY the tick was held can. A silent hold would be the worst of
+  // both — the task quietly stays open and Nick is never told why.
+  if (updated && held) updated.held = held;
+  return updated;
 }
 
 function setStatus(id, status) {

@@ -3,6 +3,8 @@ import { apiUrl } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import { duePresets } from '../../../shared/due-dates.cjs';
 import TimeFitCard from './TimeFitCard';
+import TaskDedupe from './TaskDedupe';
+import TaskBlocks, { BlockTimeControl } from './TaskBlocks';
 import './TodoPanel.css';
 
 function sourceClass(source) {
@@ -248,6 +250,13 @@ function TaskControls({ todo, onPatch, busy }) {
         )}
       </div>
 
+      {/* "Block an hour for this" is a thought you have while looking AT the
+          task, so it lives on the row that is already open rather than behind a
+          screen you have to go and find. Only NEURO-owned tasks reach here,
+          which is also the only kind that can be blocked — a Microsoft mirror
+          has no row to hang the block on. */}
+      <BlockTimeControl todo={todo} busy={busy} />
+
       {todo.originPath && (
         <div className="todo-edit-group">
           <span className="todo-edit-label">From</span>
@@ -299,6 +308,25 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch }) {
         )}
       </div>
       <span className={`todo-priority-badge ${todo.priority}`}>{todo.priority}</span>
+    </div>
+  );
+}
+
+/**
+ * The tick landed, but the task is held until it has been written up.
+ *
+ * States the hold, the reason and the exact file to write in. A hold Nick cannot
+ * see the cause of is a task that mysteriously refuses to complete — the whole
+ * feature failing in the way it exists to prevent.
+ */
+function HoldNotice({ notice, onDismiss }) {
+  return (
+    <div className="todo-hold-notice" onClick={onDismiss}>
+      <strong>Held for a write-up.</strong>{' '}
+      “{notice.text}” had {notice.startTime} on {notice.dateKey} blocked out for it,
+      and the outcome note is still empty ({notice.reason}). Add a couple of lines to{' '}
+      <code>{notice.notePath}</code> and it closes on its own — or say there is nothing
+      to write up under “waiting on a write-up”.
     </div>
   );
 }
@@ -444,6 +472,10 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   const [subFilters, setSubFilters] = useState([]);
   const [toggling, setToggling] = useState({});
   const [msPushWarning, setMsPushWarning] = useState(null);
+  // A tick that was held for a write-up. Shown rather than swallowed: a task
+  // that silently refuses to complete is far worse than no hold at all, and it
+  // is the one moment Nick needs to be told which note to go and write.
+  const [holdNotice, setHoldNotice] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [showMoscow, setShowMoscow] = useState(false);
@@ -624,8 +656,14 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
         });
-        if (res.ok) setLocalDone(prev => ({ ...prev, [key]: todo.done ? 0 : 1 }));
-        else console.error('[TodoPanel] Task complete failed:', res.status);
+        const data = await res.clone().json().catch(() => ({}));
+        const held = data?.task?.held || null;
+        // Only paint it done locally if it actually went done. Optimistically
+        // ticking a held task would show the opposite of what happened, and the
+        // next refresh would silently un-tick it.
+        if (res.ok && !held) setLocalDone(prev => ({ ...prev, [key]: todo.done ? 0 : 1 }));
+        else if (!res.ok) console.error('[TodoPanel] Task complete failed:', res.status);
+        setHoldNotice(held ? { ...held, text: todo.text } : null);
         if (mode === 'focused') refreshFocus(); else await fetchTodos();
       } catch (e) { console.error('[TodoPanel] Task complete error:', e); }
       setToggling(prev => ({ ...prev, [key]: false }));
@@ -703,6 +741,8 @@ export default function TodoPanel({ focusContext, onClearContext }) {
             Marked done here, but not in Microsoft — {msPushWarning}
           </div>
         )}
+
+        {holdNotice && <HoldNotice notice={holdNotice} onDismiss={() => setHoldNotice(null)} />}
 
         {/* Focus filter pills */}
         <div className="todo-filters">
@@ -892,6 +932,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           Marked done here, but not in Microsoft — {msPushWarning}
         </div>
       )}
+      {holdNotice && <HoldNotice notice={holdNotice} onDismiss={() => setHoldNotice(null)} />}
       <div className="todo-header">
         <h2 className="todo-title">Todos</h2>
         <div className="todo-header-right">
@@ -934,6 +975,16 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           question that decides whether any of what follows is actionable right
           now. The lane says what matters; this says what is possible. */}
       <TimeFitCard />
+      {/* Lives here rather than behind its own tab: the question "is this the same
+          task twice?" is only ever asked while looking at the task list, and a
+          screen you have to go and find is one that never gets found. It renders
+          as a single quiet line when there is nothing to review, which is most
+          days — that is the correct answer, not a broken check. */}
+      <TaskDedupe />
+      {/* Beside the dedupe check for the same reason, and above the lane: a task
+          held open because it has not been written up is a task the lane will
+          keep offering, so the explanation has to arrive before the list does. */}
+      <TaskBlocks />
       <MustMoveLane items={todayLane} />
 
       <div className="todo-add">

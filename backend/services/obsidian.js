@@ -314,6 +314,25 @@ function parseVaultTodos(options = {}) {
   }
 
   // 2. Parse Microsoft Tasks
+  //
+  // Microsoft still owns these, so they are file-backed and merged in whole — with
+  // one exception. Where Nick has confirmed a Microsoft task and a NEURO task are
+  // the same work, the NEURO row holds the ms_id and the Microsoft line is skipped
+  // below. Without that, the pair he just reviewed would carry on showing twice,
+  // which is the entire complaint. Read once, outside the loop.
+  //
+  // Only consulted when DB tasks are in play: with `dbTasks: false` the importer is
+  // reading the vault alone, and suppressing a line against a row it cannot see
+  // would silently drop a task from its input.
+  const linkedMs = includeDbTasks
+    ? (() => {
+        try { return require('./task-dedupe').linkedMsIds(); }
+        catch (e) {
+          console.error('[Obsidian] Could not read task links:', e.message);
+          return new Set();
+        }
+      })()
+    : new Set();
   const msPath = path.join(vaultPath, 'Tasks', 'Microsoft Tasks.md');
   if (fs.existsSync(msPath)) {
     const content = fs.readFileSync(msPath, 'utf-8');
@@ -330,6 +349,12 @@ function parseVaultTodos(options = {}) {
 
       const task = parseTaskLine(line);
       if (task) {
+        // A Microsoft task Nick has confirmed IS a NEURO task is dropped here, so
+        // the pair shows once — under NEURO's wording, which is the fuller one and
+        // the one carrying MoSCoW, estimate and provenance. The Microsoft task is
+        // not deleted; NEURO now completes it (routes/tasks.js) when the task is
+        // ticked off. Unlinking in the review screen brings this line straight back.
+        if (task.ms_id && linkedMs.has(task.ms_id)) continue;
         task.source = msSection;
         task.priority = mergePriority(task.priority, 'normal');
         task.filePath = msPath;

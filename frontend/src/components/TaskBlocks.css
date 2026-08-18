@@ -1,0 +1,181 @@
+/* Task blocks — time pushed into the calendar, and the write-up that closes it. */
+
+.blocks-collapsed {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.9rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.blocks-collapsed:hover {
+  border-color: var(--accent);
+}
+
+.blocks-collapsed-active {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.blocks-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.blocks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.blocks-header h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.blocks-explain {
+  margin: 0 0 0.75rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.blocks-empty,
+.blocks-error {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  padding: 0.4rem 0;
+}
+
+.blocks-error {
+  color: var(--danger);
+}
+
+.blocks-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.blocks-row-main {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.blocks-row-text {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.blocks-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+
+.blocks-row-note {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.blocks-row-note code,
+.blocks-outcome code {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+.blocks-chip {
+  background: var(--bg-secondary);
+  border-radius: 999px;
+  font-size: 0.68rem;
+  padding: 0.08rem 0.45rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.blocks-chip-quiet {
+  opacity: 0.7;
+}
+
+/* The hold is the thing the row exists to explain, so it is the loudest chip. */
+.blocks-chip-hold {
+  background: var(--warning);
+  color: #000;
+  font-weight: 700;
+}
+
+.blocks-chip-warn,
+.blocks-warn {
+  color: var(--warning);
+  font-size: 0.7rem;
+}
+
+.blocks-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.blocks-release {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.blocks-release-input {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.45rem;
+  min-width: 12rem;
+}
+
+.blocks-outcome {
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.blocks-outcome-ok {
+  color: var(--success);
+}
+
+.blocks-outcome-fail {
+  color: var(--danger);
+}
+
+.blocks-quiet {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+/* The per-row control inside TaskControls. */
+.blocks-control {
+  flex-wrap: wrap;
+}
+
+.blocks-slot {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-primary);
+}
