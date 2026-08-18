@@ -216,6 +216,20 @@ router.delete('/:id/tasks/:taskId', async (req, res) => {
   }
 });
 
+// POST /api/task-blocks/:id/restore — undo a drop. Only from 'dropped': a
+// released or complete block finished real work, and reversing that is a
+// different decision from undoing a misclick.
+router.post('/:id/restore', (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'id must be a number' });
+    const result = taskBlocks.restore(id);
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // POST /api/task-blocks/:id/drop — the work is not happening in that slot. The
 // task is untouched and stays open; only the block is abandoned.
 router.post('/:id/drop', (req, res) => {

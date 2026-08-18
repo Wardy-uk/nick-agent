@@ -448,6 +448,7 @@ function countProse(raw) {
 
 function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, onEditNote, editing, onCloseEditor, onSaved, busy, outcome }) {
   const [releasing, setReleasing] = useState(false);
+  const [confirmingDrop, setConfirmingDrop] = useState(false);
   const [reason, setReason] = useState('');
 
   return (
@@ -457,6 +458,7 @@ function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, onEditNote,
             them. Before this they were scattered back through the main list in
             score order, so the batch Nick had just made was not a thing he could
             see or work through anywhere. */}
+        <div className="blocks-tasks-label">In this block — tick or remove one at a time:</div>
         {block.tasks.map(t => (
           <div key={t.taskId} className="blocks-task">
             <button
@@ -516,17 +518,36 @@ function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, onEditNote,
         <NoteEditor block={block} onClose={onCloseEditor} onSaved={onSaved} />
       )}
 
+      {/* Block-level actions, fenced off and labelled with what they affect.
+          They used to sit in a row that lined up beside the FIRST task, so
+          "Didn't happen" read as belonging to that task — it does not, it ends
+          the whole block, and it was clicked on that understanding. Anything
+          that acts on every task in the window now says how many, and asks. */}
       <div className="blocks-row-actions">
+        <span className="blocks-actions-label">
+          Whole block ({block.tasks.length} task{block.tasks.length === 1 ? '' : 's'}):
+        </span>
         {outcome && <span className={`blocks-outcome blocks-outcome-${outcome.ok ? 'ok' : 'fail'}`}>{outcome.text}</span>}
-        {!outcome && !releasing && (
+        {!outcome && !releasing && !confirmingDrop && (
           <>
             <button className="btn btn-sm" disabled={busy} onClick={() => setReleasing(true)}>
-              Nothing to write up
+              Nothing to write up — close all {block.tasks.length}
             </button>
-            <button className="btn btn-sm" disabled={busy} onClick={() => onDrop(block)}>
-              Didn't happen
+            <button className="btn btn-sm" disabled={busy} onClick={() => setConfirmingDrop(true)}>
+              Didn't happen — drop all {block.tasks.length}
             </button>
           </>
+        )}
+        {!outcome && confirmingDrop && (
+          <span className="blocks-confirm">
+            Drop the whole block? The {block.tasks.length} task{block.tasks.length === 1 ? '' : 's'} stay open.
+            <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => { setConfirmingDrop(false); onDrop(block); }}>
+              Yes, drop it
+            </button>
+            <button className="btn btn-sm" disabled={busy} onClick={() => setConfirmingDrop(false)}>
+              Keep it
+            </button>
+          </span>
         )}
         {!outcome && releasing && (
           <div className="blocks-release">
@@ -658,6 +679,10 @@ export default function TaskBlocks() {
    * worst case of pressing it is being told the note is already there.
    */
   const [editingId, setEditingId] = useState(null);
+  // A dropped block leaves the list immediately, taking any undo button inside
+  // its card with it. So the way back lives here, above the list, and survives
+  // the row disappearing.
+  const [lastDropped, setLastDropped] = useState(null);
 
   const createNote = useCallback(async (block) => {
     setBusyId(block.blockId);
@@ -679,6 +704,38 @@ export default function TaskBlocks() {
       setBusyId(null);
     }
   }, [load]);
+
+  const dropBlock = useCallback(async (block) => {
+    setBusyId(block.blockId);
+    try {
+      const res = await fetch(apiUrl(`/api/task-blocks/${block.blockId}/drop`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setLastDropped({ blockId: block.blockId, tasks: block.tasks.length, when: `${block.dateKey} ${block.startTime}` });
+      load();
+    } catch (e) {
+      setOutcomes(o => ({ ...o, [block.blockId]: { ok: false, text: e.message } }));
+    } finally {
+      setBusyId(null);
+    }
+  }, [load]);
+
+  const undoDrop = useCallback(async () => {
+    if (!lastDropped) return;
+    try {
+      const res = await fetch(apiUrl(`/api/task-blocks/${lastDropped.blockId}/restore`), { method: 'POST' });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setLastDropped(null);
+      load();
+    } catch (e) {
+      setLastDropped(d => (d ? { ...d, error: e.message } : d));
+    }
+  }, [lastDropped, load]);
 
   const blocks = data?.blocks || [];
   const owed = blocks.filter(b => b.passed);
@@ -725,6 +782,16 @@ export default function TaskBlocks() {
 
       <BatchComposer onCreated={load} />
 
+      {lastDropped && (
+        <div className="blocks-undo">
+          Dropped the {lastDropped.when} block ({lastDropped.tasks} task{lastDropped.tasks === 1 ? '' : 's'}).
+          {' '}Nothing was deleted — the tasks are still open.
+          <button className="btn btn-sm btn-primary" onClick={undoDrop}>Undo</button>
+          <button className="btn btn-sm" onClick={() => setLastDropped(null)}>Dismiss</button>
+          {lastDropped.error && <span className="blocks-error"> {lastDropped.error}</span>}
+        </div>
+      )}
+
       {error && <div className="blocks-error">Couldn't read the list — {error}</div>}
       {!error && blocks.length === 0 && <div className="blocks-empty">No blocked time.</div>}
 
@@ -741,7 +808,7 @@ export default function TaskBlocks() {
           onCloseEditor={() => { setEditingId(null); load(); }}
           onSaved={() => load()}
           onRelease={(b, reason) => act(b, 'release', { reason }, `Closed — ${reason}`)}
-          onDrop={(b) => act(b, 'drop', {}, 'Block dropped, tasks still open')}
+          onDrop={(b) => dropBlock(b)}
         />
       ))}
     </div>

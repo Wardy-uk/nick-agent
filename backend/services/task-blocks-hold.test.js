@@ -567,3 +567,43 @@ test('a finished block is not editable', () => {
   assert.equal(saved.ok, false);
   assert.match(saved.error, /not waiting on a write-up/);
 });
+
+// ── Undoing a drop ───────────────────────────────────────────────────────────
+
+test('a dropped block can be restored, because dropping deletes nothing', async () => {
+  const { taskIds, blockId } = blockedTasks(['Dropped by mistake', 'Also in that block']);
+  taskBlocks.drop(blockId);
+  assert.equal(db.getTaskBlockRow(blockId).status, 'dropped');
+
+  const result = taskBlocks.restore(blockId);
+  assert.equal(result.ok, true);
+  assert.equal(result.tasks, 2);
+  assert.equal(db.getTaskBlockRow(blockId).status, 'scheduled');
+  assert.equal(db.listTaskBlockItems(blockId).length, 2, 'the membership must survive a drop');
+  for (const id of taskIds) assert.equal(db.getTaskRow(id).status, 'open');
+});
+
+test('restoring returns a block to awaiting-writeup if a task was ticked', () => {
+  // A task ticked before the drop is still ticked, and still owed a write-up.
+  // Always restoring to 'scheduled' would lose that.
+  const { taskIds, blockId } = blockedTasks(['Ticked before the drop', 'Untouched']);
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+  taskBlocks.drop(blockId);
+
+  taskBlocks.restore(blockId);
+  assert.equal(db.getTaskBlockRow(blockId).status, 'awaiting-writeup');
+});
+
+test('only a dropped block can be restored', () => {
+  // A released block completed the ticked tasks and a complete one earned its
+  // note. Reversing either is a decision to un-finish work, not an undo.
+  const { taskIds, blockId, full } = blockedTasks(['Finished properly']);
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+  writeUp(full);
+  taskBlocks.sweep();
+
+  const result = taskBlocks.restore(blockId);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /not dropped/);
+  assert.equal(db.getTaskRow(taskIds[0]).status, 'done');
+});

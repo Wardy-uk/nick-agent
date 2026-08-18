@@ -1036,6 +1036,37 @@ async function removeTask(blockId, taskId) {
   return { ok: true, blockId, remaining: remaining.length, eventUpdate };
 }
 
+/**
+ * Undo a drop.
+ *
+ * Dropping deletes nothing — the row, the membership, the note and the Outlook
+ * event all survive — so putting it back is just the status. It exists because
+ * the drop button is one click with a whole block behind it, and a destructive-
+ * looking action with no way back is one you learn to avoid using at all.
+ *
+ * **Only from `dropped`.** A `released` block completed the tasks Nick had
+ * ticked, and a `complete` one earned its note; reversing either means deciding
+ * to un-finish work, which is a different act and not one to fold into an undo.
+ */
+function restore(blockId) {
+  const block = db.getTaskBlockRow(blockId);
+  if (!block) return { ok: false, error: `No block #${blockId}` };
+  if (block.status !== 'dropped') {
+    return { ok: false, error: `Block #${blockId} is ${block.status}, not dropped — nothing to undo` };
+  }
+
+  const items = db.listTaskBlockItems(blockId);
+  if (!items.length) return { ok: false, error: 'That block has no tasks in it' };
+
+  // Back to whichever state its members imply, rather than always 'scheduled':
+  // a task ticked before the drop is still ticked, and still owed a write-up.
+  const status = items.some(i => i.awaiting) ? 'awaiting-writeup' : 'scheduled';
+  db.updateTaskBlockRow(blockId, { status });
+
+  console.log(`[TaskBlocks] Block #${blockId} restored to ${status}`);
+  return { ok: true, block: db.getTaskBlockRow(blockId), tasks: items.length };
+}
+
 /** Abandon a block — the work is not happening in that slot. Deletes nothing. */
 function drop(blockId) {
   const block = db.getTaskBlockRow(blockId);
@@ -1216,6 +1247,7 @@ module.exports = {
   markAwaiting,
   release,
   removeTask,
+  restore,
   drop,
   sweep,
   listOutstanding,
