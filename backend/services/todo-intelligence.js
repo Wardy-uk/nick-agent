@@ -203,7 +203,18 @@ function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5) {
     })
     .slice(0, limit)
     .map((task, index) => ({
+      // ⚠ `id` is a DISPLAY KEY, not a task id. parseVaultTodos numbers todos as
+      // it walks them, so lane row `id: 28` is simply the 28th todo it saw —
+      // measured live, that row was "Follow up with Liam" while task 28 in the
+      // DB is "Review Molly's Guild website request". Completing by this number
+      // ticks off an unrelated task, silently, in the one place Nick looks to
+      // find what he owes. Anything acting on a row must use `task_id`.
       id: task.id || `${task.filePath || task.source}-${task.lineNumber || index}`,
+      // The real identity, and the reason the lane can now be actioned at all.
+      // Null for a file-backed row, where filePath + lineNumber is the identity
+      // instead — the same owner order completeTask uses everywhere else.
+      task_id: task.task_id != null ? task.task_id : null,
+      ms_id: task.ms_id || null,
       text: task.text,
       priority: task.priority,
       moscow: task.moscow,

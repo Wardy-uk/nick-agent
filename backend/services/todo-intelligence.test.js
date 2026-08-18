@@ -122,3 +122,46 @@ test('buildFollowThroughCandidate returns the stalest high-signal task', () => {
   assert.match(follow.message, /Chase finance approval/);
   assert.equal(follow.context, 'meeting-follow-up');
 });
+
+// ── The Must Move lane can be completed from ─────────────────────────────────
+
+test('the lane carries the real task id, not its display key', () => {
+  // Measured live and this is why the test exists: the lane row for "Follow up
+  // with Liam" carried id 28, while task 28 in the DB was "Review Molly's Guild
+  // website request". `id` is a display key — parseVaultTodos numbers todos as
+  // it walks them — so completing by it ticks off an unrelated task, silently,
+  // in the one screen Nick uses to find what he owes.
+  const lane = buildTodayLane([
+    { id: 28, task_id: 159, text: 'Follow up with Liam', moscow: 'must', priority: 'high', source: 'NEURO' },
+  ], '2026-08-18');
+
+  assert.equal(lane.length, 1);
+  assert.equal(lane[0].task_id, 159, 'the lane must expose the DB id, or the checkbox completes the wrong task');
+  assert.notEqual(lane[0].task_id, lane[0].id);
+});
+
+test('a file-backed lane row has no task_id and keeps its line identity', () => {
+  // NEURO does not own a daily-note line, so filePath + lineNumber is the only
+  // identity there — the same owner order completeTask uses everywhere.
+  const lane = buildTodayLane([
+    {
+      id: 32, text: 'Action four escalations', moscow: 'must', priority: 'high',
+      source: 'Daily (Focus Today)', filePath: '/vault/Daily/2026-08-18.md', lineNumber: 9,
+    },
+  ], '2026-08-18');
+
+  assert.equal(lane[0].task_id, null, 'inventing a task id for a vault line would complete something else');
+  assert.equal(lane[0].filePath, '/vault/Daily/2026-08-18.md');
+  assert.equal(lane[0].lineNumber, 9);
+});
+
+test('a Microsoft-backed lane row keeps its ms_id, so the push can follow', () => {
+  const lane = buildTodayLane([
+    {
+      id: 40, text: 'Succession plan', moscow: 'must', priority: 'high',
+      source: 'MS Planner', ms_id: 'g2D79J0Bpkq', filePath: '/vault/Tasks/Microsoft Tasks.md', lineNumber: 4,
+    },
+  ], '2026-08-18');
+
+  assert.equal(lane[0].ms_id, 'g2D79J0Bpkq');
+});

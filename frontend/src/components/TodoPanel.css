@@ -954,3 +954,20 @@
   font-size: 11px;
   overflow-wrap: anywhere;
 }
+
+/* The Must Move lane can now be ticked off. The card is already flex, so the
+   checkbox just needs to hold its size and sit against the top of a card whose
+   reason line makes it two or three lines tall. */
+.todo-suggestions-mustmove .todo-suggestion-card {
+  align-items: flex-start;
+}
+
+.todo-suggestions-mustmove .todo-checkbox {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.todo-suggestions-mustmove .todo-suggestion-main {
+  flex: 1;
+  min-width: 0;
+}

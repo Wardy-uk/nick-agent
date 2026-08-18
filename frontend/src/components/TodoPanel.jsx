@@ -417,7 +417,19 @@ function SuggestedTodoQueue({ items, actingId, selected, onToggleSelect, onSelec
   );
 }
 
-function MustMoveLane({ items }) {
+/**
+ * The lane had no way to complete anything on it.
+ *
+ * It is the card that says "these most directly protect your day", sits above
+ * the task list, and was display-only — so the five things NEURO most wanted
+ * done were the five you could not tick off without scrolling past it and
+ * finding them again in the list below.
+ *
+ * ⚠ Completion goes through `task_id`, never the row's `id`. That field is a
+ * display key — parseVaultTodos numbers todos as it walks them — so ticking by
+ * it would complete an unrelated task.
+ */
+function MustMoveLane({ items, toggling, onToggle }) {
   if (!items.length) return null;
 
   return (
@@ -430,8 +442,20 @@ function MustMoveLane({ items }) {
         <span className="todo-suggestions-count">{items.length} in lane</span>
       </div>
       <div className="todo-suggestions-list">
-        {items.map((item) => (
+        {items.map((item) => {
+          // Same owner order as sara/app's completeTask: task_id, then the
+          // file-backed line. A row with neither cannot be completed from here,
+          // and the checkbox says so rather than failing on click.
+          const toggleKey = item.task_id ? `task:${item.task_id}` : `${item.filePath}:${item.lineNumber}`;
+          const canComplete = Boolean(item.task_id) || (item.filePath && item.lineNumber != null);
+          return (
           <div key={item.id} className="todo-suggestion-card">
+            <button
+              className={`todo-checkbox ${toggling[toggleKey] ? 'toggling' : ''}`}
+              disabled={!canComplete || toggling[toggleKey]}
+              title={canComplete ? 'Mark done' : 'Nothing here can complete this — open it in the list below'}
+              onClick={() => onToggle(item)}
+            />
             <div className="todo-suggestion-main">
               <div className="todo-suggestion-text">{item.text}</div>
               {/* buildTodayLane returns a `why` per row and this rendered none
@@ -451,7 +475,8 @@ function MustMoveLane({ items }) {
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
@@ -985,7 +1010,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           held open because it has not been written up is a task the lane will
           keep offering, so the explanation has to arrive before the list does. */}
       <TaskBlocks />
-      <MustMoveLane items={todayLane} />
+      <MustMoveLane items={todayLane} toggling={toggling} onToggle={toggleTodo} />
 
       <div className="todo-add">
         <input
