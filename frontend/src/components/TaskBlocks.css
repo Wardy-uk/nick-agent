@@ -315,3 +315,15 @@
 .blocks-row-upcoming {
   opacity: 0.85;
 }
+
+.blocks-note-create {
+  margin-left: 0.5rem;
+}
+
+/* The note is normally already there, so the usual state is a quiet tick
+   rather than a button asking to do something that has been done. */
+.blocks-note-ok {
+  margin-left: 0.5rem;
+  color: var(--success);
+  font-size: 0.7rem;
+}

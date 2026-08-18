@@ -146,6 +146,24 @@ router.post('/:id/release', (req, res) => {
   }
 });
 
+// POST /api/task-blocks/:id/note — write the outcome note now.
+//
+// A repair action, not the usual path: the stub is written when the block is
+// created, so this covers the case where that failed (vault unreachable) or the
+// note was deleted. It NEVER overwrites — an existing note is reported, not
+// replaced, because clobbering a written-up note would destroy the one thing
+// this whole feature protects.
+router.post('/:id/note', (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'id must be a number' });
+    const result = taskBlocks.createNote(id);
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // DELETE /api/task-blocks/:id/tasks/:taskId — take one task back out of a block.
 //
 // The task itself is untouched and goes back to being an ordinary open task;

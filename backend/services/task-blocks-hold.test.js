@@ -429,3 +429,49 @@ test('an upcoming block is listed, so a batch does not vanish when you make it',
   assert.equal(row.passed, false, 'it is in the diary, not owing a write-up');
   assert.equal(row.tasks.length, 2);
 });
+
+// ── Writing the note on demand ───────────────────────────────────────────────
+
+test('createNote writes the stub when it is missing', () => {
+  const { blockId, full } = blockedTasks(['Note went missing']);
+  fs.unlinkSync(full);   // vault write failed, or Nick deleted it
+
+  const result = taskBlocks.createNote(blockId);
+  assert.equal(result.ok, true);
+  assert.equal(result.created, true);
+  assert.ok(fs.existsSync(full), 'without this the block is held for a note there is nowhere to write');
+});
+
+test('createNote NEVER overwrites an existing note', () => {
+  // The whole safety of the button. Clobbering a written-up note would destroy
+  // the one thing this feature protects, in one click, with no undo.
+  const { blockId, full } = blockedTasks(['Already written up']);
+  writeUp(full);
+  const before = fs.readFileSync(full, 'utf8');
+
+  const result = taskBlocks.createNote(blockId);
+  assert.equal(result.created, false);
+  assert.match(result.reason, /already exists/);
+  assert.equal(fs.readFileSync(full, 'utf8'), before, 'the write-up was overwritten');
+  // Reported as a success: the note Nick wanted is there, which is what he asked for.
+  assert.equal(result.ok, true);
+});
+
+test('a re-written stub lists what is in the block NOW, not what was', async () => {
+  const { taskIds, blockId, full } = blockedTasks(['Kept task', 'Removed task']);
+  await taskBlocks.removeTask(blockId, taskIds[1]);
+  fs.unlinkSync(full);
+
+  taskBlocks.createNote(blockId);
+  const raw = fs.readFileSync(path.join(process.env.OBSIDIAN_VAULT_PATH, db.getTaskBlockRow(blockId).note_path), 'utf8');
+  assert.ok(raw.includes('Kept task'));
+  assert.ok(!raw.includes('Removed task'), 'the note named a task that is no longer in the block');
+});
+
+test('createNote on a block with nothing in it is refused, not written', () => {
+  const { blockId } = blockedTasks(['Only task']);
+  db.removeTaskBlockItem(blockId, db.listTaskBlockItems(blockId)[0].task_id);
+  const result = taskBlocks.createNote(blockId);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /no tasks/);
+});

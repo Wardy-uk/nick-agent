@@ -313,7 +313,7 @@ function BatchComposer({ onCreated }) {
 
 // ── What is waiting to be written up ─────────────────────────────────────────
 
-function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, busy, outcome }) {
+function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, onCreateNote, busy, outcome }) {
   const [releasing, setReleasing] = useState(false);
   const [reason, setReason] = useState('');
 
@@ -369,6 +369,23 @@ function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, busy, outco
         </div>
         <div className="blocks-row-note">
           {block.passed ? 'Write it up in ' : 'Will be written up in '}<code>{block.notePath}</code>
+          {/* Normally the note is already there — it is written when the block
+              is created. This is the way back when that write failed (vault
+              unreachable) or the note was deleted: without it, the block is held
+              for a note there is nowhere to write. It never overwrites, so it is
+              safe to press on a note that already exists. */}
+          {!block.noteExists && (
+            <button
+              className="btn btn-sm blocks-note-create"
+              disabled={busy}
+              onClick={() => onCreateNote(block)}
+            >
+              Create the note
+            </button>
+          )}
+          {block.noteExists && (
+            <span className="blocks-note-ok" title="Written when the block was created">✓ in your vault</span>
+          )}
         </div>
       </div>
 
@@ -506,6 +523,34 @@ export default function TaskBlocks() {
     }
   }, [load]);
 
+  /**
+   * Write the outcome note now.
+   *
+   * A repair action: the stub is written when the block is created, so this is
+   * for when that failed or the note was deleted. It never overwrites, so the
+   * worst case of pressing it is being told the note is already there.
+   */
+  const createNote = useCallback(async (block) => {
+    setBusyId(block.blockId);
+    try {
+      const res = await fetch(apiUrl(`/api/task-blocks/${block.blockId}/note`), { method: 'POST' });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setOutcomes(o => ({
+        ...o,
+        [block.blockId]: {
+          ok: true,
+          text: json.created ? `Note written to ${json.notePath}` : 'That note already exists — nothing was overwritten',
+        },
+      }));
+      load();
+    } catch (e) {
+      setOutcomes(o => ({ ...o, [block.blockId]: { ok: false, text: e.message } }));
+    } finally {
+      setBusyId(null);
+    }
+  }, [load]);
+
   const blocks = data?.blocks || [];
   const owed = blocks.filter(b => b.passed);
 
@@ -562,6 +607,7 @@ export default function TaskBlocks() {
           outcome={outcomes[block.blockId]}
           onToggleTask={toggleTask}
           onRemoveTask={removeTask}
+          onCreateNote={createNote}
           onRelease={(b, reason) => act(b, 'release', { reason }, `Closed — ${reason}`)}
           onDrop={(b) => act(b, 'drop', {}, 'Block dropped, tasks still open')}
         />

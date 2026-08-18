@@ -784,6 +784,48 @@ function release(blockId, reason, { completeTask = true } = {}) {
 }
 
 /**
+ * Write the outcome note for a block, on demand.
+ *
+ * Normally the stub is written when the block is created, so this is a REPAIR
+ * action rather than the usual path: it exists for the case where that write
+ * failed — the vault was unreachable, Syncthing had not mounted, the path was
+ * refused — and for a note Nick has since deleted. Without it, a block whose
+ * stub never landed can never be written up and never completes: the task is
+ * held for a note there is nowhere to write.
+ *
+ * ⚠ **It never overwrites.** `writeStub` refuses when the file exists, and that
+ * refusal is the whole safety of this button: a "create note" that clobbered an
+ * existing file would destroy the write-up the feature exists to protect, in one
+ * click, with no undo. An existing note is reported as such, not replaced.
+ */
+function createNote(blockId) {
+  const block = db.getTaskBlockRow(blockId);
+  if (!block) return { ok: false, error: `No block #${blockId}` };
+
+  const items = db.listTaskBlockItems(blockId);
+  if (!items.length) return { ok: false, error: 'That block has no tasks in it' };
+
+  // The note is keyed on the tasks in the block NOW, so a stub rewritten after a
+  // removal lists what is actually in the window.
+  const tasks = items.map(i => ({ id: i.task_id, text: i.text }));
+  const stub = writeStub(tasks, block);
+
+  if (!stub.written) {
+    const existed = stub.reason === 'note already exists';
+    return {
+      ok: existed,
+      created: false,
+      notePath: block.note_path,
+      reason: stub.reason,
+      error: existed ? null : `Could not write the note — ${stub.reason}`,
+    };
+  }
+
+  console.log(`[TaskBlocks] Outcome note written on demand for block #${blockId}`);
+  return { ok: true, created: true, notePath: block.note_path, reason: null };
+}
+
+/**
  * Take a task back out of a block.
  *
  * The task itself is untouched — it returns to being an ordinary open task. Only
@@ -1028,6 +1070,7 @@ module.exports = {
   plan,
   schedule,
   checkHold,
+  createNote,
   markAwaiting,
   release,
   removeTask,
