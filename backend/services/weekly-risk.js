@@ -48,6 +48,8 @@ const SLIDE_WEEKS = 3;
 const SNAPSHOT_STALE_DAYS = 3;
 /** Lookback for the flow signals. 30 days, so a weekly report has a stable base. */
 const FLOW_WINDOW_DAYS = 30;
+/** The NOVA flow-signals build this report knows how to read. */
+const FLOW_BUILD_EXPECTED = '2026-08-18-classifier';
 /** Flow signals run sequentially against Azure SQL — far slower than a chat call. */
 const FLOW_TIMEOUT_MS = 90_000;
 /** Handback volume rising by more than this share, period on period, is a finding. */
@@ -540,7 +542,18 @@ function assess(snap) {
   // the operating model; a handback count that rose 40% in a fortnight is a
   // fact about this fortnight, and only the second one is news.
   const flow = snap?.flow || null;
-  if (flow) {
+  // Same gate as the renderer: a stale NOVA build's numbers are not merely
+  // incomplete, they are wrong in a specific direction — every return counted as
+  // a rejection. Findings built on them would escalate friction that is not
+  // there, to the person assessing the PIP.
+  if (flow && flow.build !== FLOW_BUILD_EXPECTED) {
+    findings.push({
+      severity: 'blocked',
+      kind: 'flow-build-mismatch',
+      title: 'Ticket flow signals withheld — NOVA is on an older build',
+      detail: `NOVA answered with \`${flow.build || 'unknown (pre-versioning)'}\`; this report reads \`${FLOW_BUILD_EXPECTED}\`. The older build cannot tell a rejection from a fix returned for testing, so its figures would overstate friction. Redeploy NOVA and regenerate.`,
+    });
+  } else if (flow) {
     const hb = flow.handbacks;
     if (hb?.ok && hb.data) {
       const { total, previous, changePct, routes } = hb.data;
@@ -805,6 +818,17 @@ function complianceTable(trend) {
  */
 function flowSection(flow) {
   if (!flow) return '_Flow signals unavailable — NOVA did not answer. These figures are absent, not zero._';
+
+  // A stale NOVA deploy returns a response that LOOKS fine while the fields
+  // added since are quietly `undefined` — which renders as blanks and zeroes,
+  // not as an error. That happened once: NOVA served an old `dist` and the
+  // section reported 218 rejections using logic that had already been corrected
+  // to separate returns-after-fix. Refuse to present those numbers.
+  if (flow.build !== FLOW_BUILD_EXPECTED) {
+    return `> ⚠️ **Ticket flow figures withheld.** NOVA answered with build \`${flow.build || 'unknown (pre-versioning)'}\`, `
+      + `but this report reads \`${FLOW_BUILD_EXPECTED}\`. An older build counts every downward tier move as a rejection, `
+      + `including fixes returned for testing — so its numbers would overstate friction. Redeploy NOVA, then regenerate.`;
+  }
 
   const out = [];
   const say = (label, sig, fn) => {

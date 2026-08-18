@@ -237,6 +237,7 @@ test('ageing is ranked by ratio to target, not by raw days', () => {
 function flowPayload(over = {}) {
   const sig = data => ({ ok: true, error: null, data });
   return {
+    build: '2026-08-18-classifier',
     window: { days: 30, from: '2026-07-18' },
     handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'Tier 2', to_tier: 'Customer Care', count: 40 }], unclassified: 0, returnsAfterFix: 0, reasons: { top: [{ reason: 'Insufficient investigation', count: 22 }], withoutReason: 5, classified: 27 } }),
     pingPong: sig({ threshold: 3, ticketsAffected: 0, worst: [] }),
@@ -385,6 +386,29 @@ test('a return after a released fix is never presented as friction', () => {
   assert.match(md, /80\*\* returned after a released fix/);
   assert.match(md, /that is the flow working/);
   assert.doesNotMatch(md, /\*\*99\*\*/, 'the two counts must never be summed');
+});
+
+test('an older NOVA build has its flow figures withheld, not rendered', () => {
+  // This happened: NOVA served a stale dist, the response looked fine, and the
+  // fields added since came back undefined. Undefined renders as blanks and
+  // zeroes, not as an error — and the old logic counted every downward move as a
+  // rejection, so its numbers overstate friction in a specific direction.
+  const a = weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({ build: '2026-08-18-pre-classifier' }),
+  }));
+  const f = a.findings.find(x => x.kind === 'flow-build-mismatch');
+  assert.equal(f.severity, 'blocked');
+
+  const md = weeklyRisk.render(a);
+  assert.match(md, /figures withheld/i);
+  assert.doesNotMatch(md, /\*\*Rejections:\*\*/, 'no numbers may be shown from a build we cannot read');
+});
+
+test('a response with no build field at all is treated as stale', () => {
+  const flow = flowPayload();
+  delete flow.build;
+  const md = weeklyRisk.render(weeklyRisk.assess(baseSnapshot({ flow })));
+  assert.match(md, /unknown \(pre-versioning\)/);
 });
 
 test('a failed sub-signal renders as absent, never as a healthy zero', () => {
