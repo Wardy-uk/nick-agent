@@ -185,6 +185,90 @@ test('ageing is ranked by ratio to target, not by raw days', () => {
   assert.equal(a.ageing[0].ratio, 81);
 });
 
+// ── Flow signals ─────────────────────────────────────────────────────────────
+//
+// These exist because the Support Review was written from measures NOVA was
+// already computing and nobody was reading. The rules below are what stops that
+// recurring, so they are pinned rather than trusted.
+
+/** A flow payload in the shape the NOVA bridge returns. */
+function flowPayload(over = {}) {
+  const sig = data => ({ ok: true, error: null, data });
+  return {
+    window: { days: 30, from: '2026-07-18' },
+    handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'T2', to_tier: 'T1', count: 40 }] }),
+    pingPong: sig({ threshold: 3, ticketsAffected: 0, worst: [] }),
+    breachesByQueue: sig({ total: 0, byTier: [], coverage: { cachedTickets: 100, lastSync: '2026-08-17T06:00:00Z' } }),
+    unowned: sig({ total: 0, byTier: [] }),
+    stalled: sig({ staleDays: 14, total: 0, byTier: [], worst: [] }),
+    unavailable: [],
+    ...over,
+  };
+}
+
+test('a handback rise past the threshold escalates; a flat one only warns', () => {
+  const rising = weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({
+      handbacks: { ok: true, error: null, data: { total: 60, previous: 40, changePct: 50, routes: [{ from_tier: 'T2', to_tier: 'T1', count: 60 }] } },
+    }),
+  })).findings.find(f => f.kind === 'handbacks');
+  assert.equal(rising.severity, 'escalate', '50% rise is news, not background');
+
+  const flat = weeklyRisk.assess(baseSnapshot({ flow: flowPayload() }))
+    .findings.find(f => f.kind === 'handbacks');
+  assert.equal(flat.severity, 'warn', '5% is the operating model, not this fortnight');
+});
+
+test('a ticket past the nameable move count escalates', () => {
+  const a = weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({
+      pingPong: { ok: true, error: null, data: { threshold: 3, ticketsAffected: 12, worst: [{ ticket_key: 'NT-16112', moves: 16, returns: 13 }] } },
+    }),
+  }));
+  const f = a.findings.find(x => x.kind === 'ping-pong');
+  assert.equal(f.severity, 'escalate');
+  assert.match(f.detail, /NT-16112/, 'the worst ticket is named so it can be picked up');
+});
+
+test('breach concentration is framed as routing, never as the queue underperforming', () => {
+  const f = weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({
+      breachesByQueue: {
+        ok: true, error: null,
+        data: {
+          total: 1439,
+          byTier: [{ tier: 'Customer Care', breaches: 1302, sharePct: 90.5 }],
+          coverage: { cachedTickets: 16511, lastSync: '2026-08-17T06:00:00Z' },
+        },
+      },
+    }),
+  })).findings.find(x => x.kind === 'breach-concentration');
+  // The available misreading sends the whole improvement effort into the wrong
+  // team. If this wording ever drifts, the report starts blaming Customer Care.
+  assert.match(f.detail, /not a Customer Care performance finding/);
+  assert.equal(f.severity, 'warn');
+});
+
+test('a failed sub-signal renders as absent, never as a healthy zero', () => {
+  const a = weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({
+      handbacks: { ok: false, error: 'Query failed', data: null },
+      unavailable: [{ name: 'handbacks', error: 'Query failed' }],
+    }),
+  }));
+  assert.ok(a.findings.some(f => f.kind === 'flow-signal-unavailable' && f.severity === 'blocked'));
+
+  const md = weeklyRisk.render(a);
+  assert.match(md, /Handbacks:.*unavailable/, 'the section says it could not measure');
+  assert.doesNotMatch(md, /\*\*Handbacks:\*\* \*\*0\*\*/, 'a failed query must never read as nil handbacks');
+});
+
+test('no flow data at all renders as absent rather than omitting the section', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(baseSnapshot({ flow: null })));
+  assert.match(md, /## 3\. Ticket flow & ownership/, 'the section is still there');
+  assert.match(md, /absent, not zero/i);
+});
+
 // ── Ordering ─────────────────────────────────────────────────────────────────
 
 test('findings rank blocked → escalate → warn', () => {
@@ -212,7 +296,7 @@ test('weekCommencing returns the Monday, and is local rather than UTC', () => {
 
 test('the rendered note marks unanswered sections rather than quietly omitting them', () => {
   const md = weeklyRisk.render(weeklyRisk.assess(baseSnapshot()));
-  assert.match(md, /## 3\. Overtime/);
+  assert.match(md, /## 4\. Overtime/);
   assert.match(md, /NOT ENTERED/);
   assert.match(md, /NOT CONFIRMED/);
   assert.match(md, /week_commencing: 2026-08-17/);
@@ -442,7 +526,7 @@ function taskSnap(tasks) {
 
 test('the task section renders open, overdue and closed-last-week', () => {
   const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 92, overdue: 14, closedLastWeek: 23, undated: 40 })));
-  assert.match(md, /## 5\. My task position/);
+  assert.match(md, /## 6\. My task position/);
   assert.match(md, /\| Open tasks \| \*\*92\*\* \|/);
   assert.match(md, /\| Overdue \| \*\*14\*\* \(15%\) \|/);
   assert.match(md, /\| Closed w\/c 10 Aug 2026 \| \*\*23\*\* \|/);

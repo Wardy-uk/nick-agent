@@ -45,6 +45,14 @@ const UNKNOWN_REASON_ESCALATE_SHARE = 0.5;
 const SLIDE_WEEKS = 3;
 /** Snapshot older than this many days is reported as stale, not as fact. */
 const SNAPSHOT_STALE_DAYS = 3;
+/** Lookback for the flow signals. 30 days, so a weekly report has a stable base. */
+const FLOW_WINDOW_DAYS = 30;
+/** Handback volume rising by more than this share, period on period, is a finding. */
+const HANDBACK_RISE_SHARE = 0.25;
+/** Queue moves before a single ticket is worth naming in the report. */
+const PING_PONG_NAMEABLE = 6;
+/** One queue holding more than this share of breaches is a routing story. */
+const BREACH_CONCENTRATION = 0.8;
 
 const MANUAL_KEY = week => `weekly_risk_manual_${week}`;
 const PUBLISH_KEY = week => `weekly_risk_published_${week}`;
@@ -230,16 +238,21 @@ async function pull(name, fn) {
 async function snapshot({ week = weekCommencing(), date } = {}) {
   const novaReady = nova.isConfigured();
 
-  const [kpi, trend, escalationStats] = novaReady
+  const [kpi, trend, escalationStats, flow] = novaReady
     ? await Promise.all([
       pull('kpi-snapshot', () => nova.call(`/api/neuro-bridge/kpi-snapshot${date ? `?date=${date}` : ''}`)),
       pull('kpi-trend', () => nova.call('/api/neuro-bridge/kpi-trend?weeks=6')),
       pull('escalation-stats', () => nova.call('/api/neuro-bridge/escalation-stats?days=30')),
+      // How tickets MOVE. The Support Review was written from these five facts
+      // and every one was computable from NOVA on the day it was written — so
+      // they cross every week now, whether or not anyone thinks to ask.
+      pull('flow-signals', () => nova.call(`/api/neuro-bridge/flow-signals?days=${FLOW_WINDOW_DAYS}`)),
     ])
     : [
       { name: 'kpi-snapshot', ok: false, error: 'NOVA bridge not configured', data: null },
       { name: 'kpi-trend', ok: false, error: 'NOVA bridge not configured', data: null },
       { name: 'escalation-stats', ok: false, error: 'NOVA bridge not configured', data: null },
+      { name: 'flow-signals', ok: false, error: 'NOVA bridge not configured', data: null },
     ];
 
   // Nick's own task position. Competency 4 is about overdue management actions,
@@ -258,10 +271,11 @@ async function snapshot({ week = weekCommencing(), date } = {}) {
     week,
     generatedAt: new Date().toISOString(),
     today: todayLocal(),
-    sources: [kpi, trend, escalationStats].map(s => ({ name: s.name, ok: s.ok, error: s.error || null })),
+    sources: [kpi, trend, escalationStats, flow].map(s => ({ name: s.name, ok: s.ok, error: s.error || null })),
     kpi: kpi.data,
     trend: trend.data,
     escalationStats: escalationStats.data,
+    flow: flow.data,
     jiraEscalations,
     tasks,
     management: managementLog.status(),
@@ -495,6 +509,105 @@ function assess(snap) {
     });
   }
 
+  // ── Ticket flow ────────────────────────────────────────────────────────────
+  //
+  // The Support Review's core diagnosis: the problem is not ticket volume, it is
+  // that tickets move badly. Ownership is unclear, handbacks carry no guidance,
+  // and work stalls between teams. These rules exist so that story is told by
+  // NOVA every week rather than by a consultant every year.
+  //
+  // Each rule reports MOVEMENT where it can. A handback count is a fact about
+  // the operating model; a handback count that rose 40% in a fortnight is a
+  // fact about this fortnight, and only the second one is news.
+  const flow = snap?.flow || null;
+  if (flow) {
+    const hb = flow.handbacks;
+    if (hb?.ok && hb.data) {
+      const { total, previous, changePct, routes } = hb.data;
+      const rising = previous > 0 && (total - previous) / previous > HANDBACK_RISE_SHARE;
+      if (total > 0) {
+        findings.push({
+          severity: rising ? 'escalate' : 'warn',
+          kind: 'handbacks',
+          title: rising
+            ? `Handbacks up ${changePct}% — ${total} tickets returned between tiers`
+            : `${total} tickets handed back between tiers`,
+          detail: `${routes.slice(0, 3).map(r => `${r.from_tier} → ${r.to_tier} ${r.count}`).join('; ')}${routes.length > 3 ? `, +${routes.length - 3} more routes` : ''}. Previous ${FLOW_WINDOW_DAYS} days: ${previous}. Each handback is a ticket that was escalated without what the receiving team needed, or returned without saying what was missing.`,
+          items: routes,
+        });
+      }
+    }
+
+    const pp = flow.pingPong;
+    if (pp?.ok && pp.data?.ticketsAffected > 0) {
+      const worst = (pp.data.worst || []).filter(t => t.moves >= PING_PONG_NAMEABLE);
+      findings.push({
+        // A ticket crossing queues six times has had six chances to be owned and
+        // was not owned once. That is worth a manager's attention by itself.
+        severity: worst.length ? 'escalate' : 'warn',
+        kind: 'ping-pong',
+        title: `${pp.data.ticketsAffected} tickets crossed queues ${pp.data.threshold}+ times`,
+        detail: worst.length
+          ? `Worst: ${worst.slice(0, 3).map(t => `${t.ticket_key} (${t.moves} moves, ${t.returns} returns)`).join('; ')}. Each of these has no single case owner — the review's number-one recommendation.`
+          : `None past ${PING_PONG_NAMEABLE} moves. Worth watching rather than escalating.`,
+        items: pp.data.worst,
+      });
+    }
+
+    const bq = flow.breachesByQueue;
+    if (bq?.ok && bq.data?.total > 0) {
+      const top = bq.data.byTier[0];
+      if (top && top.sharePct !== null && top.sharePct / 100 > BREACH_CONCENTRATION) {
+        findings.push({
+          // Deliberately worded as a routing finding, not a performance one. The
+          // review found 90.5% of breaches happening in Customer Care, and the
+          // available misreading — "Customer Care is slow" — would send the
+          // whole improvement effort into the wrong team. Customer Care is where
+          // tickets wait for everyone else.
+          severity: 'warn',
+          kind: 'breach-concentration',
+          title: `${top.sharePct}% of SLA breaches happen while the ticket sits in ${top.tier}`,
+          detail: `${top.breaches} of ${bq.data.total} breaches in ${FLOW_WINDOW_DAYS} days. This is a routing and ownership finding, not a ${top.tier} performance finding — it is where tickets wait for other teams. The fix is upstream: acceptance criteria and a named case owner.`,
+          items: bq.data.byTier,
+        });
+      }
+    }
+
+    const un = flow.unowned;
+    if (un?.ok && un.data?.total > 0) {
+      findings.push({
+        severity: 'warn',
+        kind: 'unowned',
+        title: `${un.data.total} open tickets have no assignee`,
+        detail: `${un.data.byTier.slice(0, 3).map(t => `${t.tier} ${t.count} (oldest ${t.oldest_days}d)`).join('; ')}. "Single named case owner for every multi-team ticket" is the review's top recommendation; this is the number that says whether it landed.`,
+        items: un.data.byTier,
+      });
+    }
+
+    const st = flow.stalled;
+    if (st?.ok && st.data?.total > 0) {
+      findings.push({
+        severity: 'warn',
+        kind: 'stalled',
+        title: `${st.data.total} open tickets untouched for ${st.data.staleDays}+ days`,
+        detail: `Worst: ${(st.data.worst || []).slice(0, 3).map(t => `${t.issue_key} (${t.days_untouched}d, ${t.tier})`).join('; ')}. Untouched is measured from last update, not creation — an old ticket being worked is a hard problem, an old ticket nobody has touched is a forgotten one.`,
+        items: st.data.worst,
+      });
+    }
+
+    // A sub-signal that failed is reported the same way a whole source is: as an
+    // absence. Otherwise "no handbacks flagged" is indistinguishable from "the
+    // handback query threw".
+    for (const u of flow.unavailable || []) {
+      findings.push({
+        severity: 'blocked',
+        kind: 'flow-signal-unavailable',
+        title: `Flow signal \`${u.name}\` unavailable`,
+        detail: `${u.error}. That section is absent, not zero.`,
+      });
+    }
+  }
+
   // Nick's own task position. A finding only when the overdue share is large
   // enough to be the story — a couple of overdue items in a hundred is noise,
   // and a report that flags it every week trains him to skip the section.
@@ -578,6 +691,7 @@ function assess(snap) {
     trend,
     ageing,
     reasons,
+    flow,
     positives,
     findings,
     escalateCount: findings.filter(f => f.severity === 'escalate').length,
@@ -609,6 +723,70 @@ function complianceTable(trend) {
     return `| ${t.kpi} | ${now === null || now === undefined ? '—' : Math.round(now)}% | ${was === null || was === undefined ? '—' : Math.round(was)}% | ${arrow} | ${rag} |`;
   }).join('\n');
   return `${header}\n${body}`;
+}
+
+/**
+ * The ticket-flow section.
+ *
+ * Every sub-signal renders its own absence. `flow` arriving as null means the
+ * whole call failed; a sub-signal with `ok: false` means that one query failed
+ * while the rest answered. Both say so. The failure this guards against is the
+ * specific one that makes a compliance report dangerous: a section that quietly
+ * renders as "nothing to report" when it means "nothing was measured".
+ */
+function flowSection(flow) {
+  if (!flow) return '_Flow signals unavailable — NOVA did not answer. These figures are absent, not zero._';
+
+  const out = [];
+  const say = (label, sig, fn) => {
+    if (!sig) { out.push(`**${label}:** _not returned by NOVA._`); return; }
+    if (!sig.ok) { out.push(`**${label}:** _unavailable — ${sig.error}. Absent, not zero._`); return; }
+    out.push(fn(sig.data));
+  };
+
+  say('Handbacks', flow.handbacks, d => {
+    const dir = d.changePct === null ? '' : d.changePct > 0 ? ` (▲ ${d.changePct}% vs previous period)` : ` (▼ ${d.changePct}% vs previous period)`;
+    const routes = (d.routes || []).slice(0, 5)
+      .map(r => `| ${r.from_tier} → ${r.to_tier} | ${r.count} |`).join('\n');
+    return `**Handbacks:** **${d.total}** tickets returned between tiers${dir}.\n\n`
+      + (routes ? `| Route | Count |\n|---|---|\n${routes}\n` : '_No handback routes recorded._\n');
+  });
+
+  say('Ping-pong', flow.pingPong, d => {
+    const worst = (d.worst || []).slice(0, 5)
+      .map(t => `| ${t.ticket_key} | ${t.moves} | ${t.returns} |`).join('\n');
+    return `**Ping-pong:** **${d.ticketsAffected}** tickets crossed queues ${d.threshold}+ times.\n\n`
+      + (worst ? `| Ticket | Queue moves | Returns |\n|---|---|---|\n${worst}\n` : '_None over threshold._\n');
+  });
+
+  say('SLA breaches by queue', flow.breachesByQueue, d => {
+    const rows = (d.byTier || []).slice(0, 6)
+      .map(t => `| ${t.tier} | ${t.breaches} | ${t.sharePct === null ? '—' : `${t.sharePct}%`} |`).join('\n');
+    // The caveat is not decoration. The cache being behind makes every figure
+    // above an undercount, and an undercount presented as a total is the same
+    // failure as a failed query presented as a zero.
+    const stale = d.coverage?.lastSync
+      ? `\n_Ticket cache last synced ${String(d.coverage.lastSync).slice(0, 10)} (${d.coverage.cachedTickets} tickets). If the sync is behind, these are undercounts._`
+      : '\n_Ticket cache freshness unknown — treat these as a floor, not a total._';
+    return `**SLA breaches by queue at time of breach:** **${d.total}** in the window.\n\n`
+      + (rows ? `| Queue | Breaches | Share |\n|---|---|---|\n${rows}\n${stale}` : '_No breaches recorded._');
+  });
+
+  say('Unowned', flow.unowned, d => {
+    const rows = (d.byTier || []).slice(0, 5)
+      .map(t => `| ${t.tier} | ${t.count} | ${t.oldest_days}d |`).join('\n');
+    return `**Open tickets with no assignee:** **${d.total}**.\n\n`
+      + (rows ? `| Queue | Unowned | Oldest |\n|---|---|---|\n${rows}\n` : '_None._\n');
+  });
+
+  say('Stalled', flow.stalled, d => {
+    const rows = (d.worst || []).slice(0, 5)
+      .map(t => `| ${t.issue_key} | ${t.tier} | ${t.assignee || '—'} | ${t.days_untouched}d |`).join('\n');
+    return `**Open and untouched ${d.staleDays}+ days:** **${d.total}**.\n\n`
+      + (rows ? `| Ticket | Queue | Owner | Untouched |\n|---|---|---|---|\n${rows}\n` : '_None._\n');
+  });
+
+  return out.join('\n');
 }
 
 /**
@@ -681,7 +859,18 @@ function render(a) {
   }
   lines.push('');
 
-  lines.push('## 3. Overtime');
+  // Section 3 as of w/c 17 Aug 2026 — the sections below shifted down by one.
+  // It leads rather than trails because the Support Review's single most
+  // important recommendation is ticket ownership, and a section at the bottom of
+  // a six-section report is one nobody reaches.
+  lines.push('## 3. Ticket flow & ownership');
+  lines.push('');
+  lines.push(`_How tickets move, over the last ${FLOW_WINDOW_DAYS} days. Added w/c 17 Aug 2026 in response to the Support Review — these are the measures the review was written from._`);
+  lines.push('');
+  lines.push(flowSection(a.flow));
+  lines.push('');
+
+  lines.push('## 4. Overtime');
   lines.push('');
   if (manual.overtime.hours === null) {
     lines.push('> ⚠️ **NOT ENTERED.** NEURO has no overtime source — this must be stated, not assumed. An empty section here would read as nil.');
@@ -691,7 +880,7 @@ function render(a) {
   }
   lines.push('');
 
-  lines.push('## 4. Reporting exceptions / data quality');
+  lines.push('## 5. Reporting exceptions / data quality');
   lines.push('');
   if (a.reasons) {
     lines.push(`- **Escalation reason capture:** ${a.reasons.unknown} of ${a.reasons.total} escalations in 30 days logged as \`unknown\` (**${a.reasons.share}%**).${a.reasons.coded.length ? ` Correctly coded: ${a.reasons.coded.map(c => `\`${c.reason_code}\` ${c.count}`).join(', ')}.` : ''}`);
@@ -706,7 +895,7 @@ function render(a) {
   }
   lines.push('');
 
-  lines.push('## 5. My task position');
+  lines.push('## 6. My task position');
   lines.push('');
   if (a.tasks?.available) {
     const t = a.tasks;
@@ -726,7 +915,7 @@ function render(a) {
   }
   lines.push('');
 
-  lines.push('## 6. Management actions & conversations');
+  lines.push('## 7. Management actions & conversations');
   lines.push('');
   if (a.management) {
     const m = a.management;
