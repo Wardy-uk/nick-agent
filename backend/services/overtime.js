@@ -106,7 +106,20 @@ function setProfile(person, { contractedHours, optoutSigned, optoutDate, notes }
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
-function list({ person, from, to, outcome, limit = 500 } = {}) {
+/**
+ * The read that THROWS. Used by anything whose answer is a compliance claim.
+ *
+ * Caught during the first deploy: `status()` reported `available: true,
+ * totalClaims: 0` against a database that was not even initialised, because the
+ * swallowing `list()` handed it an empty array. That would have put "0 overtime
+ * hours, no checklist gaps" into the weekly report on the strength of a dead
+ * database, AND cleared the publication blocker while doing it — a false
+ * all-clear on a PIP competency, which is the precise failure this codebase is
+ * built to refuse.
+ *
+ * So there are two reads. This one is the truth; `list()` is the convenience.
+ */
+function listOrThrow({ person, from, to, outcome, limit = 500 } = {}) {
   const where = [];
   const params = [];
   if (person) { where.push('person = ?'); params.push(person); }
@@ -117,7 +130,12 @@ function list({ person, from, to, outcome, limit = 500 } = {}) {
                ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
                ORDER BY work_date DESC, id DESC
                LIMIT ?`;
-  try { return db.all(sql, [...params, Math.min(Math.max(limit, 1), 2000)]) || []; } catch { return []; }
+  return db.all(sql, [...params, Math.min(Math.max(limit, 1), 2000)]) || [];
+}
+
+/** Degrading read, for callers where an empty list and a failure are the same. */
+function list(opts = {}) {
+  try { return listOrThrow(opts); } catch { return []; }
 }
 
 function get(id) {
@@ -372,9 +390,12 @@ function decline(id, reason) {
 function status({ from, to, asOf = todayLocal() } = {}) {
   let rows;
   try {
-    rows = list({ from, to });
-  } catch {
-    return { available: false, reason: 'overtime log unreadable' };
+    // listOrThrow, deliberately. The degrading list() returns [] on failure,
+    // which would make an unreachable database indistinguishable from a clean
+    // compliance record in the report that goes to Chris.
+    rows = listOrThrow({ from, to });
+  } catch (err) {
+    return { available: false, reason: `overtime log unreadable: ${err?.message || err}` };
   }
 
   const pending = rows.filter(r => r.outcome === 'pending');
@@ -386,7 +407,7 @@ function status({ from, to, asOf = todayLocal() } = {}) {
   const overLimit = [];
   for (const person of people) {
     const profile = getProfile(person);
-    const avg = rollingAverage(list({ person }), profile?.contracted_hours ?? null, asOf);
+    const avg = rollingAverage(listOrThrow({ person }), profile?.contracted_hours ?? null, asOf);
     if (avg.averageHours !== null && avg.averageHours > WTR_WEEKLY_LIMIT) {
       overLimit.push({ person, averageHours: avg.averageHours, optoutSigned: profile?.optout_signed === 1 });
     }
@@ -411,7 +432,7 @@ function status({ from, to, asOf = todayLocal() } = {}) {
 }
 
 module.exports = {
-  list, get, record, check, approve, decline, status,
+  list, listOrThrow, get, record, check, approve, decline, status,
   getProfile, setProfile, assess, rollingAverage, outstandingSteps,
   STEPS, WTR_WEEKLY_LIMIT, WTR_REFERENCE_WEEKS, WTR_DAILY_REST_HOURS, DEFAULT_CONTRACTED_HOURS,
 };

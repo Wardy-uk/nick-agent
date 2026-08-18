@@ -124,6 +124,28 @@ test('zero logged work is a prompt for better evidence, not an accusation', () =
   assert.match(f.message, /does not mean no work happened/);
 });
 
+// ── An unreadable log must never read as a clean one ─────────────────────────
+
+test('status() reports unavailable when the log cannot be read, never a compliant zero', () => {
+  // Caught on the first deploy: status() returned { available: true,
+  // totalClaims: 0 } against an uninitialised database, because the swallowing
+  // list() handed it an empty array. That would have published "0 overtime
+  // hours, no checklist gaps" off the back of a dead database AND cleared the
+  // weekly report's publication blocker — a false all-clear on a PIP
+  // competency.
+  const db = require('../db/database');
+  const original = db.all;
+  db.all = () => { throw new Error('Database not initialized'); };
+  try {
+    const s = overtime.status();
+    assert.equal(s.available, false, 'a failed read is not an empty log');
+    assert.match(s.reason, /unreadable/);
+    assert.equal(s.totalClaims, undefined, 'no counts may be published from a failed read');
+  } finally {
+    db.all = original;
+  }
+});
+
 // ── The checklist ────────────────────────────────────────────────────────────
 
 test('all five steps are required, and an unanswered one is not a passed one', () => {
