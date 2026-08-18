@@ -808,10 +808,78 @@ function checkHold(taskId) {
 function markAwaiting(blockId, taskId = null) {
   try {
     db.updateTaskBlockRow(blockId, { status: 'awaiting-writeup' });
-    if (taskId != null) db.setTaskBlockItemAwaiting(blockId, taskId, true);
-    writeChecklistToNote(blockId);
+    if (taskId == null) { writeChecklistToNote(blockId); return; }
+    // Ticked is ticked, everywhere (Nick, 18 Aug). Work that did not finish gets
+    // blocked again, so the same task legitimately sits in two windows — and a
+    // box ticked in one while the other still shows it outstanding is the same
+    // two-screens-disagreeing problem the checklist sync exists to end. What
+    // stays per-block is the WRITE-UP: whichever block is written up first
+    // closes it, and the rest settle by themselves.
+    setTickEverywhere(taskId, true);
   } catch (e) {
     console.warn('[TaskBlocks] Could not mark awaiting:', e.message);
+  }
+}
+
+/** Every open block this task sits in. */
+function openBlocksWithTask(taskId) {
+  try { return db.listTaskBlockRows({ taskId, openOnly: true }); }
+  catch { return []; }
+}
+
+/**
+ * Tick (or untick) a task in every open block that holds it, and keep each
+ * block's own state and note in step.
+ */
+function setTickEverywhere(taskId, ticked) {
+  for (const block of openBlocksWithTask(taskId)) {
+    try {
+      db.setTaskBlockItemAwaiting(block.id, taskId, ticked);
+      refreshBlockStatus(block.id);
+      writeChecklistToNote(block.id);
+    } catch (e) {
+      console.warn(`[TaskBlocks] Could not sync tick on block #${block.id}: ${e.message}`);
+    }
+  }
+}
+
+/**
+ * Recompute whether a block still owes a write-up.
+ *
+ * A tick that has since been closed by ANOTHER block counts for nothing here —
+ * otherwise a block whose only ticked task was finished elsewhere would go on
+ * demanding a write-up for work that is already done and already written up
+ * somewhere else. Only `scheduled` / `awaiting-writeup` blocks are touched: a
+ * complete or released one has finished and is not to be reopened.
+ */
+function refreshBlockStatus(blockId) {
+  const block = db.getTaskBlockRow(blockId);
+  if (!block || !['scheduled', 'awaiting-writeup'].includes(block.status)) return;
+
+  const owes = db.listTaskBlockItems(blockId)
+    .some(i => i.awaiting && (db.getTaskRow(i.task_id) || {}).status !== 'done');
+  const want = owes ? 'awaiting-writeup' : 'scheduled';
+  if (want !== block.status) db.updateTaskBlockRow(blockId, { status: want });
+}
+
+/**
+ * A task has just been completed by `closingBlockId`. Settle it everywhere else.
+ *
+ * Nothing more is owed for it, so the tick is cleared from the other blocks and
+ * their state recomputed — a block left holding a spent tick would ask for a
+ * write-up it no longer needs. Their notes still show the box ticked, because
+ * the task is done and `readNoteForEdit` reads that from the task itself.
+ */
+function settleTaskElsewhere(taskId, closingBlockId) {
+  for (const block of openBlocksWithTask(taskId)) {
+    if (block.id === closingBlockId) continue;
+    try {
+      db.setTaskBlockItemAwaiting(block.id, taskId, false);
+      refreshBlockStatus(block.id);
+      writeChecklistToNote(block.id);
+    } catch (e) {
+      console.warn(`[TaskBlocks] Could not settle #${taskId} on block #${block.id}: ${e.message}`);
+    }
   }
 }
 
@@ -881,6 +949,7 @@ function release(blockId, reason, { completeTask = true } = {}) {
     for (const item of db.listTaskBlockItems(blockId)) {
       if (!item.awaiting) continue;
       taskStore.updateTask(item.task_id, { status: 'done', force: true });
+      settleTaskElsewhere(item.task_id, blockId);
       completed.push(item.task_id);
     }
   }
@@ -1054,16 +1123,14 @@ function saveNote(blockId, content, { baseHash = null } = {}) {
   // alone rather than guessed at.
   const ticks = parseChecklist(text);
   for (const [taskId, ticked] of ticks) {
-    try { db.setTaskBlockItemAwaiting(blockId, taskId, ticked); }
-    catch (e) { console.warn(`[TaskBlocks] Could not record tick for #${taskId}: ${e.message}`); }
+    try {
+      db.setTaskBlockItemAwaiting(blockId, taskId, ticked);
+      // A box ticked here is a tick, so it carries to every other window the
+      // task sits in — same rule as ticking on the card.
+      setTickEverywhere(taskId, ticked);
+    } catch (e) { console.warn(`[TaskBlocks] Could not record tick for #${taskId}: ${e.message}`); }
   }
-  if (ticks.size) {
-    const anyTicked = db.listTaskBlockItems(blockId).some(i => i.awaiting);
-    // Keep the block's own state honest with its items, both ways: unticking
-    // the last box means nothing is owed, and ticking one means something is.
-    if (anyTicked && block.status === 'scheduled') db.updateTaskBlockRow(blockId, { status: 'awaiting-writeup' });
-    if (!anyTicked && block.status === 'awaiting-writeup') db.updateTaskBlockRow(blockId, { status: 'scheduled' });
-  }
+  if (ticks.size) refreshBlockStatus(blockId);
 
   const verdict = isOutcomeWritten(text);
   const result = {
@@ -1093,6 +1160,9 @@ function saveNote(blockId, content, { baseHash = null } = {}) {
     }
     try {
       taskStore.updateTask(item.task_id, { status: 'done', force: true });
+      // Nothing more is owed for it anywhere else — this block closed it, and
+      // the others must stop asking for a write-up they no longer need.
+      settleTaskElsewhere(item.task_id, blockId);
       result.completedTaskIds.push(item.task_id);
     } catch (e) {
       console.warn(`[TaskBlocks] Could not complete #${item.task_id}: ${e.message}`);
@@ -1280,6 +1350,7 @@ function sweep({ now = new Date(), dryRun = false } = {}) {
       for (const item of items) {
         if (!item.awaiting) continue;
         taskStore.updateTask(item.task_id, { status: 'done', force: true });
+        settleTaskElsewhere(item.task_id, block.id);
         completed.push(item.task_id);
       }
 
@@ -1400,6 +1471,9 @@ module.exports = {
   saveNote,
   markAwaiting,
   writeChecklistToNote,
+  setTickEverywhere,
+  refreshBlockStatus,
+  settleTaskElsewhere,
   release,
   removeTask,
   restore,

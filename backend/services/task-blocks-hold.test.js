@@ -761,3 +761,80 @@ test('the sweep handles several blocks in one pass', () => {
   assert.equal(db.getTaskRow(c.taskIds[0]).status, 'in-progress');
   assert.deepEqual(swept.gaps, []);
 });
+
+// ── Ticked is ticked everywhere; only one block carries the write-up ─────────
+
+test('ticking a task ticks it in every block that holds it', () => {
+  // Nick's rule, 18 Aug: "if I tick it off, it's ticked off — but it only needs
+  // discussing in the block that's closing it."
+  // Both blocks hold more than one task, which is when a note carries a
+  // checklist at all — a single-task block has nothing to tick.
+  const first = blockedTasks(['Carried over', 'Only in the first'], { dateKey: '2026-07-01' });
+  const second = blockedTasks(['Second block A', 'Second block B'], { dateKey: '2026-07-02' });
+  db.addTaskBlockItem(second.blockId, first.taskIds[0], null);
+  taskBlocks.writeChecklistToNote(second.blockId);
+
+  taskStore.updateTask(first.taskIds[0], { status: 'done' });
+
+  for (const id of [first.blockId, second.blockId]) {
+    const view = taskBlocks.readNoteForEdit(id);
+    assert.ok(view.raw.includes(`- [x] Carried over <!--t:${first.taskIds[0]}-->`),
+      `block #${id} still showed the task unticked`);
+  }
+});
+
+test('closing it in one block stops the other asking for a write-up', () => {
+  const first = blockedTasks(['Shared task'], { dateKey: '2026-07-03' });
+  const second = blockedTasks(['Something else'], { dateKey: '2026-07-04' });
+  db.addTaskBlockItem(second.blockId, first.taskIds[0], null);
+  taskBlocks.writeChecklistToNote(second.blockId);
+
+  taskStore.updateTask(first.taskIds[0], { status: 'done' });
+  // Both now owe a write-up for it — whichever is written up first closes it.
+  assert.equal(db.getTaskBlockRow(first.blockId).status, 'awaiting-writeup');
+  assert.equal(db.getTaskBlockRow(second.blockId).status, 'awaiting-writeup');
+
+  const view = taskBlocks.readNoteForEdit(second.blockId);
+  taskBlocks.saveNote(second.blockId, view.raw.replace('## What came of it\n',
+    '## What came of it\nPicked up the shared one and finished it here.\n'), { baseHash: view.hash });
+
+  assert.equal(db.getTaskRow(first.taskIds[0]).status, 'done');
+  // The other block has nothing outstanding left, so it must stop asking.
+  assert.equal(db.getTaskBlockRow(first.blockId).status, 'scheduled',
+    'a block went on demanding a write-up for work already closed elsewhere');
+});
+
+test('a block with its OWN unfinished ticks keeps owing one', () => {
+  // The settle must be per task, not "this block is done now".
+  const first = blockedTasks(['Shared again', 'Its own work'], { dateKey: '2026-07-05' });
+  const second = blockedTasks(['Elsewhere'], { dateKey: '2026-07-06' });
+  db.addTaskBlockItem(second.blockId, first.taskIds[0], null);
+
+  taskStore.updateTask(first.taskIds[0], { status: 'done' });
+  taskStore.updateTask(first.taskIds[1], { status: 'done' });
+
+  const view = taskBlocks.readNoteForEdit(second.blockId);
+  taskBlocks.saveNote(second.blockId, view.raw.replace('## What came of it\n',
+    '## What came of it\nClosed the shared one over here.\n'), { baseHash: view.hash });
+
+  assert.equal(db.getTaskBlockRow(first.blockId).status, 'awaiting-writeup',
+    'its own ticked task still needs writing up');
+  assert.equal(db.getTaskRow(first.taskIds[1]).status, 'in-progress');
+});
+
+test('unticking a task unticks it everywhere too', () => {
+  const first = blockedTasks(['On the fence'], { dateKey: '2026-07-07' });
+  const second = blockedTasks(['Other work'], { dateKey: '2026-07-08' });
+  db.addTaskBlockItem(second.blockId, first.taskIds[0], null);
+  taskBlocks.writeChecklistToNote(second.blockId);
+
+  taskStore.updateTask(first.taskIds[0], { status: 'done' });
+  taskBlocks.setTickEverywhere(first.taskIds[0], false);
+
+  for (const id of [first.blockId, second.blockId]) {
+    assert.equal(
+      db.listTaskBlockItems(id).find(i => i.task_id === first.taskIds[0]).awaiting, 0,
+      `block #${id} kept a tick that was taken back`
+    );
+  }
+});
