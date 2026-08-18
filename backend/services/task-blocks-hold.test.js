@@ -685,3 +685,79 @@ test('a task already done shows ticked, even though it never held', () => {
   assert.ok(view.raw.includes('A summary written before any box was ticked.'));
   assert.match(view.raw, /- \[x\] One/);
 });
+
+// ── Several blocks at once ───────────────────────────────────────────────────
+
+test('blocks on different days stay independent', () => {
+  const a = blockedTasks(['Day one, job one', 'Day one, job two'], { dateKey: '2026-06-01' });
+  const b = blockedTasks(['Day two, job one', 'Day two, job two'], { dateKey: '2026-06-02' });
+
+  taskStore.updateTask(a.taskIds[0], { status: 'done' });
+  taskStore.updateTask(b.taskIds[1], { status: 'done' });
+
+  // Each tick lands in its own note and nowhere else.
+  const viewA = taskBlocks.readNoteForEdit(a.blockId);
+  const viewB = taskBlocks.readNoteForEdit(b.blockId);
+  assert.ok(viewA.raw.includes(`- [x] Day one, job one <!--t:${a.taskIds[0]}-->`));
+  assert.ok(viewA.raw.includes(`- [ ] Day one, job two <!--t:${a.taskIds[1]}-->`));
+  assert.ok(viewB.raw.includes(`- [ ] Day two, job one <!--t:${b.taskIds[0]}-->`));
+  assert.ok(viewB.raw.includes(`- [x] Day two, job two <!--t:${b.taskIds[1]}-->`));
+
+  // Writing one up leaves the other exactly as it was.
+  taskBlocks.saveNote(a.blockId, viewA.raw.replace('## What came of it\n',
+    '## What came of it\nGot the first of the two done today.\n'), { baseHash: viewA.hash });
+
+  assert.equal(db.getTaskBlockRow(a.blockId).status, 'complete');
+  assert.equal(db.getTaskBlockRow(b.blockId).status, 'awaiting-writeup');
+  assert.equal(db.getTaskRow(a.taskIds[0]).status, 'done');
+  assert.equal(db.getTaskRow(b.taskIds[1]).status, 'in-progress');
+});
+
+test('two blocks on the same day get their own notes', () => {
+  const a = blockedTasks(['Morning job'], { dateKey: '2026-06-03', startTime: '09:00' });
+  const b = blockedTasks(['Afternoon job'], { dateKey: '2026-06-03', startTime: '14:00' });
+  assert.notEqual(a.notePath, b.notePath, 'both blocks would write over each other');
+});
+
+test('a task in two open blocks is held by the most recent, and reported honestly', () => {
+  // Legitimate: work that did not finish gets blocked again. The newer block is
+  // the one being worked, so it is the one that holds.
+  const first = blockedTasks(['Carried over', 'Only in the first'], { dateKey: '2026-06-04' });
+  const second = blockedTasks(['Only in the second'], { dateKey: '2026-06-05' });
+  db.addTaskBlockItem(second.blockId, first.taskIds[0], null);
+
+  const held = taskStore.updateTask(first.taskIds[0], { status: 'done' }).held;
+  assert.equal(held.blockId, second.blockId, 'the block being worked now should hold it');
+
+  // Finish it via the second block.
+  const view = taskBlocks.readNoteForEdit(second.blockId);
+  taskBlocks.saveNote(second.blockId, view.raw.replace('## What came of it\n',
+    '## What came of it\nPicked up the carried-over one and finished it.\n'), { baseHash: view.hash });
+  assert.equal(db.getTaskRow(first.taskIds[0]).status, 'done');
+
+  // The FIRST block must not now claim that task is still outstanding.
+  taskStore.updateTask(first.taskIds[1], { status: 'done' });
+  const viewFirst = taskBlocks.readNoteForEdit(first.blockId);
+  const saved = taskBlocks.saveNote(first.blockId, viewFirst.raw.replace('## What came of it\n',
+    '## What came of it\nCleared what was left in this window.\n'), { baseHash: viewFirst.hash });
+
+  assert.ok(!saved.stillOpenTaskIds.includes(first.taskIds[0]),
+    'a task already finished in another block was reported as still open');
+});
+
+test('the sweep handles several blocks in one pass', () => {
+  const a = blockedTasks(['Swept A'], { dateKey: '2026-06-06' });
+  const b = blockedTasks(['Swept B'], { dateKey: '2026-06-07' });
+  const c = blockedTasks(['Not written up'], { dateKey: '2026-06-08' });
+
+  for (const x of [a, b, c]) taskStore.updateTask(x.taskIds[0], { status: 'done' });
+  writeUp(a.full);
+  writeUp(b.full);
+
+  const swept = taskBlocks.sweep();
+  const ids = swept.completed.map(x => x.blockId);
+  assert.ok(ids.includes(a.blockId) && ids.includes(b.blockId));
+  assert.ok(!ids.includes(c.blockId));
+  assert.equal(db.getTaskRow(c.taskIds[0]).status, 'in-progress');
+  assert.deepEqual(swept.gaps, []);
+});

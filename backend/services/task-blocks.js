@@ -1085,7 +1085,12 @@ function saveNote(blockId, content, { baseHash = null } = {}) {
   const items = db.listTaskBlockItems(blockId);
   const taskStore = require('./task-store');
   for (const item of items) {
-    if (!item.awaiting) { result.stillOpenTaskIds.push(item.task_id); continue; }
+    if (!item.awaiting) {
+      // Judged on the task, not the tick: a task can sit in two blocks, and one
+      // already finished in the other is not "still open" here.
+      if ((db.getTaskRow(item.task_id) || {}).status !== 'done') result.stillOpenTaskIds.push(item.task_id);
+      continue;
+    }
     try {
       taskStore.updateTask(item.task_id, { status: 'done', force: true });
       result.completedTaskIds.push(item.task_id);
@@ -1282,8 +1287,12 @@ function sweep({ now = new Date(), dryRun = false } = {}) {
         blockId: block.id,
         taskIds: completed,
         // The ones left open are reported rather than hidden: "you wrote it up
-        // and two are still open" is information, not an error.
-        stillOpenTaskIds: items.filter(i => !i.awaiting).map(i => i.task_id),
+        // and two are still open" is information, not an error. Judged on the
+        // TASK, not on the tick — a task can sit in two blocks, so one finished
+        // in the other would otherwise be reported here as still outstanding.
+        stillOpenTaskIds: items
+          .filter(i => !i.awaiting && (db.getTaskRow(i.task_id) || {}).status !== 'done')
+          .map(i => i.task_id),
         notePath: note.foundPath || block.note_path,
       });
     } catch (e) {
