@@ -196,9 +196,9 @@ function flowPayload(over = {}) {
   const sig = data => ({ ok: true, error: null, data });
   return {
     window: { days: 30, from: '2026-07-18' },
-    handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'T2', to_tier: 'T1', count: 40 }] }),
+    handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'Tier 2', to_tier: 'Customer Care', count: 40 }], unclassified: 0 }),
     pingPong: sig({ threshold: 3, ticketsAffected: 0, worst: [] }),
-    breachesByQueue: sig({ total: 0, everBreached: 12, byTier: [], coverage: { cachedTickets: 100, lastSync: '2026-08-17T06:00:00Z' } }),
+    breachesByQueue: sig({ total: 0, slaDataPresent: 12, byTier: [], coverage: { cachedTickets: 100, lastSync: '2026-08-17T06:00:00Z' } }),
     unowned: sig({ total: 0, byTier: [] }),
     stalled: sig({ staleDays: 14, total: 0, byTier: [], worst: [] }),
     unavailable: [],
@@ -249,21 +249,43 @@ test('breach concentration is framed as routing, never as the queue underperform
   assert.equal(f.severity, 'warn');
 });
 
-test('an unpopulated breach flag escalates — it is not a clean month', () => {
+test('an unreadable SLA field escalates — it is not a clean month', () => {
   const a = weeklyRisk.assess(baseSnapshot({
     flow: flowPayload({
       breachesByQueue: {
         ok: true, error: null,
-        data: { total: 0, everBreached: 0, byTier: [], coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' } },
+        data: { total: 0, slaDataPresent: 0, byTier: [], coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' } },
       },
     }),
   }));
   const f = a.findings.find(x => x.kind === 'breach-data-missing');
-  assert.equal(f.severity, 'escalate', 'the review counted 1,439 breaches; zero means the field is unwritten');
+  assert.equal(f.severity, 'escalate', 'the wallboards show breaches; zero here means the mapping is broken');
 
   const md = weeklyRisk.render(a);
-  assert.match(md, /no breach data/i);
-  assert.doesNotMatch(md, /\*\*0\*\* in the window/, 'a hollow zero must never render as a measured total');
+  assert.match(md, /not reportable/i);
+  assert.doesNotMatch(md, /\*\*0\*\*, by the queue holding them now/, 'a hollow zero must never render as a measured total');
+  // The claim that cost a correction: NOVA holding no breach data does not mean
+  // the business holds none. The wallboards read the same field live from Jira.
+  assert.match(md, /wallboards read the same field live/);
+});
+
+test('the breach section never claims to be the review\'s at-time-of-breach figure', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({
+      breachesByQueue: {
+        ok: true, error: null,
+        data: {
+          total: 210, slaDataPresent: 5602, basis: 'stock',
+          byTier: [{ tier: 'Customer Care', breaches: 190, sharePct: 90.5 }],
+          coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' },
+        },
+      },
+    }),
+  })));
+  // Presenting a current snapshot as the Support Review's historical measure is
+  // the easiest and most damaging error available in this report.
+  assert.match(md, /not\*\* the Support Review/);
+  assert.match(md, /queue holding them now/);
 });
 
 test('a genuine zero in the window still reads as a measurement, not a gap', () => {
@@ -271,7 +293,7 @@ test('a genuine zero in the window still reads as a measurement, not a gap', () 
     flow: flowPayload({
       breachesByQueue: {
         ok: true, error: null,
-        data: { total: 0, everBreached: 400, byTier: [], coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' } },
+        data: { total: 0, slaDataPresent: 400, byTier: [], coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' } },
       },
     }),
   }));

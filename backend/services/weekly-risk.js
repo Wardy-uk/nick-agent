@@ -530,9 +530,9 @@ function assess(snap) {
           severity: rising ? 'escalate' : 'warn',
           kind: 'handbacks',
           title: rising
-            ? `Handbacks up ${changePct}% — ${total} tickets returned between tiers`
-            : `${total} tickets handed back between tiers`,
-          detail: `${routes.slice(0, 3).map(r => `${r.from_tier} → ${r.to_tier} ${r.count}`).join('; ')}${routes.length > 3 ? `, +${routes.length - 3} more routes` : ''}. Previous ${FLOW_WINDOW_DAYS} days: ${previous}. Each handback is a ticket that was escalated without what the receiving team needed, or returned without saying what was missing.`,
+            ? `Handbacks up ${changePct}% — ${total} tickets returned to a lower tier`
+            : `${total} tickets returned to a lower tier`,
+          detail: `${routes.slice(0, 3).map(r => `${r.from_tier} → ${r.to_tier} ${r.count}`).join('; ')}${routes.length > 3 ? `, +${routes.length - 3} more routes` : ''}. Previous ${FLOW_WINDOW_DAYS} days: ${previous}. Derived from the direction of recorded tier moves — Jira captures a reason on the transition, but NOVA does not yet carry it into the escalation log, so the count is sound and the *why* is not yet reportable.`,
           items: routes,
         });
       }
@@ -559,12 +559,12 @@ function assess(snap) {
     // cache carries the breach flag at all, "0 breaches" is a statement about
     // the pipeline, and publishing it as performance would be a false all-clear
     // on the review's single most-cited metric.
-    if (bq?.ok && bq.data?.everBreached === 0) {
+    if (bq?.ok && bq.data?.slaDataPresent === 0) {
       findings.push({
         severity: 'escalate',
         kind: 'breach-data-missing',
-        title: 'SLA breach data is not being captured',
-        detail: `No ticket in NOVA's cache carries \`sla_breached\`, so breach-by-queue cannot be reported. The Support Review counted 1,439 breaches over six months — a zero here is an unwritten field, not a clean month. Needs fixing before any breach figure in this report can be trusted.`,
+        title: 'Resolution SLA data is not reaching the ticket cache',
+        detail: 'No cached ticket carries a parseable `cf14048`, so breach-by-queue cannot be reported here. This is a broken field mapping, not a clean month — the wallboards read the same field live from Jira and do show breaches.',
       });
     }
     if (bq?.ok && bq.data?.total > 0) {
@@ -771,21 +771,32 @@ function flowSection(flow) {
       + (worst ? `| Ticket | Queue moves | Returns |\n|---|---|---|\n${worst}\n` : '_None over threshold._\n');
   });
 
-  say('SLA breaches by queue', flow.breachesByQueue, d => {
-    if (d.everBreached === 0) {
-      return '**SLA breaches by queue:** _no breach data — `sla_breached` is not set on any ticket in the cache. '
-        + 'This is an unpopulated field, not a clean month, and it is flagged for escalation above._';
+  say('Open tickets currently over SLA', flow.breachesByQueue, d => {
+    if (d.slaDataPresent === 0) {
+      return '**Open tickets currently over SLA:** _not reportable — no cached ticket carries a parseable Resolution SLA field. '
+        + 'A broken field mapping, not a clean month; the wallboards read the same field live from Jira and do show breaches. Flagged for escalation above._';
     }
     const rows = (d.byTier || []).slice(0, 6)
       .map(t => `| ${t.tier} | ${t.breaches} | ${t.sharePct === null ? '—' : `${t.sharePct}%`} |`).join('\n');
-    // The caveat is not decoration. The cache being behind makes every figure
-    // above an undercount, and an undercount presented as a total is the same
-    // failure as a failed query presented as a zero.
+    // Two caveats, and neither is decoration.
+    //
+    // The first is coverage: the cache being behind makes every figure an
+    // undercount, and an undercount presented as a total is the same failure as
+    // a failed query presented as a zero.
+    //
+    // The second matters more. This is a STOCK — tickets breached right now,
+    // in the queue holding them right now. It is NOT the Support Review's
+    // "breaches by queue at time of breach", which nothing in NOVA can produce,
+    // because no table records which queue a ticket sat in when it breached.
+    // Presenting one as the other would be the easiest and most damaging error
+    // in this whole report.
     const stale = d.coverage?.lastSync
-      ? `\n_Ticket cache last synced ${String(d.coverage.lastSync).slice(0, 10)} (${d.coverage.cachedTickets} tickets). If the sync is behind, these are undercounts._`
-      : '\n_Ticket cache freshness unknown — treat these as a floor, not a total._';
-    return `**SLA breaches by queue at time of breach:** **${d.total}** in the window.\n\n`
-      + (rows ? `| Queue | Breaches | Share |\n|---|---|---|\n${rows}\n${stale}` : '_No breaches recorded._');
+      ? `\n_Cache last synced ${String(d.coverage.lastSync).slice(0, 10)} (${d.coverage.cachedTickets} tickets). If the sync is behind, these are undercounts._`
+      : '\n_Cache freshness unknown — treat these as a floor, not a total._';
+    return `**Open tickets currently over SLA:** **${d.total}**, by the queue holding them now.\n\n`
+      + (rows ? `| Queue | Over SLA | Share |\n|---|---|---|\n${rows}\n` : '_None._\n')
+      + '\n_Same field and definition as the wallboards (`cf14048`). This is a snapshot of what is breached now — **not** the Support Review\'s "breaches by queue at time of breach", which no NOVA source can produce: nothing records which queue held a ticket at the moment it breached._'
+      + stale;
   });
 
   say('Unowned', flow.unowned, d => {
