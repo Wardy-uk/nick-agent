@@ -817,8 +817,28 @@ function flowSection(flow) {
     const dir = d.changePct === null ? '' : d.changePct > 0 ? ` (▲ ${d.changePct}% vs previous period)` : ` (▼ ${d.changePct}% vs previous period)`;
     const routes = (d.routes || []).slice(0, 5)
       .map(r => `| ${r.from_tier} → ${r.to_tier} | ${r.count} |`).join('\n');
-    return `**Handbacks:** **${d.total}** tickets returned between tiers${dir}.\n\n`
-      + (routes ? `| Route | Count |\n|---|---|\n${routes}\n` : '_No handback routes recorded._\n');
+
+    // The reasons are the half the Support Review actually complained about —
+    // "returned with limited guidance on what investigation is needed". A count
+    // without them says work bounces; with them it says why, which is the only
+    // version anyone can act on.
+    let why = '';
+    if (d.reasons) {
+      if (d.reasons.top?.length) {
+        why = '\n**Why they came back:**\n\n'
+          + `| Reason | Count |\n|---|---|\n`
+          + d.reasons.top.slice(0, 6).map(r => `| ${r.reason} | ${r.count} |`).join('\n') + '\n';
+        if (d.reasons.withoutReason) {
+          why += `\n_${d.reasons.withoutReason} returns carry no reason — recorded before NOVA began capturing the Jira Rejection Reason field, not left blank by anyone._\n`;
+        }
+      } else {
+        why = '\n_No rejection reasons captured yet. The field is mandatory on the Jira transition screen, so this fills in as returns happen from now on — it is not evidence that reasons are being skipped._\n';
+      }
+    }
+
+    return `**Handbacks:** **${d.total}** tickets returned to a lower tier${dir}.\n\n`
+      + (routes ? `| Route | Count |\n|---|---|\n${routes}\n` : '_No handback routes recorded._\n')
+      + why;
   });
 
   say('Ping-pong', flow.pingPong, d => {

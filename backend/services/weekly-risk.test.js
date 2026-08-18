@@ -238,7 +238,7 @@ function flowPayload(over = {}) {
   const sig = data => ({ ok: true, error: null, data });
   return {
     window: { days: 30, from: '2026-07-18' },
-    handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'Tier 2', to_tier: 'Customer Care', count: 40 }], unclassified: 0 }),
+    handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'Tier 2', to_tier: 'Customer Care', count: 40 }], unclassified: 0, reasons: { top: [{ reason: 'Insufficient investigation', count: 22 }], withoutReason: 5, classified: 27 } }),
     pingPong: sig({ threshold: 3, ticketsAffected: 0, worst: [] }),
     breachesByQueue: sig({ total: 0, withSlaField: 12, byTier: [], coverage: { cachedTickets: 100, lastSync: '2026-08-17T06:00:00Z' } }),
     unowned: sig({ total: 0, byTier: [] }),
@@ -341,6 +341,30 @@ test('a genuine zero in the window still reads as a measurement, not a gap', () 
   }));
   assert.equal(a.findings.find(x => x.kind === 'breach-data-missing'), undefined,
     'breaches exist in the table, so a quiet window is a real result');
+});
+
+test('no reasons captured yet reads as "not started", not as reasons being skipped', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({
+      handbacks: { ok: true, error: null, data: {
+        total: 217, previous: 289, changePct: -24.9,
+        routes: [{ from_tier: 'Tier 3', to_tier: 'Tier 2', count: 106 }],
+        unclassified: 154,
+        reasons: { top: [], withoutReason: 217, classified: 217 },
+      } },
+    }),
+  })));
+  // The field is mandatory in Jira. An empty list means NOVA only just started
+  // capturing it — reporting that as "reasons are being skipped" would accuse
+  // the team of something the tooling caused.
+  assert.match(md, /not evidence that reasons are being skipped/);
+});
+
+test('captured reasons are rendered as written, not bucketed', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(baseSnapshot({ flow: flowPayload() })));
+  assert.match(md, /Why they came back/);
+  assert.match(md, /Insufficient investigation/);
+  assert.match(md, /recorded before NOVA began capturing/, 'unreasoned rows are explained, not hidden');
 });
 
 test('a failed sub-signal renders as absent, never as a healthy zero', () => {
