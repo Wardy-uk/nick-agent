@@ -237,7 +237,7 @@ test('ageing is ranked by ratio to target, not by raw days', () => {
 function flowPayload(over = {}) {
   const sig = data => ({ ok: true, error: null, data });
   return {
-    build: '2026-08-18-classifier',
+    build: '2026-08-18-classifier-b',
     window: { days: 30, from: '2026-07-18' },
     handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'Tier 2', to_tier: 'Customer Care', count: 40 }], unclassified: 0, returnsAfterFix: 0, reasons: { top: [{ reason: 'Insufficient investigation', count: 22 }], withoutReason: 5, classified: 27 } }),
     pingPong: sig({ threshold: 3, ticketsAffected: 0, worst: [] }),

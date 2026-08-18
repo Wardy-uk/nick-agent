@@ -49,9 +49,9 @@ const SNAPSHOT_STALE_DAYS = 3;
 /** Lookback for the flow signals. 30 days, so a weekly report has a stable base. */
 const FLOW_WINDOW_DAYS = 30;
 /** The NOVA flow-signals build this report knows how to read. */
-const FLOW_BUILD_EXPECTED = '2026-08-18-classifier';
+const FLOW_BUILD_EXPECTED = '2026-08-18-classifier-b';
 /** Flow signals run sequentially against Azure SQL — far slower than a chat call. */
-const FLOW_TIMEOUT_MS = 90_000;
+const FLOW_TIMEOUT_MS = 150_000;
 /** Handback volume rising by more than this share, period on period, is a finding. */
 const HANDBACK_RISE_SHARE = 0.25;
 /** Queue moves before a single ticket is worth naming in the report. */
