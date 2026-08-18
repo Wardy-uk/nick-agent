@@ -238,7 +238,7 @@ function flowPayload(over = {}) {
   const sig = data => ({ ok: true, error: null, data });
   return {
     window: { days: 30, from: '2026-07-18' },
-    handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'Tier 2', to_tier: 'Customer Care', count: 40 }], unclassified: 0, reasons: { top: [{ reason: 'Insufficient investigation', count: 22 }], withoutReason: 5, classified: 27 } }),
+    handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'Tier 2', to_tier: 'Customer Care', count: 40 }], unclassified: 0, returnsAfterFix: 0, reasons: { top: [{ reason: 'Insufficient investigation', count: 22 }], withoutReason: 5, classified: 27 } }),
     pingPong: sig({ threshold: 3, ticketsAffected: 0, worst: [] }),
     breachesByQueue: sig({ total: 0, withSlaField: 12, byTier: [], coverage: { cachedTickets: 100, lastSync: '2026-08-17T06:00:00Z' } }),
     unowned: sig({ total: 0, byTier: [] }),
@@ -349,7 +349,7 @@ test('no reasons captured yet reads as "not started", not as reasons being skipp
       handbacks: { ok: true, error: null, data: {
         total: 217, previous: 289, changePct: -24.9,
         routes: [{ from_tier: 'Tier 3', to_tier: 'Tier 2', count: 106 }],
-        unclassified: 154,
+        unclassified: 154, returnsAfterFix: 80,
         reasons: { top: [], withoutReason: 217, classified: 217 },
       } },
     }),
@@ -365,6 +365,26 @@ test('captured reasons are rendered as written, not bucketed', () => {
   assert.match(md, /Why they came back/);
   assert.match(md, /Insufficient investigation/);
   assert.match(md, /recorded before NOVA began capturing/, 'unreasoned rows are explained, not hidden');
+});
+
+test('a return after a released fix is never presented as friction', () => {
+  // The correction that mattered most: Development → Customer Care is usually a
+  // released fix coming back to be tested. Folding those into a "handbacks"
+  // total reported successful delivery as failure.
+  const md = weeklyRisk.render(weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({
+      handbacks: { ok: true, error: null, data: {
+        total: 19, previous: 22, changePct: -13.6,
+        routes: [{ from_tier: 'Tier 2', to_tier: 'Customer Care', count: 19 }],
+        unclassified: 154, returnsAfterFix: 80,
+        reasons: { top: [{ reason: 'Insufficient investigation', count: 12 }], withoutReason: 7, classified: 19 },
+      } },
+    }),
+  })));
+  assert.match(md, /\*\*Rejections:\*\* \*\*19\*\*/, 'only evidenced rejections carry the rejection label');
+  assert.match(md, /80\*\* returned after a released fix/);
+  assert.match(md, /that is the flow working/);
+  assert.doesNotMatch(md, /\*\*99\*\*/, 'the two counts must never be summed');
 });
 
 test('a failed sub-signal renders as absent, never as a healthy zero', () => {

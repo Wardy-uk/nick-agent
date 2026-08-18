@@ -550,9 +550,9 @@ function assess(snap) {
           severity: rising ? 'escalate' : 'warn',
           kind: 'handbacks',
           title: rising
-            ? `Handbacks up ${changePct}% — ${total} tickets returned to a lower tier`
-            : `${total} tickets returned to a lower tier`,
-          detail: `${routes.slice(0, 3).map(r => `${r.from_tier} → ${r.to_tier} ${r.count}`).join('; ')}${routes.length > 3 ? `, +${routes.length - 3} more routes` : ''}. Previous ${FLOW_WINDOW_DAYS} days: ${previous}. Derived from the direction of recorded tier moves — Jira captures a reason on the transition, but NOVA does not yet carry it into the escalation log, so the count is sound and the *why* is not yet reportable.`,
+            ? `Rejections up ${changePct}% — ${total} tickets returned via the rejection screen`
+            : `${total} tickets returned via the rejection screen`,
+          detail: `${routes.slice(0, 3).map(r => `${r.from_tier} → ${r.to_tier} ${r.count}`).join('; ')}${routes.length > 3 ? `, +${routes.length - 3} more routes` : ''}. Previous ${FLOW_WINDOW_DAYS} days: ${previous}. Counts only moves evidenced as rejections — a ticket coming back from Development after a released fix is a return for testing, not a rejection, and is excluded.`,
           items: routes,
         });
       }
@@ -836,9 +836,21 @@ function flowSection(flow) {
       }
     }
 
-    return `**Handbacks:** **${d.total}** tickets returned to a lower tier${dir}.\n\n`
-      + (routes ? `| Route | Count |\n|---|---|\n${routes}\n` : '_No handback routes recorded._\n')
-      + why;
+    // The counts are kept apart on purpose. A return after a released fix is
+    // the system WORKING — the ticket has come back to be tested and confirmed —
+    // and the first version of this section folded those in and reported 217
+    // "handbacks" as friction, of which 80 were Development → Customer Care.
+    // Presenting delivery as failure would aim the improvement effort at the
+    // part of the flow that works.
+    const context = [
+      d.returnsAfterFix ? `**${d.returnsAfterFix}** returned after a released fix (a linked delivery item closed) — that is the flow working, and is counted separately.` : null,
+      d.unclassified ? `**${d.unclassified}** moved down or off-ladder with no evidence either way, so they are neither counted as rejections nor assumed innocent.` : null,
+    ].filter(Boolean).join(' ');
+
+    return `**Rejections:** **${d.total}** tickets evidenced as returned via the rejection screen${dir}.\n\n`
+      + (routes ? `| Route | Count |\n|---|---|\n${routes}\n` : '_No evidenced rejections in the window._\n')
+      + why
+      + (context ? `\n${context}\n` : '');
   });
 
   say('Ping-pong', flow.pingPong, d => {
