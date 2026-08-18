@@ -34,26 +34,44 @@ const taskBlocks = require('./task-blocks');
 
 test.before(async () => { await db.init(); });
 
-/** A task with a block already scheduled, and its stub on disk. */
-function blockedTask(text, { dateKey = '2026-08-19' } = {}) {
-  const { id } = taskStore.createTask({ text, source: 'manual', skipExport: true });
-  const task = db.getTaskRow(id);
-  const notePath = taskBlocks.outcomeNotePath(task, dateKey);
+// Each fixture gets its own slot: the uniqueness guard is on (date, start_time)
+// now, because a block holds many tasks and the thing to prevent is two events
+// landing on top of each other.
+let slotSeq = 0;
+function nextSlot() {
+  const start = 9 * 60 + (slotSeq++ * 15);
+  const p = n => String(n).padStart(2, '0');
+  return `${p(Math.floor(start / 60))}:${p(start % 60)}`;
+}
+
+/** Tasks with a block already scheduled, and its stub on disk. */
+function blockedTasks(texts, { dateKey = '2026-08-19', startTime = null } = {}) {
+  startTime = startTime || nextSlot();
+  const list = Array.isArray(texts) ? texts : [texts];
+  const tasks = list.map(text => {
+    const { id } = taskStore.createTask({ text, source: 'manual', skipExport: true });
+    return db.getTaskRow(id);
+  });
+  const notePath = taskBlocks.outcomeNotePath(tasks, dateKey, startTime);
   const blockId = db.createTaskBlockRow({
-    task_id: id,
     date_key: dateKey,
-    start_time: '14:00',
+    start_time: startTime,
     end_time: '15:00',
     minutes: 60,
     minutes_assumed: 1,
     note_path: notePath,
     status: 'scheduled',
   });
+  for (const t of tasks) db.addTaskBlockItem(blockId, t.id, null);
+
   const full = path.join(process.env.OBSIDIAN_VAULT_PATH, notePath);
   fs.mkdirSync(path.dirname(full), { recursive: true });
-  fs.writeFileSync(full, taskBlocks.renderStub(task, db.getTaskBlockRow(blockId)), 'utf8');
-  return { taskId: id, blockId, notePath, full };
+  fs.writeFileSync(full, taskBlocks.renderStub(tasks, db.getTaskBlockRow(blockId)), 'utf8');
+  return { taskIds: tasks.map(t => t.id), taskId: tasks[0].id, blockId, notePath, full };
 }
+
+/** Back-compat shim so the single-task tests below read unchanged. */
+function blockedTask(text, opts = {}) { return blockedTasks(text, opts); }
 
 function writeUp(full) {
   fs.writeFileSync(
@@ -119,6 +137,7 @@ test('the sweep leaves an un-written block alone and counts it', () => {
 
 test('a note Nick renamed is still found, by the task id in its frontmatter', () => {
   const { taskId, blockId, full } = blockedTask('Book the Q4 planning session');
+  taskStore.updateTask(taskId, { status: 'done' });   // ticked, so it is owed a note
   writeUp(full);
   fs.renameSync(full, path.join(path.dirname(full), 'Renamed by Nick.md'));
 
@@ -149,10 +168,12 @@ test('dropping a task is never held — abandoning is not a claim needing proof'
 
 test('release needs a reason, and stores it', () => {
   const { taskId, blockId } = blockedTask('Sit in on the SMT update');
+  taskStore.updateTask(taskId, { status: 'done' });   // ticked, then held
 
   const refused = taskBlocks.release(blockId, '   ');
   assert.equal(refused.ok, false, 'a reasonless release is a second, quieter way of saying done');
-  assert.equal(db.getTaskBlockRow(blockId).status, 'scheduled');
+  assert.equal(db.getTaskBlockRow(blockId).status, 'awaiting-writeup',
+    'a refused release must leave the block exactly as it was');
 
   const done = taskBlocks.release(blockId, 'Meeting was cancelled, nothing to write up');
   assert.equal(done.ok, true);
@@ -160,6 +181,7 @@ test('release needs a reason, and stores it', () => {
   assert.equal(block.status, 'released');
   assert.match(block.release_reason, /cancelled/);
   assert.equal(db.getTaskRow(taskId).status, 'done');
+  assert.deepEqual(done.completedTaskIds, [taskId]);
 });
 
 test('a released block stays distinguishable from one that earned its note', () => {
@@ -167,6 +189,7 @@ test('a released block stays distinguishable from one that earned its note', () 
   taskBlocks.release(releasedId, 'no outcome worth writing');
 
   const { taskId, blockId: completedId, full } = blockedTask('Completed work');
+  taskStore.updateTask(taskId, { status: 'done' });
   writeUp(full);
   taskBlocks.sweep();
 
@@ -175,21 +198,149 @@ test('a released block stays distinguishable from one that earned its note', () 
   assert.equal(db.getTaskRow(taskId).status, 'done');
 });
 
-test('the same task cannot be blocked twice into the same slot', () => {
-  const { taskId } = blockedTask('Only once please');
+test('two blocks cannot occupy the same slot', () => {
+  // The guard is on the SLOT now, not the task: a block holds many tasks, and
+  // the failure to prevent is two events landing on top of each other.
+  // A date of its own, so the auto-assigned fixture slots cannot collide here.
+  blockedTask('Only once please', { dateKey: '2026-07-01', startTime: '11:00' });
   assert.throws(() => db.createTaskBlockRow({
-    task_id: taskId,
-    date_key: '2026-08-19', start_time: '14:00', end_time: '15:00',
+    date_key: '2026-07-01', start_time: '11:00', end_time: '12:00',
     minutes: 60, minutes_assumed: 0, note_path: 'x.md', status: 'scheduled',
   }), /UNIQUE/);
 });
 
 test('a block still in the future is not listed as outstanding', () => {
-  const { blockId } = blockedTask('Tomorrow work', { dateKey: '2099-01-05' });
+  const { blockId } = blockedTask('Tomorrow work', { dateKey: '2099-01-05', startTime: '14:00' });
   const { rows } = taskBlocks.listOutstanding({ now: new Date(2099, 0, 5, 9, 0) });
   assert.ok(!rows.some(r => r.blockId === blockId),
     'a 2pm block is not outstanding at 9am — listing it makes the panel a second, worse calendar');
 
   const later = taskBlocks.listOutstanding({ now: new Date(2099, 0, 5, 16, 0) });
   assert.ok(later.rows.some(r => r.blockId === blockId));
+});
+
+// ── Batching: several tasks in one window ────────────────────────────────────
+
+test('a batch holds every task in it, on one note', () => {
+  const { taskIds, blockId, notePath } = blockedTasks([
+    'Approve the Sandford refund',
+    'Reply to Chris about headcount',
+    'File the FOC report',
+  ]);
+
+  for (const id of taskIds) {
+    const held = taskStore.updateTask(id, { status: 'done' }).held;
+    assert.ok(held, `task #${id} was not held by its block`);
+    assert.equal(held.blockId, blockId);
+    // One note between them. Three notes for one sitting is friction that would
+    // stop the write-up happening at all.
+    assert.equal(held.notePath, notePath);
+  }
+});
+
+test('writing up a batch completes ONLY the tasks that were ticked', () => {
+  // The rule the whole batch design turns on. A window of four routinely
+  // finishes three; completing the fourth because a note exists would put work
+  // in the ledger that nobody did — the exact failure "a win is detected, not
+  // declared" exists to stop.
+  const { taskIds, blockId, full } = blockedTasks([
+    'Cancel the duplicate licence',
+    'Send the Tier 2 ageing figures',
+    'Read the incident postmortem',
+  ]);
+  const [ticked1, ticked2, never] = taskIds;
+
+  taskStore.updateTask(ticked1, { status: 'done' });
+  taskStore.updateTask(ticked2, { status: 'done' });
+
+  writeUp(full);
+  const swept = taskBlocks.sweep();
+
+  assert.equal(db.getTaskRow(ticked1).status, 'done');
+  assert.equal(db.getTaskRow(ticked2).status, 'done');
+  assert.equal(db.getTaskRow(never).status, 'open',
+    'a task nobody ticked was marked done because someone wrote a note');
+
+  const entry = swept.completed.find(c => c.blockId === blockId);
+  assert.deepEqual(entry.taskIds, [ticked1, ticked2]);
+  // Reported, not hidden: "you wrote it up and one is still open" is information.
+  assert.deepEqual(entry.stillOpenTaskIds, [never]);
+  assert.equal(db.getTaskBlockRow(blockId).status, 'complete');
+});
+
+test('a task left open by a batch can still be ticked afterwards', () => {
+  // Once the block is complete it owes nothing, so the second tick must land
+  // rather than hold against a block that is already written up.
+  const { taskIds, full } = blockedTasks(['Do the first thing', 'Do the second thing']);
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+  writeUp(full);
+  taskBlocks.sweep();
+
+  const after = taskStore.updateTask(taskIds[1], { status: 'done' });
+  assert.equal(after.status, 'done');
+  assert.equal(after.held, undefined, 'a written-up block must not keep holding');
+});
+
+test('releasing a batch closes the block without completing untouched work', () => {
+  const { taskIds, blockId } = blockedTasks(['Abandoned one', 'Abandoned two']);
+  const result = taskBlocks.release(blockId, 'Day got eaten by an escalation');
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.completedTaskIds, []);
+  for (const id of taskIds) assert.equal(db.getTaskRow(id).status, 'open');
+  assert.equal(db.getTaskBlockRow(blockId).status, 'released');
+});
+
+test('the outstanding list names every task in the block and which are ticked', () => {
+  const { taskIds, blockId } = blockedTasks(['Ticked job', 'Untouched job'], { dateKey: '2026-01-05' });
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+
+  const { rows } = taskBlocks.listOutstanding({ now: new Date(2026, 0, 5, 18, 0) });
+  const row = rows.find(r => r.blockId === blockId);
+  assert.ok(row, 'a passed block owing a write-up must be listed');
+  assert.equal(row.tasks.length, 2);
+  assert.equal(row.tasks.find(t => t.taskId === taskIds[0]).awaiting, true);
+  assert.equal(row.tasks.find(t => t.taskId === taskIds[1]).awaiting, false);
+});
+
+test('a second block does not land on the first — even before any calendar sync', () => {
+  // calendar_cache only refreshes on a sync, so a block created a moment ago is
+  // not in it; if Graph refused the event it never will be. Without counting
+  // NEURO's own blocks the slot search hands out the same gap every time, which
+  // is one-to-one-booking.planAll()'s lesson word for word.
+  const { id } = taskStore.createTask({ text: 'First of two back to back', skipExport: true });
+  const { id: id2 } = taskStore.createTask({ text: 'Second of two back to back', skipExport: true });
+
+  const now = new Date(2026, 8, 2, 7, 0);          // Wed 2 Sep 2026, empty diary
+  const first = taskBlocks.plan(id, { now, minutes: 30 });
+  assert.equal(first.ok, true);
+
+  db.createTaskBlockRow({
+    date_key: first.slot.date, start_time: first.slot.startTime, end_time: first.slot.endTime,
+    minutes: 30, minutes_assumed: 0, note_path: 'x.md', status: 'scheduled',
+  });
+
+  const second = taskBlocks.plan(id2, { now, minutes: 30 });
+  assert.equal(second.ok, true);
+  assert.notEqual(
+    `${second.slot.date} ${second.slot.startTime}`,
+    `${first.slot.date} ${first.slot.startTime}`,
+    'the second block was offered the slot the first already holds'
+  );
+});
+
+test('a dropped block frees its slot again', () => {
+  const { id } = taskStore.createTask({ text: 'Slot freed by dropping', skipExport: true });
+  const now = new Date(2026, 8, 3, 7, 0);          // Thu 3 Sep 2026
+
+  const first = taskBlocks.plan(id, { now, minutes: 30 });
+  const blockId = db.createTaskBlockRow({
+    date_key: first.slot.date, start_time: first.slot.startTime, end_time: first.slot.endTime,
+    minutes: 30, minutes_assumed: 0, note_path: 'y.md', status: 'scheduled',
+  });
+  taskBlocks.drop(blockId);
+
+  const again = taskBlocks.plan(id, { now, minutes: 30 });
+  assert.equal(again.slot.startTime, first.slot.startTime,
+    'dropping a block is a decision that the time is no longer spoken for');
 });

@@ -527,38 +527,33 @@ CREATE INDEX IF NOT EXISTS idx_wins_date ON wins(date_key DESC);
 CREATE INDEX IF NOT EXISTS idx_wins_occurred ON wins(occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_wins_source ON wins(source);
 
--- ── Task blocks — a task pushed into the O365 calendar (18 Aug 2026) ─────────
+-- ── Task blocks — tasks pushed into the O365 calendar (18 Aug 2026) ──────────
 --
 -- Nick's rule, carried over from meetings: a block in the diary is a PLAN, not
--- finished work. `meeting-notes-source` will not count a meeting Nick attended
--- until the Plaud note lands, because the note is what proves both that he was
--- there and that the meeting was processed. A time block has exactly the same
--- hole and no Plaud recording to close it — nobody records a solo work block —
--- so the evidence has to be an outcome note Nick writes.
+-- finished work. `meeting-notes-source` will not count a meeting until the Plaud
+-- note lands, because the note is what proves both that he was there and that
+-- the meeting was processed. A time block has exactly the same hole and no Plaud
+-- recording to close it — nobody records a solo work block — so the evidence is
+-- an outcome note Nick writes.
 --
--- Hence this table rather than a column on `tasks`: the block is a separate
--- object with its own lifecycle, and the hold on completion is a property of
--- the BLOCK, not of the task. It also keeps `tasks.status` alone. Adding an
--- 'awaiting-write-up' value to that CHECK constraint means a full table rebuild
--- on a live 447MB DB, and 'done' would stop meaning "done" for every existing
--- reader — both a much bigger risk than one extra table.
+-- **A block holds MANY tasks.** The first cut keyed the block on a single
+-- task_id, and that is wrong for the way the work actually arrives: several
+-- five-minute jobs belong in one thirty-minute window, and the whole point of
+-- batching them is that they produce ONE write-up between them. Four separate
+-- notes for one sitting is friction that would kill the feature. So the block is
+-- the unit and `task_block_items` is the membership.
+--
+-- The window is chosen independently of what is in it — a 30-minute block may
+-- hold 20 minutes of work, deliberately. Nothing here forces them to agree.
 --
 -- status:
 --   scheduled        the block exists; nothing has been claimed about it yet
---   awaiting-writeup Nick ticked the task done, no qualifying note yet — HELD
---   complete         a real outcome note landed; the task went done with it
+--   awaiting-writeup at least one member task has been ticked — HELD
+--   complete         a real outcome note landed
 --   released         closed with no note, by an explicit decision + a reason
---   dropped          the block was abandoned (task dropped, or plans changed)
---
--- The unique index is the idempotency guard, and it is deliberately keyed on
--- (task, day, start) rather than on the Graph event id: the failure to prevent
--- is scheduling the same task twice into the same slot, and that must be caught
--- BEFORE the Graph create, when there is no event id to key on yet. Deleting
--- the event in Outlook is a DECISION — nothing here rescans the calendar to
--- recreate it, the same call plaud-admin-blocks made and for the same reason.
+--   dropped          the block was abandoned
 CREATE TABLE IF NOT EXISTS task_blocks (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id         INTEGER NOT NULL,
   -- NULL only when the Graph create failed; the row is still written so the
   -- stub note and the failure are both traceable rather than silently lost.
   event_id        TEXT,
@@ -567,23 +562,55 @@ CREATE TABLE IF NOT EXISTS task_blocks (
   date_key        TEXT NOT NULL,
   start_time      TEXT NOT NULL,   -- HH:MM
   end_time        TEXT NOT NULL,   -- HH:MM
+  -- Length of the WINDOW, which is a decision about the diary, not a sum of the
+  -- estimates inside it.
   minutes         INTEGER NOT NULL,
-  -- 1 when the length came from time-fit's ASSUMED_MINUTES rather than an
-  -- estimate on the task. Carried all the way to the screen, same rule as #87:
-  -- a guess presented as a measurement is the answer you stop trusting.
+  -- 1 when the length came from time-fit's ASSUMED_MINUTES rather than from an
+  -- estimate or an explicit choice. Carried to the screen, same rule as #87: a
+  -- guess presented as a measurement is the answer you stop trusting.
   minutes_assumed INTEGER NOT NULL DEFAULT 0,
-  -- Vault-relative path of the outcome stub. The direct read; a scan by
-  -- task_id in frontmatter is the fallback for a note Nick moved or renamed.
+  -- Vault-relative path of the outcome stub. One per BLOCK, not per task.
   note_path       TEXT NOT NULL,
   status          TEXT NOT NULL DEFAULT 'scheduled'
                     CHECK(status IN ('scheduled','awaiting-writeup','complete','released','dropped')),
-  -- Why it closed without a note. NULL unless status = 'released'.
   release_reason  TEXT,
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL,
   completed_at    TEXT
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_task_blocks_slot ON task_blocks(task_id, date_key, start_time);
+-- Which tasks are in the block.
+--
+-- `allotted_minutes` is what the task was given INSIDE the window — the number
+-- Nick judged when he packed it. It is written back to `tasks.estimate_minutes`
+-- (snapped to the coarse buckets) because that judgement is exactly the estimate
+-- the task never had: 0 of 154 open tasks carried one, and asking for estimates
+-- up front is how the priority field ended up 18% populated. Asking at the
+-- moment he is already thinking about duration is the only version that gets
+-- answered.
+--
+-- `awaiting` records that THIS task's completion was held — the tick happened.
+-- It is per item, not per block, because a batch of four routinely finishes
+-- three: the write-up releases the hold on all of them, but only the ones
+-- actually ticked are completed. Auto-completing the rest would mark work done
+-- that nobody did, which is the exact thing "a win is detected, not declared"
+-- exists to stop.
+CREATE TABLE IF NOT EXISTS task_block_items (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  block_id         INTEGER NOT NULL,
+  task_id          INTEGER NOT NULL,
+  allotted_minutes INTEGER,
+  awaiting         INTEGER NOT NULL DEFAULT 0,
+  created_at       TEXT NOT NULL,
+  UNIQUE(block_id, task_id)
+);
+
+-- The idempotency guard, checked BEFORE the Graph create — by the time Graph has
+-- answered, a double-click has already made the duplicate. Keyed on the slot
+-- rather than the event id, which does not exist yet at that point. Deleting the
+-- block in Outlook is a DECISION: nothing rescans the calendar to recreate it,
+-- the same call plaud-admin-blocks made and for the same reason.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_blocks_slot ON task_blocks(date_key, start_time);
 CREATE INDEX IF NOT EXISTS idx_task_blocks_status ON task_blocks(status);
-CREATE INDEX IF NOT EXISTS idx_task_blocks_task ON task_blocks(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_block_items_task ON task_block_items(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_block_items_block ON task_block_items(block_id);

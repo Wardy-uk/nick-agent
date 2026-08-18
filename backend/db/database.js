@@ -106,6 +106,36 @@ async function init() {
     console.error('[DB] tasks migration check failed:', e.message);
   }
 
+  // Migration: task_blocks gains many-tasks-per-block (18 Aug 2026).
+  //
+  // The first shape keyed a block on one task_id. Batching several short tasks
+  // into one window makes the BLOCK the unit and the membership a separate
+  // table, so the old column has to go.
+  //
+  // **Guarded on the table being EMPTY, and refuses loudly otherwise.** The
+  // shipped shape has no home for the rows a populated table would hold — the
+  // migration cannot be written honestly — so a drop is only safe on the day it
+  // is, which is the day the feature shipped with zero rows. If this ever finds
+  // data it must not destroy it; it says so and leaves the table alone, and the
+  // new code will fail visibly rather than silently losing a block.
+  try {
+    const blockCols = db.prepare('PRAGMA table_info(task_blocks)').all().map(r => r.name);
+    if (blockCols.includes('task_id')) {
+      const rows = db.prepare('SELECT COUNT(*) AS n FROM task_blocks').get().n;
+      if (rows === 0) {
+        db.exec('DROP TABLE task_blocks');
+        // Re-run the schema so the new definition (and its indexes) land. Every
+        // statement in it is CREATE ... IF NOT EXISTS, so this is idempotent.
+        db.exec(schema);
+        console.log('[DB] task_blocks migrated to many-tasks-per-block');
+      } else {
+        console.error(`[DB] task_blocks holds ${rows} row(s) in the OLD single-task shape and was NOT migrated — task blocks will not work until this is resolved by hand`);
+      }
+    }
+  } catch (e) {
+    console.error('[DB] task_blocks migration check failed:', e.message);
+  }
+
   // Migration: health_samples.source_uuid (#40 — Apple Health transport).
   //
   // UNIQUE(metric, recorded_at) already made a re-post idempotent, and it stays
@@ -1025,12 +1055,12 @@ const TASK_BLOCK_FIELDS = [
 function createTaskBlockRow(block) {
   const now = new Date().toISOString();
   const info = run(
-    `INSERT INTO task_blocks (task_id, event_id, event_web_link, date_key, start_time,
+    `INSERT INTO task_blocks (event_id, event_web_link, date_key, start_time,
                               end_time, minutes, minutes_assumed, note_path, status,
                               created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      block.task_id, block.event_id || null, block.event_web_link || null,
+      block.event_id || null, block.event_web_link || null,
       block.date_key, block.start_time, block.end_time, block.minutes,
       block.minutes_assumed ? 1 : 0, block.note_path, block.status || 'scheduled',
       now, now,
@@ -1039,32 +1069,63 @@ function createTaskBlockRow(block) {
   return info.lastInsertRowid;
 }
 
+function addTaskBlockItem(blockId, taskId, allottedMinutes = null) {
+  return run(
+    `INSERT OR IGNORE INTO task_block_items (block_id, task_id, allotted_minutes, created_at)
+     VALUES (?, ?, ?, ?)`,
+    [blockId, taskId, allottedMinutes == null ? null : allottedMinutes, new Date().toISOString()]
+  ).changes;
+}
+
 function getTaskBlockRow(id) {
   return get('SELECT * FROM task_blocks WHERE id = ?', [id]);
 }
 
+/** The tasks in a block, with their text joined on so callers need one read. */
+function listTaskBlockItems(blockId) {
+  return all(
+    `SELECT i.*, t.text, t.status AS task_status
+       FROM task_block_items i
+       LEFT JOIN tasks t ON t.id = i.task_id
+      WHERE i.block_id = ?
+      ORDER BY i.id`,
+    [blockId]
+  );
+}
+
 /**
- * Blocks for one task, newest first.
+ * Blocks, newest first.
  *
- * `openOnly` means the two states that still owe an outcome note. A task can
- * legitimately have several blocks — work that needed two sittings — so this
- * returns a list, never "the block".
+ * `taskId` filters to blocks CONTAINING that task, via the membership table. A
+ * task can legitimately sit in several blocks — work that needed two sittings —
+ * so this returns a list, never "the block".
  */
 function listTaskBlockRows({ taskId = null, statuses = null, openOnly = false } = {}) {
   const where = [];
   const params = [];
-  if (taskId != null) { where.push('task_id = ?'); params.push(taskId); }
+  if (taskId != null) {
+    where.push('b.id IN (SELECT block_id FROM task_block_items WHERE task_id = ?)');
+    params.push(taskId);
+  }
   if (openOnly) {
-    where.push("status IN ('scheduled', 'awaiting-writeup')");
+    where.push("b.status IN ('scheduled', 'awaiting-writeup')");
   } else if (statuses && statuses.length) {
-    where.push(`status IN (${statuses.map(() => '?').join(', ')})`);
+    where.push(`b.status IN (${statuses.map(() => '?').join(', ')})`);
     params.push(...statuses);
   }
   return all(
-    `SELECT * FROM task_blocks${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
-     ORDER BY date_key DESC, start_time DESC, id DESC`,
+    `SELECT b.* FROM task_blocks b${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY b.date_key DESC, b.start_time DESC, b.id DESC`,
     params
   );
+}
+
+/** Mark one task's completion as held inside its block. */
+function setTaskBlockItemAwaiting(blockId, taskId, awaiting = true) {
+  return run(
+    'UPDATE task_block_items SET awaiting = ? WHERE block_id = ? AND task_id = ?',
+    [awaiting ? 1 : 0, blockId, taskId]
+  ).changes;
 }
 
 function updateTaskBlockRow(id, fields) {
@@ -1312,8 +1373,11 @@ module.exports = {
   listTaskRows,
   updateTaskRow,
   createTaskBlockRow,
+  addTaskBlockItem,
   getTaskBlockRow,
+  listTaskBlockItems,
   listTaskBlockRows,
+  setTaskBlockItemAwaiting,
   updateTaskBlockRow,
   deleteTaskRow,
   countTasks,

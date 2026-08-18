@@ -306,7 +306,9 @@ function updateTask(id, fields = {}) {
     const taskBlocks = require('./task-blocks');
     const blocker = taskBlocks.checkHold(id);
     if (blocker) {
-      taskBlocks.markAwaiting(blocker.id);
+      // The task id matters: the block records WHICH of its tasks were ticked,
+      // so a batch completes only those when the write-up lands.
+      taskBlocks.markAwaiting(blocker.id, id);
       patch.status = 'in-progress';
       held = {
         blockId: blocker.id,

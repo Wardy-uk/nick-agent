@@ -23,12 +23,19 @@ const fs = require('fs');
 process.env.NEURO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'neuro-blocks-')), 'a.db');
 
 const {
-  isOutcomeWritten, renderStub, outcomeNotePath, slugify, findSlot,
+  isOutcomeWritten, renderStub, outcomeNotePath, slugify, findSlot, resolveWindow,
   MIN_OUTCOME_CHARS, DAY_START_MIN, DAY_END_MIN, SEARCH_DAYS,
 } = require('./task-blocks');
 
 const TASK = { id: 58, text: 'Build succession plan — cover for HoTS and emerging team leads' };
 const BLOCK = { date_key: '2026-08-19', start_time: '14:00', end_time: '15:00', minutes: 60 };
+
+// A batch: several short jobs in one window.
+const BATCH = [
+  { id: 61, text: 'Approve the Sandford refund' },
+  { id: 62, text: 'Reply to Chris about headcount' },
+  { id: 63, text: 'File the FOC report' },
+];
 
 // ── The stub must not release the task ───────────────────────────────────────
 
@@ -224,4 +231,106 @@ test('the working window is the whole day, not the 1-2-1 windows', () => {
   // with other people in them. Applying it here would refuse most of the day.
   assert.equal(DAY_START_MIN, 9 * 60);
   assert.equal(DAY_END_MIN, 17 * 60 + 30);
+});
+
+// ── Batching: several tasks in one window ────────────────────────────────────
+
+test('a batch stub does not count as a write-up either', () => {
+  // The trap this pins: the checklist of task names is real text sitting in the
+  // note. Unfenced, it would read as prose and release every batch the instant
+  // it was created — the empty-stub bug again, wearing a different hat.
+  const verdict = isOutcomeWritten(renderStub(BATCH, BLOCK));
+  assert.equal(verdict.written, false,
+    'the batch checklist read as a write-up — every batch would complete on creation');
+  assert.equal(verdict.chars, 0);
+});
+
+test('ticking every box is still not a summary', () => {
+  const raw = renderStub(BATCH, BLOCK).replace(/- \[ \]/g, '- [x]');
+  assert.equal(isOutcomeWritten(raw).written, false,
+    'a checklist records what was in the window; it does not say what came of it');
+});
+
+test('a batch releases on prose, same as a single task', () => {
+  const raw = renderStub(BATCH, BLOCK).replace(
+    '## What came of it\n',
+    '## What came of it\nCleared the refund and the FOC report. Headcount reply still needs Chris.\n'
+  );
+  assert.equal(isOutcomeWritten(raw).written, true);
+});
+
+test('the batch checklist survives into the finished note', () => {
+  // Fenced separately from the stub precisely so it is not scaffolding: three
+  // weeks later, "what did I get through in that half hour" is the question and
+  // the task names are the answer.
+  const raw = renderStub(BATCH, BLOCK);
+  for (const t of BATCH) assert.ok(raw.includes(t.text), `${t.text} missing from the note`);
+});
+
+test('a batch stub carries every task id', () => {
+  assert.match(renderStub(BATCH, BLOCK), /^task_ids: \[61, 62, 63\]$/m);
+});
+
+test('a single-task stub carries both id forms, so older notes still resolve', () => {
+  const raw = renderStub(TASK, BLOCK);
+  assert.match(raw, /^task_ids: \[58\]$/m);
+  assert.match(raw, /^task_id: 58$/m);
+});
+
+test('a batch note is named for the sitting, not for whichever task was first', () => {
+  const p = outcomeNotePath(BATCH, '2026-08-19', '14:00');
+  assert.match(p, /2026-08-19 Focus block 1400 \(3 tasks\)\.md$/);
+  assert.ok(!p.includes('Sandford'), 'naming it after one of three buries the other two');
+});
+
+test('two batches on one day do not collide on a filename', () => {
+  assert.notEqual(
+    outcomeNotePath(BATCH, '2026-08-19', '09:00'),
+    outcomeNotePath(BATCH, '2026-08-19', '14:00')
+  );
+});
+
+test('an unclosed fence fails towards "not written"', () => {
+  // A truncated or hand-mangled note must not read as complete. Failing the
+  // safe way means Nick is asked again, not that a task closes on nothing.
+  const raw = renderStub(TASK, BLOCK).replace('<!-- /neuro:task-outcome-stub -->', '');
+  assert.equal(isOutcomeWritten(raw).written, false);
+});
+
+// ── How long the window is ───────────────────────────────────────────────────
+
+test('an explicit duration wins and is never snapped to a bucket', () => {
+  // The block is a real window in a real diary. A 45-minute request that
+  // silently became an hour is the feature disagreeing with Nick in his own
+  // calendar. Buckets are for the estimate written back onto the task.
+  const w = resolveWindow([{ estimate_minutes: 15 }], 45);
+  assert.equal(w.minutes, 45);
+  assert.equal(w.assumed, false);
+  assert.equal(w.basis, 'requested');
+});
+
+test('with every task estimated, the window is their sum and is not a guess', () => {
+  const w = resolveWindow([{ estimate_minutes: 5 }, { estimate_minutes: 15 }, { estimate_minutes: 5 }], null);
+  assert.equal(w.minutes, 25);
+  assert.equal(w.assumed, false);
+  assert.equal(w.basis, 'estimates');
+});
+
+test('a partly estimated batch is ASSUMED, not a sum', () => {
+  // Filling the gaps with the assumption and presenting the total as a sum
+  // launders a guess into a measurement — the one thing #87 rules out.
+  const w = resolveWindow([{ estimate_minutes: 5 }, { estimate_minutes: null }], null);
+  assert.equal(w.assumed, true);
+  assert.equal(w.basis, 'assumed');
+});
+
+test('nothing estimated falls back to the assumption and says so', () => {
+  const w = resolveWindow([{ estimate_minutes: null }], null);
+  assert.equal(w.minutes, 30);
+  assert.equal(w.assumed, true);
+});
+
+test('a zero or negative request is ignored rather than obeyed', () => {
+  assert.equal(resolveWindow([{ estimate_minutes: 15 }], 0).basis, 'estimates');
+  assert.equal(resolveWindow([{ estimate_minutes: 15 }], -10).basis, 'estimates');
 });

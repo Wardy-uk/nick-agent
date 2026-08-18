@@ -32,14 +32,43 @@ router.get('/', (req, res) => {
   }
 });
 
-// GET /api/task-blocks/plan/:taskId — what would be created. Creates nothing.
-router.get('/plan/:taskId', (req, res) => {
+/** `?taskIds=58,61` or a single `/plan/58`. Both shapes, one parser. */
+function readTaskIds(raw) {
+  return String(raw ?? '').split(',').map(s => parseInt(s, 10)).filter(Number.isInteger);
+}
+
+const MAX_TASKS_PER_BLOCK = 12;
+
+/**
+ * A window has to be a real length. The upper bound is a whole working day: a
+ * longer one is a typo, and a block that swallows the diary is not a thing to
+ * create quietly.
+ */
+function readMinutes(raw) {
+  if (raw == null || raw === '') return { minutes: null };
+  const n = parseInt(raw, 10);
+  if (!Number.isInteger(n) || n <= 0) return { error: 'minutes must be a positive whole number' };
+  if (n > 480) return { error: 'minutes must be 480 (a working day) or less' };
+  return { minutes: n };
+}
+
+// GET /api/task-blocks/plan/:taskIds — what would be created. Creates nothing.
+// `:taskIds` is one id or a comma-separated list, so a batch can be previewed
+// (total, window, whether it is overpacked) before anything reaches the diary.
+router.get('/plan/:taskIds', (req, res) => {
   try {
-    const taskId = parseInt(req.params.taskId, 10);
-    if (!Number.isInteger(taskId)) return res.status(400).json({ ok: false, error: 'taskId must be a number' });
-    const draft = taskBlocks.plan(taskId, {
+    const taskIds = readTaskIds(req.params.taskIds);
+    if (!taskIds.length) return res.status(400).json({ ok: false, error: 'taskIds must be numbers' });
+    if (taskIds.length > MAX_TASKS_PER_BLOCK) {
+      return res.status(400).json({ ok: false, error: `at most ${MAX_TASKS_PER_BLOCK} tasks in one block` });
+    }
+    const mins = readMinutes(req.query.minutes);
+    if (mins.error) return res.status(400).json({ ok: false, error: mins.error });
+
+    const draft = taskBlocks.plan(taskIds, {
       date: req.query.date || null,
       startTime: req.query.startTime || null,
+      minutes: mins.minutes,
     });
     res.status(draft.ok ? 200 : 400).json(draft);
   } catch (e) {
@@ -64,8 +93,18 @@ router.post('/sweep', (req, res) => {
 // exception to it.
 router.post('/', async (req, res) => {
   try {
-    const taskId = parseInt(req.body?.taskId, 10);
-    if (!Number.isInteger(taskId)) return res.status(400).json({ ok: false, error: 'taskId required' });
+    // `taskIds` for a batch, `taskId` for one — the single form stays because it
+    // is what the task row sends and there is no reason to make it build a list.
+    const taskIds = req.body?.taskIds != null
+      ? readTaskIds(Array.isArray(req.body.taskIds) ? req.body.taskIds.join(',') : req.body.taskIds)
+      : readTaskIds(req.body?.taskId);
+    if (!taskIds.length) return res.status(400).json({ ok: false, error: 'taskId or taskIds required' });
+    if (taskIds.length > MAX_TASKS_PER_BLOCK) {
+      return res.status(400).json({ ok: false, error: `at most ${MAX_TASKS_PER_BLOCK} tasks in one block` });
+    }
+
+    const mins = readMinutes(req.body?.minutes);
+    if (mins.error) return res.status(400).json({ ok: false, error: mins.error });
 
     const date = req.body?.date || null;
     const startTime = req.body?.startTime || null;
@@ -79,7 +118,14 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'startTime must be HH:MM' });
     }
 
-    const result = await taskBlocks.schedule(taskId, { date, startTime });
+    const result = await taskBlocks.schedule(taskIds, {
+      date,
+      startTime,
+      minutes: mins.minutes,
+      // The estimate write-back is on by default — it is the whole reason the
+      // duration is asked for here — but a caller can decline it.
+      saveEstimates: req.body?.saveEstimates !== false,
+    });
     res.status(result.ok ? 200 : (result.duplicate ? 409 : 502)).json(result);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

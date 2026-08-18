@@ -23,17 +23,24 @@ import './TaskBlocks.css';
 
 // ── Blocking time for one task ───────────────────────────────────────────────
 
+// The same coarse buckets task-store snaps estimates to. Offered as presets
+// because "quick / half an hour / a couple of hours" is a judgement anyone can
+// make in one second, and that is the only kind that actually gets filled in —
+// asking for "37 minutes" asks for a number nobody has.
+const DURATIONS = [5, 15, 30, 45, 60, 90, 120];
+
 export function BlockTimeControl({ todo, busy }) {
   const [draft, setDraft] = useState(null);
   const [state, setState] = useState('idle');   // idle | planning | drafted | saving | done | error
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
 
-  const propose = useCallback(async () => {
+  const propose = useCallback(async (minutes = null) => {
     setState('planning');
     setError(null);
     try {
-      const res = await fetch(apiUrl(`/api/task-blocks/plan/${todo.task_id}`));
+      const qs = minutes ? `?minutes=${minutes}` : '';
+      const res = await fetch(apiUrl(`/api/task-blocks/plan/${todo.task_id}${qs}`));
       const body = await res.json();
       if (!body.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setDraft(body);
@@ -55,6 +62,7 @@ export function BlockTimeControl({ todo, busy }) {
           taskId: todo.task_id,
           date: draft.slot.date,
           startTime: draft.slot.startTime,
+          minutes: draft.minutes,
         }),
       });
       const body = await res.json();
@@ -72,7 +80,7 @@ export function BlockTimeControl({ todo, busy }) {
       <div className="todo-edit-group">
         <span className="todo-edit-label">Calendar</span>
         <span className="blocks-outcome blocks-outcome-ok">
-          Blocked {result.slot.date} {result.slot.startTime}–{result.slot.endTime}.
+          Blocked {result.slot.date} {result.slot.startTime}–{result.slot.endTime} ({result.minutes} min).
           {' '}This task stays open until <code>{result.notePath}</code> has something in it.
         </span>
       </div>
@@ -84,7 +92,7 @@ export function BlockTimeControl({ todo, busy }) {
       <span className="todo-edit-label">Calendar</span>
 
       {state === 'idle' && (
-        <button className="todo-edit-btn" disabled={busy} onClick={propose}>Block time</button>
+        <button className="todo-edit-btn" disabled={busy} onClick={() => propose()}>Block time</button>
       )}
       {state === 'planning' && <span className="blocks-quiet">Looking for a slot…</span>}
 
@@ -93,11 +101,24 @@ export function BlockTimeControl({ todo, busy }) {
           <span className="blocks-slot">
             {draft.slot.date} {draft.slot.startTime}–{draft.slot.endTime}
           </span>
+          {/* How long, set here. This is the moment Nick is already thinking
+              about duration, which is the only moment an estimate gets given —
+              0 of 154 open tasks had one, because nothing had ever asked at a
+              useful time. What he picks is saved back onto the task. */}
+          <span className="blocks-durations">
+            {DURATIONS.map(m => (
+              <button
+                key={m}
+                className={`todo-edit-btn${draft.minutes === m ? ' active' : ''}`}
+                onClick={() => propose(m)}
+              >{m < 60 ? `${m}m` : `${m / 60}h`}</button>
+            ))}
+          </span>
           {/* #87's rule, carried through: an assumed duration is stated every
               time it is used. A "this fits" that turns out to be a guess is the
               answer you stop trusting after the second time it is wrong. */}
           {draft.minutesAssumed && (
-            <span className="blocks-warn" title="No estimate on this task">
+            <span className="blocks-warn" title="No estimate on this task — pick one above and it will be saved">
               assuming {draft.assumedMinutes} min
             </span>
           )}
@@ -134,6 +155,162 @@ export function BlockTimeControl({ todo, busy }) {
   );
 }
 
+// ── Batching several tasks into one window ───────────────────────────────────
+
+/**
+ * Pick a few short jobs, block one window for the lot.
+ *
+ * Lives in this panel rather than as checkboxes down the task list: the list is
+ * filtered, grouped and progressively expanded, so a selection made in it would
+ * be one Nick loses the moment he changes a filter.
+ *
+ * The window is chosen independently of what is in it — a 30-minute block
+ * holding 20 minutes of work is a normal thing to want, so the overflow is
+ * reported rather than enforced.
+ */
+function BatchComposer({ onCreated }) {
+  const [open, setOpen] = useState(false);
+  const [tasks, setTasks] = useState([]);
+  const [picked, setPicked] = useState([]);
+  const [minutes, setMinutes] = useState(30);
+  const [draft, setDraft] = useState(null);
+  const [state, setState] = useState('idle');
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!open || tasks.length) return;
+    fetch(apiUrl('/api/tasks?status=open'))
+      .then(r => r.json())
+      .then(d => setTasks(d.tasks || []))
+      .catch(e => setError(e.message));
+  }, [open, tasks.length]);
+
+  const toggle = (id) => {
+    setDraft(null);
+    setPicked(p => (p.includes(id) ? p.filter(x => x !== id) : [...p, id]));
+  };
+
+  const packed = picked
+    .map(id => tasks.find(t => t.id === id))
+    .filter(Boolean)
+    .reduce((sum, t) => sum + (t.estimate_minutes || 0), 0);
+
+  const preview = useCallback(async () => {
+    setState('planning');
+    setError(null);
+    try {
+      const res = await fetch(apiUrl(`/api/task-blocks/plan/${picked.join(',')}?minutes=${minutes}`));
+      const body = await res.json();
+      if (!body.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setDraft(body);
+      setState('drafted');
+    } catch (e) {
+      setError(e.message);
+      setState('error');
+    }
+  }, [picked, minutes]);
+
+  const create = useCallback(async () => {
+    setState('saving');
+    try {
+      const res = await fetch(apiUrl('/api/task-blocks'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskIds: picked,
+          minutes,
+          date: draft.slot.date,
+          startTime: draft.slot.startTime,
+        }),
+      });
+      const body = await res.json();
+      if (!body.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setState('idle');
+      setPicked([]);
+      setDraft(null);
+      setOpen(false);
+      onCreated?.(body);
+    } catch (e) {
+      setError(e.message);
+      setState('error');
+    }
+  }, [picked, minutes, draft, onCreated]);
+
+  if (!open) {
+    return (
+      <button className="btn btn-sm blocks-batch-open" onClick={() => setOpen(true)}>
+        Block a window for several tasks
+      </button>
+    );
+  }
+
+  return (
+    <div className="blocks-batch">
+      <div className="blocks-batch-head">
+        <strong>Pick the tasks, then the window</strong>
+        <button className="btn btn-sm" onClick={() => { setOpen(false); setPicked([]); setDraft(null); }}>Cancel</button>
+      </div>
+
+      <div className="blocks-batch-list">
+        {tasks.length === 0 && <span className="blocks-quiet">Loading open tasks…</span>}
+        {tasks.map(t => (
+          <label key={t.id} className={`blocks-batch-item${picked.includes(t.id) ? ' picked' : ''}`}>
+            <input type="checkbox" checked={picked.includes(t.id)} onChange={() => toggle(t.id)} />
+            <span className="blocks-batch-item-text">{t.text}</span>
+            {/* An un-estimated task shows a dash, never a number it does not
+                have — the same reason time-fit flags every assumption. */}
+            <span className="blocks-chip blocks-chip-quiet">
+              {t.estimate_minutes ? `${t.estimate_minutes}m` : '—'}
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <div className="blocks-batch-foot">
+        <span className="blocks-quiet">
+          {picked.length} picked, {packed} min estimated
+        </span>
+        <span className="blocks-durations">
+          {DURATIONS.map(m => (
+            <button
+              key={m}
+              className={`todo-edit-btn${minutes === m ? ' active' : ''}`}
+              onClick={() => { setMinutes(m); setDraft(null); }}
+            >{m < 60 ? `${m}m` : `${m / 60}h`}</button>
+          ))}
+        </span>
+        <button className="btn btn-sm" disabled={!picked.length || state === 'planning'} onClick={preview}>
+          Find a slot
+        </button>
+      </div>
+
+      {/* Reported, not refused: Nick chooses the window, and a deliberately
+          tight one is his call to make. */}
+      {draft?.overpacked && (
+        <div className="blocks-warn">
+          {draft.estimatedMinutes} min of work in a {draft.minutes} min window — it will overrun.
+        </div>
+      )}
+
+      {state === 'drafted' && draft && (
+        <div className="blocks-batch-confirm">
+          <span className="blocks-slot">
+            {draft.slot.date} {draft.slot.startTime}–{draft.slot.endTime}
+          </span>
+          {draft.calendarKnown === false && (
+            <span className="blocks-warn">can't see your diary — this slot may clash</span>
+          )}
+          <span className="blocks-quiet">One note for all {picked.length}.</span>
+          <button className="btn btn-sm btn-primary" onClick={create}>Create</button>
+        </div>
+      )}
+
+      {state === 'saving' && <span className="blocks-quiet">Creating…</span>}
+      {error && <div className="blocks-error">{error}</div>}
+    </div>
+  );
+}
+
 // ── What is waiting to be written up ─────────────────────────────────────────
 
 function Row({ block, onRelease, onDrop, busy, outcome }) {
@@ -143,7 +320,18 @@ function Row({ block, onRelease, onDrop, busy, outcome }) {
   return (
     <div className="blocks-row">
       <div className="blocks-row-main">
-        <div className="blocks-row-text">{block.text}</div>
+        {block.tasks.map(t => (
+          <div key={t.taskId} className="blocks-row-text">
+            {t.text}
+            {/* Ticked tasks will complete when the note lands; untouched ones
+                will not. Saying which is the difference between a write-up that
+                does what Nick expects and one that quietly closes work he never
+                did. */}
+            <span className={`blocks-tick${t.awaiting ? ' blocks-tick-on' : ''}`}>
+              {t.awaiting ? 'ticked — completes on write-up' : 'not ticked — stays open'}
+            </span>
+          </div>
+        ))}
         <div className="blocks-row-meta">
           <span className="blocks-chip">{block.dateKey} {block.startTime}–{block.endTime}</span>
           <span className="blocks-chip blocks-chip-quiet">{block.minutes} min{block.minutesAssumed ? ' (assumed)' : ''}</span>
@@ -252,15 +440,18 @@ export default function TaskBlocks() {
   // the correct answer rather than a check that has stopped working.
   if (!open) {
     return (
-      <div className="blocks-collapsed" onClick={() => setOpen(true)}>
-        {loading && <span>Checking blocked time…</span>}
-        {!loading && error && <span className="blocks-warn">Write-ups: couldn't check — {error}</span>}
-        {!loading && !error && blocks.length === 0 && <span>Nothing waiting to be written up.</span>}
-        {!loading && !error && blocks.length > 0 && (
-          <span className="blocks-collapsed-active">
-            {blocks.length} block{blocks.length === 1 ? '' : 's'} waiting to be written up →
-          </span>
-        )}
+      <div className="blocks-collapsed">
+        <span onClick={() => setOpen(true)} style={{ cursor: 'pointer' }}>
+          {loading && 'Checking blocked time…'}
+          {!loading && error && <span className="blocks-warn">Write-ups: couldn't check — {error}</span>}
+          {!loading && !error && blocks.length === 0 && 'Nothing waiting to be written up.'}
+          {!loading && !error && blocks.length > 0 && (
+            <span className="blocks-collapsed-active">
+              {blocks.length} block{blocks.length === 1 ? '' : 's'} waiting to be written up →
+            </span>
+          )}
+        </span>
+        <BatchComposer onCreated={load} />
       </div>
     );
   }
@@ -278,6 +469,8 @@ export default function TaskBlocks() {
         so the note you write is the evidence. These tasks stay open until there is
         one.
       </p>
+
+      <BatchComposer onCreated={load} />
 
       {error && <div className="blocks-error">Couldn't read the list — {error}</div>}
       {!error && blocks.length === 0 && <div className="blocks-empty">Nothing waiting. </div>}

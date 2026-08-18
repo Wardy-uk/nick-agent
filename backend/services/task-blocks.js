@@ -63,6 +63,21 @@ const OUTCOMES_DIR = 'Tasks/Outcomes';
 const STUB_OPEN = '<!-- neuro:task-outcome-stub -->';
 const STUB_CLOSE = '<!-- /neuro:task-outcome-stub -->';
 
+// The checklist of what a batch held. Fenced SEPARATELY from the stub because
+// the two have opposite lifetimes: the stub's instructions are scaffolding Nick
+// may delete, while the checklist is the record of what the window contained and
+// should survive into the finished note.
+//
+// ⚠ It must still be stripped before measuring, and this is the trap worth
+// naming: the checklist is real text, so an unfenced one would read as prose and
+// release every batch the moment it was created — the empty-stub bug back again,
+// wearing a different hat. Ticking boxes is not a summary either, so a fully
+// ticked list still does not clear the bar.
+const LIST_OPEN = '<!-- neuro:task-outcome-list -->';
+const LIST_CLOSE = '<!-- /neuro:task-outcome-list -->';
+
+const FENCES = [[STUB_OPEN, STUB_CLOSE], [LIST_OPEN, LIST_CLOSE]];
+
 /**
  * How much prose counts as a write-up.
  *
@@ -117,11 +132,16 @@ function isOutcomeWritten(raw) {
   let text = String(raw).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   text = text.replace(/^---\n[\s\S]*?\n---/, ' ');                 // frontmatter
-  // The stub NEURO wrote. Non-greedy and global: a note may carry more than one
-  // if Nick pasted a second block's template in.
-  text = text.split(STUB_OPEN).map((part, i) => (
-    i === 0 ? part : part.slice(part.indexOf(STUB_CLOSE) + STUB_CLOSE.length)
-  )).join(' ');
+  // Everything NEURO wrote and fenced. Split rather than regex so an unclosed
+  // fence drops the remainder instead of matching nothing and letting the whole
+  // template through — failing towards "not written" is the safe direction.
+  for (const [open, close] of FENCES) {
+    text = text.split(open).map((part, i) => {
+      if (i === 0) return part;
+      const end = part.indexOf(close);
+      return end === -1 ? '' : part.slice(end + close.length);
+    }).join(' ');
+  }
   text = text.replace(/<!--[\s\S]*?-->/g, ' ');                     // any other comment
   text = text.replace(/^#{1,6}[^\n]*$/gm, ' ');                     // headings are scaffolding
   text = text.replace(/^\s*[-*+]\s*(\[[ xX]\])?\s*$/gm, ' ');       // an empty bullet is not content
@@ -137,6 +157,34 @@ function isOutcomeWritten(raw) {
   };
 }
 
+/**
+ * How long the block should be, and how sure we are of it.
+ *
+ * Precedence: what Nick asked for → the sum of the tasks' estimates → the
+ * assumption. An explicit choice is never second-guessed and never snapped: the
+ * block is a real window in a real diary, and a 45-minute request that silently
+ * became an hour would be the feature quietly disagreeing with him. The BUCKETS
+ * are for the estimate written back onto the task, not for the window.
+ *
+ * `assumed` is true only when nothing knew — an explicit request and a real sum
+ * are both answers, and only a guess should be labelled as one.
+ */
+function resolveWindow(tasks, requestedMinutes) {
+  if (Number.isFinite(requestedMinutes) && requestedMinutes > 0) {
+    return { minutes: Math.round(requestedMinutes), assumed: false, basis: 'requested' };
+  }
+  const estimates = tasks.map(t => t.estimate_minutes);
+  if (estimates.length && estimates.every(e => e != null)) {
+    return { minutes: estimates.reduce((a, b) => a + b, 0), assumed: false, basis: 'estimates' };
+  }
+  // Partly estimated still counts as not knowing: filling the gaps with the
+  // assumption and presenting the total as a sum would launder a guess into a
+  // measurement, which is the one thing #87 rules out.
+  const minutes = estimates.reduce((sum, e) => sum + (e == null ? timeFit.ASSUMED_MINUTES : e), 0)
+    || timeFit.ASSUMED_MINUTES;
+  return { minutes, assumed: true, basis: 'assumed' };
+}
+
 /** Filesystem-safe, readable, and short enough not to hit Windows path limits. */
 function slugify(text) {
   return String(text || 'task')
@@ -148,37 +196,69 @@ function slugify(text) {
     .replace(/[\s.]+$/, '') || 'task';
 }
 
-/** Vault-relative path for a task's outcome note. Pure. */
-function outcomeNotePath(task, dateKey) {
+/**
+ * Vault-relative path for a block's outcome note. Pure.
+ *
+ * One note per BLOCK, so a batch is named for the sitting rather than for
+ * whichever task happened to be first — naming it after one of four would make
+ * the other three look like an afterthought in the folder listing.
+ */
+function outcomeNotePath(tasks, dateKey, startTime = null) {
   const [year, month] = String(dateKey).split('-');
-  return `${OUTCOMES_DIR}/${year}/${month}/${dateKey} ${slugify(task.text)}.md`;
+  const list = Array.isArray(tasks) ? tasks : [tasks];
+  const name = list.length === 1
+    ? slugify(list[0].text)
+    // The time disambiguates two batches on one day, where the task names cannot.
+    : `Focus block ${String(startTime || '').replace(':', '')} (${list.length} tasks)`;
+  return `${OUTCOMES_DIR}/${year}/${month}/${dateKey} ${name}.md`;
 }
 
 /**
- * The stub. Says plainly that the task is being held and what closes the hold —
+ * The stub. Says plainly that the tasks are being held and what closes the hold —
  * a note that does not explain why it exists is one Nick finds three weeks later
  * and deletes.
+ *
+ * A batch gets a checklist of what was in the window. That list is the actual
+ * value of the note for a batch: three weeks later "what did I get through in
+ * that half hour" is the question, and the individual task names are the answer.
  */
-function renderStub(task, block) {
+function renderStub(tasks, block) {
+  const list = Array.isArray(tasks) ? tasks : [tasks];
+  const many = list.length > 1;
+  const title = many
+    ? `Focus block — ${list.length} tasks`
+    : list[0].text;
+
   return [
     '---',
     'type: task-outcome',
-    `task_id: ${task.id}`,
-    `task: "${String(task.text).replace(/"/g, "'")}"`,
+    // A LIST always, even for one, so the reader and `findOutcomeByTaskIds`
+    // never need two shapes. `task_id` stays for a single task because that is
+    // what the first notes were written with.
+    `task_ids: [${list.map(t => t.id).join(', ')}]`,
+    ...(many ? [] : [`task_id: ${list[0].id}`]),
     `date: ${block.date_key}`,
     `block: ${block.date_key}T${block.start_time}`,
     `minutes: ${block.minutes}`,
     '---',
     '',
-    `# ${task.text}`,
+    `# ${title}`,
     '',
     STUB_OPEN,
     `> Blocked ${block.start_time}–${block.end_time} on ${block.date_key}.`,
-    '> This task stays open in NEURO until there is a real summary below —',
+    many
+      ? '> These tasks stay open in NEURO until there is a real summary below —'
+      : '> This task stays open in NEURO until there is a real summary below —',
     '> a couple of lines on what came of it is enough. Nothing to write up?',
     '> Release it from the task list and say why.',
     STUB_CLOSE,
     '',
+    // Inside the fence would be wrong: the checklist is a record of what the
+    // window held, and it must survive into the finished note rather than being
+    // stripped as template.
+    ...(many
+      ? ['## In this block', LIST_OPEN, ...list.map(t => `- [ ] ${t.text}`), LIST_CLOSE, '']
+      : []),
     '## What came of it',
     '',
     '',
@@ -218,13 +298,25 @@ function readOutcomeNote(block) {
     return { raw: null, foundPath: null, error: e.message };
   }
 
-  // Moved or renamed — find it by id.
-  const found = findOutcomeByTaskId(root, block.task_id, block.date_key);
+  // Moved or renamed — find it by the ids it carries.
+  const taskIds = db.listTaskBlockItems(block.id).map(i => i.task_id);
+  const found = findOutcomeByTaskIds(root, taskIds, block.date_key);
   if (found) return { raw: found.raw, foundPath: found.relPath, error: null };
   return { raw: null, foundPath: null, error: null };
 }
 
-function findOutcomeByTaskId(root, taskId, dateKey) {
+/** Does this note's frontmatter claim any of these task ids? */
+function noteClaimsTask(fm, taskIds) {
+  if (!fm) return false;
+  const wanted = taskIds.map(String);
+  // `task_ids: [58, 61]` — parseFrontmatter hands back the raw string, so the
+  // numbers are pulled out rather than parsed as YAML.
+  const listed = String(fm.task_ids || '').match(/\d+/g) || [];
+  if (listed.some(id => wanted.includes(id))) return true;
+  return fm.task_id != null && wanted.includes(String(fm.task_id));
+}
+
+function findOutcomeByTaskIds(root, taskIds, dateKey) {
   const base = path.join(root, OUTCOMES_DIR);
   if (!fs.existsSync(base)) return null;
 
@@ -243,10 +335,10 @@ function findOutcomeByTaskId(root, taskId, dateKey) {
       let raw;
       try { raw = fs.readFileSync(full, 'utf8'); } catch { continue; }
       const fm = readFrontmatter(raw);
-      if (!fm || String(fm.task_id) !== String(taskId)) continue;
-      // A task can have several blocks; match the one this note was written for
-      // when the note says, and accept it otherwise (an older note carrying no
-      // block date is still that task's write-up).
+      if (!noteClaimsTask(fm, taskIds)) continue;
+      // A task can sit in several blocks; match the one this note was written
+      // for when the note says, and accept it otherwise (an older note carrying
+      // no block date is still that block's write-up).
       if (fm.date && dateKey && String(fm.date).slice(0, 10) !== dateKey) continue;
       return { raw, relPath: path.relative(root, full).replace(/\\/g, '/') };
     }
@@ -339,26 +431,71 @@ function findSlot({ minutes, events = [], now = new Date(), nonWorking = null } 
 
 // ── Scheduling ───────────────────────────────────────────────────────────────
 
-function blockMinutes(task) {
-  const estimate = task.estimate_minutes;
-  return estimate == null
-    ? { minutes: timeFit.ASSUMED_MINUTES, assumed: true }
-    : { minutes: estimate, assumed: false };
+/**
+ * Resolve and validate the tasks going into a block.
+ *
+ * Refuses the whole thing rather than silently dropping one: a batch that
+ * quietly blocked three of the four Nick picked would leave the fourth open with
+ * no sign it was ever meant to be in there.
+ */
+function resolveTasks(taskIds) {
+  const ids = [...new Set((Array.isArray(taskIds) ? taskIds : [taskIds])
+    .map(n => parseInt(n, 10)).filter(Number.isInteger))];
+  if (!ids.length) return { error: 'at least one task is required' };
+
+  const tasks = [];
+  for (const id of ids) {
+    const task = db.getTaskRow(id);
+    if (!task) return { error: `No task #${id}` };
+    if (task.status === 'done' || task.status === 'dropped') {
+      return { error: `Task #${id} is ${task.status}` };
+    }
+    tasks.push(task);
+  }
+  return { tasks };
 }
 
 /**
  * What WOULD be created. Reads the diary, creates nothing — the same two-step as
  * `event-parser` and `one-to-one-booking.propose()`, so the slot can be seen and
  * changed before an event exists.
+ *
+ * `minutes` is the window Nick asked for. `taskIds` may be one or many.
  */
-function plan(taskId, { date = null, startTime = null, now = new Date() } = {}) {
-  const task = db.getTaskRow(taskId);
-  if (!task) return { ok: false, error: `No task #${taskId}` };
-  if (task.status === 'done' || task.status === 'dropped') {
-    return { ok: false, error: `Task #${taskId} is ${task.status}` };
-  }
+function plan(taskIds, { date = null, startTime = null, minutes = null, now = new Date() } = {}) {
+  const resolved = resolveTasks(taskIds);
+  if (resolved.error) return { ok: false, error: resolved.error };
+  const tasks = resolved.tasks;
 
-  const { minutes, assumed } = blockMinutes(task);
+  const window = resolveWindow(tasks, minutes);
+  const estimated = tasks.reduce((sum, t) => sum + (t.estimate_minutes || 0), 0);
+  const unestimated = tasks.filter(t => t.estimate_minutes == null).length;
+
+  const shape = (slot, chosen, extra = {}) => ({
+    ok: true,
+    tasks: tasks.map(t => ({
+      id: t.id,
+      text: t.text,
+      estimateMinutes: t.estimate_minutes,
+      // Stated per task, not just in aggregate — the row Nick has to fix is the
+      // one without a number on it.
+      assumed: t.estimate_minutes == null,
+    })),
+    slot,
+    minutes: window.minutes,
+    minutesAssumed: window.assumed,
+    minutesBasis: window.basis,
+    assumedMinutes: window.assumed ? timeFit.ASSUMED_MINUTES : null,
+    // What the window holds versus how long it is. Nick chooses the window, so
+    // this is reported rather than enforced — a deliberately roomy block is a
+    // normal thing to want.
+    estimatedMinutes: estimated,
+    unestimatedTasks: unestimated,
+    overpacked: estimated > window.minutes,
+    chosen,
+    notePath: outcomeNotePath(tasks, slot.date, slot.startTime),
+    ...extra,
+  });
 
   // An explicit slot is Nick's decision and is not second-guessed against the
   // diary — he can see his own calendar, and refusing a deliberate choice is how
@@ -366,22 +503,13 @@ function plan(taskId, { date = null, startTime = null, now = new Date() } = {}) 
   if (date && startTime) {
     const start = toMin(startTime);
     if (start == null) return { ok: false, error: 'startTime must be HH:MM' };
-    return {
-      ok: true,
-      task: { id: task.id, text: task.text },
-      slot: { date, startTime, endTime: hhmm(start + minutes) },
-      minutes,
-      minutesAssumed: assumed,
-      assumedMinutes: assumed ? timeFit.ASSUMED_MINUTES : null,
-      chosen: 'explicit',
-      notePath: outcomeNotePath(task, date),
-    };
+    return shape({ date, startTime, endTime: hhmm(start + window.minutes) }, 'explicit');
   }
 
   const events = readCalendar(now);
   const workingDays = require('./working-days');
   const slot = findSlot({
-    minutes,
+    minutes: window.minutes,
     events: events.rows,
     now,
     nonWorking: workingDays.holidaySet(),
@@ -390,42 +518,62 @@ function plan(taskId, { date = null, startTime = null, now = new Date() } = {}) 
     return { ok: false, error: slot.reason, calendarKnown: events.known };
   }
 
-  return {
-    ok: true,
-    task: { id: task.id, text: task.text },
-    slot,
-    minutes,
-    minutesAssumed: assumed,
-    assumedMinutes: assumed ? timeFit.ASSUMED_MINUTES : null,
-    chosen: 'proposed',
-    // "I can't see the diary" must stay distinct from "you're free" — #87's rule,
-    // and here it decides whether the proposed slot is worth anything at all.
-    calendarKnown: events.known,
-    notePath: outcomeNotePath(task, slot.date),
-  };
+  // "I can't see the diary" must stay distinct from "you're free" — #87's rule,
+  // and here it decides whether the proposed slot is worth anything at all.
+  return shape(slot, 'proposed', { calendarKnown: events.known });
 }
 
-/** calendar_cache over the search window, in the shape findSlot/time-fit read. */
+/**
+ * The diary as far as slot-finding is concerned: Graph's cached events PLUS the
+ * blocks NEURO has already placed itself.
+ *
+ * That second half is not belt-and-braces, it is load-bearing. `calendar_cache`
+ * only refreshes on a calendar sync, so a block created a minute ago is not in
+ * it — and if Graph refused the event, it never will be. Without this, blocking
+ * two tasks in a row proposes the SAME slot twice and the second one is rejected
+ * as a duplicate. That is `one-to-one-booking.planAll()`'s lesson word for word:
+ * proposing individually hands everyone the same free gap.
+ *
+ * `released` and `dropped` blocks free their slot again — both are decisions
+ * that the time is no longer spoken for.
+ */
 function readCalendar(now = new Date()) {
   const shared = require('../../shared/working-days.cjs');
   const from = shared.toDateStr(now);
   const to = shared.toDateStr(shared.addDays(now, SEARCH_DAYS));
+
+  let known = true;
+  let rows = [];
   try {
-    const rows = db.getCalendarEvents(`${from}T00:00:00`, `${to}T23:59:59`);
-    return {
-      known: true,
-      rows: rows.map(row => ({
-        date: String(row.start_time || '').split('T')[0],
-        start: row.start_time,
-        end: row.end_time,
-        subject: row.subject,
-        isAllDay: Boolean(row.is_all_day),
-        showAs: row.show_as || 'busy',
-      })),
-    };
+    rows = db.getCalendarEvents(`${from}T00:00:00`, `${to}T23:59:59`).map(row => ({
+      date: String(row.start_time || '').split('T')[0],
+      start: row.start_time,
+      end: row.end_time,
+      subject: row.subject,
+      isAllDay: Boolean(row.is_all_day),
+      showAs: row.show_as || 'busy',
+    }));
   } catch {
-    return { known: false, rows: [] };
+    known = false;
   }
+
+  try {
+    for (const block of db.listTaskBlockRows({ statuses: ['scheduled', 'awaiting-writeup', 'complete'] })) {
+      if (block.date_key < from || block.date_key > to) continue;
+      rows.push({
+        date: block.date_key,
+        start: `${block.date_key}T${block.start_time}:00`,
+        end: `${block.date_key}T${block.end_time}:00`,
+        subject: 'NEURO focus block',
+        isAllDay: false,
+        showAs: 'busy',
+      });
+    }
+  } catch (e) {
+    console.warn('[TaskBlocks] Could not read existing blocks for slot search:', e.message);
+  }
+
+  return { known, rows };
 }
 
 /**
@@ -438,39 +586,62 @@ function readCalendar(now = new Date()) {
  * Graph has answered, the duplicate has already been created. A row with a null
  * event_id is recoverable; a duplicate invite is not.
  */
-async function schedule(taskId, { date = null, startTime = null, now = new Date() } = {}) {
-  const draft = plan(taskId, { date, startTime, now });
+async function schedule(taskIds, {
+  date = null, startTime = null, minutes = null, saveEstimates = true, now = new Date(),
+} = {}) {
+  const draft = plan(taskIds, { date, startTime, minutes, now });
   if (!draft.ok) return draft;
 
-  const task = db.getTaskRow(taskId);
-  const { slot, minutes, minutesAssumed } = draft;
+  const resolved = resolveTasks(taskIds);
+  const tasks = resolved.tasks;
+  const { slot, minutesAssumed } = draft;
+  const windowMinutes = draft.minutes;
   const notePath = draft.notePath;
 
   let blockId;
   try {
     blockId = db.createTaskBlockRow({
-      task_id: task.id,
       date_key: slot.date,
       start_time: slot.startTime,
       end_time: slot.endTime,
-      minutes,
+      minutes: windowMinutes,
       minutes_assumed: minutesAssumed ? 1 : 0,
       note_path: notePath,
       status: 'scheduled',
     });
   } catch (e) {
     if (/UNIQUE/i.test(e.message)) {
-      return { ok: false, error: `That task is already blocked at ${slot.startTime} on ${slot.date}`, duplicate: true };
+      return { ok: false, error: `Something is already blocked at ${slot.startTime} on ${slot.date}`, duplicate: true };
     }
     throw e;
   }
 
+  // Membership, and the estimate write-back. Splitting the window evenly across
+  // un-estimated tasks would invent a number per task; instead each keeps what
+  // it had, and only a SINGLE-task block learns its duration from the window —
+  // there, the window IS the judgement about that task.
+  const taskStore = require('./task-store');
+  for (const task of tasks) {
+    const allotted = tasks.length === 1 ? windowMinutes : (task.estimate_minutes ?? null);
+    db.addTaskBlockItem(blockId, task.id, allotted);
+    // Writing it back is what closes the estimate gap: 0 of 154 open tasks
+    // carried one, because nothing ever asked at a moment Nick was already
+    // thinking about duration. Snapped to the coarse buckets on the way in
+    // (task-store does that), while the block keeps the exact window.
+    if (saveEstimates && allotted != null && task.estimate_minutes == null) {
+      try { taskStore.updateTask(task.id, { estimateMinutes: allotted }); }
+      catch (e) { console.warn(`[TaskBlocks] Could not save estimate for #${task.id}: ${e.message}`); }
+    }
+  }
+
   const block = db.getTaskBlockRow(blockId);
-  const stub = writeStub(task, block);
+  const stub = writeStub(tasks, block);
 
   const microsoft = require('./microsoft');
   const result = await microsoft.createCalendarEvent({
-    subject: `Focus: ${task.text}`.slice(0, 200),
+    subject: (tasks.length === 1
+      ? `Focus: ${tasks[0].text}`
+      : `Focus: ${tasks.length} tasks`).slice(0, 200),
     start: `${slot.date}T${slot.startTime}:00`,
     end: `${slot.date}T${slot.endTime}:00`,
     // No attendees, by design. This is Nick's own time — nothing leaves the
@@ -478,20 +649,22 @@ async function schedule(taskId, { date = null, startTime = null, now = new Date(
     // through the approve gate outbound actions need.
     attendees: [],
     body: [
-      `NEURO task #${task.id}.`,
+      ...tasks.map(t => `• ${t.text}  (NEURO #${t.id})`),
       '',
       'This block is not finished until the outcome note has something in it:',
       `  ${stub.written || stub.reason === 'note already exists' ? notePath : '(stub not written — ' + stub.reason + ')'}`,
       '',
-      'The task stays open in NEURO until then.',
+      tasks.length === 1
+        ? 'The task stays open in NEURO until then.'
+        : 'These tasks stay open in NEURO until then.',
     ].join('\n'),
   });
 
   if (!result.created) {
-    // The block row survives with a null event_id. The stub exists, the task is
-    // still linked, and Nick can retry — losing the row here would leave an
+    // The block row survives with a null event_id. The stub exists, the tasks
+    // are still linked, and Nick can retry — losing the row here would leave an
     // orphaned note in the vault with nothing pointing at it.
-    console.warn(`[TaskBlocks] Graph create failed for task #${task.id}: ${result.reason}`);
+    console.warn(`[TaskBlocks] Graph create failed for block #${blockId}: ${result.reason}`);
     return {
       ok: false,
       error: `Blocked in NEURO but Outlook refused it (${result.reason})`,
@@ -506,14 +679,16 @@ async function schedule(taskId, { date = null, startTime = null, now = new Date(
     event_web_link: result.event.webLink || null,
   });
 
-  console.log(`[TaskBlocks] Task #${task.id} blocked ${slot.date} ${slot.startTime}-${slot.endTime}`);
+  console.log(`[TaskBlocks] Block #${blockId} (${tasks.length} task(s)) at ${slot.date} ${slot.startTime}-${slot.endTime}`);
   return {
     ok: true,
     blockId,
-    task: { id: task.id, text: task.text },
+    tasks: draft.tasks,
     slot,
-    minutes,
+    minutes: windowMinutes,
     minutesAssumed,
+    estimatedMinutes: draft.estimatedMinutes,
+    overpacked: draft.overpacked,
     notePath,
     noteWritten: stub.written,
     noteReason: stub.reason,
@@ -561,10 +736,17 @@ function checkHold(taskId) {
   return { ...blocks[0], holdReason: isOutcomeWritten(readOutcomeNote(blocks[0]).raw).reason };
 }
 
-/** Mark the block as owing a write-up. Called when a held completion is refused. */
-function markAwaiting(blockId) {
+/**
+ * Record that this task's tick was held.
+ *
+ * Marks the ITEM as well as the block. Per item, because a batch of four
+ * routinely finishes three: when the note lands, only the ticked ones complete.
+ * Completing the rest would mark work done that nobody did.
+ */
+function markAwaiting(blockId, taskId = null) {
   try {
     db.updateTaskBlockRow(blockId, { status: 'awaiting-writeup' });
+    if (taskId != null) db.setTaskBlockItemAwaiting(blockId, taskId, true);
   } catch (e) {
     console.warn('[TaskBlocks] Could not mark awaiting:', e.message);
   }
@@ -586,13 +768,19 @@ function release(blockId, reason, { completeTask = true } = {}) {
 
   db.updateTaskBlockRow(blockId, { status: 'released', release_reason: why });
 
-  let task = null;
+  // Same rule as the sweep: only what Nick ticked is completed. Releasing a
+  // batch he never ticked closes the BLOCK, not the work.
+  const completed = [];
   if (completeTask) {
     const taskStore = require('./task-store');
-    task = taskStore.updateTask(block.task_id, { status: 'done', force: true });
+    for (const item of db.listTaskBlockItems(blockId)) {
+      if (!item.awaiting) continue;
+      taskStore.updateTask(item.task_id, { status: 'done', force: true });
+      completed.push(item.task_id);
+    }
   }
   console.log(`[TaskBlocks] Block #${blockId} released: ${why}`);
-  return { ok: true, block: db.getTaskBlockRow(blockId), task };
+  return { ok: true, block: db.getTaskBlockRow(blockId), completedTaskIds: completed };
 }
 
 /** Abandon a block — the work is not happening in that slot. Deletes nothing. */
@@ -649,11 +837,27 @@ function sweep({ now = new Date(), dryRun = false } = {}) {
         // that actually holds the write-up.
         note_path: note.foundPath || block.note_path,
       });
+
+      // ONLY the tasks Nick actually ticked are completed. The write-up releases
+      // the HOLD; it is not a claim that everything in the window got done. A
+      // batch of four routinely finishes three, and marking the fourth done
+      // because a note exists would put work in the wins ledger that nobody did
+      // — the exact failure "a win is detected, not declared" exists to stop.
       const taskStore = require('./task-store');
-      taskStore.updateTask(block.task_id, { status: 'done', force: true });
+      const items = db.listTaskBlockItems(block.id);
+      const completed = [];
+      for (const item of items) {
+        if (!item.awaiting) continue;
+        taskStore.updateTask(item.task_id, { status: 'done', force: true });
+        completed.push(item.task_id);
+      }
+
       result.completed.push({
         blockId: block.id,
-        taskId: block.task_id,
+        taskIds: completed,
+        // The ones left open are reported rather than hidden: "you wrote it up
+        // and two are still open" is information, not an error.
+        stillOpenTaskIds: items.filter(i => !i.awaiting).map(i => i.task_id),
         notePath: note.foundPath || block.note_path,
       });
     } catch (e) {
@@ -692,14 +896,20 @@ function listOutstanding({ now = new Date() } = {}) {
       || (block.date_key === today && (toMin(block.end_time) ?? 0) <= nowMin);
     if (block.status === 'scheduled' && !passed) continue;
 
-    const task = db.getTaskRow(block.task_id);
-    if (!task) continue;
+    const items = db.listTaskBlockItems(block.id);
+    if (!items.length) continue;
 
     const note = readOutcomeNote(block);
     rows.push({
       blockId: block.id,
-      taskId: block.task_id,
-      text: task.text,
+      tasks: items.map(i => ({
+        taskId: i.task_id,
+        text: i.text,
+        // Ticked and waiting on the write-up, versus never ticked — the card has
+        // to be able to say which, because only the first will complete.
+        awaiting: Boolean(i.awaiting),
+        allottedMinutes: i.allotted_minutes,
+      })),
       dateKey: block.date_key,
       startTime: block.start_time,
       endTime: block.end_time,
@@ -726,9 +936,12 @@ module.exports = {
   DAY_START_MIN,
   DAY_END_MIN,
   SEARCH_DAYS,
+  LIST_OPEN,
+  LIST_CLOSE,
   isOutcomeWritten,
   outcomeNotePath,
   renderStub,
+  resolveWindow,
   slugify,
   findSlot,
   plan,

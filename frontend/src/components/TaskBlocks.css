@@ -179,3 +179,91 @@
   font-size: 0.72rem;
   color: var(--text-primary);
 }
+
+/* Duration presets — coarse buckets, because "quick / half an hour / a couple
+   of hours" is a judgement that gets made in one second. */
+.blocks-durations {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+/* Whether a task will complete when the note lands. */
+.blocks-tick {
+  margin-left: 0.5rem;
+  font-size: 0.66rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  opacity: 0.75;
+}
+
+.blocks-tick-on {
+  color: var(--success);
+  opacity: 1;
+}
+
+.blocks-batch-open {
+  margin-left: 0.75rem;
+}
+
+.blocks-batch {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.7rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.blocks-batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
+}
+
+.blocks-batch-list {
+  max-height: 15rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.blocks-batch-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.2rem 0.3rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.blocks-batch-item:hover {
+  background: var(--bg-secondary);
+}
+
+.blocks-batch-item.picked {
+  background: var(--bg-secondary);
+}
+
+.blocks-batch-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blocks-batch-foot,
+.blocks-batch-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
