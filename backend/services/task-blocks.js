@@ -783,6 +783,77 @@ function release(blockId, reason, { completeTask = true } = {}) {
   return { ok: true, block: db.getTaskBlockRow(blockId), completedTaskIds: completed };
 }
 
+/**
+ * Take a task back out of a block.
+ *
+ * The task itself is untouched — it returns to being an ordinary open task. Only
+ * its membership goes, along with the hold that came with it: a task no longer
+ * in any block has nothing owing a write-up, so it completes normally again.
+ *
+ * **Removing the last task is refused.** An empty block is a window in the diary
+ * for nothing, and a note nobody can write — `drop()` is the honest way to say
+ * "this is not happening", and it keeps the decision on the record rather than
+ * leaving a husk behind.
+ *
+ * The Outlook event is corrected afterwards and is **never allowed to fail the
+ * removal**: the membership is already gone in NEURO, so reporting failure would
+ * say the removal did not happen when it did. What Graph actually did comes back
+ * in `eventUpdate` so the caller can say so — the same shape the Microsoft task
+ * push uses.
+ */
+async function removeTask(blockId, taskId) {
+  const block = db.getTaskBlockRow(blockId);
+  if (!block) return { ok: false, error: `No block #${blockId}` };
+  if (!['scheduled', 'awaiting-writeup'].includes(block.status)) {
+    return { ok: false, error: `Block #${blockId} is ${block.status} — nothing to remove from` };
+  }
+
+  const items = db.listTaskBlockItems(blockId);
+  if (!items.some(i => i.task_id === Number(taskId))) {
+    return { ok: false, error: `Task #${taskId} is not in this block` };
+  }
+  if (items.length === 1) {
+    return {
+      ok: false,
+      error: 'That is the only task in the block — drop the block instead',
+      lastTask: true,
+    };
+  }
+
+  db.removeTaskBlockItem(blockId, taskId);
+  const remaining = db.listTaskBlockItems(blockId);
+
+  // If nothing ticked is left, the block is back to merely scheduled — it is no
+  // longer holding anyone's completion, and leaving it marked otherwise would
+  // keep it in the "waiting on you" list for a hold that no longer exists.
+  if (block.status === 'awaiting-writeup' && !remaining.some(i => i.awaiting)) {
+    db.updateTaskBlockRow(blockId, { status: 'scheduled' });
+  }
+
+  let eventUpdate = null;
+  if (block.event_id) {
+    try {
+      const microsoft = require('./microsoft');
+      eventUpdate = await microsoft.updateCalendarEvent(block.event_id, {
+        subject: (remaining.length === 1
+          ? `Focus: ${remaining[0].text}`
+          : `Focus: ${remaining.length} tasks`).slice(0, 200),
+        body: [
+          ...remaining.map(i => `• ${i.text}  (NEURO #${i.task_id})`),
+          '',
+          'This block is not finished until the outcome note has something in it:',
+          `  ${block.note_path}`,
+        ].join('\n'),
+      });
+    } catch (e) {
+      eventUpdate = { updated: false, reason: 'error', detail: e.message };
+    }
+  }
+
+  console.log(`[TaskBlocks] Task #${taskId} removed from block #${blockId} (${remaining.length} left)`);
+  return { ok: true, blockId, remaining: remaining.length, eventUpdate };
+}
+
 /** Abandon a block — the work is not happening in that slot. Deletes nothing. */
 function drop(blockId) {
   const block = db.getTaskBlockRow(blockId);
@@ -872,13 +943,18 @@ function sweep({ now = new Date(), dryRun = false } = {}) {
 }
 
 /**
- * Blocks that owe a write-up, with the task text and the note to write in.
+ * Every live block, with the tasks in it.
  *
- * `scheduled` blocks whose slot is still in the future are excluded — a block at
- * 3pm is not outstanding at 9am, and listing it would turn the panel into a
- * second, worse calendar.
+ * Both halves of the panel come from this one read. `passed` says whether the
+ * slot is behind us, which is what separates "waiting on a write-up" from "in
+ * your diary later" — the two need different words but not different queries.
+ *
+ * An upcoming block is included deliberately, where an earlier cut hid it: once
+ * tasks are grouped into a window, the grouping is the thing Nick wants to see
+ * and work through in the task list. Hiding it until the slot passed meant the
+ * batch he had just made vanished from the screen he made it on.
  */
-function listOutstanding({ now = new Date() } = {}) {
+function listOutstanding({ now = new Date(), includeUpcoming = true } = {}) {
   const shared = require('../../shared/working-days.cjs');
   const today = shared.toDateStr(now);
   const nowMin = now.getHours() * 60 + now.getMinutes();
@@ -894,9 +970,11 @@ function listOutstanding({ now = new Date() } = {}) {
   for (const block of blocks) {
     const passed = block.date_key < today
       || (block.date_key === today && (toMin(block.end_time) ?? 0) <= nowMin);
-    if (block.status === 'scheduled' && !passed) continue;
+    if (!passed && !includeUpcoming) continue;
 
     const items = db.listTaskBlockItems(block.id);
+    // A block with nothing in it is not a thing to show. Removing the last task
+    // is refused, so this only happens if rows were deleted by hand.
     if (!items.length) continue;
 
     const note = readOutcomeNote(block);
@@ -918,6 +996,9 @@ function listOutstanding({ now = new Date() } = {}) {
       notePath: note.foundPath || block.note_path,
       noteExists: note.raw != null,
       status: block.status,
+      // Behind us, so it owes a write-up — versus still ahead, which is just the
+      // diary. Same rows, different words on the card.
+      passed,
       webLink: block.event_web_link || null,
       // Distinguishes "not written up" from "the vault could not be read",
       // rather than presenting the second as the first.
@@ -949,6 +1030,7 @@ module.exports = {
   checkHold,
   markAwaiting,
   release,
+  removeTask,
   drop,
   sweep,
   listOutstanding,

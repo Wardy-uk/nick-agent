@@ -267,3 +267,51 @@
   padding-top: 0.5rem;
   border-top: 1px solid var(--border);
 }
+
+/* A block renders as a group of its tasks — that grouping is the point. */
+.blocks-task {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.15rem 0;
+}
+
+.blocks-task-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A ticked task is waiting on the write-up, not undone — so the box reads as
+   done rather than as an action still available. */
+.blocks-task-ticked {
+  opacity: 0.55;
+}
+
+.blocks-task-remove {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+}
+
+.blocks-task-remove:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.blocks-task-remove:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+/* A block still ahead of us owes nothing yet — quieter than one that does. */
+.blocks-row-upcoming {
+  opacity: 0.85;
+}

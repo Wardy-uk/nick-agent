@@ -1218,13 +1218,17 @@ async function createCalendarEvent({
 //
 // Same naive local wall-clock + timezone-name contract as createCalendarEvent:
 // no code here converts offsets by hand.
-async function updateCalendarEvent(eventId, { start, end, subject } = {}) {
+async function updateCalendarEvent(eventId, { start, end, subject, body } = {}) {
   if (!eventId) return { updated: false, reason: 'no_event_id' };
 
   const payload = {};
   if (start) payload.start = { dateTime: start, timeZone: EVENT_TIMEZONE };
   if (end) payload.end = { dateTime: end, timeZone: EVENT_TIMEZONE };
   if (subject) payload.subject = String(subject).trim();
+  // Body edits exist for NEURO's own focus blocks, whose body lists the tasks
+  // in the window — take one out and the invite in Outlook still names it.
+  // Never used on a meeting with other people: Graph mails them an update.
+  if (body != null) payload.body = { contentType: 'text', content: String(body) };
   if (!Object.keys(payload).length) return { updated: false, reason: 'nothing_to_change' };
 
   let token;

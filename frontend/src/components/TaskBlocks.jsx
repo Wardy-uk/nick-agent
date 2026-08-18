@@ -313,29 +313,52 @@ function BatchComposer({ onCreated }) {
 
 // ── What is waiting to be written up ─────────────────────────────────────────
 
-function Row({ block, onRelease, onDrop, busy, outcome }) {
+function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, busy, outcome }) {
   const [releasing, setReleasing] = useState(false);
   const [reason, setReason] = useState('');
 
   return (
-    <div className="blocks-row">
+    <div className={`blocks-row${block.passed ? '' : ' blocks-row-upcoming'}`}>
       <div className="blocks-row-main">
+        {/* The tasks in this window, grouped — which is the point of grouping
+            them. Before this they were scattered back through the main list in
+            score order, so the batch Nick had just made was not a thing he could
+            see or work through anywhere. */}
         {block.tasks.map(t => (
-          <div key={t.taskId} className="blocks-row-text">
-            {t.text}
+          <div key={t.taskId} className="blocks-task">
+            <button
+              className={`todo-checkbox${t.awaiting ? ' blocks-task-ticked' : ''}`}
+              disabled={busy || t.awaiting}
+              title={t.awaiting ? 'Ticked — completes when the note is written' : 'Mark done'}
+              onClick={() => onToggleTask(block, t)}
+            />
+            <span className="blocks-task-text">{t.text}</span>
             {/* Ticked tasks will complete when the note lands; untouched ones
                 will not. Saying which is the difference between a write-up that
                 does what Nick expects and one that quietly closes work he never
                 did. */}
             <span className={`blocks-tick${t.awaiting ? ' blocks-tick-on' : ''}`}>
-              {t.awaiting ? 'ticked — completes on write-up' : 'not ticked — stays open'}
+              {t.awaiting ? 'completes on write-up' : 'not ticked'}
             </span>
+            {/* Taking it out returns it to being an ordinary open task — the
+                task is never deleted, only its membership. */}
+            <button
+              className="blocks-task-remove"
+              disabled={busy || block.tasks.length === 1}
+              title={block.tasks.length === 1
+                ? 'The only task in this block — drop the block instead'
+                : 'Take this out of the block'}
+              onClick={() => onRemoveTask(block, t)}
+            >×</button>
           </div>
         ))}
         <div className="blocks-row-meta">
           <span className="blocks-chip">{block.dateKey} {block.startTime}–{block.endTime}</span>
           <span className="blocks-chip blocks-chip-quiet">{block.minutes} min{block.minutesAssumed ? ' (assumed)' : ''}</span>
-          {block.status === 'awaiting-writeup' && (
+          {/* In the diary versus behind us. Different words, same rows — a block
+              that has not happened yet owes nothing. */}
+          {!block.passed && <span className="blocks-chip blocks-chip-quiet">upcoming</span>}
+          {block.passed && block.status === 'awaiting-writeup' && (
             <span className="blocks-chip blocks-chip-hold">holding your tick</span>
           )}
           {/* "not written up" and "the vault could not be read" are different
@@ -345,7 +368,7 @@ function Row({ block, onRelease, onDrop, busy, outcome }) {
             : !block.noteExists && <span className="blocks-chip blocks-chip-warn">stub missing</span>}
         </div>
         <div className="blocks-row-note">
-          Write it up in <code>{block.notePath}</code>
+          {block.passed ? 'Write it up in ' : 'Will be written up in '}<code>{block.notePath}</code>
         </div>
       </div>
 
@@ -434,7 +457,57 @@ export default function TaskBlocks() {
     }
   }, [load]);
 
+  /**
+   * Tick a task off from inside its block.
+   *
+   * Goes through the ordinary task-completion route, so the hold applies exactly
+   * as it does everywhere else — the tick is recorded, the task waits for the
+   * write-up. Reusing that route rather than adding a block-specific one is what
+   * keeps a single answer to "what does completing a task do".
+   */
+  const toggleTask = useCallback(async (block, task) => {
+    setBusyId(block.blockId);
+    try {
+      const res = await fetch(apiUrl(`/api/tasks/${task.taskId}/complete`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      load();
+    } catch (e) {
+      setOutcomes(o => ({ ...o, [block.blockId]: { ok: false, text: e.message } }));
+    } finally {
+      setBusyId(null);
+    }
+  }, [load]);
+
+  const removeTask = useCallback(async (block, task) => {
+    setBusyId(block.blockId);
+    try {
+      const res = await fetch(apiUrl(`/api/task-blocks/${block.blockId}/tasks/${task.taskId}`), {
+        method: 'DELETE',
+      });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      // Say what Outlook did rather than implying it agreed — the membership is
+      // already gone here either way.
+      if (json.eventUpdate && json.eventUpdate.updated === false) {
+        setOutcomes(o => ({
+          ...o,
+          [block.blockId]: { ok: true, text: `Removed — but Outlook still lists it (${json.eventUpdate.reason})` },
+        }));
+      }
+      load();
+    } catch (e) {
+      setOutcomes(o => ({ ...o, [block.blockId]: { ok: false, text: e.message } }));
+    } finally {
+      setBusyId(null);
+    }
+  }, [load]);
+
   const blocks = data?.blocks || [];
+  const owed = blocks.filter(b => b.passed);
 
   // One quiet line when there is nothing waiting — which is most days, and is
   // the correct answer rather than a check that has stopped working.
@@ -444,11 +517,17 @@ export default function TaskBlocks() {
         <span onClick={() => setOpen(true)} style={{ cursor: 'pointer' }}>
           {loading && 'Checking blocked time…'}
           {!loading && error && <span className="blocks-warn">Write-ups: couldn't check — {error}</span>}
-          {!loading && !error && blocks.length === 0 && 'Nothing waiting to be written up.'}
-          {!loading && !error && blocks.length > 0 && (
+          {!loading && !error && blocks.length === 0 && 'No blocked time.'}
+          {/* Two different facts, and only the first is asking anything of Nick:
+              blocks that have happened and owe a write-up, versus blocks simply
+              sitting in the diary. */}
+          {!loading && !error && owed.length > 0 && (
             <span className="blocks-collapsed-active">
-              {blocks.length} block{blocks.length === 1 ? '' : 's'} waiting to be written up →
+              {owed.length} block{owed.length === 1 ? '' : 's'} waiting to be written up →
             </span>
+          )}
+          {!loading && !error && owed.length === 0 && blocks.length > 0 && (
+            <span>{blocks.length} block{blocks.length === 1 ? '' : 's'} in the diary →</span>
           )}
         </span>
         <BatchComposer onCreated={load} />
@@ -459,7 +538,7 @@ export default function TaskBlocks() {
   return (
     <div className="blocks-panel">
       <div className="blocks-header">
-        <h4>Waiting on a write-up</h4>
+        <h4>Blocked time</h4>
         <button className="btn btn-sm" onClick={() => setOpen(false)}>Hide</button>
       </div>
 
@@ -473,7 +552,7 @@ export default function TaskBlocks() {
       <BatchComposer onCreated={load} />
 
       {error && <div className="blocks-error">Couldn't read the list — {error}</div>}
-      {!error && blocks.length === 0 && <div className="blocks-empty">Nothing waiting. </div>}
+      {!error && blocks.length === 0 && <div className="blocks-empty">No blocked time.</div>}
 
       {blocks.map(block => (
         <Row
@@ -481,8 +560,10 @@ export default function TaskBlocks() {
           block={block}
           busy={busyId === block.blockId}
           outcome={outcomes[block.blockId]}
+          onToggleTask={toggleTask}
+          onRemoveTask={removeTask}
           onRelease={(b, reason) => act(b, 'release', { reason }, `Closed — ${reason}`)}
-          onDrop={(b) => act(b, 'drop', {}, 'Block dropped, task still open')}
+          onDrop={(b) => act(b, 'drop', {}, 'Block dropped, tasks still open')}
         />
       ))}
     </div>

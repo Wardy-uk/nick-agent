@@ -146,6 +146,26 @@ router.post('/:id/release', (req, res) => {
   }
 });
 
+// DELETE /api/task-blocks/:id/tasks/:taskId — take one task back out of a block.
+//
+// The task itself is untouched and goes back to being an ordinary open task;
+// only the membership and its hold go. Removing the LAST task is refused —
+// an empty block is a window in the diary for nothing, and `drop` is the honest
+// way to say it is not happening.
+router.delete('/:id/tasks/:taskId', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const taskId = parseInt(req.params.taskId, 10);
+    if (!Number.isInteger(id) || !Number.isInteger(taskId)) {
+      return res.status(400).json({ ok: false, error: 'id and taskId must be numbers' });
+    }
+    const result = await taskBlocks.removeTask(id, taskId);
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // POST /api/task-blocks/:id/drop — the work is not happening in that slot. The
 // task is untouched and stays open; only the block is abandoned.
 router.post('/:id/drop', (req, res) => {

@@ -209,14 +209,27 @@ test('two blocks cannot occupy the same slot', () => {
   }), /UNIQUE/);
 });
 
-test('a block still in the future is not listed as outstanding', () => {
+test('a future block is listed, but flagged as not yet owing a write-up', () => {
+  // This replaces an earlier rule that HID upcoming blocks ("a 2pm block is not
+  // outstanding at 9am"). That was right about the words and wrong about the
+  // screen: once tasks are grouped into a window, the grouping is the thing to
+  // work through, and hiding it meant the batch vanished from the screen it was
+  // made on. So it is listed, and `passed` carries the distinction instead.
   const { blockId } = blockedTask('Tomorrow work', { dateKey: '2099-01-05', startTime: '14:00' });
-  const { rows } = taskBlocks.listOutstanding({ now: new Date(2099, 0, 5, 9, 0) });
-  assert.ok(!rows.some(r => r.blockId === blockId),
-    'a 2pm block is not outstanding at 9am — listing it makes the panel a second, worse calendar');
+
+  const early = taskBlocks.listOutstanding({ now: new Date(2099, 0, 5, 9, 0) });
+  const earlyRow = early.rows.find(r => r.blockId === blockId);
+  assert.ok(earlyRow, 'the block must be visible as a group before its slot');
+  assert.equal(earlyRow.passed, false);
 
   const later = taskBlocks.listOutstanding({ now: new Date(2099, 0, 5, 16, 0) });
-  assert.ok(later.rows.some(r => r.blockId === blockId));
+  assert.equal(later.rows.find(r => r.blockId === blockId).passed, true,
+    'once the slot is behind us it owes a write-up');
+
+  // The old behaviour is still reachable for a caller that wants only what is
+  // owed — the nudge path cares about that, not about the diary.
+  const owedOnly = taskBlocks.listOutstanding({ now: new Date(2099, 0, 5, 9, 0), includeUpcoming: false });
+  assert.ok(!owedOnly.rows.some(r => r.blockId === blockId));
 });
 
 // ── Batching: several tasks in one window ────────────────────────────────────
@@ -343,4 +356,76 @@ test('a dropped block frees its slot again', () => {
   const again = taskBlocks.plan(id, { now, minutes: 30 });
   assert.equal(again.slot.startTime, first.slot.startTime,
     'dropping a block is a decision that the time is no longer spoken for');
+});
+
+// ── Taking a task back out of a block ────────────────────────────────────────
+
+test('removing a task drops its membership and its hold, not the task', async () => {
+  const { taskIds, blockId } = blockedTasks(['Stays in the block', 'Comes back out']);
+  const [stays, leaves] = taskIds;
+
+  const result = await taskBlocks.removeTask(blockId, leaves);
+  assert.equal(result.ok, true);
+  assert.equal(result.remaining, 1);
+
+  // The task is untouched and ordinary again — so it completes normally, with
+  // no hold, because it is no longer in any block.
+  assert.equal(db.getTaskRow(leaves).status, 'open');
+  assert.equal(taskStore.updateTask(leaves, { status: 'done' }).status, 'done');
+
+  // The one left behind is still held.
+  assert.ok(taskStore.updateTask(stays, { status: 'done' }).held);
+});
+
+test('removing the last task is refused — drop the block instead', async () => {
+  const { taskIds, blockId } = blockedTasks(['The only one']);
+  const result = await taskBlocks.removeTask(blockId, taskIds[0]);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.lastTask, true);
+  assert.match(result.error, /drop the block/);
+  // An empty block is a window in the diary for nothing, and a note nobody can
+  // write. Nothing was removed.
+  assert.equal(db.listTaskBlockItems(blockId).length, 1);
+});
+
+test('removing the last ticked task stops the block holding anyone', async () => {
+  const { taskIds, blockId } = blockedTasks(['Ticked then removed', 'Never ticked']);
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+  assert.equal(db.getTaskBlockRow(blockId).status, 'awaiting-writeup');
+
+  await taskBlocks.removeTask(blockId, taskIds[0]);
+  assert.equal(db.getTaskBlockRow(blockId).status, 'scheduled',
+    'the block kept claiming to be waiting on a write-up for a hold that no longer exists');
+});
+
+test('a task cannot be removed from a block that is already finished', async () => {
+  const { taskIds, blockId, full } = blockedTasks(['One', 'Two']);
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+  writeUp(full);
+  taskBlocks.sweep();
+
+  const result = await taskBlocks.removeTask(blockId, taskIds[1]);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /complete/);
+});
+
+test('removing a task that is not in the block says so', async () => {
+  const { blockId } = blockedTasks(['In the block', 'Also in it']);
+  const { id: outsider } = taskStore.createTask({ text: 'Not in any block', skipExport: true });
+  const result = await taskBlocks.removeTask(blockId, outsider);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /not in this block/);
+});
+
+test('an upcoming block is listed, so a batch does not vanish when you make it', () => {
+  // The earlier cut hid future blocks as "not outstanding yet", which meant the
+  // batch Nick had just created disappeared from the screen he created it on.
+  const { blockId } = blockedTasks(['Later today one', 'Later today two'], { dateKey: '2099-03-04' });
+  const { rows } = taskBlocks.listOutstanding({ now: new Date(2099, 2, 4, 8, 0) });
+
+  const row = rows.find(r => r.blockId === blockId);
+  assert.ok(row, 'a block later today must still be visible as a group');
+  assert.equal(row.passed, false, 'it is in the diary, not owing a write-up');
+  assert.equal(row.tasks.length, 2);
 });

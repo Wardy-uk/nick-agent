@@ -1120,6 +1120,11 @@ function listTaskBlockRows({ taskId = null, statuses = null, openOnly = false } 
   );
 }
 
+/** Take a task out of a block. The task row itself is untouched. */
+function removeTaskBlockItem(blockId, taskId) {
+  return run('DELETE FROM task_block_items WHERE block_id = ? AND task_id = ?', [blockId, taskId]).changes;
+}
+
 /** Mark one task's completion as held inside its block. */
 function setTaskBlockItemAwaiting(blockId, taskId, awaiting = true) {
   return run(
@@ -1377,6 +1382,7 @@ module.exports = {
   getTaskBlockRow,
   listTaskBlockItems,
   listTaskBlockRows,
+  removeTaskBlockItem,
   setTaskBlockItemAwaiting,
   updateTaskBlockRow,
   deleteTaskRow,
