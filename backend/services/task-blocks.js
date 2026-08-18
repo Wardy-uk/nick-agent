@@ -826,6 +826,146 @@ function createNote(blockId) {
 }
 
 /**
+ * The note as it stands, for editing.
+ *
+ * A missing note comes back as a freshly rendered stub rather than an error —
+ * "create" and "edit" are the same act from where Nick is sitting, and making
+ * him press a different button first is a step that exists only because of how
+ * this is stored.
+ *
+ * `hash` is what makes saving safe: the vault is also open in Obsidian and
+ * synced by Syncthing, so the copy loaded here can go stale while it sits on
+ * screen. Sending it back on save turns a silent last-write-wins into a
+ * refusal.
+ */
+function readNoteForEdit(blockId) {
+  const block = db.getTaskBlockRow(blockId);
+  if (!block) return { ok: false, error: `No block #${blockId}` };
+
+  const items = db.listTaskBlockItems(blockId);
+  if (!items.length) return { ok: false, error: 'That block has no tasks in it' };
+
+  const note = readOutcomeNote(block);
+  if (note.error) return { ok: false, error: note.error, vaultError: true };
+
+  const tasks = items.map(i => ({ id: i.task_id, text: i.text }));
+  const raw = note.raw != null ? note.raw : renderStub(tasks, block);
+  const verdict = isOutcomeWritten(raw);
+
+  return {
+    ok: true,
+    notePath: note.foundPath || block.note_path,
+    raw,
+    exists: note.raw != null,
+    hash: contentHash(raw),
+    written: verdict.written,
+    chars: verdict.chars,
+    minChars: MIN_OUTCOME_CHARS,
+    tasks: items.map(i => ({ taskId: i.task_id, text: i.text, awaiting: Boolean(i.awaiting) })),
+  };
+}
+
+function contentHash(text) {
+  return require('crypto').createHash('sha1').update(String(text ?? ''), 'utf8').digest('hex').slice(0, 16);
+}
+
+/**
+ * Save the note, then judge it and release the block if it now says something.
+ *
+ * Three guards, in order of how badly they would hurt:
+ *
+ * 1. **`baseHash` mismatch refuses the write.** The same file is open in
+ *    Obsidian and delivered by Syncthing, so without this a save from a card
+ *    left open since this morning silently destroys whatever was written in
+ *    Obsidian since. Refusing and saying so is the only honest option — NEURO
+ *    cannot merge prose.
+ *
+ * 2. **Frontmatter is restored if it was removed.** `task_ids` is the link back
+ *    to the block; lose it and a renamed note can never be found again. Repaired
+ *    rather than refused, because a person editing prose should not have to
+ *    understand why the top of the file matters.
+ *
+ * 3. The release runs immediately rather than waiting for the sweep. The sweep
+ *    stays as the mechanism for notes written in Obsidian; here, Nick is looking
+ *    at the screen, and a ten-minute wait to find out whether his words counted
+ *    is what would make him stop trusting the rule.
+ */
+function saveNote(blockId, content, { baseHash = null } = {}) {
+  const block = db.getTaskBlockRow(blockId);
+  if (!block) return { ok: false, error: `No block #${blockId}` };
+  if (!['scheduled', 'awaiting-writeup'].includes(block.status)) {
+    return { ok: false, error: `Block #${blockId} is ${block.status} — it is not waiting on a write-up` };
+  }
+
+  const root = vaultRoot();
+  if (!root) return { ok: false, error: 'OBSIDIAN_VAULT_PATH not set' };
+
+  const existing = readOutcomeNote(block);
+  if (existing.error) return { ok: false, error: existing.error };
+
+  if (baseHash != null && existing.raw != null && contentHash(existing.raw) !== baseHash) {
+    return {
+      ok: false,
+      conflict: true,
+      error: 'This note changed in the vault since you opened it — reload before saving so nothing is lost',
+    };
+  }
+
+  let text = String(content ?? '');
+  // Restore the frontmatter if it was edited away. Without `task_ids` the note
+  // is unfindable once renamed, and the block would hold forever.
+  if (!/^---\n[\s\S]*?\n---/.test(text.replace(/\r\n/g, '\n'))) {
+    const items = db.listTaskBlockItems(blockId);
+    const head = renderStub(items.map(i => ({ id: i.task_id, text: i.text })), block)
+      .match(/^---\n[\s\S]*?\n---\n/)[0];
+    text = head + '\n' + text.replace(/^\s+/, '');
+  }
+
+  const relPath = existing.foundPath || block.note_path;
+  const full = path.join(root, relPath);
+  try {
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, text, 'utf8');
+  } catch (e) {
+    return { ok: false, error: `Could not write the note — ${e.message}` };
+  }
+
+  const verdict = isOutcomeWritten(text);
+  const result = {
+    ok: true,
+    notePath: relPath,
+    hash: contentHash(text),
+    written: verdict.written,
+    chars: verdict.chars,
+    minChars: MIN_OUTCOME_CHARS,
+    reason: verdict.reason,
+    released: false,
+    completedTaskIds: [],
+    stillOpenTaskIds: [],
+  };
+
+  if (!verdict.written) return result;
+
+  // It says something. Same rule as the sweep: only the ticked tasks complete.
+  const items = db.listTaskBlockItems(blockId);
+  const taskStore = require('./task-store');
+  for (const item of items) {
+    if (!item.awaiting) { result.stillOpenTaskIds.push(item.task_id); continue; }
+    try {
+      taskStore.updateTask(item.task_id, { status: 'done', force: true });
+      result.completedTaskIds.push(item.task_id);
+    } catch (e) {
+      console.warn(`[TaskBlocks] Could not complete #${item.task_id}: ${e.message}`);
+    }
+  }
+  db.updateTaskBlockRow(blockId, { status: 'complete', note_path: relPath });
+  result.released = true;
+
+  console.log(`[TaskBlocks] Block #${blockId} written up in NEURO — ${result.completedTaskIds.length} task(s) completed`);
+  return result;
+}
+
+/**
  * Take a task back out of a block.
  *
  * The task itself is untouched — it returns to being an ordinary open task. Only
@@ -1071,6 +1211,8 @@ module.exports = {
   schedule,
   checkHold,
   createNote,
+  readNoteForEdit,
+  saveNote,
   markAwaiting,
   release,
   removeTask,

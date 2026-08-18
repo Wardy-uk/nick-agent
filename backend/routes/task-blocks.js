@@ -146,6 +146,38 @@ router.post('/:id/release', (req, res) => {
   }
 });
 
+// GET /api/task-blocks/:id/note — the note, for editing in NEURO.
+//
+// A missing note comes back as a freshly rendered stub rather than a 404:
+// "create" and "edit" are the same act from where Nick is sitting, and the
+// separate create step existed only because of how this is stored.
+router.get('/:id/note', (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'id must be a number' });
+    const result = taskBlocks.readNoteForEdit(id);
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// PUT /api/task-blocks/:id/note — save it, judge it, and release the block if it
+// now says something. 409 when the vault copy moved underneath the editor.
+router.put('/:id/note', (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'id must be a number' });
+    if (typeof req.body?.content !== 'string') {
+      return res.status(400).json({ ok: false, error: 'content required' });
+    }
+    const result = taskBlocks.saveNote(id, req.body.content, { baseHash: req.body.baseHash ?? null });
+    res.status(result.ok ? 200 : (result.conflict ? 409 : 400)).json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // POST /api/task-blocks/:id/note — write the outcome note now.
 //
 // A repair action, not the usual path: the stub is written when the block is

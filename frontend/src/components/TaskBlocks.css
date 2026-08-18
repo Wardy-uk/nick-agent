@@ -327,3 +327,34 @@
   color: var(--success);
   font-size: 0.7rem;
 }
+
+/* Writing the note in place. The whole point is that switching to Obsidian to
+   type two lines is the friction that stops it happening. */
+.blocks-editor {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.blocks-editor-text {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  padding: 0.5rem;
+  resize: vertical;
+}
+
+.blocks-editor-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}

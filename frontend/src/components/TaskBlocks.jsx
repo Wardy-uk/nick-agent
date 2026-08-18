@@ -311,9 +311,142 @@ function BatchComposer({ onCreated }) {
   );
 }
 
+/**
+ * Write the outcome note without leaving NEURO.
+ *
+ * The note is the one thing between a block and being finished, so making Nick
+ * switch to Obsidian to write two lines is exactly the friction that stops it
+ * happening — and an unwritten note holds the tasks open indefinitely.
+ *
+ * It edits the real file in the vault, and says plainly how far off the bar the
+ * text currently is. The count is shown while typing rather than only on save,
+ * because "that didn't count" after the fact is how a rule stops being trusted.
+ */
+function NoteEditor({ block, onClose, onSaved }) {
+  const [state, setState] = useState('loading');
+  const [note, setNote] = useState(null);
+  const [text, setText] = useState('');
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    let live = true;
+    fetch(apiUrl(`/api/task-blocks/${block.blockId}/note`))
+      .then(r => r.json())
+      .then(j => {
+        if (!live) return;
+        if (!j.ok) { setError(j.error); setState('error'); return; }
+        setNote(j);
+        setText(j.raw);
+        setState('editing');
+      })
+      .catch(e => { if (live) { setError(e.message); setState('error'); } });
+    return () => { live = false; };
+  }, [block.blockId]);
+
+  const save = useCallback(async () => {
+    setState('saving');
+    try {
+      const res = await fetch(apiUrl(`/api/task-blocks/${block.blockId}/note`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: text, baseHash: note?.hash ?? null }),
+      });
+      const json = await res.json();
+      if (!json.ok) {
+        setError(json.error);
+        // A conflict is recoverable and worth distinguishing: the note moved in
+        // the vault, so reloading is the fix rather than retrying the save.
+        setState(json.conflict ? 'conflict' : 'error');
+        return;
+      }
+      setResult(json);
+      setState('saved');
+      onSaved?.(json);
+    } catch (e) {
+      setError(e.message);
+      setState('error');
+    }
+  }, [block.blockId, text, note, onSaved]);
+
+  if (state === 'loading') return <div className="blocks-editor blocks-quiet">Opening the note…</div>;
+
+  if (state === 'saved' && result) {
+    return (
+      <div className="blocks-editor">
+        <div className={`blocks-outcome blocks-outcome-${result.released ? 'ok' : 'fail'}`}>
+          {result.released
+            ? `Saved. ${result.completedTaskIds.length} task${result.completedTaskIds.length === 1 ? '' : 's'} completed${result.stillOpenTaskIds.length ? `, ${result.stillOpenTaskIds.length} still open (not ticked)` : ''}.`
+            : `Saved, but it does not count yet — ${result.reason}. The block stays open.`}
+        </div>
+        <button className="btn btn-sm" onClick={onClose}>Close</button>
+      </div>
+    );
+  }
+
+  // Only Nick's own prose counts, so the live number is measured the same way
+  // the release check measures it — the stub, the headings and the checklist are
+  // all excluded.
+  const enough = countProse(text) >= (note?.minChars ?? 25);
+
+  return (
+    <div className="blocks-editor">
+      <textarea
+        className="blocks-editor-text"
+        value={text}
+        spellCheck
+        onChange={(e) => setText(e.target.value)}
+        rows={16}
+      />
+      <div className="blocks-editor-foot">
+        <span className={enough ? 'blocks-note-ok' : 'blocks-warn'}>
+          {enough
+            ? 'That counts — saving will complete the ticked tasks'
+            : `${countProse(text)} / ${note?.minChars ?? 25} characters of your own words`}
+        </span>
+        <button className="btn btn-sm btn-primary" disabled={state === 'saving'} onClick={save}>
+          {state === 'saving' ? 'Saving…' : 'Save to vault'}
+        </button>
+        <button className="btn btn-sm" onClick={onClose}>Cancel</button>
+      </div>
+      {state === 'conflict' && (
+        <div className="blocks-error">
+          {error} <button className="btn btn-sm" onClick={onClose}>Reload</button>
+        </div>
+      )}
+      {state === 'error' && <div className="blocks-error">{error}</div>}
+    </div>
+  );
+}
+
+/**
+ * How much of this is Nick's own writing — the same subtraction the backend
+ * makes, so the number on screen and the rule that releases the block agree.
+ * Kept simple deliberately: the server is the authority, this only has to stop
+ * the count being obviously wrong while typing.
+ */
+function countProse(raw) {
+  let t = String(raw || '').replace(/\r\n/g, '\n');
+  t = t.replace(/^---\n[\s\S]*?\n---/, ' ');
+  for (const [open, close] of [
+    ['<!-- neuro:task-outcome-stub -->', '<!-- /neuro:task-outcome-stub -->'],
+    ['<!-- neuro:task-outcome-list -->', '<!-- /neuro:task-outcome-list -->'],
+  ]) {
+    t = t.split(open).map((part, i) => {
+      if (i === 0) return part;
+      const end = part.indexOf(close);
+      return end === -1 ? '' : part.slice(end + close.length);
+    }).join(' ');
+  }
+  t = t.replace(/<!--[\s\S]*?-->/g, ' ');
+  t = t.replace(/^#{1,6}[^\n]*$/gm, ' ');
+  t = t.replace(/^\s*[-*+]\s*(\[[ xX]\])?\s*$/gm, ' ');
+  return t.replace(/\s+/g, ' ').trim().length;
+}
+
 // ── What is waiting to be written up ─────────────────────────────────────────
 
-function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, onCreateNote, busy, outcome }) {
+function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, onEditNote, editing, onCloseEditor, onSaved, busy, outcome }) {
   const [releasing, setReleasing] = useState(false);
   const [reason, setReason] = useState('');
 
@@ -369,25 +502,19 @@ function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, onCreateNot
         </div>
         <div className="blocks-row-note">
           {block.passed ? 'Write it up in ' : 'Will be written up in '}<code>{block.notePath}</code>
-          {/* Normally the note is already there — it is written when the block
-              is created. This is the way back when that write failed (vault
-              unreachable) or the note was deleted: without it, the block is held
-              for a note there is nowhere to write. It never overwrites, so it is
-              safe to press on a note that already exists. */}
-          {!block.noteExists && (
-            <button
-              className="btn btn-sm blocks-note-create"
-              disabled={busy}
-              onClick={() => onCreateNote(block)}
-            >
-              Create the note
-            </button>
-          )}
-          {block.noteExists && (
-            <span className="blocks-note-ok" title="Written when the block was created">✓ in your vault</span>
-          )}
+          {/* Edit, not create — the note is written when the block is created,
+              so the thing standing between here and completion is never the
+              file, it is the words in it. A missing note opens as a fresh stub,
+              so this one button covers both. */}
+          <button className="btn btn-sm blocks-note-create" disabled={busy} onClick={() => onEditNote(block)}>
+            {block.noteExists ? 'Write it up' : 'Start the note'}
+          </button>
         </div>
       </div>
+
+      {editing && (
+        <NoteEditor block={block} onClose={onCloseEditor} onSaved={onSaved} />
+      )}
 
       <div className="blocks-row-actions">
         {outcome && <span className={`blocks-outcome blocks-outcome-${outcome.ok ? 'ok' : 'fail'}`}>{outcome.text}</span>}
@@ -530,6 +657,8 @@ export default function TaskBlocks() {
    * for when that failed or the note was deleted. It never overwrites, so the
    * worst case of pressing it is being told the note is already there.
    */
+  const [editingId, setEditingId] = useState(null);
+
   const createNote = useCallback(async (block) => {
     setBusyId(block.blockId);
     try {
@@ -607,7 +736,10 @@ export default function TaskBlocks() {
           outcome={outcomes[block.blockId]}
           onToggleTask={toggleTask}
           onRemoveTask={removeTask}
-          onCreateNote={createNote}
+          onEditNote={(b) => setEditingId(b.blockId)}
+          editing={editingId === block.blockId}
+          onCloseEditor={() => { setEditingId(null); load(); }}
+          onSaved={() => load()}
           onRelease={(b, reason) => act(b, 'release', { reason }, `Closed — ${reason}`)}
           onDrop={(b) => act(b, 'drop', {}, 'Block dropped, tasks still open')}
         />

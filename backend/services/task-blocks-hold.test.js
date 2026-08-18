@@ -475,3 +475,95 @@ test('createNote on a block with nothing in it is refused, not written', () => {
   assert.equal(result.ok, false);
   assert.match(result.error, /no tasks/);
 });
+
+// ── Writing the note from inside NEURO ───────────────────────────────────────
+
+test('the editor opens a missing note as a fresh stub, not an error', () => {
+  const { blockId, full } = blockedTasks(['Note deleted in Obsidian']);
+  fs.unlinkSync(full);
+
+  const view = taskBlocks.readNoteForEdit(blockId);
+  assert.equal(view.ok, true);
+  assert.equal(view.exists, false, 'create and edit are the same act from where Nick sits');
+  assert.ok(view.raw.includes('Note deleted in Obsidian'));
+  assert.equal(view.written, false);
+});
+
+test('saving real prose completes the ticked tasks immediately', () => {
+  // The sweep stays the mechanism for notes written in Obsidian. Here Nick is
+  // looking at the screen, and a ten-minute wait to learn whether his words
+  // counted is what would stop him trusting the rule.
+  const { taskIds, blockId } = blockedTasks(['Ticked one', 'Never touched']);
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+
+  const view = taskBlocks.readNoteForEdit(blockId);
+  const saved = taskBlocks.saveNote(
+    blockId,
+    view.raw.replace('## What came of it\n', '## What came of it\nCleared the first one; the second needs Chris.\n'),
+    { baseHash: view.hash }
+  );
+
+  assert.equal(saved.ok, true);
+  assert.equal(saved.released, true);
+  assert.deepEqual(saved.completedTaskIds, [taskIds[0]]);
+  assert.deepEqual(saved.stillOpenTaskIds, [taskIds[1]]);
+  assert.equal(db.getTaskRow(taskIds[0]).status, 'done');
+  assert.equal(db.getTaskRow(taskIds[1]).status, 'open');
+  assert.equal(db.getTaskBlockRow(blockId).status, 'complete');
+});
+
+test('saving something that still says nothing does not release the block', () => {
+  const { taskIds, blockId } = blockedTasks(['Still open after a non-answer']);
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+
+  const view = taskBlocks.readNoteForEdit(blockId);
+  const saved = taskBlocks.saveNote(blockId, view.raw.replace('## What came of it\n', '## What came of it\ndone\n'), {
+    baseHash: view.hash,
+  });
+
+  assert.equal(saved.ok, true, 'the words are still saved — they are his');
+  assert.equal(saved.released, false);
+  assert.match(saved.reason, /characters/);
+  assert.equal(db.getTaskRow(taskIds[0]).status, 'in-progress');
+});
+
+test('a note changed in the vault since loading refuses the save', () => {
+  // The same file is open in Obsidian and delivered by Syncthing. Without this,
+  // saving from a card left open since this morning silently destroys whatever
+  // was written there since — and NEURO cannot merge prose.
+  const { blockId, full } = blockedTasks(['Edited in two places']);
+  const view = taskBlocks.readNoteForEdit(blockId);
+
+  fs.writeFileSync(full, view.raw + '\nWritten in Obsidian while the card sat open.\n', 'utf8');
+
+  const saved = taskBlocks.saveNote(blockId, view.raw + '\nWritten in NEURO.\n', { baseHash: view.hash });
+  assert.equal(saved.ok, false);
+  assert.equal(saved.conflict, true);
+  assert.match(fs.readFileSync(full, 'utf8'), /Written in Obsidian/, 'the vault copy was overwritten');
+});
+
+test('frontmatter edited away is restored, so the note stays findable', () => {
+  // `task_ids` is the link back to the block. Lose it and a renamed note can
+  // never be matched again, and the block holds forever.
+  const { blockId, full } = blockedTasks(['Frontmatter clobbered']);
+  const view = taskBlocks.readNoteForEdit(blockId);
+
+  const saved = taskBlocks.saveNote(blockId, 'Just my summary, typed over the whole file.', { baseHash: view.hash });
+  assert.equal(saved.ok, true);
+
+  const raw = fs.readFileSync(full, 'utf8');
+  assert.match(raw, /^---\n/, 'the note lost its frontmatter');
+  assert.match(raw, /task_ids:/);
+  assert.ok(raw.includes('Just my summary'));
+});
+
+test('a finished block is not editable', () => {
+  const { taskIds, blockId, full } = blockedTasks(['Already done and dusted']);
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+  writeUp(full);
+  taskBlocks.sweep();
+
+  const saved = taskBlocks.saveNote(blockId, 'trying to rewrite history', { baseHash: null });
+  assert.equal(saved.ok, false);
+  assert.match(saved.error, /not waiting on a write-up/);
+});
