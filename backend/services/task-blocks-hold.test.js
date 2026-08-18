@@ -607,3 +607,81 @@ test('only a dropped block can be restored', () => {
   assert.match(result.error, /not dropped/);
   assert.equal(db.getTaskRow(taskIds[0]).status, 'done');
 });
+
+// ── Ticks survive the round trip between the card and the note ───────────────
+
+test('ticks made on the card show up in the note when it is opened', () => {
+  // The bug this fixes: the checklist was written when the block was created and
+  // never updated, so it showed every task unticked however many had been ticked
+  // off since. Two screens disagreeing about the same fact.
+  const { taskIds, blockId } = blockedTasks(['Did this one', 'Did not do this']);
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+
+  const view = taskBlocks.readNoteForEdit(blockId);
+  assert.ok(view.raw.includes(`- [x] Did this one <!--t:${taskIds[0]}-->`),
+    'a task ticked on the card still showed unticked in the note');
+  assert.ok(view.raw.includes(`- [ ] Did not do this <!--t:${taskIds[1]}-->`));
+});
+
+test('ticking a box in the note records the tick in NEURO', () => {
+  const { taskIds, blockId } = blockedTasks(['Ticked in the note', 'Left alone']);
+  const view = taskBlocks.readNoteForEdit(blockId);
+
+  const edited = view.raw
+    .replace(`- [ ] Ticked in the note <!--t:${taskIds[0]}-->`, `- [x] Ticked in the note <!--t:${taskIds[0]}-->`)
+    .replace('## What came of it\n', '## What came of it\nGot the first one finished, second slipped.\n');
+
+  const saved = taskBlocks.saveNote(blockId, edited, { baseHash: view.hash });
+  assert.equal(saved.released, true);
+  assert.deepEqual(saved.completedTaskIds, [taskIds[0]]);
+  assert.deepEqual(saved.stillOpenTaskIds, [taskIds[1]]);
+  assert.equal(db.getTaskRow(taskIds[1]).status, 'open');
+});
+
+test('unticking a box in the note takes the tick back', () => {
+  const { taskIds, blockId } = blockedTasks(['Ticked then reconsidered', 'Other']);
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+  assert.equal(db.getTaskBlockRow(blockId).status, 'awaiting-writeup');
+
+  const view = taskBlocks.readNoteForEdit(blockId);
+  const edited = view.raw.replace(`- [x] Ticked then reconsidered <!--t:${taskIds[0]}-->`,
+    `- [ ] Ticked then reconsidered <!--t:${taskIds[0]}-->`);
+
+  taskBlocks.saveNote(blockId, edited, { baseHash: view.hash });
+  assert.equal(db.listTaskBlockItems(blockId).find(i => i.task_id === taskIds[0]).awaiting, 0);
+  assert.equal(db.getTaskBlockRow(blockId).status, 'scheduled',
+    'nothing is ticked any more, so nothing is owed');
+});
+
+test('a box ticked in Obsidian is honoured by the sweep', () => {
+  // The note is most likely to be finished in Obsidian, and a tick made there
+  // would otherwise be ignored in favour of a card Nick never opened.
+  const { taskIds, blockId, full, notePath } = blockedTasks(['Done in Obsidian', 'Not done']);
+  const view = taskBlocks.readNoteForEdit(blockId);
+
+  fs.writeFileSync(path.join(process.env.OBSIDIAN_VAULT_PATH, notePath),
+    view.raw
+      .replace(`- [ ] Done in Obsidian <!--t:${taskIds[0]}-->`, `- [x] Done in Obsidian <!--t:${taskIds[0]}-->`)
+      .replace('## What came of it\n', '## What came of it\nWrote this up in Obsidian on the train.\n'),
+    'utf8');
+
+  const swept = taskBlocks.sweep();
+  const entry = swept.completed.find(c => c.blockId === blockId);
+  assert.deepEqual(entry.taskIds, [taskIds[0]]);
+  assert.equal(db.getTaskRow(taskIds[0]).status, 'done');
+  assert.equal(db.getTaskRow(taskIds[1]).status, 'open');
+});
+
+test('a task already done shows ticked, even though it never held', () => {
+  // It completed straight away because the note already had a write-up, so
+  // `awaiting` was never set. Keying the box on that flag alone would show a
+  // finished task unticked — the note contradicting the task list.
+  const { taskIds, blockId, full } = blockedTasks(['One', 'Two']);
+  fs.writeFileSync(full, fs.readFileSync(full, 'utf8').replace(
+    '## What came of it\n', '## What came of it\nA summary written before any box was ticked.\n'), 'utf8');
+
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+  const view = taskBlocks.readNoteForEdit(blockId);
+  assert.ok(view.raw.includes('A summary written before any box was ticked.'));
+  assert.match(view.raw, /- \[x\] One/);
+});

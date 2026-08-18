@@ -24,6 +24,7 @@ process.env.NEURO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'neu
 
 const {
   isOutcomeWritten, renderStub, outcomeNotePath, slugify, findSlot, resolveWindow,
+  renderChecklist, parseChecklist, syncChecklistInNote, LIST_OPEN, LIST_CLOSE,
   MIN_OUTCOME_CHARS, DAY_START_MIN, DAY_END_MIN, SEARCH_DAYS,
 } = require('./task-blocks');
 
@@ -333,4 +334,65 @@ test('nothing estimated falls back to the assumption and says so', () => {
 test('a zero or negative request is ignored rather than obeyed', () => {
   assert.equal(resolveWindow([{ estimate_minutes: 15 }], 0).basis, 'estimates');
   assert.equal(resolveWindow([{ estimate_minutes: 15 }], -10).basis, 'estimates');
+});
+
+// ── The checklist boxes are the ticks ────────────────────────────────────────
+
+test('the checklist reflects what has been ticked, not always empty', () => {
+  // A blank checklist beside a card showing three ticked is two screens
+  // disagreeing about the same fact — and the one being typed into looks wrong.
+  const lines = renderChecklist([
+    { id: 61, text: 'Done one', awaiting: true },
+    { id: 62, text: 'Not done', awaiting: false },
+  ]);
+  assert.ok(lines.some(l => l.startsWith('- [x] Done one')));
+  assert.ok(lines.some(l => l.startsWith('- [ ] Not done')));
+});
+
+test('each line carries its task id, so a tick cannot land on the wrong task', () => {
+  const raw = renderChecklist([{ id: 61, text: 'Something', awaiting: false }]).join('\n');
+  assert.match(raw, /<!--t:61-->/);
+});
+
+test('the boxes read back exactly, ticked and unticked', () => {
+  const raw = renderChecklist([
+    { id: 61, text: 'Ticked', awaiting: true },
+    { id: 62, text: 'Untouched', awaiting: false },
+  ]).join('\n');
+  const ticks = parseChecklist(raw);
+  assert.equal(ticks.get(61), true);
+  assert.equal(ticks.get(62), false);
+});
+
+test('a line without its id comment is ignored rather than guessed at', () => {
+  // A wrong guess here completes the wrong task, which is the failure mode this
+  // whole feature keeps running into.
+  const raw = [LIST_OPEN, '- [x] Reworded past recognition', LIST_CLOSE].join('\n');
+  assert.equal(parseChecklist(raw).size, 0);
+});
+
+test('nothing outside the fence is read as a tick', () => {
+  const raw = ['- [x] A checklist Nick wrote himself <!--t:99-->', LIST_OPEN, LIST_CLOSE].join('\n');
+  assert.equal(parseChecklist(raw).size, 0, 'only the block checklist decides which tasks are ticked');
+});
+
+test('syncing the checklist leaves the rest of the note untouched', () => {
+  // Surgical, following vault-hygiene: the note may already hold the write-up,
+  // and regenerating it wholesale to fix some checkboxes would throw that away.
+  const original = renderStub(BATCH, BLOCK).replace(
+    '## What came of it\n',
+    '## What came of it\nCleared two of the three; the refund needs Maria.\n'
+  );
+  const synced = syncChecklistInNote(original, BATCH.map((t, i) => ({ ...t, awaiting: i === 0 })));
+
+  assert.ok(synced.includes('Cleared two of the three; the refund needs Maria.'), 'the write-up was lost');
+  assert.match(synced, /- \[x\] Approve the Sandford refund/);
+  assert.match(synced, /- \[ \] File the FOC report/);
+  assert.equal(isOutcomeWritten(synced).written, true);
+});
+
+test('a ticked checklist still does not count as a write-up', () => {
+  const all = syncChecklistInNote(renderStub(BATCH, BLOCK), BATCH.map(t => ({ ...t, awaiting: true })));
+  assert.equal(isOutcomeWritten(all).written, false,
+    'ticking boxes records what was done, it does not say what came of it');
 });

@@ -185,6 +185,68 @@ function resolveWindow(tasks, requestedMinutes) {
   return { minutes, assumed: true, basis: 'assumed' };
 }
 
+/**
+ * The checklist of what the window holds, with the boxes reflecting what has
+ * actually been ticked.
+ *
+ * The box carries a real meaning — it IS the tick — so it is written from
+ * `awaiting` rather than always empty. A checklist that stays blank while the
+ * card shows three ticked is two screens disagreeing about the same fact, and
+ * the one Nick is typing into is the one that looks wrong.
+ *
+ * Each line carries its task id in a comment. Obsidian renders HTML comments
+ * invisibly, so it costs nothing on screen and makes reading the boxes back
+ * exact — matching on the text alone breaks the moment a line is reworded, and
+ * failing to match would silently drop a tick.
+ */
+function renderChecklist(tasks) {
+  return [
+    LIST_OPEN,
+    ...tasks.map(t => `- [${t.awaiting ? 'x' : ' '}] ${t.text} <!--t:${t.id}-->`),
+    LIST_CLOSE,
+  ];
+}
+
+/**
+ * Read the boxes back out of a note.
+ *
+ * Returns a Map of task id → ticked. Only lines carrying an id comment are
+ * trusted; a line Nick has reworded past recognition is left alone rather than
+ * guessed at, because a wrong guess here completes the wrong task.
+ */
+function parseChecklist(raw) {
+  const ticks = new Map();
+  const text = String(raw || '').replace(/\r\n/g, '\n');
+  const start = text.indexOf(LIST_OPEN);
+  if (start === -1) return ticks;
+  const end = text.indexOf(LIST_CLOSE, start);
+  const body = end === -1 ? text.slice(start) : text.slice(start, end);
+
+  for (const line of body.split('\n')) {
+    const m = line.match(/^\s*[-*+]\s*\[([ xX])\][\s\S]*?<!--\s*t:(\d+)\s*-->/);
+    if (!m) continue;
+    ticks.set(Number(m[2]), m[1].toLowerCase() === 'x');
+  }
+  return ticks;
+}
+
+/**
+ * Rewrite just the checklist region of an existing note, leaving every other
+ * line exactly as Nick left it.
+ *
+ * Surgical rather than a re-render of the whole file, following vault-hygiene:
+ * the note may already hold his write-up, and regenerating it wholesale to fix
+ * some checkboxes would throw that away.
+ */
+function syncChecklistInNote(raw, tasks) {
+  const text = String(raw || '');
+  const start = text.indexOf(LIST_OPEN);
+  if (start === -1) return text;
+  const end = text.indexOf(LIST_CLOSE, start);
+  if (end === -1) return text;
+  return text.slice(0, start) + renderChecklist(tasks).join('\n') + text.slice(end + LIST_CLOSE.length);
+}
+
 /** Filesystem-safe, readable, and short enough not to hit Windows path limits. */
 function slugify(text) {
   return String(text || 'task')
@@ -257,7 +319,7 @@ function renderStub(tasks, block) {
     // window held, and it must survive into the finished note rather than being
     // stripped as template.
     ...(many
-      ? ['## In this block', LIST_OPEN, ...list.map(t => `- [ ] ${t.text}`), LIST_CLOSE, '']
+      ? ['## In this block', ...renderChecklist(list), '']
       : []),
     '## What came of it',
     '',
@@ -747,8 +809,51 @@ function markAwaiting(blockId, taskId = null) {
   try {
     db.updateTaskBlockRow(blockId, { status: 'awaiting-writeup' });
     if (taskId != null) db.setTaskBlockItemAwaiting(blockId, taskId, true);
+    writeChecklistToNote(blockId);
   } catch (e) {
     console.warn('[TaskBlocks] Could not mark awaiting:', e.message);
+  }
+}
+
+/**
+ * Push the current ticks into the note on disk.
+ *
+ * ⚠ This is what stops the checklist going stale, and a stale one is actively
+ * dangerous rather than merely untidy: the sweep and the editor both READ those
+ * boxes, so a checklist still showing everything unticked would take back every
+ * tick made on the card. The file has to be updated at the moment of the tick,
+ * not only when the note is next opened.
+ *
+ * It also means the boxes are right in Obsidian, which is where Nick is most
+ * likely to see them.
+ *
+ * Best-effort and never allowed to throw: the tick itself has already been
+ * recorded, and an unreachable vault must not turn that into a failure.
+ */
+function writeChecklistToNote(blockId) {
+  const root = vaultRoot();
+  if (!root) return;
+  const block = db.getTaskBlockRow(blockId);
+  if (!block) return;
+
+  const items = db.listTaskBlockItems(blockId);
+  if (items.length < 2) return;   // a single-task note carries no checklist
+
+  const note = readOutcomeNote(block);
+  if (note.error || note.raw == null) return;
+
+  const tasks = items.map(i => ({
+    id: i.task_id,
+    text: i.text,
+    awaiting: Boolean(i.awaiting) || i.task_status === 'done',
+  }));
+  const updated = syncChecklistInNote(note.raw, tasks);
+  if (updated === note.raw) return;
+
+  try {
+    fs.writeFileSync(path.join(root, note.foundPath || block.note_path), updated, 'utf8');
+  } catch (e) {
+    console.warn(`[TaskBlocks] Could not update the checklist in the note: ${e.message}`);
   }
 }
 
@@ -848,8 +953,20 @@ function readNoteForEdit(blockId) {
   const note = readOutcomeNote(block);
   if (note.error) return { ok: false, error: note.error, vaultError: true };
 
-  const tasks = items.map(i => ({ id: i.task_id, text: i.text }));
-  const raw = note.raw != null ? note.raw : renderStub(tasks, block);
+  // A box is ticked if the task is owed a write-up OR is already done. Keying
+  // it on `awaiting` alone leaves a finished task showing unticked, because a
+  // task completed while the note already had a write-up never holds and so
+  // never gets the flag — the box would then contradict the task list.
+  const tasks = items.map(i => ({
+    id: i.task_id,
+    text: i.text,
+    awaiting: Boolean(i.awaiting) || i.task_status === 'done',
+  }));
+  // Bring the boxes up to date with what has actually been ticked before Nick
+  // sees them. The checklist was written when the block was created, so without
+  // this it shows every task unticked however many he has ticked off since —
+  // which is the card and the note disagreeing about the same fact.
+  const raw = note.raw != null ? syncChecklistInNote(note.raw, tasks) : renderStub(tasks, block);
   const verdict = isOutcomeWritten(raw);
 
   return {
@@ -928,6 +1045,24 @@ function saveNote(blockId, content, { baseHash = null } = {}) {
     fs.writeFileSync(full, text, 'utf8');
   } catch (e) {
     return { ok: false, error: `Could not write the note — ${e.message}` };
+  }
+
+  // The boxes in the note are ticks. Reading them back is what makes the
+  // checklist mean something rather than being decoration — ticking a box while
+  // writing the summary is the natural gesture, and it would be lost otherwise.
+  // Only lines carrying their task id are trusted, so a reworded line is left
+  // alone rather than guessed at.
+  const ticks = parseChecklist(text);
+  for (const [taskId, ticked] of ticks) {
+    try { db.setTaskBlockItemAwaiting(blockId, taskId, ticked); }
+    catch (e) { console.warn(`[TaskBlocks] Could not record tick for #${taskId}: ${e.message}`); }
+  }
+  if (ticks.size) {
+    const anyTicked = db.listTaskBlockItems(blockId).some(i => i.awaiting);
+    // Keep the block's own state honest with its items, both ways: unticking
+    // the last box means nothing is owed, and ticking one means something is.
+    if (anyTicked && block.status === 'scheduled') db.updateTaskBlockRow(blockId, { status: 'awaiting-writeup' });
+    if (!anyTicked && block.status === 'awaiting-writeup') db.updateTaskBlockRow(blockId, { status: 'scheduled' });
   }
 
   const verdict = isOutcomeWritten(text);
@@ -1122,6 +1257,13 @@ function sweep({ now = new Date(), dryRun = false } = {}) {
         note_path: note.foundPath || block.note_path,
       });
 
+      // Boxes ticked in Obsidian count too — that is where this note is most
+      // likely to be finished, and a tick made there would otherwise be ignored
+      // in favour of a card Nick never opened.
+      for (const [taskId, ticked] of parseChecklist(note.raw)) {
+        try { db.setTaskBlockItemAwaiting(block.id, taskId, ticked); } catch {}
+      }
+
       // ONLY the tasks Nick actually ticked are completed. The write-up releases
       // the HOLD; it is not a claim that everything in the window got done. A
       // batch of four routinely finishes three, and marking the fourth done
@@ -1235,6 +1377,9 @@ module.exports = {
   isOutcomeWritten,
   outcomeNotePath,
   renderStub,
+  renderChecklist,
+  parseChecklist,
+  syncChecklistInNote,
   resolveWindow,
   slugify,
   findSlot,
@@ -1245,6 +1390,7 @@ module.exports = {
   readNoteForEdit,
   saveNote,
   markAwaiting,
+  writeChecklistToNote,
   release,
   removeTask,
   restore,
