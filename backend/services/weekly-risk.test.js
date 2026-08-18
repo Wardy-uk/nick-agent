@@ -198,7 +198,7 @@ function flowPayload(over = {}) {
     window: { days: 30, from: '2026-07-18' },
     handbacks: sig({ total: 40, previous: 38, changePct: 5.3, routes: [{ from_tier: 'Tier 2', to_tier: 'Customer Care', count: 40 }], unclassified: 0 }),
     pingPong: sig({ threshold: 3, ticketsAffected: 0, worst: [] }),
-    breachesByQueue: sig({ total: 0, slaDataPresent: 12, byTier: [], coverage: { cachedTickets: 100, lastSync: '2026-08-17T06:00:00Z' } }),
+    breachesByQueue: sig({ total: 0, withSlaField: 12, byTier: [], coverage: { cachedTickets: 100, lastSync: '2026-08-17T06:00:00Z' } }),
     unowned: sig({ total: 0, byTier: [] }),
     stalled: sig({ staleDays: 14, total: 0, byTier: [], worst: [] }),
     unavailable: [],
@@ -254,7 +254,7 @@ test('an unreadable SLA field escalates — it is not a clean month', () => {
     flow: flowPayload({
       breachesByQueue: {
         ok: true, error: null,
-        data: { total: 0, slaDataPresent: 0, byTier: [], coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' } },
+        data: { total: 0, withSlaField: 0, byTier: [], coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' } },
       },
     }),
   }));
@@ -275,7 +275,7 @@ test('the breach section never claims to be the review\'s at-time-of-breach figu
       breachesByQueue: {
         ok: true, error: null,
         data: {
-          total: 210, slaDataPresent: 5602, basis: 'stock',
+          total: 210, withSlaField: 5602, basis: 'stock',
           byTier: [{ tier: 'Customer Care', breaches: 190, sharePct: 90.5 }],
           coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' },
         },
@@ -293,7 +293,7 @@ test('a genuine zero in the window still reads as a measurement, not a gap', () 
     flow: flowPayload({
       breachesByQueue: {
         ok: true, error: null,
-        data: { total: 0, slaDataPresent: 400, byTier: [], coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' } },
+        data: { total: 0, withSlaField: 400, byTier: [], coverage: { cachedTickets: 5602, lastSync: '2026-08-18T11:00:00Z' } },
       },
     }),
   }));

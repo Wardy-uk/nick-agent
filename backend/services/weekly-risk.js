@@ -559,7 +559,7 @@ function assess(snap) {
     // cache carries the breach flag at all, "0 breaches" is a statement about
     // the pipeline, and publishing it as performance would be a false all-clear
     // on the review's single most-cited metric.
-    if (bq?.ok && bq.data?.slaDataPresent === 0) {
+    if (bq?.ok && bq.data?.withSlaField === 0) {
       findings.push({
         severity: 'escalate',
         kind: 'breach-data-missing',
@@ -772,7 +772,7 @@ function flowSection(flow) {
   });
 
   say('Open tickets currently over SLA', flow.breachesByQueue, d => {
-    if (d.slaDataPresent === 0) {
+    if (d.withSlaField === 0) {
       return '**Open tickets currently over SLA:** _not reportable — no cached ticket carries a parseable Resolution SLA field. '
         + 'A broken field mapping, not a clean month; the wallboards read the same field live from Jira and do show breaches. Flagged for escalation above._';
     }
