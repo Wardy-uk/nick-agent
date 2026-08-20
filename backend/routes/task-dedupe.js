@@ -75,6 +75,54 @@ router.get('/candidates', (req, res) => {
   }
 });
 
+/**
+ * POST /api/task-dedupe/match — { texts: [{ id, text }], minScore, limit }
+ *
+ * "Does a task already exist for this?" Read-only, and it decides nothing: the
+ * caller gets scored candidates and a human picks. VANTAGE uses it to check the
+ * Support Review's 35 actions against the task store before offering to create
+ * anything, so an action Mel already put in Planner is adopted rather than
+ * duplicated.
+ *
+ * Scores against ALL open tasks including Microsoft-linked ones — see matchText.
+ */
+router.post('/match', (req, res) => {
+  try {
+    const { texts, minScore, limit } = req.body || {};
+    if (!Array.isArray(texts)) return res.status(400).json({ error: 'texts must be an array of { id, text }' });
+    if (texts.length > 200) return res.status(400).json({ error: 'texts is limited to 200 per call' });
+
+    const tasks = taskStore.listTasks({ status: 'open' });
+    // BOTH lists. The Microsoft mirror is where Mel's Planner board actually
+    // lives until someone links a pair, and on 20 Aug 2026 nothing was linked —
+    // so searching only the task store would answer "nothing exists" for work
+    // that is on the board with a due date.
+    const ms = microsoftTasks();
+
+    const asked = Number(minScore);
+    const results = dedupe.matchText({
+      texts,
+      tasks,
+      msTasks: ms,
+      minScore: Number.isFinite(asked) ? Math.min(Math.max(asked, 0.15), 1) : dedupe.MIN_SCORE,
+      limit: Number.isFinite(Number(limit)) ? Math.min(Math.max(Number(limit), 1), 10) : 3,
+    });
+
+    // `compared` so a caller can tell "nothing matched" from "there was nothing
+    // to match against" — the same distinction /candidates makes. A zero
+    // microsoft count means the sync has not run or Graph is unauthorised, and
+    // the caller must not report that as "not on the board".
+    res.json({
+      results,
+      compared: { tasks: tasks.length, microsoft: ms.length, texts: texts.length },
+      microsoftAvailable: ms.length > 0,
+    });
+  } catch (e) {
+    console.error('[TaskDedupe] Match error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/task-dedupe/link — { taskId, msId, msSource } — these ARE the same task
 router.post('/link', (req, res) => {
   try {

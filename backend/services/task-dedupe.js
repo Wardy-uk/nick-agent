@@ -281,6 +281,105 @@ function pairKey(taskId, msId) {
   return `${taskId}::${msId}`;
 }
 
+/**
+ * Score arbitrary texts against the open task list. PURE apart from the tasks
+ * passed in.
+ *
+ * Added for VANTAGE, which needs to ask "does a task already exist for this
+ * Support Review action?" before offering to create one. It is deliberately the
+ * same tokeniser, IDF and scorer as rankCandidates rather than a second matcher
+ * in the other codebase: two implementations of "are these the same job" would
+ * disagree, and the disagreement would surface as VANTAGE creating a duplicate
+ * of a task Planner already holds.
+ *
+ * Three differences from rankCandidates, all intentional:
+ *
+ * - **BOTH populations are searched.** This is the one that matters. The task
+ *   store and the Microsoft mirror are separate lists joined only by the links
+ *   below, and on 20 Aug 2026 there were no links at all: 163 tasks, zero with
+ *   an `ms_id`, while eighteen live Planner items sat in the vault. Searching
+ *   the task store alone answered "nothing exists for this action" for actions
+ *   that were sitting on Mel's board with a due date on them. An absent link is
+ *   not an absent task.
+ * - Tasks ALREADY linked to Microsoft are still scored. rankCandidates excludes
+ *   them because their question is answered; here a plan action mapping onto a
+ *   task that is already merged with the board is the *best* possible answer,
+ *   not a disqualified one.
+ * - The IDF is built over every candidate and the queries together, so a word
+ *   common to all of them ("review", "process") is correctly cheap.
+ *
+ * texts:    [{ id, text }] — id is the caller's, echoed back untouched.
+ * tasks:    NEURO task rows.
+ * msTasks:  the Microsoft mirror — [{ ms_id, text, due_date, source }].
+ *
+ * Each match carries `kind`, because what the caller does next differs: a
+ * `neuro` match is linked to, a `microsoft` match has no NEURO task yet and one
+ * has to be made and merged.
+ */
+function matchText({ texts = [], tasks = [], msTasks = [], minScore = MIN_SCORE, limit = 3 } = {}) {
+  const queries = texts
+    .map(q => ({ id: q.id, text: q.text, tokens: tokenize(q.text || '') }))
+    .filter(q => q.tokens.size > 0);
+
+  const linkedMs = new Set(tasks.map(t => t.ms_id).filter(Boolean));
+
+  const candidates = [
+    ...tasks.map(t => ({
+      kind: 'neuro',
+      key: `n${t.id}`,
+      tokens: tokenize(t.text || ''),
+      item: {
+        id: t.id,
+        text: t.text,
+        status: t.status || null,
+        due_date: t.due_date || null,
+        moscow: t.moscow || null,
+        source: t.source || null,
+        origin_path: t.origin_path || null,
+        ms_id: t.ms_id || null,
+        ms_source: t.ms_source || null,
+      },
+    })),
+    // A Microsoft line already merged into a task would otherwise be offered
+    // twice, as itself and as the task — the same suppression the vault parser
+    // does once a pair is linked.
+    ...msTasks
+      .filter(m => m.ms_id && !linkedMs.has(m.ms_id))
+      .map(m => ({
+        kind: 'microsoft',
+        key: `m${m.ms_id}`,
+        tokens: tokenize(m.text || ''),
+        item: {
+          ms_id: m.ms_id,
+          text: m.text,
+          due_date: m.due_date || null,
+          ms_source: normaliseMsSource(m.source) || m.source || 'Microsoft',
+        },
+      })),
+  ].filter(c => c.tokens.size > 0);
+
+  const idf = buildIdf([...candidates.map(c => c.tokens), ...queries.map(q => q.tokens)]);
+
+  return queries.map(q => {
+    const scored = [];
+    for (const c of candidates) {
+      const s = scorePair(q.tokens, c.tokens, idf);
+      if (s.score < minScore) continue;
+      scored.push({
+        score: s.score,
+        confidence: s.score >= STRONG_SCORE ? 'strong' : 'possible',
+        sharedWords: distinctiveShared(s.shared, idf),
+        kind: c.kind,
+        ...(c.kind === 'neuro' ? { task: c.item } : { ms: c.item }),
+      });
+    }
+    // Ties break towards the NEURO task: it is the one that can simply be linked.
+    scored.sort((a, b) => b.score - a.score
+      || (a.kind === b.kind ? 0 : a.kind === 'neuro' ? -1 : 1));
+    return { id: q.id, matches: scored.slice(0, limit) };
+  });
+}
+
 // ── Stateful: what Nick has decided ──────────────────────────────────────────
 //
 // A confirmed link is `tasks.ms_id` — the column already existed and is what the
@@ -424,6 +523,7 @@ module.exports = {
   linkPair,
   linkedMsIds,
   listLinks,
+  matchText,
   normaliseMsSource,
   pairKey,
   rankCandidates,

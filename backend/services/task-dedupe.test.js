@@ -279,6 +279,78 @@ test('a Microsoft source hint is normalised, and an unknown one stays null', () 
   assert.equal(dedupe.normaliseMsSource(null), null);
 });
 
+test('matchText scores arbitrary text against tasks, including Microsoft-linked ones', () => {
+  const tasks = [
+    { id: 1, text: 'Publish triage and escalation criteria for every team', status: 'open' },
+    // Already merged with Mel's Planner board. rankCandidates excludes these
+    // because their duplicate question is settled; matchText must NOT, or the
+    // plan action they answer would be offered a brand new task instead.
+    { id: 2, text: 'Reinstate regular one to one meetings for Customer Care', status: 'open', ms_id: 'ms-1', ms_source: 'MS Planner' },
+    { id: 3, text: 'Order more coffee for the office kitchen', status: 'open' },
+  ];
+
+  const results = dedupe.matchText({
+    texts: [
+      { id: 'T1', text: 'Publish triage and escalation criteria for every team' },
+      { id: 'Q6', text: 'Reinstate regular 1:1s for every Customer Care colleague' },
+      { id: 'N6', text: 'Release governance forum / project gate' },
+    ],
+    tasks,
+  });
+
+  const byId = Object.fromEntries(results.map(r => [r.id, r]));
+  assert.equal(byId.T1.matches[0].task.id, 1);
+  assert.equal(byId.T1.matches[0].confidence, 'strong');
+
+  assert.equal(byId.Q6.matches[0].task.id, 2, 'a Planner-linked task is still a valid answer');
+  assert.equal(byId.Q6.matches[0].task.ms_source, 'MS Planner', 'the Planner badge survives to the caller');
+
+  // Nothing in the store is this action. Saying so is the point — it is what
+  // lets the caller offer to create rather than guess.
+  assert.equal(byId.N6.matches.length, 0);
+
+  // Caller ids are echoed untouched; the caller keys its own data on them.
+  assert.deepEqual(results.map(r => r.id), ['T1', 'Q6', 'N6']);
+});
+
+test('matchText searches the Microsoft mirror, not just the task store', () => {
+  // The failure this exists to prevent: on 20 Aug 2026 the store held 163 tasks
+  // with ZERO ms_id links, while Mel's Planner board sat in the vault mirror. A
+  // match run over tasks alone answers "nothing exists" for work that is on the
+  // board with a due date on it.
+  const results = dedupe.matchText({
+    texts: [{ id: 'T6', text: 'Top 10 missing troubleshooting guides, SMEs assigned' }],
+    tasks: [{ id: 1, text: 'Order more coffee for the office kitchen', status: 'open' }],
+    msTasks: [{ ms_id: 'ms-kb', text: 'Missing troubleshooting guides — assign SMEs to the top 10', source: 'MS Planner' }],
+  });
+
+  const [m] = results[0].matches;
+  assert.equal(m.kind, 'microsoft');
+  assert.equal(m.ms.ms_id, 'ms-kb');
+  assert.equal(m.ms.ms_source, 'MS Planner');
+  assert.equal(m.task, undefined, 'a Microsoft match has no NEURO task — the caller must create one');
+});
+
+test('a Planner item already merged into a task is offered once, as the task', () => {
+  const results = dedupe.matchText({
+    texts: [{ id: 'Q6', text: 'Reinstate regular one to one meetings for Customer Care' }],
+    tasks: [{ id: 7, text: 'Reinstate regular one to one meetings for Customer Care', status: 'open', ms_id: 'ms-121', ms_source: 'MS Planner' }],
+    msTasks: [{ ms_id: 'ms-121', text: 'Reinstate regular one to one meetings for Customer Care', source: 'MS Planner' }],
+  });
+
+  assert.equal(results[0].matches.length, 1, 'the merged pair is one candidate, not two');
+  assert.equal(results[0].matches[0].kind, 'neuro');
+  assert.equal(results[0].matches[0].task.id, 7);
+});
+
+test('matchText ignores text with no content tokens rather than matching everything', () => {
+  const results = dedupe.matchText({
+    texts: [{ id: 'A', text: 'the and of' }, { id: 'B', text: '' }],
+    tasks: [{ id: 1, text: 'Publish triage and escalation criteria', status: 'open' }],
+  });
+  assert.equal(results.length, 0);
+});
+
 test.after(() => {
   try { fs.rmSync(scratchDir, { recursive: true, force: true }); } catch {}
 });
