@@ -131,13 +131,32 @@ test('a non-working day keeps only what the engine marked unsuppressable', () =>
   assert.equal(g.speech, null, 'a day off is not spoken into');
 });
 
-test('away leaves the ranking alone — it is a reason not to speak, not to demote', () => {
+test('away changes nothing — not the ranking, and not the speech', () => {
+  // Caught live: the rationale claimed "nothing is spoken" in the same payload
+  // as a populated `speech` and `quiet:false`. Presence means "not at home",
+  // the phone is in his pocket, and being out is exactly when SARA coming to
+  // him is the point — so away must speak.
   const items = [item({ id: 'a', score: 70 }), item({ id: 'b', score: 60 })];
-  const away = gate(ctx(ACTIVITY.AWAY, { quiet: false }), items);
+  const away = gate(ctx(ACTIVITY.AWAY), items);
   const steady = gate(ctx(ACTIVITY.STEADY), items);
   assert.equal(away.primary.id, steady.primary.id);
   assert.deepEqual(away.secondary.map((s) => s.id), steady.secondary.map((s) => s.id));
   assert.equal(away.dropped.length, 0);
+  assert.equal(away.speech, steady.speech);
+  assert.ok(away.speech, 'away is not a reason to go silent');
+});
+
+test('a gate never claims silence while it is speaking', () => {
+  // The general invariant behind the bug above: speech and the stated reason
+  // must describe the same payload. Asserted across every activity so a new
+  // branch cannot reintroduce it.
+  for (const activity of Object.values(ACTIVITY)) {
+    const g = gate(ctx(activity), [item(), ESCALATION]);
+    if (g.speech) {
+      assert.equal(g.quiet, false, `${activity}: speaking while quiet`);
+      assert.ok(!/nothing is spoken|not spoken/.test(g.rationale), `${activity}: rationale claims silence while speaking`);
+    }
+  }
 });
 
 // ── Shape ────────────────────────────────────────────────────────────────────

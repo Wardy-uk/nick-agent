@@ -162,10 +162,19 @@ function gate(context, items) {
       break;
 
     case ACTIVITY.AWAY:
-      // Ranking is untouched — being away is a reason not to SPEAK, not a
-      // reason to decide the work is less important than it was.
+      // Away changes NOTHING — not the ranking, not the speech. It is recorded
+      // because it is true, not because it gates anything.
+      //
+      // ⚠ The first cut claimed "nothing is spoken" here, and was caught on the
+      // live box saying exactly that in the same payload as a populated
+      // `speech` and `quiet:false` — the layer built to stop NEURO asserting
+      // things it had not checked, asserting something it had not checked.
+      // Away must not be quiet: presence means "not at home", the phone is in
+      // his pocket, and being out is precisely when SARA coming to him is the
+      // whole point. Being away is also not a reason to decide the work matters
+      // less than it did a minute ago.
       primary = kept.length ? itemCard(kept.shift()) : null;
-      rationale = 'Away, so the ranking stands but nothing is spoken.';
+      rationale = 'Away, so the ranking stands and nothing is filtered.';
       break;
 
     case ACTIVITY.UNKNOWN:
