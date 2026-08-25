@@ -106,6 +106,22 @@ async function init() {
     console.error('[DB] tasks migration check failed:', e.message);
   }
 
+  // Migration: calendar_cache.attendees_other — does this event have other
+  // people in it? Graph is asked for `attendees` and the cache dropped them on
+  // write, so nothing reading the cache could tell a 1-2-1 from a solo focus
+  // block. No backfill is needed: calendar-sync is replace-by-window, so the
+  // next sync rewrites every row with the column populated. Existing rows read
+  // NULL ("we could not tell") until then, which is the honest interim answer.
+  try {
+    const calColumns = db.prepare('PRAGMA table_info(calendar_cache)').all().map(r => r.name);
+    if (calColumns.length && !calColumns.includes('attendees_other')) {
+      db.exec('ALTER TABLE calendar_cache ADD COLUMN attendees_other INTEGER');
+      console.log('[DB] calendar_cache.attendees_other added');
+    }
+  } catch (e) {
+    console.error('[DB] calendar_cache migration check failed:', e.message);
+  }
+
   // Migration: task_blocks gains many-tasks-per-block (18 Aug 2026).
   //
   // The first shape keyed a block on one task_id. Batching several short tasks
@@ -437,13 +453,21 @@ function deleteTodo(id) {
 
 // Calendar cache helpers
 function upsertCalendarEvent(event) {
+  // attendees_other is deliberately three-valued. `event.attendeesOther` is
+  // true/false when the caller could judge it and undefined when it could not,
+  // and coercing that unknown to 0 would tell every reader "solo block" about a
+  // meeting we simply could not see the attendees of.
+  const attendeesOther = typeof event.attendeesOther === 'boolean'
+    ? (event.attendeesOther ? 1 : 0)
+    : null;
   run(`
     INSERT OR REPLACE INTO calendar_cache
-      (event_id, subject, start_time, end_time, is_all_day, location, organizer, show_as, fetched_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      (event_id, subject, start_time, end_time, is_all_day, location, organizer, show_as, attendees_other, fetched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `, [
     event.id, event.subject, event.start, event.end,
-    event.isAllDay ? 1 : 0, event.location, event.organizer, event.showAs
+    event.isAllDay ? 1 : 0, event.location, event.organizer, event.showAs,
+    attendeesOther
   ]);
 }
 

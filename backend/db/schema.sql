@@ -72,6 +72,11 @@ CREATE TABLE IF NOT EXISTS calendar_cache (
   location TEXT,
   organizer TEXT,
   show_as TEXT,
+  -- 1 = has attendees other than Nick, 0 = solo block, NULL = we could not tell.
+  -- NULL is a real answer and must never be read as 0: the NOVA bridge supplies
+  -- no attendee list, and with no signed-in address Nick's own entry cannot be
+  -- told from anyone else's. See calendar-sync + plaud-admin-blocks.attendeesOther.
+  attendees_other INTEGER,
   fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

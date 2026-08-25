@@ -560,6 +560,10 @@ module.exports = {
   status,
   forget,
   isEnabled,
+  // Promoted out of _internals because calendar-sync stamps the same judgement
+  // onto every cached event for context-state to read. One copy of "a meeting
+  // has other people in it", not two that can drift.
+  attendeesOther,
   _internals: {
     skipReason,
     placeBlock,

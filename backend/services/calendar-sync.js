@@ -68,6 +68,27 @@ async function sync({ days = 14, checkArrivals = true } = {}) {
     );
   } catch {}
 
+  // Does each event have OTHER PEOPLE in it? The cache dropped `attendees` on
+  // write, so everything reasoning off it — the ambient SARA surface most of all
+  // — could not tell a 1-2-1 from a solo focus block, and half Nick's diary is
+  // solo blocks. Judged here, once, at the only point a live attendee list
+  // exists, using plaud-admin-blocks' test rather than a second copy of it.
+  //
+  // ⚠ Fails CLOSED to UNKNOWN, not to false. With no signed-in address Nick's
+  // own entry cannot be told from anyone else's, and the NOVA bridge supplies no
+  // attendee list at all — in both cases we do not know, and saying "solo block"
+  // would be a confident wrong answer rather than an absent one.
+  let me = null;
+  try { me = await microsoft.getSignedInAddress(); } catch {}
+  const { attendeesOther } = require('./plaud-admin-blocks');
+  for (const event of events) {
+    if (!event || typeof event !== 'object') continue;
+    event.attendeesOther = (me && Array.isArray(event.attendees))
+      ? attendeesOther(event, me).length > 0
+      : undefined;
+  }
+  if (!me) console.warn('[CalendarSync] No signed-in address — attendee judgement left unknown on every event');
+
   let synced = 0;
   const newEventIds = [];
   try {

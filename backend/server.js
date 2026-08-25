@@ -187,6 +187,8 @@ app.use('/api/kb-article', require('./routes/kb-article'));
 app.use('/api/email', require('./routes/email-triage'));
 app.use('/api/pi-health', require('./routes/pi-health'));
 app.use('/api/state-of-play', require('./routes/state-of-play'));
+// The ambient feed both SARA surfaces render — one primary thing, in context.
+app.use('/api/attention', require('./routes/attention'));
 app.use('/api/weekly-risk', require('./routes/weekly-risk'));
 app.use('/api/tasks', require('./routes/tasks'));
 // Its own mount, deliberately NOT under /api/tasks — a sibling registered after
