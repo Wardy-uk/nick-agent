@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { resolveContext, ACTIVITY, INPUT_BLOCKS, PRE_MEETING_MINUTES } = require('./context-state');
+const { resolveContext, cannotSee, ACTIVITY, INPUT_BLOCKS, PRE_MEETING_MINUTES } = require('./context-state');
 
 // A working Tuesday, mid-morning. Every test pins its own `now` — this module is
 // pure precisely so the suite cannot break on a date rollover.
@@ -252,6 +252,52 @@ test('"high" means EVERY input answered, not just a high score', () => {
 
   const full = resolveContext(calm({ queue: { known: true, breaching: 1, unseenEscalations: 0 } }), TUE_1430);
   assert.equal(full.confidence.level, 'high');
+});
+
+// ── A gap is only worth saying when it could have changed the answer ─────────
+
+test('a gap that could not have outranked the answer is not mentioned', () => {
+  // OwnTracks was down for weeks, so location is permanently unreadable. The
+  // first version said "I can't tell where you are" on EVERY screen, forever —
+  // an honesty line that never changes is an apology you learn to skip.
+  // Mid-standup, location could only ever have argued for `away`, which ritual
+  // already beats.
+  assert.equal(cannotSee(['location'], ACTIVITY.RITUAL), null);
+  assert.equal(cannotSee(['location'], ACTIVITY.IN_MEETING), null);
+  assert.equal(cannotSee(['queue'], ACTIVITY.PRE_MEETING), null);
+});
+
+test('the same gap IS mentioned when it would have won', () => {
+  // On a steady afternoon, `away` outranks `steady` — so not knowing is worth
+  // saying out loud.
+  assert.equal(cannotSee(['location'], ACTIVITY.STEADY), "I can't tell where you are.");
+  assert.equal(cannotSee(['calendar'], ACTIVITY.FIREFIGHTING), "I can't see your diary.");
+});
+
+test('an unreadable context keeps every gap in play', () => {
+  const line = cannotSee(['calendar', 'location'], ACTIVITY.UNKNOWN);
+  assert.match(line, /see your diary/);
+  assert.match(line, /tell where you are/);
+  assert.equal(cannotSee(['location'], null), "I can't tell where you are.");
+});
+
+test('gaps read as a sentence, however many there are', () => {
+  assert.equal(cannotSee([], ACTIVITY.STEADY), null);
+  assert.equal(cannotSee(['calendar', 'location'], ACTIVITY.STEADY), "I can't see your diary or tell where you are.");
+  const three = cannotSee(['calendar', 'queue', 'location'], ACTIVITY.STEADY);
+  assert.equal(three, "I can't see your diary, see your queue or tell where you are.");
+});
+
+test('the full picture survives the filter', () => {
+  // Nothing is hidden — only the ambient line is filtered. `unknowns` still
+  // carries everything for the detail panel.
+  const c = resolveContext(
+    calm({ rituals: { known: true, standupOutstanding: true, eodOutstanding: false }, location: { known: false } }),
+    TUE_0930,
+  );
+  assert.equal(c.activity, ACTIVITY.RITUAL);
+  assert.equal(c.cannotSee, null, 'not worth interrupting with');
+  assert.deepEqual(c.unknowns, ['location'], 'but still recorded in full');
 });
 
 // ── Purity ───────────────────────────────────────────────────────────────────

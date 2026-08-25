@@ -24,6 +24,9 @@
   min-height: calc(100% + 2rem);
 }
 
+/* The field bleeds edge to edge; the WORDS do not. Without a column the
+   sentences ran the full width of a desktop window at ~180 characters a line,
+   which is unreadable and made the vertical space look empty by comparison. */
 .surface__content {
   position: relative;
   z-index: 1;
@@ -32,6 +35,9 @@
   flex: 1;
   gap: 1.15rem;
   padding: 0.25rem 0.15rem 0;
+  width: 100%;
+  max-width: 34rem;
+  margin: 0 auto;
 }
 
 /* ── Crown ─────────────────────────────────────────────────────────────────
@@ -59,6 +65,60 @@
   color: var(--muted);
   cursor: pointer;
   border-bottom: 1px dotted rgba(139, 152, 168, 0.5);
+}
+
+/* Speech-out. Stays OFF by default — a PWA that talks unprompted on a train
+   gets deleted — so this is the switch, sitting where she is rather than in a
+   settings screen. */
+.surface__ear {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 0 0 0 0.5rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  opacity: 0.45;
+}
+.surface__ear--on { opacity: 1; }
+
+/* Why he's here, when he arrived by tapping a notification. */
+.surface__arrival {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  text-align: left;
+  width: 100%;
+  background: rgba(28, 37, 48, 0.7);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.surface__arrivallabel {
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.surface__arrivalbody {
+  font-family: Newsreader, Georgia, "Times New Roman", serif;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+/* His question, quoted back before her answer — so a spoken exchange has a
+   record of what she actually heard. Mis-hearing is the commonest dictation
+   failure and it is invisible without this. */
+.surface__asked {
+  font-family: Newsreader, Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-size: 0.95rem;
+  color: var(--muted);
+  margin: 0 0 0.2rem;
 }
 
 .surface__why {
@@ -161,8 +221,39 @@
   opacity: 0.75;
 }
 .surface__aside--warn { color: #e0c97e; }
+.surface__saysub--warn { color: #e0c97e; }
+
+.surface__footrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 0.5rem;
+}
+
+/* Her ears. Given real weight — it is the primary way to reach her from the one
+   screen that has no menu, so it must not read as a secondary affordance. */
+.surface__mic {
+  background: rgba(20, 27, 36, 0.9);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.6rem 1rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.surface__mic--live {
+  border-color: rgba(76, 154, 255, 0.7);
+  background: rgba(43, 61, 87, 0.92);
+  animation: surface-listening 1.8s ease-in-out infinite;
+}
+@keyframes surface-listening {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(76, 154, 255, 0.28); }
+  50%      { box-shadow: 0 0 0 6px rgba(76, 154, 255, 0); }
+}
+
 .surface__all {
-  align-self: flex-start;
   background: none;
   border: none;
   color: var(--muted);
@@ -170,7 +261,12 @@
   font-size: 0.78rem;
   text-decoration: underline;
   cursor: pointer;
-  padding: 0.35rem 0 0;
+  padding: 0.35rem 0;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .surface__mic--live { animation: none; }
 }
 
 /* ── Bare states ───────────────────────────────────────────────────────── */

@@ -410,31 +410,20 @@ async function gather(now = new Date()) {
     inputs.rituals = { known: false };
   }
 
-  try {
-    const location = require('./location');
-    if (!location.isConfigured()) {
-      gaps.push({ input: 'location', why: 'OwnTracks not configured' });
-      inputs.location = { known: false };
-    } else {
-      const dwells = await location.getCachedDwells();
-      const last = Array.isArray(dwells) && dwells.length ? dwells[dwells.length - 1] : null;
-      inputs.location = last
-        ? { known: true, place: last.name || last.label || 'unknown', source: 'owntracks' }
-        : { known: false };
-      if (!last) gaps.push({ input: 'location', why: 'no dwell recorded today' });
-    }
-  } catch (e) {
-    gaps.push({ input: 'location', why: e.message });
-    inputs.location = { known: false };
-  }
-
+  // Home Assistant is read once and answers TWO inputs. It is the presence
+  // source, and it is also the fallback for location — the OwnTracks recorder
+  // has not been running (nothing listening on its port), so location was
+  // permanently dark while HA knew perfectly well where the phone was.
+  // Same shape as `working-days`: live → fallback → unknown, with `source`
+  // always naming which one actually answered.
+  let phone = null;
   try {
     const ha = require('./ha');
     if (!ha.isConfigured()) {
       gaps.push({ input: 'presence', why: 'Home Assistant not configured' });
       inputs.presence = { known: false };
     } else {
-      const phone = await ha.getPhoneStatus();
+      phone = await ha.getPhoneStatus();
       // `null` presence is unknown, never "not present" — an unreachable HA
       // must not read as Nick having left the building.
       inputs.presence = phone && phone.presence
@@ -445,6 +434,33 @@ async function gather(now = new Date()) {
   } catch (e) {
     gaps.push({ input: 'presence', why: e.message });
     inputs.presence = { known: false };
+    phone = null;
+  }
+
+  inputs.location = { known: false };
+  try {
+    const location = require('./location');
+    if (!location.isConfigured()) {
+      gaps.push({ input: 'location', why: 'OwnTracks not configured' });
+    } else {
+      const dwells = await location.getCachedDwells();
+      const last = Array.isArray(dwells) && dwells.length ? dwells[dwells.length - 1] : null;
+      if (last) inputs.location = { known: true, place: last.name || last.label || 'unknown', source: 'owntracks' };
+      else gaps.push({ input: 'location', why: 'OwnTracks recorded no dwell today' });
+    }
+  } catch (e) {
+    gaps.push({ input: 'location', why: e.message });
+  }
+
+  if (!inputs.location.known && phone && phone.presence) {
+    // HA's `person` entity is home / not_home / a zone name. A zone name is a
+    // real place; `not_home` is only ever the absence of one, so it maps to
+    // 'away' rather than being reported as somewhere Nick is.
+    const p = String(phone.presence).toLowerCase();
+    const place = p === 'home' ? 'home'
+      : p === 'not_home' ? (phone.geocodedLocation || 'away')
+      : phone.presence;
+    inputs.location = { known: true, place, source: 'home-assistant' };
   }
 
   try {

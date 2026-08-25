@@ -35,10 +35,22 @@ import './Field.css';
 
 const IDLE_FPS = 12;
 const ACTIVE_FPS = 30;
-const NODE_COUNT = 230;
-const SEEDS = 11;              // clusters — a vault is lumpy; an even scatter reads as a starfield
-const EDGE_DIST_SQ = 1500;     // ~39px. Latent edges only; never created while thinking
+
+// ⚠ Density is per AREA, not a fixed count. The first cut hardcoded 230 nodes,
+// which is right for a 340x700 phone and vanishes on anything wider: the same
+// nodes spread over five times the area, the mesh stopped forming, and the
+// cloud disappeared entirely. One node per ~900px² is the density that read
+// well in the mockup; the clamp is a perf floor and ceiling, not a look.
+const PX2_PER_NODE = 900;
+const NODE_MIN = 150;
+const NODE_MAX = 900;
+const PX2_PER_SEED = 26000;    // clusters — a vault is lumpy; an even scatter reads as a starfield
+const SEED_MIN = 5;
+const SEED_MAX = 18;
+const EDGE_DIST_SQ = 2100;     // ~46px. Latent edges only; never created while thinking
 const FOCUS_RADIUS = 150;
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // How the read becomes a picture. `depth` is how much order arrives (0 = none),
 // `period` how many seconds between settles.
@@ -83,20 +95,23 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
       ctx = canvas.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      // Seeds spread across the WHOLE canvas with a margin. The first cut let
-      // them fall anywhere and they piled into one corner — the field read as a
-      // lopsided blob rather than a mind.
+      // Both counts scale with the area, so the substrate has the same density
+      // on a 390px phone and a 1700px desktop.
+      const area = w * h;
+      const nodeCount = Math.round(clamp(area / PX2_PER_NODE, NODE_MIN, NODE_MAX));
+      const seedCount = Math.round(clamp(area / PX2_PER_SEED, SEED_MIN, SEED_MAX));
+
+      // Seeds land freely rather than on a grid. An even distribution reads as
+      // wallpaper; the uneven one — dense here, open there — is what makes it
+      // look like a mind instead of a texture.
       const seeds = [];
-      for (let s = 0; s < SEEDS; s++) {
-        seeds.push({
-          x: w * (0.08 + 0.84 * ((s % 3) / 2 + (Math.random() - 0.5) * 0.22)),
-          y: h * (0.06 + 0.88 * (Math.floor(s / 3) / 3 + (Math.random() - 0.5) * 0.16)),
-        });
+      for (let s = 0; s < seedCount; s++) {
+        seeds.push({ x: Math.random() * w, y: Math.random() * h });
       }
       nodes = [];
-      for (let i = 0; i < NODE_COUNT; i++) {
+      for (let i = 0; i < nodeCount; i++) {
         const seed = seeds[i % seeds.length];
-        const spread = 26 + Math.random() * 46;
+        const spread = 34 + Math.random() * 62;
         nodes.push({
           x: seed.x + (Math.random() - 0.5) * spread * 2,
           y: seed.y + (Math.random() - 0.5) * spread * 2,
@@ -125,8 +140,8 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
         const mx = (n1.x + n2.x) / 2;
         const my = (n1.y + n2.y) / 2;
         const near = Math.max(0, 1 - Math.hypot(mx - focus.x, my - focus.y) / FOCUS_RADIUS) * k;
-        const alpha = (0.01 + near * 0.115) * dim;
-        if (alpha < 0.012) continue;
+        const alpha = (0.012 + near * 0.16) * dim;
+        if (alpha < 0.013) continue;
         ctx.strokeStyle = `rgba(120,170,235,${alpha.toFixed(3)})`;
         ctx.lineWidth = 0.6;
         ctx.beginPath();
@@ -143,9 +158,9 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
         const jitter = (1 - near) * 0.9;
         const jx = Math.sin(t * nd.sp + nd.ph) * jitter;
         const jy = Math.cos(t * nd.sp * 1.3 + nd.ph) * jitter;
-        ctx.fillStyle = `rgba(150,190,240,${((0.055 + near * 0.24) * dim).toFixed(3)})`;
+        ctx.fillStyle = `rgba(150,190,240,${((0.07 + near * 0.3) * dim).toFixed(3)})`;
         ctx.beginPath();
-        ctx.arc(nd.x + jx, nd.y + jy, 0.8 + near * 0.45, 0, 6.2832);
+        ctx.arc(nd.x + jx, nd.y + jy, 0.85 + near * 0.5, 0, 6.2832);
         ctx.fill();
       }
     }

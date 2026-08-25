@@ -103,6 +103,10 @@ export default function App() {
   // The strip is revealed on request, and stays revealed while Nick is off the
   // Surface — otherwise the one screen with no menu is also the only way back.
   const [navOpen, setNavOpen] = useState(false);
+  // What SARA said when she pinged him, carried onto the Surface so tapping a
+  // notification lands somewhere that acknowledges WHY he is there. Without it
+  // the push and the screen are two unconnected events.
+  const [arrivedFrom, setArrivedFrom] = useState(null);
   const [actionIntent, setActionIntent] = useState(() => readLaunchIntent());
   // Which ritual a notification meant, when it routed straight to a tab. The
   // resolved TAB is the same for standup and EOD ('standup'), so without this
@@ -120,6 +124,7 @@ export default function App() {
     setActive(intent.tab);
     setIntentKind(plan.presentation === 'tab' ? plan.kind : null);
     setActionIntent(plan.presentation === 'tab' ? null : intent);
+    if (intent.tab === 'surface') setArrivedFrom({ title: intent.title, body: intent.body });
     clearLaunchIntentFromUrl();
   }, []);
 
@@ -143,6 +148,7 @@ export default function App() {
       setActive(intent.tab);
       setIntentKind(plan.presentation === 'tab' ? plan.kind : null);
       setActionIntent(plan.presentation === 'tab' ? null : intent);
+      if (intent.tab === 'surface') setArrivedFrom({ title: intent.title, body: intent.body });
     }
 
     navigator.serviceWorker.addEventListener('message', onMessage);
@@ -154,6 +160,7 @@ export default function App() {
   function goTab(tab) {
     setActive(tab);
     setIntentKind(null);
+    setArrivedFrom(null);
     // Landing back on the Surface puts the menu away again; it is meant to be
     // an escape hatch, not a thing that creeps back into being the navigation.
     if (tab === 'surface') setNavOpen(false);
@@ -239,6 +246,8 @@ export default function App() {
           onNavigate={goTab}
           onActionIntent={setActionIntent}
           onShowAll={() => setNavOpen(true)}
+          arrivedFrom={arrivedFrom}
+          onClearArrival={() => setArrivedFrom(null)}
         />
       </main>
 

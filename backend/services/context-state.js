@@ -72,12 +72,57 @@ const BLIND_PHRASES = {
   workingDay: 'tell what kind of day this is',
 };
 
+// The resolution order, as a rank. Lower wins. Used to work out whether a gap
+// could actually have changed the answer.
+const ACTIVITY_RANK = {
+  [ACTIVITY.IN_MEETING]: 1,
+  [ACTIVITY.PRE_MEETING]: 2,
+  [ACTIVITY.FIREFIGHTING]: 3,
+  [ACTIVITY.IN_FOCUS_SESSION]: 4,
+  [ACTIVITY.RITUAL]: 5,
+  [ACTIVITY.OFF]: 6,
+  [ACTIVITY.AWAY]: 7,
+  [ACTIVITY.STEADY]: 8,
+};
+
+// The best (lowest-ranked) state each input is capable of producing. An input
+// that can only produce something we already outrank cannot have changed the
+// outcome, however unreadable it was.
+const INPUT_BEST_RANK = {
+  calendar: ACTIVITY_RANK[ACTIVITY.IN_MEETING],
+  queue: ACTIVITY_RANK[ACTIVITY.FIREFIGHTING],
+  focusSession: ACTIVITY_RANK[ACTIVITY.IN_FOCUS_SESSION],
+  rituals: ACTIVITY_RANK[ACTIVITY.RITUAL],
+  workingDay: ACTIVITY_RANK[ACTIVITY.OFF],
+  location: ACTIVITY_RANK[ACTIVITY.AWAY],
+  presence: ACTIVITY_RANK[ACTIVITY.AWAY],
+};
+
 /**
- * "I can't tell where you are." — one sentence naming the gaps, or null when
- * there are none. PURE, and exported so it pins on its own.
+ * "I can't tell where you are." — one sentence naming the gaps that MATTER, or
+ * null. PURE, and exported so it pins on its own.
+ *
+ * ⚠ The filter is the point. OwnTracks has been down for a while, so location
+ * is permanently unreadable — and the first version said "I can't tell where
+ * you are" on every single screen, forever. An honesty line that never changes
+ * is not information, it is an apology you learn to skip, and it goes the same
+ * way nudge volume does.
+ *
+ * So a gap is only spoken when it could have changed the answer: when the
+ * missing input is capable of producing a state that OUTRANKS the one we
+ * settled on. Mid-standup, location can only ever have argued for `away`, which
+ * ritual already beats — so she says nothing about it. On a steady afternoon
+ * the same gap is worth saying, because `away` would have won.
+ *
+ * Nothing is hidden by this: `unknowns`, `gaps` and the confidence rationale
+ * all still carry the full picture, one tap behind the state word. This decides
+ * only what is worth INTERRUPTING with.
  */
-function cannotSee(unknowns = []) {
+function cannotSee(unknowns = [], activity = null) {
+  const chosen = ACTIVITY_RANK[activity];
   const parts = (Array.isArray(unknowns) ? unknowns : [])
+    // No activity, or an unreadable one, means every gap is still in play.
+    .filter((k) => !chosen || !(INPUT_BEST_RANK[k] >= chosen))
     .map((k) => BLIND_PHRASES[k])
     .filter(Boolean);
   if (!parts.length) return null;
@@ -264,7 +309,7 @@ function resolveContext(inputs = {}, now = new Date()) {
       place,
       quiet: false,
       confidence: deriveConfidence({ activity: ACTIVITY.UNKNOWN, knownCount: 0, contradictions: [] }),
-      cannotSee: cannotSee(unknowns),
+      cannotSee: cannotSee(unknowns, ACTIVITY.UNKNOWN),
       reasons: ['No input answered, so there is nothing to infer from.'],
       contradictions: [],
       unknowns,
@@ -385,7 +430,7 @@ function resolveContext(inputs = {}, now = new Date()) {
     place,
     quiet,
     confidence: deriveConfidence({ activity, knownCount, contradictions }),
-    cannotSee: cannotSee(unknowns),
+    cannotSee: cannotSee(unknowns, activity),
     reasons,
     contradictions,
     unknowns,

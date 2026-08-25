@@ -71,7 +71,13 @@ function resolveSaraLiteTab(raw = {}) {
   if (kind === 'capture') return 'capture';
   if (kind === 'chat') return 'chat';
   if (kind === 'todo') return 'tasks';
-  return 'focus';
+  // Everything with no specific home lands on SARA (25 Aug 2026). It used to
+  // fall through to Focus, which meant the ONE path where SARA genuinely comes
+  // to Nick — a push he taps — routed straight past her to the old list-shaped
+  // surface. An escalation notification is exactly the case: no dedicated tab,
+  // so it went to Focus. It now arrives where she is, with the thing that
+  // pinged him already ranked in context.
+  return 'surface';
 }
 
 function resolveSaraLitePlan(raw = {}) {
