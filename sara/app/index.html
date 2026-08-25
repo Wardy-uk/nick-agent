@@ -10,6 +10,15 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="SARA Mobile" />
+    <!-- SARA's voice is set in a reading face; the UI stays in the system face.
+         The split is the point: you can tell her apart from her instruments
+         without reading a word. Loaded async and non-blocking — this is a PWA
+         that has to open offline, and Georgia (present on iOS) is the fallback,
+         so a cold start still gets a serif rather than dropping to the sans. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" media="print" onload="this.media='all'"
+          href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300&display=swap" />
     <title>SARA Mobile</title>
   </head>
   <body>

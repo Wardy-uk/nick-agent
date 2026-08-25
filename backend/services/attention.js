@@ -58,16 +58,97 @@ function isObject(v) {
 }
 
 function contextCard(id, title, reason) {
-  return { kind: 'context', id, title, reason, actions: [] };
+  return { kind: 'context', id, title, reason, say: reason || null, actions: [] };
 }
 
-function itemCard(item) {
+/**
+ * The card's reason, said as a sentence instead of listed as fields.
+ *
+ * `decision-engine` builds `reason` as dot-joined fragments — "Marked high
+ * priority · 1 day overdue · 34 other overdue" — which is a data dump, not SARA
+ * talking. This composes the same facts from the item's own `meta` into one
+ * line in her register: direct, no hedging, no cheerleading.
+ *
+ * PURE, and composed HERE rather than in each client, or the phone, the kiosk
+ * and the notification end up phrasing the same fact three ways.
+ *
+ * ⚠ It never invents. Anything it cannot phrase from structured `meta` falls
+ * back to the engine's own `reason` VERBATIM — a worse sentence is a fair price,
+ * a fabricated one is not.
+ */
+function sayLine(item, now = new Date()) {
+  if (!isObject(item)) return null;
+  const meta = isObject(item.meta) ? item.meta : {};
+  const fallback = item.reason || null;
+
+  if (item.type === 'todo') {
+    if (meta.dueDate && Number.isFinite(Number(meta.overdueCount))) {
+      const days = _daysBetween(meta.dueDate, now);
+      if (days == null) return fallback;
+      const over = days <= 0 ? 'It was due today'
+        : days === 1 ? "It's a day over"
+        : `It's ${days} days over`;
+      const rest = Number(meta.overdueCount) - 1;
+      if (rest <= 0) return `${over}.`;
+      // The verb agrees with the count, not just the noun — "1 other are
+      // behind it" is the kind of sentence that stops SARA sounding like a
+      // person the moment the pile drops to two.
+      const tail = rest === 1 ? '1 other is behind it' : `${rest} others are behind it`;
+      return `${over}, and ${tail}.`;
+    }
+    if (Number.isFinite(Number(meta.dueTodayCount))) {
+      const rest = Number(meta.dueTodayCount) - 1;
+      return rest > 0 ? `Due today, along with ${rest} more.` : 'Due today.';
+    }
+    if (Number.isFinite(Number(meta.undatedHighCount))) {
+      const n = Number(meta.undatedHighCount);
+      return n === 1 ? 'High priority, but nothing has given it a date.'
+        : `${n} high-priority tasks, none of them dated.`;
+    }
+    return fallback;
+  }
+
+  if (item.type === 'escalation') {
+    const list = Array.isArray(meta.escalations) ? meta.escalations : [];
+    if (list.length > 1 || Number(meta.overflow) > 0) {
+      const total = list.length + (Number(meta.overflow) || 0);
+      return `${total} escalations are waiting on a reply from you.`;
+    }
+    const age = list[0] && Number.isFinite(Number(list[0].ageDays)) ? Number(list[0].ageDays) : null;
+    if (age == null) return 'No reply from you on this one yet.';
+    return age <= 0 ? 'Raised today, and you have not replied yet.'
+      : age === 1 ? 'Raised yesterday, and still no reply from you.'
+      : `Raised ${age} days ago, and still no reply from you.`;
+  }
+
+  return fallback;
+}
+
+/** One sentence-ending mark, never two. */
+function _terminate(text) {
+  const s = String(text || '').trim();
+  if (!s) return '';
+  return /[.!?]$/.test(s) ? s : `${s}.`;
+}
+
+/** Whole days from a YYYY-MM-DD due date to `now`. Local, never toISOString. */
+function _daysBetween(dueStr, now) {
+  const due = new Date(`${String(dueStr).slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(due.getTime())) return null;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+  return Math.round((today - due) / 86400000);
+}
+
+function itemCard(item, now) {
   return {
     kind: 'item',
     id: item.id,
     type: item.type,
     title: item.title,
     reason: item.reason || null,
+    // What SARA actually says about it. `reason` is kept alongside so nothing
+    // that wants the raw fields loses them.
+    say: sayLine(item, now),
     urgency: item.urgency || null,
     tier: item.tier ?? null,
     score: item.score ?? null,
@@ -84,9 +165,10 @@ function itemCard(item) {
  *
  * @param {object} context  from context-state.resolveContext
  * @param {Array}  items    decision-engine items, already ranked
+ * @param {Date}   now      passed in, never read from the clock (this stays pure)
  * @returns {{primary: object|null, secondary: Array, dropped: Array, quiet: boolean, speech: string|null, rationale: string}}
  */
-function gate(context, items) {
+function gate(context, items, now = new Date()) {
   const pool = Array.isArray(items) ? items.filter(isObject) : [];
   const ctx = isObject(context) ? context : { activity: ACTIVITY.UNKNOWN, confidence: { level: 'low' } };
   const activity = ctx.activity || ACTIVITY.UNKNOWN;
@@ -117,7 +199,7 @@ function gate(context, items) {
     const found = kept.find(predicate);
     if (!found) return null;
     kept = kept.filter((i) => i !== found);
-    return itemCard(found);
+    return itemCard(found, now);
   }
 
   switch (activity) {
@@ -136,14 +218,14 @@ function gate(context, items) {
       break;
 
     case ACTIVITY.FIREFIGHTING:
-      primary = pick((i) => QUEUE_TYPES.has(i.type)) || (kept.length ? itemCard(kept.shift()) : null);
+      primary = pick((i) => QUEUE_TYPES.has(i.type)) || (kept.length ? itemCard(kept.shift(), now) : null);
       rationale = 'The queue is live, so the queue leads.';
       break;
 
     case ACTIVITY.IN_FOCUS_SESSION:
       // Protect the session: only a tier-1 interruption earns the screen.
       drop((i) => i.tier === 1, 'a focus session is running — held until it ends');
-      primary = kept.length ? itemCard(kept.shift()) : contextCard('context-focus-session', ctx.label, ctx.summary);
+      primary = kept.length ? itemCard(kept.shift(), now) : contextCard('context-focus-session', ctx.label, ctx.summary);
       rationale = 'A focus session is running, so only a tier-1 interruption gets through.';
       break;
 
@@ -157,7 +239,7 @@ function gate(context, items) {
       // Not a working day. Only what the engine itself marked unsuppressable —
       // an escalation on a Saturday is still worth knowing about.
       drop((i) => i._unsuppressable === true, 'not a working day');
-      primary = kept.length ? itemCard(kept.shift()) : contextCard('context-off', ctx.label, ctx.summary);
+      primary = kept.length ? itemCard(kept.shift(), now) : contextCard('context-off', ctx.label, ctx.summary);
       rationale = 'Not a working day, so only what cannot be suppressed gets through.';
       break;
 
@@ -173,17 +255,17 @@ function gate(context, items) {
       // his pocket, and being out is precisely when SARA coming to him is the
       // whole point. Being away is also not a reason to decide the work matters
       // less than it did a minute ago.
-      primary = kept.length ? itemCard(kept.shift()) : null;
+      primary = kept.length ? itemCard(kept.shift(), now) : null;
       rationale = 'Away, so the ranking stands and nothing is filtered.';
       break;
 
     case ACTIVITY.UNKNOWN:
-      primary = kept.length ? itemCard(kept.shift()) : null;
+      primary = kept.length ? itemCard(kept.shift(), now) : null;
       rationale = 'The context could not be read, so nothing is filtered — a bad read must not hide work.';
       break;
 
     default: // STEADY
-      primary = kept.length ? itemCard(kept.shift()) : null;
+      primary = kept.length ? itemCard(kept.shift(), now) : null;
       rationale = 'Nothing stood out in the context, so the ranking stands as scored.';
       break;
   }
@@ -192,15 +274,18 @@ function gate(context, items) {
     rationale += ' Confidence is low, so the order was adjusted but nothing was hidden.';
   }
 
-  const secondary = kept.slice(0, SECONDARY_MAX).map(itemCard);
+  const secondary = kept.slice(0, SECONDARY_MAX).map((i) => itemCard(i, now));
 
   // Speech: silence when the context says so, and never for a context card that
   // is only describing the frame — "you're in a focus session" said aloud to
   // someone in a focus session is pure interruption.
   let speech = null;
   if (!quiet && primary && primary.kind === 'item') {
-    speech = primary.reason ? `${primary.title}. ${primary.reason}.` : `${primary.title}.`;
-    speech = speech.replace(/\.\.+$/, '.');
+    // Spoken and rendered from the SAME composed line, so the phone never says
+    // one thing and reads another. `say` is a full sentence when composed and a
+    // bare fragment when it fell back to the engine's `reason` verbatim, so the
+    // terminator is added only where one is missing.
+    speech = _terminate(primary.title) + (primary.say ? ` ${_terminate(primary.say)}` : '');
   }
 
   return { primary, secondary, dropped, quiet, speech, rationale };
@@ -369,7 +454,7 @@ async function build({ now = new Date() } = {}) {
     gaps.push({ input: 'decision-engine', why: e.message });
   }
 
-  const gated = gate(context, items);
+  const gated = gate(context, items, now);
 
   return {
     generatedAt: now.toISOString(),
@@ -382,4 +467,4 @@ async function build({ now = new Date() } = {}) {
   };
 }
 
-module.exports = { build, gather, gate, SECONDARY_MAX };
+module.exports = { build, gather, gate, sayLine, SECONDARY_MAX };

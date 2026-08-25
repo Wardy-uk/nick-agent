@@ -2,37 +2,43 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api';
 import actionSurfaces from '../../../../shared/action-surfaces.cjs';
 import { speakIfEnabled, isAudioUnlocked } from '../voiceUtils';
+import Field from '../components/Field';
 import './Surface.css';
 
 // Surface — SARA without a menu.
 //
 // The rest of this app is a tab strip: Nick chooses, SARA renders. This is the
 // other way round. It renders GET /api/attention — ONE thing the brain decided
-// is worth his attention right now, in the context it decided it in — and the
-// nine views become places the brain routes TO rather than things to go and find.
+// is worth his attention, in the context it decided it in — and the nine views
+// become places the brain routes TO rather than things to go and find.
 //
-// Three things it must get right, all of them about honesty:
+// ── Presence ────────────────────────────────────────────────────────────────
+// SARA is `components/Field`: the vault as a pinned noisy substrate, with her
+// visible only as order arriving in it. No orb, no avatar, no face. Crucially
+// the field is driven by the brain's OWN state, so the coherence on screen is
+// the coherence of the read — it is informative before a word is read, which is
+// what keeps it from being a screensaver.
 //
-//   1. SILENCE IS A CORRECT ANSWER. Most of a calm day has no primary, and the
-//      brain deliberately returns `primary: null`. Rendering a filler card here
-//      would turn an ambient surface into a nudge machine, which is the one
-//      thing allowed to argue against building more of this.
-//   2. NOTHING IS HIDDEN SILENTLY. The brain reports what it gated out and why;
-//      so does this. A card that vanished for a reason Nick cannot see is
-//      indistinguishable from one that was lost.
-//   3. "COULDN'T LOOK" IS NOT "NOTHING THERE". `context.unknowns` and `gaps`
-//      are rendered, not swallowed — a confident-looking calm day inferred
-//      without the calendar is exactly the false all-clear the brain refuses to
-//      give, and the UI must not put it back.
+// ── What the first cut got wrong, and why ───────────────────────────────────
+//   1. There was no SARA in it at all — a card on black, with `flex:1` voids
+//      above and below that read as broken rather than calm.
+//   2. The most prominent chrome was a DEBUG READOUT: "MODERATE CONFIDENCE",
+//      "can't see 1". Honest, but instrumentation — a number where her presence
+//      should be. The honesty stays; she says it, in a sentence, at the bottom.
+//   3. She wasn't talking. "Marked high priority · 1 day overdue · 34 other
+//      overdue" is a field dump. The brain now composes `say`, so the same
+//      facts arrive as one line in her register — and composed SERVER-side, so
+//      the phone, the kiosk and the notification cannot word it three ways.
 //
-// Speech follows the brain's `quiet` and its pre-composed `speech` line. The
-// phrasing is NOT rebuilt here: three surfaces saying the same thing differently
-// is how they drift.
+// Three things it must still get right, all of them about honesty:
+//   * SILENCE IS A CORRECT ANSWER. Most of a calm day has no primary.
+//   * NOTHING IS HIDDEN SILENTLY. What was gated out is named.
+//   * "COULDN'T LOOK" IS NOT "NOTHING THERE" — hence `context.cannotSee`.
 const POLL_MS = 60_000;
 const { resolveSaraLiteTab } = actionSurfaces;
 
-// Where a card goes when it is tapped. Reuses the notification router, so a card
-// and the notification for the same thing can never land on different tabs.
+// Where a card goes when tapped. Reuses the notification router, so a card and
+// the notification for the same thing can never land on different tabs.
 function tabFor(card) {
   if (!card || card.kind !== 'item') return null;
   return resolveSaraLiteTab({ type: card.type, meta: card.meta });
@@ -41,7 +47,7 @@ function tabFor(card) {
 export default function Surface({ onNavigate, onShowAll }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [busy, setBusy] = useState(false);
-  const [showDetail, setShowDetail] = useState(false);
+  const [showWhy, setShowWhy] = useState(false);
 
   const load = useCallback(async ({ quiet = false } = {}) => {
     if (!quiet) setState((s) => ({ ...s, loading: true, error: null }));
@@ -49,17 +55,17 @@ export default function Surface({ onNavigate, onShowAll }) {
       const data = await apiFetch('/api/attention');
       setState({ loading: false, error: null, data });
     } catch (error) {
-      // An error is NOT an empty feed. Keeping the last good payload on screen
-      // beside the error beats blanking to something that looks like a calm day.
+      // An error is NOT an empty feed. Keep the last good payload on screen
+      // beside the error rather than blanking to something that looks calm.
       setState((s) => ({ loading: false, error: error.message, data: s.data }));
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  // Poll, and re-read the moment the phone comes back to the foreground — the
-  // context this is built on (in a meeting, mid-session, before a 1-2-1) is
-  // exactly the thing that has changed while the screen was off.
+  // Poll, and re-read the moment the phone comes back — the context this rests
+  // on (in a meeting, mid-session, before a 1-2-1) is exactly what changed
+  // while the screen was off.
   useEffect(() => {
     const timer = setInterval(() => load({ quiet: true }), POLL_MS);
     const onVisible = () => { if (document.visibilityState === 'visible') load({ quiet: true }); };
@@ -68,13 +74,10 @@ export default function Surface({ onNavigate, onShowAll }) {
   }, [load]);
 
   // Speak the brain's line, once per distinct line. `speech` is already null
-  // whenever the brain decided to stay quiet, so there is no second opinion
-  // about silence here.
-  //
-  // The gesture retry is what makes this work on iOS at all: speechSynthesis
-  // needs a touch first, and a cold start lands straight here. Left UNSPOKEN and
-  // retried rather than dropped — a dropped utterance is indistinguishable from
-  // a broken toggle (#111).
+  // whenever it decided to stay quiet, so there is no second opinion here.
+  // The gesture retry is what makes it work on iOS at all (#111): a cold start
+  // lands here before any touch, so it is left UNSPOKEN and retried rather than
+  // dropped — a dropped utterance is indistinguishable from a broken toggle.
   const spokenRef = useRef(null);
   const speech = state.data?.speech || null;
   useEffect(() => {
@@ -107,127 +110,135 @@ export default function Surface({ onNavigate, onShowAll }) {
   const { loading, error, data } = state;
 
   if (loading && !data) {
-    return <div className="surface surface--waiting"><p className="surface__waiting">Reading the room…</p></div>;
+    return (
+      <div className="surface surface--bare">
+        <Field confidenceLevel="low" degraded />
+        <p className="surface__bareline">Reading the room…</p>
+      </div>
+    );
   }
 
   if (!data) {
     return (
-      <div className="surface surface--waiting">
-        <p className="surface__error">Can't reach the brain.</p>
-        {error && <p className="surface__errordetail">{error}</p>}
+      <div className="surface surface--bare">
+        <Field confidenceLevel="low" degraded />
+        <p className="surface__saylead">I can't reach the brain.</p>
+        {error && <p className="surface__whyline">{error}</p>}
         <button type="button" className="surface__btn" onClick={() => load()}>Try again</button>
       </div>
     );
   }
 
   const { context, primary, secondary = [], dropped = [], quiet, rationale, poolAvailable, gaps = [] } = data;
-  const unknowns = context?.unknowns || [];
-  const blind = unknowns.length > 0;
 
   return (
     <div className="surface">
-      {/* The frame: where SARA thinks Nick is, and how sure she is. Confidence is
-          shown always, not only when it is low — a read that never admits doubt
-          is one Nick stops interrogating. */}
-      <button
-        type="button"
-        className="surface__context"
-        onClick={() => setShowDetail((v) => !v)}
-        aria-expanded={showDetail}
-      >
-        <span className="surface__ctxlabel">{context?.label || 'Unknown'}</span>
-        <span className={`surface__ctxconf surface__ctxconf--${context?.confidence?.level || 'low'}`}>
-          {context?.confidence?.level || 'low'} confidence
-        </span>
-        {context?.place?.known && context.place.name !== 'unknown' && (
-          <span className="surface__ctxplace">{context.place.name}</span>
-        )}
-        {blind && <span className="surface__ctxblind">can't see {unknowns.length}</span>}
-      </button>
+      <Field
+        activity={context?.activity}
+        confidenceLevel={context?.confidence?.level}
+        quiet={quiet}
+        degraded={!poolAvailable}
+      />
 
-      {showDetail && (
-        <div className="surface__detail">
-          <p className="surface__summary">{context?.summary}</p>
-          {(context?.reasons || []).map((r, i) => <p key={i} className="surface__reason">{r}</p>)}
-          {(context?.contradictions || []).map((c, i) => (
-            <p key={`c${i}`} className="surface__contradiction">⚠ {c}</p>
-          ))}
-          {rationale && <p className="surface__rationale">{rationale}</p>}
-          {gaps.length > 0 && (
-            <p className="surface__gaps">
-              Couldn't read: {gaps.map((g) => g.input).join(', ')}.
+      <div className="surface__content">
+        {/* Chrome, deliberately small and wordless about its own certainty.
+            The state is one lowercase word; the reasoning is behind a tap. */}
+        <div className="surface__crown">
+          <span className="surface__mark">SARA</span>
+          <button
+            type="button"
+            className="surface__state"
+            onClick={() => setShowWhy((v) => !v)}
+            aria-expanded={showWhy}
+            aria-label="Why SARA is showing this"
+          >
+            {context?.label ? context.label.toLowerCase() : 'unsure'}
+          </button>
+        </div>
+
+        {showWhy && (
+          <div className="surface__why">
+            {context?.summary && <p className="surface__whyline surface__whyline--lead">{context.summary}</p>}
+            {(context?.reasons || []).map((r, i) => <p key={i} className="surface__whyline">{r}</p>)}
+            {(context?.contradictions || []).map((c, i) => (
+              <p key={`c${i}`} className="surface__whyline surface__whyline--warn">{c}</p>
+            ))}
+            {rationale && <p className="surface__whyline">{rationale}</p>}
+            {gaps.length > 0 && (
+              <p className="surface__whyline">Couldn't read: {gaps.map((g) => g.input).join(', ')}.</p>
+            )}
+            <p className="surface__whyline">
+              Confidence {context?.confidence?.level} — {context?.confidence?.rationale}
             </p>
-          )}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* The one thing. */}
-      {primary ? (
-        <div className={`surface__primary surface__primary--${primary.kind}`}>
-          <h1 className="surface__title">{primary.title}</h1>
-          {primary.reason && <p className="surface__reasonline">{primary.reason}</p>}
-          {primary.kind === 'item' && (
-            <div className="surface__actions">
-              <button type="button" className="surface__btn surface__btn--go" onClick={() => open(primary)}>
-                {primary.actionHint || 'Open'}
-              </button>
-              <button type="button" className="surface__btn" disabled={busy} onClick={() => dismiss(primary)}>
-                Not now
-              </button>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="surface__primary surface__primary--empty">
-          {/* Three genuinely different facts, and conflating them is how a broken
-              feed comes to look like a good day. */}
-          {!poolAvailable ? (
+        {/* The one thing, given the room. */}
+        <div className="surface__say">
+          {primary ? (
             <>
-              <h1 className="surface__title">I can't see your work right now.</h1>
-              <p className="surface__reasonline">The queue didn't answer, so this isn't an all-clear.</p>
-            </>
-          ) : quiet ? (
-            <>
-              <h1 className="surface__title">{context?.summary || 'Staying out of the way.'}</h1>
-              <p className="surface__reasonline">Nothing needs you here.</p>
+              <p className="surface__saylead">{primary.title}</p>
+              {primary.say && <p className="surface__saysub">{primary.say}</p>}
+              {primary.kind === 'item' && (
+                <div className="surface__acts">
+                  <button type="button" className="surface__btn surface__btn--go" onClick={() => open(primary)}>
+                    {primary.actionHint || 'Open it'}
+                  </button>
+                  <button type="button" className="surface__btn" disabled={busy} onClick={() => dismiss(primary)}>
+                    Not now
+                  </button>
+                </div>
+              )}
             </>
           ) : (
+            // Three genuinely different facts. Conflating them is how a broken
+            // feed comes to look like a good day.
             <>
-              <h1 className="surface__title">Nothing pressing.</h1>
-              <p className="surface__reasonline">
-                {blind ? "Though I can't see everything — tap above." : 'Everything is where it should be.'}
-              </p>
+              {!poolAvailable ? (
+                <>
+                  <p className="surface__saylead">I can't see your work right now.</p>
+                  <p className="surface__saysub">So don't read this as an all-clear.</p>
+                </>
+              ) : quiet ? (
+                <>
+                  <p className="surface__saylead">{context?.summary || 'Staying out of the way.'}</p>
+                  <p className="surface__saysub">Nothing here needs you.</p>
+                </>
+              ) : (
+                <>
+                  <p className="surface__saylead">Nothing pressing.</p>
+                  <p className="surface__saysub">Everything's where it should be.</p>
+                </>
+              )}
             </>
           )}
         </div>
-      )}
 
-      {secondary.length > 0 && (
-        <ul className="surface__secondary">
-          {secondary.map((card) => (
-            <li key={card.id}>
-              <button type="button" className="surface__row" onClick={() => open(card)}>
-                <span className="surface__rowtitle">{card.title}</span>
-                {card.reason && <span className="surface__rowreason">{card.reason}</span>}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+        {/* Everything else, deliberately quieter. */}
+        {secondary.length > 0 && (
+          <ul className="surface__rest">
+            {secondary.map((card) => (
+              <li key={card.id}>
+                <button type="button" className="surface__row" onClick={() => open(card)}>
+                  <span className="surface__rowtitle">{card.title}</span>
+                  {card.say && <span className="surface__rowsay">{card.say}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
 
-      {/* Held, not lost. The brain names everything it gated out; saying so is
-          what keeps this from feeling like things go missing. */}
-      {dropped.length > 0 && (
-        <p className="surface__held">
-          {dropped.length} held — {dropped[0].why}.
-        </p>
-      )}
-
-      <div className="surface__foot">
-        <button type="button" className="surface__all" onClick={() => onShowAll?.()}>
-          Show me everything
-        </button>
-        {error && <span className="surface__stale">Last read failed — showing what I had.</span>}
+        <div className="surface__foot">
+          {/* Held, not lost. Naming it is what keeps this from feeling like
+              things go missing behind her back. */}
+          {dropped.length > 0 && (
+            <p className="surface__aside">{dropped.length} held — {dropped[0].why}.</p>
+          )}
+          {/* The honesty, in her words rather than as a badge. */}
+          {context?.cannotSee && <p className="surface__aside surface__aside--her">{context.cannotSee}</p>}
+          {error && <p className="surface__aside surface__aside--warn">That last read failed — this is what I had.</p>}
+          <button type="button" className="surface__all" onClick={() => onShowAll?.()}>Show me everything</button>
+        </div>
       </div>
     </div>
   );

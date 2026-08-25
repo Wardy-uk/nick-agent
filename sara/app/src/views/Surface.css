@@ -1,162 +1,192 @@
 /* Surface — SARA without a menu.
  *
- * The layout is the argument: ONE thing, large, with the frame it was decided
- * in above it and everything else deliberately quieter underneath. If this ever
- * starts to read as a list, the feature has drifted back into being a dashboard.
+ * Two type roles, and the split carries meaning: what SARA SAYS is set in a
+ * reading face, what the SYSTEM reports is set in the UI face. You can tell her
+ * apart from her instruments without reading a word — and if a screen ever ends
+ * up all UI face, she has gone again.
+ *
+ * Newsreader is loaded from Google Fonts in index.html; Georgia is the fallback
+ * and is present on iOS, so a cold or offline start still gets a reading face
+ * rather than dropping to the system sans.
  */
 
+/* The field must bleed to the edges of the screen — a substrate with a 1rem
+   margin around it reads as a picture of a field, not as the room you are in.
+   `.app__view` pads by 1rem, so cancel it and re-apply inside: the negative
+   margin pulls the box out over that padding, and the height compensates by
+   exactly the 2rem it gained. */
 .surface {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
-  min-height: 100%;
+  margin: -1rem;
+  padding: 1rem;
+  min-height: calc(100% + 2rem);
 }
 
-.surface--waiting {
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  gap: 0.6rem;
-  padding: 2rem 1rem;
-}
-.surface__waiting { color: var(--muted); }
-.surface__error { color: var(--text); font-weight: 600; }
-.surface__errordetail { color: var(--muted); font-size: 0.8rem; word-break: break-word; }
-
-/* ── The frame ─────────────────────────────────────────────────────────────
- * Small, tappable, and always showing confidence — a read that never admits
- * doubt is one that stops being interrogated. */
-.surface__context {
+.surface__content {
+  position: relative;
+  z-index: 1;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  padding: 0.5rem 0.65rem;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.surface__ctxlabel { font-weight: 600; font-size: 0.85rem; }
-.surface__ctxconf {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 0.1rem 0.4rem;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  color: var(--muted);
-}
-.surface__ctxconf--high { color: #7ee0a6; border-color: #2f5f45; }
-.surface__ctxconf--moderate { color: #e0c97e; border-color: #5f542f; }
-.surface__ctxconf--low { color: #e08b7e; border-color: #5f382f; }
-.surface__ctxplace { font-size: 0.72rem; color: var(--muted); }
-/* Deliberately visible rather than tucked away: "I could not look" must never
-   be mistakable for "there is nothing there". */
-.surface__ctxblind {
-  font-size: 0.68rem;
-  color: #e0c97e;
-  margin-left: auto;
+  flex-direction: column;
+  flex: 1;
+  gap: 1.15rem;
+  padding: 0.25rem 0.15rem 0;
 }
 
-.surface__detail {
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 0.7rem;
+/* ── Crown ─────────────────────────────────────────────────────────────────
+ * Small and wordless about its own certainty. The state is one lowercase word;
+ * the reasoning is a tap away. The previous version put "MODERATE CONFIDENCE"
+ * and "can't see 1" here — instrumentation in the most prominent position on
+ * the screen. */
+.surface__crown {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+.surface__mark {
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.24em;
+}
+.surface__state {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 1px dotted rgba(139, 152, 168, 0.5);
+}
+
+.surface__why {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+  padding: 0.7rem 0.75rem;
+  background: rgba(20, 27, 36, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 10px;
 }
-.surface__summary { font-size: 0.9rem; }
-.surface__reason, .surface__rationale, .surface__gaps {
-  color: var(--muted);
-  font-size: 0.78rem;
-  line-height: 1.45;
-}
-.surface__contradiction { color: #e0c97e; font-size: 0.78rem; line-height: 1.45; }
+.surface__whyline { color: var(--muted); font-size: 0.76rem; line-height: 1.5; margin: 0; }
+.surface__whyline--lead { color: var(--text); }
+.surface__whyline--warn { color: #e0c97e; }
 
-/* ── The one thing ─────────────────────────────────────────────────────────
- * Given the room. This is the whole point of the screen. */
-.surface__primary {
+/* ── Her voice ─────────────────────────────────────────────────────────────
+ * The one thing, given real room. `justify-content: center` inside a bounded
+ * block rather than a bare `flex:1` on the card — the first cut centred one
+ * card in the whole viewport and left two dead voids that read as broken. */
+.surface__say {
   flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 0.6rem;
-  padding: 1.2rem 0.2rem;
+  gap: 0.7rem;
+  padding: 1.5rem 0;
+  min-height: 0;
 }
-.surface__title {
-  font-size: 1.6rem;
-  font-weight: 650;
-  line-height: 1.25;
+.surface__saylead {
+  font-family: Newsreader, Georgia, "Times New Roman", serif;
+  font-weight: 300;
+  font-size: 1.72rem;
+  line-height: 1.22;
+  letter-spacing: -0.012em;
+  margin: 0;
+  text-wrap: balance;
+}
+.surface__saysub {
+  font-family: Newsreader, Georgia, "Times New Roman", serif;
+  font-weight: 300;
+  font-size: 1.06rem;
+  line-height: 1.42;
+  color: var(--muted);
   margin: 0;
 }
-.surface__reasonline { color: var(--muted); font-size: 0.95rem; line-height: 1.5; }
 
-/* A context card is SARA describing the frame, not proposing work — so it is
-   quieter, and it carries no actions. */
-.surface__primary--context .surface__title,
-.surface__primary--empty .surface__title {
-  font-size: 1.3rem;
-  font-weight: 550;
-  color: var(--muted);
-}
-
-.surface__actions { display: flex; gap: 0.5rem; margin-top: 0.3rem; }
+.surface__acts { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.35rem; }
 .surface__btn {
-  background: var(--panel);
+  background: rgba(20, 27, 36, 0.9);
   border: 1px solid var(--line);
   color: var(--text);
   border-radius: 10px;
-  padding: 0.6rem 0.9rem;
+  padding: 0.62rem 0.95rem;
   font: inherit;
+  font-size: 0.86rem;
   cursor: pointer;
 }
-.surface__btn--go { background: var(--accent-dim); border-color: var(--accent); }
+.surface__btn--go { background: rgba(43, 61, 87, 0.92); border-color: rgba(76, 154, 255, 0.55); }
 .surface__btn:disabled { opacity: 0.5; }
 
-/* ── Everything else, deliberately quieter ─────────────────────────────── */
-.surface__secondary { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+/* ── Everything else, quieter ──────────────────────────────────────────────
+ * Hairlines rather than filled cards. Boxes here would make three more things
+ * compete with the one thing, which is the whole failure being fixed. */
+.surface__rest { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; flex-shrink: 0; }
 .surface__row {
   width: 100%;
   text-align: left;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 0.55rem 0.7rem;
+  background: none;
+  border: none;
+  border-top: 1px solid rgba(38, 49, 63, 0.75);
+  padding: 0.6rem 0.1rem;
   color: inherit;
   font: inherit;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.1rem;
 }
-.surface__rowtitle { font-size: 0.9rem; }
-.surface__rowreason { color: var(--muted); font-size: 0.75rem; }
+.surface__rowtitle { font-size: 0.88rem; }
+.surface__rowsay {
+  font-family: Newsreader, Georgia, "Times New Roman", serif;
+  font-size: 0.83rem;
+  color: var(--muted);
+}
 
-/* Held, not lost. */
-.surface__held { color: var(--muted); font-size: 0.72rem; text-align: center; }
-
+/* ── Foot ──────────────────────────────────────────────────────────────── */
 .surface__foot {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.35rem;
-  padding-top: 0.2rem;
+  gap: 0.3rem;
+  padding: 0.9rem 0 0.4rem;
+  flex-shrink: 0;
 }
+.surface__aside { color: var(--muted); font-size: 0.74rem; margin: 0; }
+/* Her admission of a gap is HER speaking, so it takes her face. */
+.surface__aside--her {
+  font-family: Newsreader, Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-size: 0.86rem;
+  opacity: 0.75;
+}
+.surface__aside--warn { color: #e0c97e; }
 .surface__all {
+  align-self: flex-start;
   background: none;
   border: none;
   color: var(--muted);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   text-decoration: underline;
   cursor: pointer;
-  padding: 0.4rem;
+  padding: 0.35rem 0 0;
 }
-.surface__stale { color: #e0c97e; font-size: 0.72rem; }
+
+/* ── Bare states ───────────────────────────────────────────────────────── */
+.surface--bare {
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  text-align: center;
+  padding: 2rem 1rem;
+}
+.surface--bare .surface__saylead,
+.surface--bare .surface__bareline,
+.surface--bare .surface__whyline,
+.surface--bare .surface__btn { position: relative; z-index: 1; }
+.surface__bareline {
+  font-family: Newsreader, Georgia, "Times New Roman", serif;
+  color: var(--muted);
+  font-size: 1.05rem;
+}

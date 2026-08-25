@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { gate, SECONDARY_MAX } = require('./attention');
+const { gate, sayLine, SECONDARY_MAX } = require('./attention');
 const { ACTIVITY } = require('./context-state');
 
 // A context of the shape resolveContext returns. Confidence is stated per-test
@@ -183,6 +183,66 @@ test('pure: a garbage context degrades to no filtering rather than throwing', ()
   const g = gate(null, [item()]);
   assert.equal(g.dropped.length, 0);
   assert.equal(g.primary.id, 'item-1');
+});
+
+// ── She says it, rather than listing fields ─────────────────────────────────
+
+const AUG25 = new Date('2026-08-25T09:00:00');
+
+test('an overdue task is said, not itemised', () => {
+  // The shipped screen read "Marked high priority · 1 day overdue · 34 other
+  // overdue" — the same facts, dumped.
+  const line = sayLine(item({ type: 'todo', meta: { dueDate: '2026-08-24', overdueCount: 35 } }), AUG25);
+  assert.equal(line, "It's a day over, and 34 others are behind it.");
+});
+
+test('the last one standing does not claim company', () => {
+  assert.equal(
+    sayLine(item({ type: 'todo', meta: { dueDate: '2026-08-18', overdueCount: 1 } }), AUG25),
+    "It's 7 days over.",
+  );
+});
+
+test('due-today and undated work read as themselves, not as overdue', () => {
+  assert.equal(sayLine(item({ type: 'todo', meta: { dueTodayCount: 1 } }), AUG25), 'Due today.');
+  assert.equal(sayLine(item({ type: 'todo', meta: { dueTodayCount: 4 } }), AUG25), 'Due today, along with 3 more.');
+  assert.equal(
+    sayLine(item({ type: 'todo', meta: { undatedHighCount: 1 } }), AUG25),
+    'High priority, but nothing has given it a date.',
+  );
+});
+
+test('an escalation says how long it has been ignored', () => {
+  const one = sayLine(item({ type: 'escalation', meta: { escalations: [{ ageDays: 9 }] } }), AUG25);
+  assert.equal(one, 'Raised 9 days ago, and still no reply from you.');
+  assert.match(sayLine(item({ type: 'escalation', meta: { escalations: [{ ageDays: 1 }] } }), AUG25), /yesterday/);
+  const many = sayLine(item({ type: 'escalation', meta: { escalations: [{}, {}], overflow: 3 } }), AUG25);
+  assert.equal(many, '5 escalations are waiting on a reply from you.');
+});
+
+test('⚠ it never invents — anything unphraseable falls back to the engine verbatim', () => {
+  const raw = 'Needs action · Unread · Recent';
+  assert.equal(sayLine(item({ type: 'email', reason: raw, meta: {} }), AUG25), raw);
+  // A todo with no structured meta must not be dressed up either.
+  assert.equal(sayLine(item({ type: 'todo', reason: raw, meta: {} }), AUG25), raw);
+  assert.equal(sayLine(item({ type: 'todo', reason: null, meta: {} }), AUG25), null);
+  assert.equal(sayLine(null, AUG25), null);
+});
+
+test('a malformed due date falls back rather than printing NaN', () => {
+  const raw = 'Overdue';
+  assert.equal(sayLine(item({ type: 'todo', reason: raw, meta: { dueDate: 'not-a-date', overdueCount: 3 } }), AUG25), raw);
+});
+
+test('what is spoken and what is read are the same composed line', () => {
+  const g = gate(ctx(ACTIVITY.STEADY), [item({ type: 'todo', title: 'Brief the team', meta: { dueDate: '2026-08-24', overdueCount: 2 } })], AUG25);
+  assert.equal(g.primary.say, "It's a day over, and 1 other is behind it.");
+  assert.equal(g.speech, "Brief the team. It's a day over, and 1 other is behind it.");
+});
+
+test('sayLine honours the `now` it is given', () => {
+  const t = item({ type: 'todo', meta: { dueDate: '2026-08-24', overdueCount: 1 } });
+  assert.notEqual(sayLine(t, AUG25), sayLine(t, new Date('2026-09-01T09:00:00')));
 });
 
 test('pure: the pool is not mutated', () => {

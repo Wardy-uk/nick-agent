@@ -57,6 +57,35 @@ const ACTIVITY = {
 // so "we could not see the calendar" is a fact the surface can state.
 const INPUT_BLOCKS = ['calendar', 'focusSession', 'queue', 'location', 'presence', 'rituals', 'workingDay'];
 
+// What a missing input MEANS, in SARA's words. The surface used to render this
+// as a badge reading "can't see 1", which is instrumentation: it told Nick a
+// number instead of a fact, in the most prominent position on the screen. She
+// says it instead, in a sentence, composed here so the phone and the kiosk
+// cannot word the same gap differently.
+const BLIND_PHRASES = {
+  calendar: 'see your diary',
+  location: 'tell where you are',
+  presence: "tell if you're at your desk",
+  queue: 'see your queue',
+  rituals: "tell if you've done your standup",
+  focusSession: "tell if you're mid-session",
+  workingDay: 'tell what kind of day this is',
+};
+
+/**
+ * "I can't tell where you are." — one sentence naming the gaps, or null when
+ * there are none. PURE, and exported so it pins on its own.
+ */
+function cannotSee(unknowns = []) {
+  const parts = (Array.isArray(unknowns) ? unknowns : [])
+    .map((k) => BLIND_PHRASES[k])
+    .filter(Boolean);
+  if (!parts.length) return null;
+  if (parts.length === 1) return `I can't ${parts[0]}.`;
+  if (parts.length === 2) return `I can't ${parts[0]} or ${parts[1]}.`;
+  return `I can't ${parts.slice(0, -1).join(', ')} or ${parts[parts.length - 1]}.`;
+}
+
 function isObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
@@ -235,6 +264,7 @@ function resolveContext(inputs = {}, now = new Date()) {
       place,
       quiet: false,
       confidence: deriveConfidence({ activity: ACTIVITY.UNKNOWN, knownCount: 0, contradictions: [] }),
+      cannotSee: cannotSee(unknowns),
       reasons: ['No input answered, so there is nothing to infer from.'],
       contradictions: [],
       unknowns,
@@ -355,6 +385,7 @@ function resolveContext(inputs = {}, now = new Date()) {
     place,
     quiet,
     confidence: deriveConfidence({ activity, knownCount, contradictions }),
+    cannotSee: cannotSee(unknowns),
     reasons,
     contradictions,
     unknowns,
@@ -365,6 +396,7 @@ function resolveContext(inputs = {}, now = new Date()) {
 
 module.exports = {
   resolveContext,
+  cannotSee,
   ACTIVITY,
   INPUT_BLOCKS,
   PRE_MEETING_MINUTES,
