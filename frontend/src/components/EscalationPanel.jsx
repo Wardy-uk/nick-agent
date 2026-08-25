@@ -19,8 +19,27 @@ function ageDays(iso) {
   return Math.floor((Date.now() - new Date(iso)) / 86400000);
 }
 
+function agoLabel(days) {
+  if (days == null) return null;
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  return `${days}d ago`;
+}
+
 function EscalationRow({ t, onPick }) {
   const age = ageDays(t.created);
+  // Two dates, because one of them was being read as the other. The badge used
+  // to say "9d old" from `created` alone, which is the age of the ESCALATION
+  // and says nothing about whether anything has happened on it — so a ticket
+  // replied to this morning still read as nine days of silence. `updated` was
+  // already fetched and mapped and simply never rendered.
+  //
+  // It is labelled "touched", not "replied", on purpose: Jira bumps `updated`
+  // for a NOVA triage comment, a round-robin assignment or the CSAT bot as
+  // readily as for a human, so calling it a reply would be a claim the field
+  // cannot support. The honest version of that answer needs the comments, and
+  // /active deliberately does not pay for them.
+  const touched = ageDays(t.updated);
   return (
     <div className="esc-row">
       <div className="esc-row-main">
@@ -49,7 +68,17 @@ function EscalationRow({ t, onPick }) {
         <span>{t.status || '—'}</span>
         <span>{t.priority || 'No priority'}</span>
         <span>{t.assignee || 'Unassigned'}</span>
-        {age != null && <span>{age}d old</span>}
+        {age != null && (
+          <span title="When this escalation was raised">raised {agoLabel(age)}</span>
+        )}
+        {touched != null && (
+          <span
+            className={touched >= 7 ? 'esc-row-touched esc-row-touched-cold' : 'esc-row-touched'}
+            title="Last change of any kind on the ticket — includes NOVA automation, not just a human reply"
+          >
+            touched {agoLabel(touched)}
+          </span>
+        )}
         <button type="button" className="esc-row-action" onClick={() => onPick(t.key)}>
           Escalate again
         </button>

@@ -109,14 +109,12 @@ function analysePerson({ name, team }) {
   // read `next-1-2-1-due` as "owed by", while `book()` was writing the booked
   // date into it — so a 1-2-1 sitting in the diary showed as high-severity
   // overdue the day after it happened.
-  const nextDue = fm['next-1-2-1-due'];
-  const booked = fm['1-2-1-booked'] || null;
+  // Detected, not declared: `effectiveCadenceFields` folds in the newest note
+  // the detector found, because the frontmatter stamp only catches up at 22:00.
+  const fields = require('./one-to-one-detect').effectiveCadenceFields(name, fm);
+  const { nextDue, booked } = fields;
   if (nextDue || booked) {
-    const s = require('./one-to-one-detect').cadenceState({
-      lastHeld: fm['last-1-2-1'] || null,
-      nextDue: nextDue || null,
-      booked,
-    }, today, { soonDays: 3 });
+    const s = require('./one-to-one-detect').cadenceState(fields, today, { soonDays: 3 });
 
     if (s.state === 'overdue') {
       issues.push({

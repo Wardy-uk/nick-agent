@@ -527,6 +527,39 @@ function cadenceState({ lastHeld, nextDue, booked, bookable = true } = {}, today
   return { state: 'ok', nextDue, daysUntil: delta };
 }
 
+/**
+ * Fold what the detector KNOWS into what the frontmatter SAYS, and hand back the
+ * three fields `cadenceState` takes.
+ *
+ * The stamp is the LAGGING copy: `syncPeopleNotes` only runs at 22:00, so for
+ * the whole of the day a 1-2-1 is written up, `last-1-2-1` still reads months
+ * old and every consumer says "been and gone with no note" about a note already
+ * on disk. Same rule as everywhere else — a 1-2-1 is detected, not declared —
+ * so the stamp is never the arbiter when the detector is ahead of it.
+ *
+ * `next-1-2-1-due` is recomputed the same way tonight's sync will, or fixing the
+ * "no note" reading would only trade it for a spurious "overdue by 98d": the due
+ * date is derived from `last-1-2-1`, so it is stale by exactly the same amount.
+ * Nothing is written here — this is a READ-time fold, and the sync still owns
+ * the vault.
+ */
+function effectiveCadenceFields(name, fm = {}) {
+  return foldDetected(fm, (getIndex().byPerson?.[name] || [])[0]?.date || null);
+}
+
+/**
+ * The fold itself — PURE, so it pins without a vault or a clock (the same split
+ * as `pi-health.assess()` and `cadenceState()`).
+ */
+function foldDetected(fm = {}, detected = null) {
+  const stamped = fm['last-1-2-1'] || null;
+  const booked = fm['1-2-1-booked'] || null;
+  if (!detected || (stamped && detected <= stamped)) {
+    return { lastHeld: stamped, nextDue: fm['next-1-2-1-due'] || null, booked };
+  }
+  return { lastHeld: detected, nextDue: addDays(detected, cadenceDays(fm.cadence)), booked };
+}
+
 /** Whole days from `from` to `to`. Both are YYYY-MM-DD; -ve means `to` is past. */
 function daysBetween(from, to) {
   const a = new Date(`${from}T12:00:00`); // midday, as addDays — no DST edge
@@ -630,6 +663,8 @@ module.exports = {
   CADENCES,
   cadenceDays,
   cadenceState,
+  effectiveCadenceFields,
+  foldDetected,
   scan,
   refresh,
   getIndex,

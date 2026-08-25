@@ -106,3 +106,48 @@ test('date maths does not drift across the BST boundary', () => {
   assert.equal(s.state, 'due-soon');
   assert.equal(s.daysUntil, 2);
 });
+
+// ---------------------------------------------------------------------------
+// foldDetected — the stamp is the LAGGING copy
+//
+// Reported live on 20 Aug 2026: Hope Goodall's card rendered the summary of the
+// 1-2-1 note dated that morning and, one line above it, "Met 2026-08-19 — no
+// note". Both halves read the same person from the same board: the summary came
+// from the detector, the badge from `last-1-2-1`, which was still 2026-04-30
+// because syncPeopleNotes only stamps at 22:00. Same rule as everywhere else in
+// NEURO — a 1-2-1 is DETECTED, not declared — so the stamp never wins over a
+// note the detector can actually see.
+// ---------------------------------------------------------------------------
+
+const { foldDetected } = require('./one-to-one-detect');
+
+test('a detected note newer than the stamp wins, and the due date follows it', () => {
+  const f = foldDetected(
+    { 'last-1-2-1': '2026-04-30', 'next-1-2-1-due': '2026-05-14', '1-2-1-booked': '2026-08-19', cadence: 'fortnightly' },
+    '2026-08-20',
+  );
+  assert.equal(f.lastHeld, '2026-08-20');
+  // Recomputed exactly as tonight's sync will. Reading the stale 2026-05-14
+  // would only trade "no note" for a spurious "overdue by 98d".
+  assert.equal(f.nextDue, '2026-09-03');
+});
+
+test('and that fold is what stops the card saying "no note" about a note on disk', () => {
+  const fm = { 'last-1-2-1': '2026-04-30', 'next-1-2-1-due': '2026-05-14', '1-2-1-booked': '2026-08-19', cadence: 'fortnightly' };
+  assert.equal(cadenceState(foldDetected(fm, null), '2026-08-20').state, 'unwritten');
+  assert.notEqual(cadenceState(foldDetected(fm, '2026-08-20'), '2026-08-20').state, 'unwritten');
+});
+
+test('the stamp is left alone when the detector has nothing newer', () => {
+  const fm = { 'last-1-2-1': '2026-08-04', 'next-1-2-1-due': '2026-08-18', cadence: 'fortnightly' };
+  assert.deepEqual(foldDetected(fm, '2026-07-01'), { lastHeld: '2026-08-04', nextDue: '2026-08-18', booked: null });
+  assert.deepEqual(foldDetected(fm, null), { lastHeld: '2026-08-04', nextDue: '2026-08-18', booked: null });
+  // Same date: the sync has already caught up, so nothing is recomputed.
+  assert.equal(foldDetected(fm, '2026-08-04').nextDue, '2026-08-18');
+});
+
+test('a detected note carries a person who was never stamped at all', () => {
+  const f = foldDetected({ cadence: 'weekly' }, '2026-08-20');
+  assert.equal(f.lastHeld, '2026-08-20');
+  assert.equal(f.nextDue, '2026-08-27');
+});

@@ -107,6 +107,13 @@
   color: var(--text-muted);
 }
 
+/* "touched" carries a cursor:help because the distinction between a change and
+   a reply lives in its tooltip. A week of no movement is the only state worth
+   colouring — anything shorter is a normal working ticket, and colouring those
+   would make the whole column red and mean nothing. */
+.esc-row-touched { cursor: help; }
+.esc-row-touched-cold { color: var(--warning); }
+
 .esc-tag-req { color: var(--danger); }
 .esc-tag-tier { color: var(--text-muted); }
 .esc-tag-urgency { color: var(--warning); cursor: help; }

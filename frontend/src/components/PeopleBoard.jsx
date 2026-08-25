@@ -35,7 +35,7 @@ const TEAMS = {
   ],
 };
 
-function getSaraStatus(person, vaultData, summaries) {
+function getSaraStatus(person, vaultData, summaries, detectedLast) {
   const fm = vaultData?.frontmatter || {};
   const empStatus = (fm['employment-status'] || '').toLowerCase();
   const status = (fm.status || '').toLowerCase();
@@ -43,7 +43,7 @@ function getSaraStatus(person, vaultData, summaries) {
   const tasks = summaries?.[person.name]?.tasks || [];
   const overdueTasks = tasks.filter(t => t.overdue);
 
-  const s121 = get121Status(fm);
+  const s121 = get121Status(fm, detectedLast);
 
   if (s121?.status === 'overdue') return { word: 'overdue', tone: 'danger', reason: s121.label };
   if (status === 'risk' || empStatus.includes('improvement')) return { word: 'slipping', tone: 'danger', reason: empStatus || 'Flagged at risk' };
@@ -58,9 +58,9 @@ function getSaraStatus(person, vaultData, summaries) {
   return { word: 'solid', tone: 'ok', reason: '' };
 }
 
-function buildTeamSaraLine(teams, peopleData, personSummaries) {
+function buildTeamSaraLine(teams, peopleData, personSummaries, oneToOnes) {
   const allPeople = Object.values(teams).flat();
-  const statuses = allPeople.map(p => getSaraStatus(p, peopleData[p.name], personSummaries));
+  const statuses = allPeople.map(p => getSaraStatus(p, peopleData[p.name], personSummaries, latest121(oneToOnes, p.name)));
   const overdue = statuses.filter(s => s.word === 'overdue' || s.word === 'slipping');
   const watching = statuses.filter(s => s.word === 'watch');
   const solid = statuses.filter(s => s.word === 'solid');
@@ -84,10 +84,24 @@ function buildTeamSaraLine(teams, peopleData, personSummaries) {
 // Mirrors one-to-one-detect.cadenceState() on the server. A 1-2-1 already in the
 // diary reads "Booked", never "Overdue": `1-2-1-booked` is what is in the
 // calendar, `next-1-2-1-due` is only ever when the next one is OWED.
-function get121Status(frontmatter) {
-  const due = frontmatter?.['next-1-2-1-due'];
+//
+// `detectedLast` is the date of the newest 1-2-1 note the DETECTOR found — the
+// same list `RecentOneToOnes` renders directly underneath this badge. It has to
+// be an input, because the frontmatter stamp only catches up when
+// syncPeopleNotes runs at 22:00: for the whole of the day a 1-2-1 is written up,
+// the card showed the note's summary and, one line above it, "no note". Same
+// rule as everywhere else — a 1-2-1 is DETECTED, not declared, so the stamp is
+// the lagging copy and never the arbiter. When the detector is ahead, the due
+// date is recomputed from it exactly as syncPeopleNotes will tonight; reading
+// the stale `next-1-2-1-due` would only trade "no note" for "overdue by 98d".
+function get121Status(frontmatter, detectedLast) {
+  const stamped = frontmatter?.['last-1-2-1'] || null;
+  const ahead = detectedLast && (!stamped || detectedLast > stamped);
+  const last = ahead ? detectedLast : stamped;
+  const due = ahead
+    ? addDays(last, cadenceDays(frontmatter?.cadence))
+    : frontmatter?.['next-1-2-1-due'];
   const booked = frontmatter?.['1-2-1-booked'];
-  const last = frontmatter?.['last-1-2-1'];
 
   const dayDelta = (from) => {
     const d = new Date(`${from}T12:00:00`);
@@ -259,6 +273,23 @@ function ApprovalPanel({ approvals, onRefresh }) {
 
 // 1-2-1 prep used to live here (PrepViewer + a Generate Prep button). NOVA owns
 // prep now — the card shows what actually happened instead of what was prepped.
+
+/** The date of the newest 1-2-1 the detector can prove happened, if any. */
+function latest121(oneToOnes, name) {
+  return oneToOnes?.[name]?.[0]?.date || null;
+}
+
+/** Days per cadence. Mirrors CADENCES in services/one-to-one-detect.js. */
+function cadenceDays(raw) {
+  return { weekly: 7, 'bi-weekly': 14, monthly: 28, 'bi-monthly': 56 }[normaliseCadence(raw)] || 14;
+}
+
+function addDays(iso, days) {
+  const d = new Date(`${iso}T12:00:00`); // midday: no DST edge on date-only maths
+  d.setDate(d.getDate() + days);
+  // Local getters, never toISOString() — see CLAUDE.md.
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 function formatDate(iso) {
   if (!iso) return '';
@@ -1083,13 +1114,13 @@ export default function PeopleBoard() {
     setRunning121(null);
   };
 
-  const saraLine = buildTeamSaraLine(TEAMS, peopleData, personSummaries);
+  const saraLine = buildTeamSaraLine(TEAMS, peopleData, personSummaries, oneToOnes);
 
   // Everyone the board is currently showing an overdue 1-2-1 badge for. Driving
   // this off the same get121Status the cards use keeps the button honest — it
   // books exactly who you can see is overdue, nobody else.
   const overdueNames = Object.values(TEAMS).flat()
-    .filter(p => get121Status(peopleData[p.name]?.frontmatter)?.status === 'overdue')
+    .filter(p => get121Status(peopleData[p.name]?.frontmatter, latest121(oneToOnes, p.name))?.status === 'overdue')
     .map(p => p.name);
 
   return (
@@ -1220,7 +1251,7 @@ export default function PeopleBoard() {
               const vaultData = peopleData[person.name];
               const tags = vaultData?.tags || [];
               const fm = vaultData?.frontmatter || {};
-              const sara = getSaraStatus(person, vaultData, personSummaries);
+              const sara = getSaraStatus(person, vaultData, personSummaries, latest121(oneToOnes, person.name));
               const isRunning = running121 === person.name;
 
               return (
@@ -1232,7 +1263,7 @@ export default function PeopleBoard() {
                   <span className="person-role">{person.role}</span>
                   {sara.reason && <span className="sara-status-reason">{sara.reason}</span>}
                   {(() => {
-                    const s121 = get121Status(fm);
+                    const s121 = get121Status(fm, latest121(oneToOnes, person.name));
                     if (!s121) return null;
                     return (
                       <span className={`person-121-status person-121-${s121.status}`}>

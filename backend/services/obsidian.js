@@ -1299,23 +1299,22 @@ function getUpcoming121s(daysAhead = 2) {
     const bookable = String(fm.archived || '').toLowerCase() !== 'true' &&
       CADENCES.some(c => c.match.test(cadence));
 
-    const s = cadenceState({
-      lastHeld: fm['last-1-2-1'] || null,
-      nextDue: fm['next-1-2-1-due'] || null,
-      booked: fm['1-2-1-booked'] || null,
-      bookable,
-    }, null, { soonDays: daysAhead });
+    const name = file.replace('.md', '');
+    // Detected, not declared: the frontmatter stamp only catches up at 22:00, so
+    // reading it alone nags Nick to write up a note that is already on disk.
+    const fields = require('./one-to-one-detect').effectiveCadenceFields(name, fm);
+    const s = cadenceState({ ...fields, bookable }, null, { soonDays: daysAhead });
 
     if (s.state === 'ok' || s.state === 'booked') continue;
     upcoming.push({
-      name: file.replace('.md', ''),
+      name,
       state: s.state,
       dueDate: s.nextDue || null,
       bookedDate: s.booked || null,
       daysUntil: s.daysUntil !== undefined ? s.daysUntil : -(s.daysOverdue ?? s.daysSince ?? 0),
       overdue: s.state === 'overdue',
       unwritten: s.state === 'unwritten',
-      lastMeeting: fm['last-1-2-1'] || null,
+      lastMeeting: fields.lastHeld,
     });
   }
   return upcoming.sort((a, b) => a.daysUntil - b.daysUntil);
