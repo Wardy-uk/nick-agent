@@ -50,6 +50,10 @@ const { resolveContext, ACTIVITY } = require('./context-state');
 
 const SECONDARY_MAX = 3;
 
+// How old a phone reading may be before it stops being "where Nick is". The same
+// bar `stress-score` applies to HRV, deliberately reused rather than re-picked.
+const PHONE_STALE_HOURS = 6;
+
 // Item types that ARE the queue catching fire, for the firefighting re-rank.
 const QUEUE_TYPES = new Set(['escalation', 'nova-flag', 'novaFlag']);
 
@@ -424,12 +428,31 @@ async function gather(now = new Date()) {
       inputs.presence = { known: false };
     } else {
       phone = await ha.getPhoneStatus();
+      // ⚠ STALENESS IS THE WHOLE GAME HERE. `/api/states` serves the last known
+      // value identically whether it landed a second ago or a month ago, and the
+      // Companion app stopped reporting on 22 July 2026 — so HA answered "Office"
+      // with a full GPS fix that was 33 DAYS OLD, and the first version of this
+      // read it as where Nick was standing. A frozen source that still answers is
+      // worse than one that fails, because nothing looks wrong.
+      //
+      // Six hours is `stress-score`'s bar for the same judgement ("no HRV reading
+      // in 6h → stale") rather than a fresh number. Past it the input is UNKNOWN,
+      // not false: we do not know where he is, which is a different claim from
+      // knowing he is out.
+      const stale = phone && Number.isFinite(phone.presenceAgeHours) && phone.presenceAgeHours > PHONE_STALE_HOURS;
+      if (stale) phone = { ...phone, presence: null, geocodedLocation: null, _stale: true };
+
       // `null` presence is unknown, never "not present" — an unreachable HA
       // must not read as Nick having left the building.
       inputs.presence = phone && phone.presence
         ? { known: true, present: phone.presence === 'home' }
         : { known: false };
-      if (!phone || !phone.presence) gaps.push({ input: 'presence', why: 'no presence entity reported' });
+      if (stale) {
+        const days = Math.round(phone.presenceAgeHours / 24);
+        gaps.push({ input: 'presence', why: `Home Assistant's phone data is ${days} day${days === 1 ? '' : 's'} stale — the Companion app has stopped reporting` });
+      } else if (!phone || !phone.presence) {
+        gaps.push({ input: 'presence', why: 'no presence entity reported' });
+      }
     }
   } catch (e) {
     gaps.push({ input: 'presence', why: e.message });
@@ -452,6 +475,8 @@ async function gather(now = new Date()) {
     gaps.push({ input: 'location', why: e.message });
   }
 
+  // The HA fallback inherits the same freshness rule by construction: a stale
+  // `phone` has had its presence nulled above, so this cannot fire on it.
   if (!inputs.location.known && phone && phone.presence) {
     // HA's `person` entity is home / not_home / a zone name. A zone name is a
     // real place; `not_home` is only ever the absence of one, so it maps to

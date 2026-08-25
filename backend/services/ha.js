@@ -53,6 +53,21 @@ function pick(states, entityId) {
   return e ? e.state : null;
 }
 
+/**
+ * When HA last heard from an entity, as an ISO string, or null.
+ *
+ * ⚠ Load-bearing. A state in `/api/states` is the LAST KNOWN value, not a
+ * current one, and HA serves it identically whether it arrived a second ago or
+ * a month ago. The Companion app stopped reporting on 22 July 2026 and every
+ * `nicks_iphone` entity has sat frozen since — so `person.nick` still answered
+ * "Office" with a full GPS fix, 33 days out of date, and anything reading it
+ * without this timestamp treats a month-old position as where Nick is standing.
+ */
+function pickUpdatedAt(states, entityId) {
+  const e = states.find(s => s.entity_id === entityId);
+  return e ? (e.last_updated || e.last_changed || null) : null;
+}
+
 function isUsable(v) {
   return v && !['unavailable', 'unknown', 'none'].includes(String(v).toLowerCase());
 }
@@ -72,8 +87,17 @@ async function getPhoneStatus() {
   const connection = pick(states, `sensor.${PHONE_PREFIX}_connection_type`);
   const geocoded = pick(states, `sensor.${PHONE_PREFIX}_geocoded_location`);
 
+  // How old the presence reading is. Reported, never enforced here — what
+  // counts as "too old" depends on the question being asked, so the caller
+  // decides. This module's job is to stop pretending it doesn't matter.
+  const presenceUpdatedAt = pickUpdatedAt(states, `person.${PERSON_ID}`)
+    || pickUpdatedAt(states, `device_tracker.${PHONE_PREFIX}`);
+  const ageMs = presenceUpdatedAt ? Date.now() - new Date(presenceUpdatedAt).getTime() : null;
+
   return {
     presence: isUsable(presence) ? presence : null,
+    presenceUpdatedAt,
+    presenceAgeHours: Number.isFinite(ageMs) ? Math.round((ageMs / 3600000) * 10) / 10 : null,
     batteryLevel: isUsable(battery) ? Number(battery) : null,
     batteryState: isUsable(batteryState) ? batteryState : null,
     ssid: isUsable(ssid) ? ssid : null,
