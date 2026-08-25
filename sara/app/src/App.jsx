@@ -4,6 +4,7 @@ import { usePushSubscription } from './hooks/usePushSubscription';
 import { useWakeLock } from './hooks/useWakeLock';
 import LockScreen from './components/LockScreen';
 import NotificationActionCard from './components/NotificationActionCard';
+import Surface from './views/Surface';
 import Capture from './views/Capture';
 import Focus from './views/Focus';
 import Today from './views/Today';
@@ -18,10 +19,21 @@ import { readRuntime } from './runtime';
 import './App.css';
 
 // SARA mobile app shell.
-// Five areas, nothing else — see the "NEURO & SARA — What They Are" vault note.
-// This is SARA on the go; the heavier command-centre lives on the kiosk/desktop SARA surfaces.
+//
+// SARA is the J.A.R.V.I.S. layer — voice, ears and eyes — and should NOT be a
+// menu (Nick, 25 Aug 2026). So the tab strip is no longer how you navigate: the
+// default and root view is Surface, which renders GET /api/attention and shows
+// the ONE thing the brain decided is worth his attention, in the context it
+// decided it in. The views below are still all here, but they are places the
+// brain routes TO, not a list to go shopping in.
+//
+// ⚠ The strip is HIDDEN, not deleted, and "Show me everything" reveals it. Nick's
+// failure mode is avoidance, and a thing he cannot find is worse than a menu he
+// does not need — an ambient surface that is sometimes wrong must always have a
+// way round it, or being wrong once costs the whole feature.
 const TABS = [
-  // Today is the default: the one to open when you don't know where to start.
+  // The root. Everything below is reachable from here, by SARA's choice or Nick's.
+  { id: 'surface', label: 'SARA', icon: '◉', Component: Surface },
   { id: 'today', label: 'Today', icon: '◐', Component: Today },
   { id: 'focus', label: 'Focus', icon: '🎯', Component: Focus },
   { id: 'tasks', label: 'Tasks', icon: '✓', Component: Tasks },
@@ -87,7 +99,10 @@ function clearLaunchIntentFromUrl() {
 export default function App() {
   const runtime = readRuntime();
   const [authed, setAuthed] = useState(() => !!getPin());
-  const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'today');
+  const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'surface');
+  // The strip is revealed on request, and stays revealed while Nick is off the
+  // Surface — otherwise the one screen with no menu is also the only way back.
+  const [navOpen, setNavOpen] = useState(false);
   const [actionIntent, setActionIntent] = useState(() => readLaunchIntent());
   // Which ritual a notification meant, when it routed straight to a tab. The
   // resolved TAB is the same for standup and EOD ('standup'), so without this
@@ -139,6 +154,9 @@ export default function App() {
   function goTab(tab) {
     setActive(tab);
     setIntentKind(null);
+    // Landing back on the Surface puts the menu away again; it is meant to be
+    // an escape hatch, not a thing that creeps back into being the navigation.
+    if (tab === 'surface') setNavOpen(false);
   }
 
   async function refreshApp() {
@@ -158,9 +176,10 @@ export default function App() {
   // below a conditional return changes the hook count between renders, which
   // React rejects outright ("rendered more hooks than during the previous render").
   const ActiveView = useMemo(
-    () => TABS.find((t) => t.id === active)?.Component || Focus,
+    () => TABS.find((t) => t.id === active)?.Component || Surface,
     [active]
   );
+  const navVisible = navOpen || active !== 'surface';
 
   if (runtime.deploymentIssue) return <DeploymentGuard />;
 
@@ -219,10 +238,11 @@ export default function App() {
           intentKind={intentKind}
           onNavigate={goTab}
           onActionIntent={setActionIntent}
+          onShowAll={() => setNavOpen(true)}
         />
       </main>
 
-      <nav className="app__nav" aria-label="SARA sections">
+      <nav className="app__nav" aria-label="SARA sections" hidden={!navVisible}>
         {TABS.map((t) => (
           <button
             key={t.id}

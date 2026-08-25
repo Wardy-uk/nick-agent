@@ -82,10 +82,15 @@ body {
   background: var(--panel);
   padding-bottom: env(safe-area-inset-bottom);
 }
+/* `display:flex` above beats the plain `hidden` attribute, so the escape hatch
+   would render permanently open without this. */
+.app__nav[hidden] { display: none; }
 
-/* Nine tabs since #26. Nine flex:1 buttons on a 390px phone leave ~43px each,
-   and a wrapped label grows the whole nav bar rather than truncating one word.
-   Tighter padding + nowrap keeps every tab on one line. Reasoned from the
+/* Ten tabs since the Surface (25 Aug 2026) — but the strip is now HIDDEN by
+   default and only revealed by "Show me everything", so it is an escape hatch
+   rather than the navigation, and the per-tab width is no longer what the
+   layout lives or dies on. Ten flex:1 buttons on a 390px phone leave ~39px
+   each; tighter padding + nowrap keeps every tab on one line. Reasoned from the
    widths, not measured on the device — worth an eye on the phone. */
 .navbtn {
   flex: 1;

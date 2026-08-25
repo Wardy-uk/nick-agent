@@ -1,0 +1,162 @@
+/* Surface — SARA without a menu.
+ *
+ * The layout is the argument: ONE thing, large, with the frame it was decided
+ * in above it and everything else deliberately quieter underneath. If this ever
+ * starts to read as a list, the feature has drifted back into being a dashboard.
+ */
+
+.surface {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  min-height: 100%;
+}
+
+.surface--waiting {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 0.6rem;
+  padding: 2rem 1rem;
+}
+.surface__waiting { color: var(--muted); }
+.surface__error { color: var(--text); font-weight: 600; }
+.surface__errordetail { color: var(--muted); font-size: 0.8rem; word-break: break-word; }
+
+/* ── The frame ─────────────────────────────────────────────────────────────
+ * Small, tappable, and always showing confidence — a read that never admits
+ * doubt is one that stops being interrogated. */
+.surface__context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.surface__ctxlabel { font-weight: 600; font-size: 0.85rem; }
+.surface__ctxconf {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.surface__ctxconf--high { color: #7ee0a6; border-color: #2f5f45; }
+.surface__ctxconf--moderate { color: #e0c97e; border-color: #5f542f; }
+.surface__ctxconf--low { color: #e08b7e; border-color: #5f382f; }
+.surface__ctxplace { font-size: 0.72rem; color: var(--muted); }
+/* Deliberately visible rather than tucked away: "I could not look" must never
+   be mistakable for "there is nothing there". */
+.surface__ctxblind {
+  font-size: 0.68rem;
+  color: #e0c97e;
+  margin-left: auto;
+}
+
+.surface__detail {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.surface__summary { font-size: 0.9rem; }
+.surface__reason, .surface__rationale, .surface__gaps {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+.surface__contradiction { color: #e0c97e; font-size: 0.78rem; line-height: 1.45; }
+
+/* ── The one thing ─────────────────────────────────────────────────────────
+ * Given the room. This is the whole point of the screen. */
+.surface__primary {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 1.2rem 0.2rem;
+}
+.surface__title {
+  font-size: 1.6rem;
+  font-weight: 650;
+  line-height: 1.25;
+  margin: 0;
+}
+.surface__reasonline { color: var(--muted); font-size: 0.95rem; line-height: 1.5; }
+
+/* A context card is SARA describing the frame, not proposing work — so it is
+   quieter, and it carries no actions. */
+.surface__primary--context .surface__title,
+.surface__primary--empty .surface__title {
+  font-size: 1.3rem;
+  font-weight: 550;
+  color: var(--muted);
+}
+
+.surface__actions { display: flex; gap: 0.5rem; margin-top: 0.3rem; }
+.surface__btn {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 0.6rem 0.9rem;
+  font: inherit;
+  cursor: pointer;
+}
+.surface__btn--go { background: var(--accent-dim); border-color: var(--accent); }
+.surface__btn:disabled { opacity: 0.5; }
+
+/* ── Everything else, deliberately quieter ─────────────────────────────── */
+.surface__secondary { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.surface__row {
+  width: 100%;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.surface__rowtitle { font-size: 0.9rem; }
+.surface__rowreason { color: var(--muted); font-size: 0.75rem; }
+
+/* Held, not lost. */
+.surface__held { color: var(--muted); font-size: 0.72rem; text-align: center; }
+
+.surface__foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding-top: 0.2rem;
+}
+.surface__all {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0.4rem;
+}
+.surface__stale { color: #e0c97e; font-size: 0.72rem; }
