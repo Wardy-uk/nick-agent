@@ -9,12 +9,60 @@ const OT_DEVICE = process.env.OWNTRACKS_DEVICE || 'iphone';
 // Minimum dwell time to count as a meaningful location (minutes)
 const MIN_DWELL_MINUTES = 20;
 
+/**
+ * Is there ANY source of position, not just OwnTracks.
+ *
+ * ⚠ This guard is what kept the whole archive empty. It read
+ * `!!OWNTRACKS_RECORDER_URL` — the env var being SET, never the recorder
+ * answering — and `recordTodaysDwells()` returns immediately when it is false.
+ * The var was set to a port nothing has ever listened on, so the check passed,
+ * the fetch failed, `[]` came back, and 65 days of dwell caches were written
+ * holding nothing while `location_visits` stayed at zero rows. Same distinction
+ * as #65's "configured is not the same claim as works".
+ */
 function isConfigured() {
-  return !!(process.env.OWNTRACKS_RECORDER_URL);
+  if (process.env.OWNTRACKS_RECORDER_URL) return true;
+  try { return require('./ha').isConfigured(); } catch { return false; }
+}
+
+/** Which source last answered — so a visit records where it came from. */
+let _lastSource = null;
+function lastSource() { return _lastSource; }
+
+/**
+ * Today's position points, from whichever source has them.
+ *
+ * OwnTracks first (it is the higher-fidelity feed when it exists), Home
+ * Assistant second. The same live → fallback shape as `working-days`, and
+ * `lastSource()` always names which one answered rather than leaving the
+ * archive to assume.
+ *
+ * ⚠ An empty result from one source means "this source had nothing", NOT "Nick
+ * went nowhere" — which is exactly why it falls through rather than returning.
+ */
+async function getTodayPoints() {
+  const ot = await _getOwnTracksPoints();
+  if (ot.length) { _lastSource = 'owntracks'; return ot; }
+
+  try {
+    const ha = require('./ha');
+    if (ha.isConfigured()) {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      const points = await ha.getLocationPoints(start.toISOString(), now.toISOString());
+      if (points.length) { _lastSource = 'home-assistant'; return points; }
+    }
+  } catch (e) {
+    console.warn('[Location] HA fallback failed:', e.message);
+  }
+
+  _lastSource = null;
+  return [];
 }
 
 // Fetch today's location points from OwnTracks Recorder
-async function getTodayPoints() {
+async function _getOwnTracksPoints() {
+  if (!process.env.OWNTRACKS_RECORDER_URL) return [];
   try {
     const today = new Date();
     const dateStr = today.toISOString().split('T')[0].replace(/-/g, '/');
@@ -145,16 +193,26 @@ async function getCachedDwells() {
   const cacheKey = `location_dwells_${todayKey}`;
   const cacheTime = `location_dwells_time_${todayKey}`;
 
-  // Use cache if less than 30 minutes old
+  // Use cache if less than 30 minutes old.
+  //
+  // ⚠ An EMPTY result is never cached and a cached empty is never trusted. The
+  // cache exists to avoid repeat Nominatim calls, and an empty day makes no
+  // Nominatim calls at all — so caching one buys nothing and costs plenty:
+  // a transient source failure became a settled half-hour of "you went
+  // nowhere". That is how this table came to hold 65 consecutive days of `[]`
+  // with a fresh timestamp on each, which reads as evidence rather than as the
+  // absence of it.
   const lastFetch = parseInt(db.getState(cacheTime) || '0', 10);
   if (Date.now() - lastFetch < 30 * 60 * 1000) {
     try {
       const cached = db.getState(cacheKey);
-      if (cached) return JSON.parse(cached);
+      const parsed = cached ? JSON.parse(cached) : null;
+      if (Array.isArray(parsed) && parsed.length) return parsed;
     } catch {}
   }
 
   const dwells = await getTodayDwells();
+  if (!dwells.length) return dwells;
   db.setState(cacheKey, JSON.stringify(dwells));
   db.setState(cacheTime, String(Date.now()));
   return dwells;
@@ -209,6 +267,7 @@ async function getLocationContextBlock() {
 
 module.exports = {
   isConfigured,
+  lastSource,
   getTodayPoints,
   getTodayDwells,
   getCachedDwells,

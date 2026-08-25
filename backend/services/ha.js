@@ -106,6 +106,56 @@ async function getPhoneStatus() {
   };
 }
 
+/**
+ * Position history for the phone, as `{ lat, lon, tst }` points.
+ *
+ * The shape is OwnTracks' on purpose — `location.clusterPoints()` was written
+ * against the recorder's API and is good code that has simply never had data.
+ * Matching the shape means the clustering, the dwell rules and the whole
+ * archive downstream stay untouched: this is a new SOURCE, not a new pipeline.
+ *
+ * `tst` is epoch SECONDS, again matching OwnTracks — the caller multiplies by
+ * 1000 to build dates, so milliseconds here would produce dwells in the year
+ * 57000 rather than an obvious error.
+ *
+ * Returns [] on any failure. That is safe ONLY because the caller treats an
+ * empty result as "this source had nothing" and falls through, rather than as
+ * "Nick went nowhere" — see location.getTodayPoints.
+ */
+async function getLocationPoints(fromIso, toIso) {
+  if (!isConfigured()) return [];
+  const entity = `device_tracker.${PHONE_PREFIX}`;
+  const url = `${HA_URL}/api/history/period/${encodeURIComponent(fromIso)}`
+    + `?filter_entity_id=${encodeURIComponent(entity)}`
+    + (toIso ? `&end_time=${encodeURIComponent(toIso)}` : '');
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${HA_TOKEN}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) throw new Error(`HA history ${res.status}`);
+    const data = await res.json();
+    const series = Array.isArray(data) && data.length ? data[0] : [];
+    const points = [];
+    for (const row of series) {
+      const a = row && row.attributes;
+      if (!a || typeof a.latitude !== 'number' || typeof a.longitude !== 'number') continue;
+      // A fix wider than the clustering radius cannot say which place it was,
+      // and one bad reading drags a cluster's centre far enough to invent a
+      // visit that never happened. 500m is well outside the 200m cluster radius
+      // but still admits ordinary indoor/cell-tower fixes.
+      if (typeof a.gps_accuracy === 'number' && a.gps_accuracy > 500) continue;
+      const t = Date.parse(row.last_updated || row.last_changed || '');
+      if (!Number.isFinite(t)) continue;
+      points.push({ lat: a.latitude, lon: a.longitude, tst: Math.floor(t / 1000) });
+    }
+    return points;
+  } catch (e) {
+    console.warn('[HA] Location history fetch failed:', e.message);
+    return [];
+  }
+}
+
 // Markdown context block for Claude chat — mirrors location.getLocationContextBlock().
 async function getHaContextBlock() {
   if (!isConfigured()) return null;
@@ -144,5 +194,6 @@ module.exports = {
   getStates,
   getEntity,
   getPhoneStatus,
+  getLocationPoints,
   getHaContextBlock,
 };

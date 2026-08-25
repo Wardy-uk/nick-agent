@@ -54,7 +54,10 @@ async function recordTodaysDwells() {
       dwell.arrivalTime,
       dwell.departureTime,
       dwell.durationMinutes,
-      'owntracks',
+      // Which feed this visit actually came from. It was hardcoded 'owntracks'
+      // — harmless while nothing was ever recorded, and a lie the moment a
+      // second source exists.
+      location.lastSource() || 'unknown',
       placeId
     );
     recorded++;
