@@ -108,6 +108,32 @@ function sayLine(item, now = new Date()) {
     return fallback;
   }
 
+  if (item.type === 'meeting') {
+    // Recomputed from the START, not from the `minutesAway` the collector
+    // captured: that number was true when the pool was built, and a card that
+    // still says "in 10 minutes" four minutes later is quietly lying. Same rule
+    // as the navigation shortcut storing a start rather than a relative time.
+    const start = meta.start ? new Date(meta.start) : null;
+    if (!start || Number.isNaN(start.getTime())) return fallback;
+    const mins = Math.round((start.getTime() - now.getTime()) / 60000);
+    const where = meta.location ? `, in ${meta.location}` : '';
+    if (mins <= 0) return `It's started${where}.`;
+    if (mins === 1) return `Starting in a minute${where}.`;
+    if (mins < 60) return `In ${mins} minutes${where}.`;
+    const hrs = Math.round(mins / 60);
+    return hrs === 1 ? `In about an hour${where}.` : `In about ${hrs} hours${where}.`;
+  }
+
+  if (item.type === 'email') {
+    // Only the ACTION pile carries a sender. The delegate one does not, and its
+    // reason is already a sentence, so it falls through untouched.
+    const who = String(meta.from || '').split('<')[0].trim().split(/\s+/)[0];
+    if (!who) return fallback;
+    const count = Number(meta.count) || 1;
+    if (count === 1) return `From ${who}, and it needs an answer.`;
+    return `${count} need an answer — the top one is from ${who}.`;
+  }
+
   if (item.type === 'escalation') {
     const list = Array.isArray(meta.escalations) ? meta.escalations : [];
     if (list.length > 1 || Number(meta.overflow) > 0) {

@@ -220,6 +220,32 @@ test('an escalation says how long it has been ignored', () => {
   assert.equal(many, '5 escalations are waiting on a reply from you.');
 });
 
+test('a meeting is timed from its START, not from a stale captured count', () => {
+  // The collector's `minutesAway` was true when the pool was built. A card still
+  // reading "in 10 min" four minutes later is quietly lying, so it is recomputed.
+  const m = (start, over = {}) => item({ type: 'meeting', title: '1-2-1', meta: { start, ...over } });
+  assert.equal(sayLine(m('2026-08-25T09:10:00'), AUG25), 'In 10 minutes.');
+  assert.equal(sayLine(m('2026-08-25T09:10:00'), new Date('2026-08-25T09:06:00')), 'In 4 minutes.');
+  assert.equal(sayLine(m('2026-08-25T09:01:00'), AUG25), 'Starting in a minute.');
+  assert.equal(sayLine(m('2026-08-25T08:55:00'), AUG25), "It's started.");
+  assert.equal(sayLine(m('2026-08-25T10:00:00'), AUG25), 'In about an hour.');
+  assert.equal(sayLine(m('2026-08-25T09:10:00', { location: 'the Boardroom' }), AUG25), 'In 10 minutes, in the Boardroom.');
+});
+
+test('emails name the sender; the delegate pile keeps its own sentence', () => {
+  assert.equal(
+    sayLine(item({ type: 'email', meta: { count: 1, from: 'Emma Weston <emma@nurtur.tech>' } }), AUG25),
+    'From Emma, and it needs an answer.',
+  );
+  assert.equal(
+    sayLine(item({ type: 'email', meta: { count: 6, from: 'Emma Weston' } }), AUG25),
+    '6 need an answer — the top one is from Emma.',
+  );
+  // No sender = the delegate variant, whose reason is already prose.
+  const delegate = 'These are answerable by someone else';
+  assert.equal(sayLine(item({ type: 'email', reason: delegate, meta: { count: 3 } }), AUG25), delegate);
+});
+
 test('⚠ it never invents — anything unphraseable falls back to the engine verbatim', () => {
   const raw = 'Needs action · Unread · Recent';
   assert.equal(sayLine(item({ type: 'email', reason: raw, meta: {} }), AUG25), raw);
