@@ -724,7 +724,17 @@ async function _runWithTools(systemPrompt, messages, mode) {
     { maxTokens: policy.maxTokens, maxRounds: 5 }
   );
 
-  try { require('./ai-routing').recordUsage(result.usage); } catch {}
+  // Meta matters as much as the tokens: this turn bypasses the routing tiers,
+  // so without it the cost ledger records the single most expensive thing NEURO
+  // does — a 5-round tool conversation — against no task and no model, and it
+  // cannot be attributed or priced from the table if the vendor cost is absent.
+  try {
+    require('./ai-routing').recordUsage(result.usage, {
+      provider: picked.name,
+      model: result.model || null,
+      taskType: 'chat_tools',
+    });
+  } catch {}
   // This turn never touched the routing tiers, so it has to report its own
   // outcome too — otherwise the provider mix shows only background tasks and
   // says nothing about the chat Nick actually watches.

@@ -236,7 +236,7 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
     if (message?.content) text = text ? `${text}\n${message.content}` : message.content;
 
     const calls = message?.tool_calls || [];
-    if (!calls.length) return { text, usage, toolCalls };
+    if (!calls.length) return { text, usage, toolCalls, model };
 
     convo.push(message);
 
@@ -266,7 +266,7 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
   }
 
   console.warn(`[OpenRouter] Tool loop hit maxRounds (${maxRounds}) — returning partial reply`);
-  return { text, usage, toolCalls, truncated: true };
+  return { text, usage, toolCalls, truncated: true, model };
 }
 
 module.exports = { isConfigured, chat, generate, streamChat, chatWithTools };

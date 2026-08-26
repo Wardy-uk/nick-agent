@@ -462,7 +462,13 @@ async function _turn(session) {
       );
       reply = result.text || '';
       session.degraded = false;
-      try { aiRouting.recordUsage(result.usage); } catch {}
+      try {
+        aiRouting.recordUsage(result.usage, {
+          provider: picked.name,
+          model: result.model || null,
+          taskType: `${session.kind || 'standup'}_tools`,
+        });
+      } catch {}
     } catch (e) {
       console.warn(`[StandupSession] Tool path (${picked.name}) failed, degrading:`, e.message);
       session.degradedReason = e.message.slice(0, 120);
