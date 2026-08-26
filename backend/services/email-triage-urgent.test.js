@@ -142,6 +142,164 @@ test('the fingerprint is order-independent — mail is a set, not a sequence', (
   assert.notEqual(fp([{ id: 'a' }]), fp([{ id: 'a' }, { id: 'c' }]));
 });
 
+// ── Every fetched email reaches the model ──────────────────────────────────
+
+function inbox(n) {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `mail-${i}`,
+    subject: `Subject ${i}`,
+    from: `Sender ${i}`,
+    fromEmail: `s${i}@example.com`,
+    preview: 'Some ordinary body text with nothing special in it.',
+    received: new Date().toISOString(),
+    isRead: true,
+  }));
+}
+
+// We fetch 40 and the model only ever saw the first 20; the other 20 fell
+// through to aiCategory 'FYI', indistinguishable from a real verdict.
+test('all 40 fetched emails reach the model, in batches', async () => {
+  const microsoft = require('./microsoft');
+  const aiProvider = require('./ai-provider');
+  const realFetch = microsoft.fetchRecentEmails;
+  const realAuth = microsoft.isAuthenticated;
+  const realTriage = aiProvider.triageEmails;
+
+  const batchSizes = [];
+  microsoft.isAuthenticated = async () => true;
+  microsoft.fetchRecentEmails = async () => inbox(40);
+  aiProvider.triageEmails = async (prompt) => {
+    const n = (prompt.match(/^\[\d+\] From:/gm) || []).length;
+    batchSizes.push(n);
+    return {
+      provider: 'stub',
+      text: JSON.stringify(Array.from({ length: n }, (_, i) => ({ index: i, category: 'ACTION', reason: 'stub' }))),
+    };
+  };
+
+  try {
+    seed([]);
+    db.setState('email_triage_input', '');
+    db.setState('email_triage_feedback_rollup', '');
+    await emailTriage.runTriage({ force: true });
+
+    assert.deepEqual(batchSizes, [20, 20], 'two batches of 20, not one truncated call');
+    const stored = JSON.parse(db.getState('email_triage'));
+    assert.equal(stored.length, 40);
+    assert.equal(stored.filter(e => e.aiClassified).length, 40, 'every email got a model verdict');
+    // Batch-local indices must be mapped back, or batch 2's answers land on
+    // batch 1's emails — the silent way this could go wrong.
+    assert.equal(stored[39].aiCategory, 'ACTION');
+  } finally {
+    microsoft.fetchRecentEmails = realFetch;
+    microsoft.isAuthenticated = realAuth;
+    aiProvider.triageEmails = realTriage;
+  }
+});
+
+test('a failed batch costs only itself, and unanswered mail says so', async () => {
+  const microsoft = require('./microsoft');
+  const aiProvider = require('./ai-provider');
+  const realFetch = microsoft.fetchRecentEmails;
+  const realAuth = microsoft.isAuthenticated;
+  const realTriage = aiProvider.triageEmails;
+
+  let call = 0;
+  microsoft.isAuthenticated = async () => true;
+  microsoft.fetchRecentEmails = async () => inbox(40);
+  aiProvider.triageEmails = async (prompt) => {
+    if (++call === 1) throw new Error('rate limited');
+    const n = (prompt.match(/^\[\d+\] From:/gm) || []).length;
+    return {
+      provider: 'stub',
+      text: JSON.stringify(Array.from({ length: n }, (_, i) => ({ index: i, category: 'ACTION', reason: 'stub' }))),
+    };
+  };
+
+  try {
+    seed([]);
+    db.setState('email_triage_input', '');
+    await emailTriage.runTriage({ force: true });
+    const stored = JSON.parse(db.getState('email_triage'));
+    assert.equal(stored.filter(e => e.aiClassified).length, 20, 'the surviving batch still lands');
+    // The failed half must NOT claim a verdict it never got.
+    const unanswered = stored.filter(e => !e.aiClassified);
+    assert.equal(unanswered.length, 20);
+    assert.ok(unanswered.every(e => e.aiCategory === null), 'no answer is null, never "FYI"');
+  } finally {
+    microsoft.fetchRecentEmails = realFetch;
+    microsoft.isAuthenticated = realAuth;
+    aiProvider.triageEmails = realTriage;
+  }
+});
+
+// ── The store must not become the next pile ────────────────────────────────
+
+function daysAgo(n) {
+  return new Date(Date.now() - n * 86400000).toISOString();
+}
+
+test('a dismissed entry is compacted — the body is dead weight once it is gone', () => {
+  db.setState('email_triage_feedback_rollup', '');
+  emailTriage._internals.storeTriage([
+    email({ dismissed: true, dismissedAt: daysAgo(1), dismissReason: 'done' }),
+    email({ id: 'AAMk-2' }),
+  ]);
+
+  const [dismissed, live] = JSON.parse(db.getState('email_triage'));
+  assert.equal(dismissed.preview, undefined, 'a dismissed entry keeps no body');
+  assert.equal(dismissed.subject, undefined);
+  // What it MUST keep: the id (so the merge cannot resurrect it) and the
+  // fields the #70 feedback score reads.
+  assert.equal(dismissed.id, 'AAMk-1');
+  assert.equal(dismissed.dismissed, true);
+  assert.equal(dismissed.dismissReason, 'done');
+  assert.equal(dismissed.urgency, 'high');
+  assert.equal(dismissed.category, 'ACTION');
+  assert.equal(live.preview, 'Just to add to this —', 'an outstanding entry is untouched');
+});
+
+test('old dismissed entries are pruned, and their verdict survives them', () => {
+  db.setState('email_triage_feedback_rollup', '');
+  const retain = emailTriage._internals.DISMISSED_RETAIN_DAYS;
+  emailTriage._internals.storeTriage([
+    email({ id: 'old-1', dismissed: true, dismissedAt: daysAgo(retain + 1), dismissReason: 'not-relevant' }),
+    email({ id: 'old-2', dismissed: true, dismissedAt: daysAgo(retain + 1), dismissReason: 'done' }),
+    email({ id: 'recent', dismissed: true, dismissedAt: daysAgo(1), dismissReason: 'done' }),
+    email({ id: 'live' }),
+  ]);
+
+  const kept = JSON.parse(db.getState('email_triage')).map(e => e.id);
+  assert.deepEqual(kept, ['recent', 'live'], 'only the aged-out dismissals go');
+
+  // Pruning must cost history, not throw it away: all three judgements still
+  // count, or the classifier's score silently resets every week.
+  const fb = emailTriage.getDismissFeedback();
+  assert.equal(fb.judged, 3);
+  assert.equal(fb.notRelevant, 1);
+  assert.equal(fb.misrankRate, 33);
+});
+
+test('a dismissal with no timestamp is kept rather than aged by guesswork', () => {
+  db.setState('email_triage_feedback_rollup', '');
+  emailTriage._internals.storeTriage([
+    email({ id: 'undated', dismissed: true, dismissedAt: null, dismissReason: 'done' }),
+  ]);
+  assert.equal(JSON.parse(db.getState('email_triage')).length, 1);
+});
+
+test('clearing does not make the classifier forget it was ever corrected', () => {
+  db.setState('email_triage_feedback_rollup', '');
+  seed([
+    email({ dismissed: true, dismissedAt: daysAgo(1), dismissReason: 'not-relevant' }),
+    email({ id: 'AAMk-2' }),
+  ]);
+  emailTriage.clearDismissed();
+
+  assert.equal(JSON.parse(db.getState('email_triage')).length, 1, 'dismissed entries are gone');
+  assert.equal(emailTriage.getDismissFeedback().notRelevant, 1, 'the correction is not');
+});
+
 test('the chat context feed can tell "not looked yet" from "inbox clear"', () => {
   seed([]);
   db.setState('email_triage_time', '');
