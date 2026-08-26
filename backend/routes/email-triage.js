@@ -316,10 +316,12 @@ router.post('/triage/:emailId/reply', async (req, res) => {
   }
 });
 
-// POST /api/email/triage/run — trigger a fresh triage cycle
+// POST /api/email/triage/run — trigger a fresh triage cycle.
+// Forced: Nick pressed "Run Triage", and answering that with a cached result
+// because the mail happens to be unchanged is a button that appears broken.
 router.post('/triage/run', async (req, res) => {
   try {
-    const result = await emailTriage.runTriage();
+    const result = await emailTriage.runTriage({ force: true });
     res.json(result);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -364,8 +366,9 @@ router.post('/triage/clear', async (req, res) => {
     db.setState('email_triage', '[]');
     db.setState('email_triage_time', '0');
     console.log('[EmailTriage] All triage data cleared');
-    // Run fresh scan
-    const result = await emailTriage.runTriage();
+    // Forced — we just emptied the blob, so the unchanged-input check must not
+    // look at the mail, agree with itself and leave the panel blank.
+    const result = await emailTriage.runTriage({ force: true });
     res.json({ ok: true, cleared: true, ...result });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

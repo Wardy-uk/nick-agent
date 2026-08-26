@@ -691,8 +691,17 @@ function start() {
     });
   }, 30000);
 
-  // Email triage — run at 8am, 12pm, 5pm weekdays
-  cron.schedule('0 8,12,17 * * 1-5', () => {
+  // Email triage — every 30 minutes, 8am-6pm weekdays (26 Aug 2026).
+  //
+  // Was 8am/12pm/5pm, which left a 5-hour hole in the afternoon and a 15-hour
+  // one overnight; in practice the only reason it felt fresher than that is
+  // that the backend restarts several times a day. Measured before changing
+  // it: 120ms of CPU and ~2,250 tokens per run, 6.9s of it waiting on Graph
+  // and OpenRouter. CPU was never the constraint — the shared daily cloud
+  // budget is, which is why `runTriage` skips the model call when the mail is
+  // unchanged. Deliberately NOT overnight: mail arriving at 3am is not worth a
+  // token, and the 8am run covers it.
+  cron.schedule('*/30 8-18 * * 1-5', () => {
     require('./email-triage').runTriage().catch(e => {
       console.error('[Scheduler] Email triage failed:', e.message);
     });

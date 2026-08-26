@@ -77,6 +77,67 @@ test('the message names the sender off the triage record, not a DB column', () =
   assert.match(msg, /^2 urgent emails need a reply — including one from Phillipa Legg\.$/);
 });
 
+// The mailbox being unreadable must never be published as an empty inbox —
+// especially now the urgent banner is driven off this pass. `null` (could not
+// look) and `[]` (looked, nothing there) were one branch, and both wiped the
+// stored triage.
+test('an unreachable mailbox keeps the last known triage instead of clearing it', async () => {
+  seed([email()]);
+  const microsoft = require('./microsoft');
+  const realFetch = microsoft.fetchRecentEmails;
+  const realAuth = microsoft.isAuthenticated;
+  microsoft.isAuthenticated = async () => true;
+  microsoft.fetchRecentEmails = async () => null;
+  try {
+    const result = await emailTriage.runTriage();
+    assert.equal(result.ok, false);
+    assert.equal(result.stale, true);
+    assert.match(result.reason, /unreachable/);
+    assert.equal(emailTriage.getUrgentEmails().length, 1, 'the banner must not be silenced by a failed look');
+  } finally {
+    microsoft.fetchRecentEmails = realFetch;
+    microsoft.isAuthenticated = realAuth;
+  }
+});
+
+// A fully actioned inbox is the normal end of a good day. Gating the skip on
+// "something undismissed is stored" would pay for a full classification every
+// 30 minutes exactly when there is nothing to do.
+test('unchanged mail skips the model call, even with everything dismissed', async () => {
+  const microsoft = require('./microsoft');
+  const realFetch = microsoft.fetchRecentEmails;
+  const realAuth = microsoft.isAuthenticated;
+  microsoft.isAuthenticated = async () => true;
+  microsoft.fetchRecentEmails = async () => [{ id: 'AAMk-1' }, { id: 'AAMk-2' }];
+  // Stubbed, or the forced run below makes a real cloud call and spends the
+  // daily AI budget to prove a control-flow branch.
+  const aiProvider = require('./ai-provider');
+  const realTriage = aiProvider.triageEmails;
+  aiProvider.triageEmails = async () => ({ text: '[]', provider: 'stub' });
+  try {
+    seed([email({ dismissed: true }), email({ id: 'AAMk-2', dismissed: true })]);
+    // Fingerprint the same input the next run will see.
+    db.setState('email_triage_input', emailTriage._internals.inputFingerprint([{ id: 'AAMk-2' }, { id: 'AAMk-1' }]));
+
+    const result = await emailTriage.runTriage();
+    assert.equal(result.skipped, true, 'same mail must not be reclassified');
+    assert.equal(result.urgent, 0);
+
+    const forced = await emailTriage.runTriage({ force: true });
+    assert.notEqual(forced.skipped, true, 'force must actually re-run');
+  } finally {
+    microsoft.fetchRecentEmails = realFetch;
+    microsoft.isAuthenticated = realAuth;
+    aiProvider.triageEmails = realTriage;
+  }
+});
+
+test('the fingerprint is order-independent — mail is a set, not a sequence', () => {
+  const fp = emailTriage._internals.inputFingerprint;
+  assert.equal(fp([{ id: 'b' }, { id: 'a' }]), fp([{ id: 'a' }, { id: 'b' }]));
+  assert.notEqual(fp([{ id: 'a' }]), fp([{ id: 'a' }, { id: 'c' }]));
+});
+
 test('the chat context feed can tell "not looked yet" from "inbox clear"', () => {
   seed([]);
   db.setState('email_triage_time', '');
