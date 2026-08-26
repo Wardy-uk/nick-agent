@@ -121,7 +121,11 @@ test('unchanged mail skips the model call, even with everything dismissed', asyn
 
     const result = await emailTriage.runTriage();
     assert.equal(result.skipped, true, 'same mail must not be reclassified');
+    assert.equal(result.classified, 0, 'a skip classified nothing and must say so');
+    // Every branch counts what is OUTSTANDING, never what the pass looked at:
+    // both of these are dismissed, so there is nothing to report.
     assert.equal(result.urgent, 0);
+    assert.equal(result.count, 0);
 
     const forced = await emailTriage.runTriage({ force: true });
     assert.notEqual(forced.skipped, true, 'force must actually re-run');
