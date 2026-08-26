@@ -239,13 +239,110 @@ function _isOpenRouterAllowed(taskType) {
   return c.enabled && openrouterProvider.isConfigured();
 }
 
-function _recordOpenRouterUsage(usage) {
+/**
+ * Record a cloud call against the daily budget AND into the cost ledger.
+ *
+ * `meta` carries what pricing needs and the counter never kept: which model
+ * answered and which task asked. Without the model there is no price; without
+ * the task there is no answering "what is spending the money", which is the
+ * only question a cost figure is useful for.
+ */
+function _recordOpenRouterUsage(usage, meta = {}) {
   _resetIfNewDay();
   _usage.calls++;
   _usage.tokens += usage?.total_tokens || 0;
   const hk = _currentHourKey();
   _usage.hourlyEscalations.set(hk, (_usage.hourlyEscalations.get(hk) || 0) + 1);
   _saveUsage();
+
+  // Never let bookkeeping break a call — the answer has already been produced.
+  try {
+    const { resolveCost } = require('./ai-cost');
+    const provider = meta.provider || 'openrouter';
+    const model = meta.model || null;
+    const { costUsd, source } = resolveCost(usage, model, provider);
+    require('../db/database').recordAiCall({
+      provider,
+      model,
+      taskType: meta.taskType || null,
+      promptTokens: usage?.prompt_tokens || 0,
+      completionTokens: usage?.completion_tokens || 0,
+      costUsd,
+      costSource: source,
+    });
+  } catch (e) {
+    console.warn('[AIRouting] Cost ledger write failed:', e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// Cost
+// ═══════════════════════════════════════════════════════
+// The counter above answers "am I near the cap today". It cannot answer "what
+// did last week cost" or "what is spending it", because it is one number that
+// resets at midnight. The ledger (`ai_calls`) answers both.
+
+function _dayKeyAgo(days) {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().split('T')[0];
+}
+
+/**
+ * Spend today / 7d / 30d plus what is spending it.
+ *
+ * Two grouped queries, never the raw rows — this rides on `/api/status`, which
+ * is polled. Totals treat an unpriced call as MISSING, not free: `unpriced` is
+ * carried at every level so a figure that is not the whole story says so.
+ */
+function getCostSummary() {
+  try {
+    const db = require('../db/database');
+    const { PRICES_CHECKED, CURRENCY } = require('./ai-cost');
+    const days = db.getAiSpendByDay(_dayKeyAgo(30));
+    const today = _todayStr();
+    const since7 = _dayKeyAgo(7);
+
+    const fold = (rows) => rows.reduce((a, r) => ({
+      calls: a.calls + (r.calls || 0),
+      tokens: a.tokens + (r.tokens || 0),
+      costUsd: a.costUsd + (r.cost_usd || 0),
+      unpriced: a.unpriced + (r.unpriced || 0),
+    }), { calls: 0, tokens: 0, costUsd: 0, unpriced: 0 });
+
+    const round = (s) => ({ ...s, costUsd: Math.round(s.costUsd * 1e6) / 1e6 });
+
+    return {
+      currency: CURRENCY,
+      pricesCheckedOn: PRICES_CHECKED,
+      today: round(fold(days.filter(d => d.date_key === today))),
+      last7: round(fold(days.filter(d => d.date_key >= since7))),
+      last30: round(fold(days)),
+      daily: days.slice(0, 30).map(d => ({
+        date: d.date_key,
+        calls: d.calls,
+        tokens: d.tokens,
+        costUsd: d.cost_usd == null ? null : Math.round(d.cost_usd * 1e6) / 1e6,
+        unpriced: d.unpriced,
+      })),
+      // Where the money goes. Seven days rather than thirty: the useful
+      // question is which task is spending it NOW.
+      byTask: db.getAiSpendBy('task', since7)
+        .slice(0, 8)
+        .map(r => ({
+          task: r.key || 'unknown',
+          calls: r.calls,
+          tokens: r.tokens,
+          costUsd: r.cost_usd == null ? null : Math.round(r.cost_usd * 1e6) / 1e6,
+          unpriced: r.unpriced,
+        })),
+    };
+  } catch (e) {
+    // A ledger that cannot be read is NOT a zero spend — say so and let the
+    // panel render "couldn't read it" rather than a reassuring £0.00.
+    console.warn('[AIRouting] Cost summary failed:', e.message);
+    return { error: e.message };
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -538,7 +635,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
         attempted++;
         const result = await _runOpenRouter(taskType, payload, options);
         if (result.text && result.text.trim().length > 0) {
-          _recordOpenRouterUsage(result.usage);
+          _recordOpenRouterUsage(result.usage, { provider: 'openrouter', model: result.model || (process.env.OPENROUTER_MODEL || 'anthropic/claude-haiku-4.5'), taskType });
           console.log(`[AIRouting] ${taskType}: openrouter${attempted > 1 ? ' [fallback]' : ''}`);
           return { text: result.text, provider: 'openrouter', fallback: attempted > 1 , providerMs: Date.now() - attemptStart };
         }
@@ -550,7 +647,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
         attempted++;
         const result = await _runAnthropic(taskType, payload, options);
         if (result.text && result.text.trim().length > 0) {
-          _recordOpenRouterUsage(result.usage);
+          _recordOpenRouterUsage(result.usage, { provider: 'anthropic', model: result.model || (process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001'), taskType });
           console.log(`[AIRouting] ${taskType}: anthropic${attempted > 1 ? ' [fallback]' : ''}`);
           return { text: result.text, provider: 'anthropic', fallback: attempted > 1 , providerMs: Date.now() - attemptStart };
         }
@@ -562,7 +659,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
         attempted++;
         const result = await _runOpenAI(taskType, payload, options);
         if (result.text && result.text.trim().length > 0) {
-          _recordOpenRouterUsage(result.usage);
+          _recordOpenRouterUsage(result.usage, { provider: 'openai', model: result.model || (process.env.OPENAI_MODEL || 'gpt-4o-mini'), taskType });
           console.log(`[AIRouting] ${taskType}: openai${attempted > 1 ? ' [fallback]' : ''}`);
           return { text: result.text, provider: 'openai', fallback: attempted > 1 , providerMs: Date.now() - attemptStart };
         }
@@ -630,7 +727,7 @@ async function _runStreamingChatInner(systemPrompt, messages, res, options = {})
         attempted++;
         const result = await openrouterProvider.streamChat(systemPrompt, messages, res, options);
         if (result.fullText) {
-          _recordOpenRouterUsage(result.usage);
+          _recordOpenRouterUsage(result.usage, { provider: 'openrouter', model: result.model || (process.env.OPENROUTER_MODEL || 'anthropic/claude-haiku-4.5'), taskType });
           return { text: result.fullText, provider: 'openrouter', fallback: attempted > 1 };
         }
         continue;
@@ -640,7 +737,7 @@ async function _runStreamingChatInner(systemPrompt, messages, res, options = {})
         attempted++;
         const result = await anthropicProvider.streamChat(systemPrompt, messages, res, options);
         if (result.fullText) {
-          _recordOpenRouterUsage(result.usage);
+          _recordOpenRouterUsage(result.usage, { provider: 'anthropic', model: result.model || (process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001'), taskType });
           return { text: result.fullText, provider: 'anthropic', fallback: attempted > 1 };
         }
         continue;
@@ -650,7 +747,7 @@ async function _runStreamingChatInner(systemPrompt, messages, res, options = {})
         attempted++;
         const result = await openaiProvider.streamChat(systemPrompt, messages, res, options);
         if (result.fullText) {
-          _recordOpenRouterUsage(result.usage);
+          _recordOpenRouterUsage(result.usage, { provider: 'openai', model: result.model || (process.env.OPENAI_MODEL || 'gpt-4o-mini'), taskType });
           return { text: result.fullText, provider: 'openai', fallback: attempted > 1 };
         }
         continue;
@@ -801,6 +898,8 @@ function getStatus() {
     pi4Worker: pi4Worker.getStatus(),
     // What actually happened, as opposed to what is configured above.
     health: getHealth(),
+    // What it cost. The counters above are a cap check, not a bill.
+    cost: getCostSummary(),
     taskModels: TASK_MODELS,
     cloudPreferredTasks: [...CLOUD_PREFERRED_TASKS],
     backgroundTasks: [...BACKGROUND_TASKS],
@@ -815,6 +914,7 @@ module.exports = {
   runTask,
   runStreamingChat,
   getStatus,
+  getCostSummary,
   getHealth,
   checkOllama,
   getAIMode: () => _cfg().aiMode,

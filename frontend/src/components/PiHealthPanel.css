@@ -500,3 +500,92 @@
   .ph-gauges { grid-template-columns: repeat(2, 1fr); }
   .ph-focus-main { flex-direction: column; }
 }
+
+/* ---- AI spend ---- */
+.ph-cost-basis {
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  letter-spacing: 0;
+}
+
+.ph-cost-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ph-cost-cell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ph-cost-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.ph-cost-value {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ph-cost-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* Amber, and never folded into the total above it: an unpriced call is
+   missing from the figure rather than free. */
+.ph-cost-unpriced {
+  font-size: 10px;
+  color: #f59e0b;
+}
+
+.ph-cost-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ph-cost-task {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+.ph-cost-task-name {
+  flex: 1;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ph-cost-task-calls {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ph-cost-task-value {
+  min-width: 62px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ph-cost-unknown {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 6px 0;
+}

@@ -13,6 +13,24 @@ function fmtBytes(b) {
   return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)}${u[i]}`;
 }
 
+// USD, and it says so on the card. NOVA formats the same kind of figure with a
+// "£" over unconverted dollars, which is how a cost display quietly becomes
+// ~27% wrong; a pound number needs an FX source with a date on it.
+function fmtUsd(n) {
+  // Null is "we could not price this", not zero. Never render it as $0.00.
+  if (n == null) return '—';
+  if (n >= 1) return `$${n.toFixed(2)}`;
+  if (n >= 0.01) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(4)}`;
+}
+
+function fmtTokens(n) {
+  if (n == null) return '—';
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M tok`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k tok`;
+  return `${n} tok`;
+}
+
 function fmtDuration(sec) {
   if (sec == null) return '—';
   const d = Math.floor(sec / 86400);
@@ -572,6 +590,64 @@ export default function PiHealthPanel() {
               );
             })}
           </div>
+
+          {/* ---- SPEND: the counters above are a cap check, not a bill ---- */}
+          {ai.cost && (
+            <>
+              <div className="ph-sub-title">
+                Spend
+                <span className="ph-cost-basis">
+                  {ai.cost.currency} · prices checked {ai.cost.pricesCheckedOn}
+                </span>
+              </div>
+              {ai.cost.error ? (
+                // A ledger that could not be read is not a free day.
+                <div className="ph-cost-unknown">Cost ledger unreadable — {ai.cost.error}</div>
+              ) : (
+                <>
+                  <div className="ph-cost-row">
+                    {[
+                      { label: 'Today', v: ai.cost.today },
+                      { label: '7 days', v: ai.cost.last7 },
+                      { label: '30 days', v: ai.cost.last30 },
+                    ].map(({ label, v }) => (
+                      <div key={label} className="ph-cost-cell">
+                        <span className="ph-cost-label">{label}</span>
+                        <span className="ph-cost-value">{fmtUsd(v.costUsd)}</span>
+                        <span className="ph-cost-sub">
+                          {v.calls} call{v.calls === 1 ? '' : 's'} · {fmtTokens(v.tokens)}
+                        </span>
+                        {/* Never folded into the total — an unpriced call is
+                            missing from the figure, not free. */}
+                        {v.unpriced > 0 && (
+                          <span className="ph-cost-unpriced">
+                            +{v.unpriced} unpriced
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {ai.cost.byTask?.length > 0 && (
+                    <div className="ph-cost-tasks">
+                      {ai.cost.byTask.map(t => (
+                        <div key={t.task} className="ph-cost-task">
+                          <span className="ph-cost-task-name">{t.task}</span>
+                          <span className="ph-cost-task-calls">{t.calls}×</span>
+                          <span className="ph-cost-task-value">{fmtUsd(t.costUsd)}</span>
+                          {t.unpriced > 0 && <span className="ph-cost-unpriced">{t.unpriced} unpriced</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {ai.cost.last30.calls === 0 && (
+                    <div className="ph-cost-unknown">
+                      Nothing recorded yet — the ledger starts from the first cloud call after 26 Aug.
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
 
           {aiState.health.recent?.length > 0 && (
             <>

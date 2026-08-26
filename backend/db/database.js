@@ -603,6 +603,69 @@ function getRecentConversations(limit = 5) {
   return rows;
 }
 
+// ── AI cost ledger (26 Aug 2026) ────────────────────────────────────────────
+// Deliberately the SAME day boundary as `ai-routing`'s `_todayStr()` (UTC date)
+// rather than the local one used elsewhere. The panel shows the ledger's
+// "today" next to the budget counter's "today", and two definitions of the day
+// would have them disagree for an hour every evening — a discrepancy that
+// reads as a bug in the numbers themselves. Duplicated rather than imported
+// because ai-routing already requires this module.
+function aiLedgerDateKey() {
+  return new Date().toISOString().split('T')[0];
+}
+
+// One row per cloud call, cost frozen at write time — the same shape NOVA's
+// `agent_llm_calls` uses, so the two systems answer "what is this costing" the
+// same way. Local dates, never toISOString().
+function recordAiCall(call) {
+  run(`
+    INSERT INTO ai_calls
+      (date_key, provider, model, task_type, prompt_tokens, completion_tokens, cost_usd, cost_source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    aiLedgerDateKey(),
+    call.provider,
+    call.model || null,
+    call.taskType || null,
+    call.promptTokens || 0,
+    call.completionTokens || 0,
+    // Explicit null, never 0 — an unpriced call is not a free one.
+    call.costUsd == null ? null : call.costUsd,
+    call.costSource || null,
+  ]);
+}
+
+function getAiCallsSince(dateKey) {
+  return all('SELECT * FROM ai_calls WHERE date_key >= ? ORDER BY id DESC', [dateKey]);
+}
+
+function getAiSpendByDay(dateKey) {
+  return all(`
+    SELECT date_key,
+           COUNT(*) AS calls,
+           SUM(prompt_tokens + completion_tokens) AS tokens,
+           SUM(cost_usd) AS cost_usd,
+           SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS unpriced
+    FROM ai_calls WHERE date_key >= ?
+    GROUP BY date_key ORDER BY date_key DESC
+  `, [dateKey]);
+}
+
+function getAiSpendBy(column, dateKey) {
+  // Caller-supplied column, so it is whitelisted rather than interpolated.
+  const col = { task: 'task_type', model: 'model', provider: 'provider' }[column];
+  if (!col) throw new Error(`getAiSpendBy: unknown grouping "${column}"`);
+  return all(`
+    SELECT ${col} AS key,
+           COUNT(*) AS calls,
+           SUM(prompt_tokens + completion_tokens) AS tokens,
+           SUM(cost_usd) AS cost_usd,
+           SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS unpriced
+    FROM ai_calls WHERE date_key >= ?
+    GROUP BY ${col} ORDER BY cost_usd DESC
+  `, [dateKey]);
+}
+
 // Inbox item helpers RETIRED 26 Aug 2026 with `inbox-scanner.js`.
 //
 // The `inbox_items` table is left defined but is written by nothing: it was a
@@ -1317,6 +1380,10 @@ module.exports = {
   saveDailySummary,
   getDailySummaries,
   getTodayActivity,
+  recordAiCall,
+  getAiCallsSince,
+  getAiSpendByDay,
+  getAiSpendBy,
   saveEmbedding,
   getEmbedding,
   getEmbeddingChunkCount,

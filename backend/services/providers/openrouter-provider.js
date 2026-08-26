@@ -40,6 +40,9 @@ async function chat(systemPrompt, messages, options = {}) {
         ],
         temperature: options.temperature ?? 0.5,
         max_tokens: options.maxTokens || 512,
+        // Returns the real charged cost on `usage.cost`, which beats anything
+        // we could compute from a hand-maintained price table.
+        usage: { include: true },
       }),
       signal: controller.signal,
     });
@@ -51,9 +54,11 @@ async function chat(systemPrompt, messages, options = {}) {
 
     const data = await res.json();
     const text = data.choices?.[0]?.message?.content || '';
-    const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+    // Null rather than a zeroed object when the response carries no usage at
+    // all: "we were not told" must not become "it cost nothing".
+    const usage = data.usage || null;
 
-    return { text, usage };
+    return { text, usage, model };
   } finally {
     clearTimeout(timer);
   }
@@ -94,6 +99,13 @@ async function streamChat(systemPrompt, messages, res, options = {}) {
         temperature: options.temperature ?? 0.5,
         max_tokens: options.maxTokens || 1024,
         stream: true,
+        // A stream reports its usage in a final chunk, but ONLY if asked.
+        // Without this the function returned hardcoded zeros, so streaming chat
+        // — the biggest consumer, and OpenRouter-first by policy — recorded a
+        // call costing nothing and was invisible to the daily token cap too.
+        stream_options: { include_usage: true },
+        // Ask for the real charged cost rather than pricing it ourselves.
+        usage: { include: true },
       }),
       signal: controller.signal,
     });
@@ -105,6 +117,9 @@ async function streamChat(systemPrompt, messages, res, options = {}) {
 
     let fullText = '';
     let buffer = '';
+    // Stays null until the stream actually tells us. Null and "zero tokens" are
+    // different facts and the cost ledger depends on the difference.
+    let streamUsage = null;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
@@ -131,11 +146,14 @@ async function streamChat(systemPrompt, messages, res, options = {}) {
               res.write(`data: ${JSON.stringify({ type: 'text', content })}\n\n`);
             }
           }
+          // The usage chunk arrives at the END, with an empty `choices` array —
+          // it is not attached to a delta, so it has to be picked up here.
+          if (parsed.usage) streamUsage = parsed.usage;
         } catch {}
       }
     }
 
-    return { fullText, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
+    return { fullText, usage: streamUsage, model };
   } finally {
     clearTimeout(timer);
   }
@@ -168,7 +186,10 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
 
   const convo = [{ role: 'system', content: systemPrompt }, ...messages];
   const toolCalls = [];
-  const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  // A tools turn is several round-trips, so cost accumulates across them —
+  // reporting only the last round would under-count a 5-round conversation
+  // fivefold.
+  const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost: 0 };
   let text = '';
 
   for (let round = 0; round < maxRounds; round++) {
@@ -191,6 +212,7 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
           tools: openaiTools,
           temperature: options.temperature ?? 0.5,
           max_tokens: options.maxTokens || 1024,
+          usage: { include: true },
         }),
         signal: controller.signal,
       });
@@ -208,6 +230,7 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
       usage.prompt_tokens += data.usage.prompt_tokens || 0;
       usage.completion_tokens += data.usage.completion_tokens || 0;
       usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+      usage.cost += Number(data.usage.cost) || 0;
     }
 
     if (message?.content) text = text ? `${text}\n${message.content}` : message.content;

@@ -144,6 +144,28 @@ CREATE TABLE IF NOT EXISTS inbox_items (
 CREATE INDEX IF NOT EXISTS idx_inbox_dismissed ON inbox_items(dismissed);
 CREATE INDEX IF NOT EXISTS idx_inbox_email_id ON inbox_items(email_id);
 
+-- One row per cloud AI call (26 Aug 2026). Before this the only record was a
+-- single "tokens today" counter that reset at midnight, so "what did last week
+-- cost" and "which task is spending it" were unanswerable. Rows, not daily
+-- rollups: a few hundred a day is nothing, and the rollups are queries.
+-- cost_usd is NULL when the model is unpriced or the tokens were never
+-- reported -- never 0, which would read as free.
+CREATE TABLE IF NOT EXISTS ai_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date_key TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT,
+  task_type TEXT,
+  prompt_tokens INTEGER DEFAULT 0,
+  completion_tokens INTEGER DEFAULT 0,
+  cost_usd REAL,
+  cost_source TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_calls_date ON ai_calls(date_key);
+CREATE INDEX IF NOT EXISTS idx_ai_calls_task ON ai_calls(date_key, task_type);
+
 CREATE TABLE IF NOT EXISTS vault_embeddings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   relative_path TEXT NOT NULL,
