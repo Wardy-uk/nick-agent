@@ -411,8 +411,7 @@ ${queueSummary.at_risk_tickets.length > 0 ? '### At-Risk Tickets\n' + queueSumma
   }
 
   if (['inbox', 'general'].includes(intent)) try {
-    const scanner = require('./inbox-scanner');
-    const inbox = scanner.getFlaggedItems();
+    const inbox = require('./email-triage').getFlaggedItems();
     if (inbox.items.length > 0) {
       const highItems = inbox.items.filter(i => i.urgency === 'high');
       const medItems = inbox.items.filter(i => i.urgency === 'medium');

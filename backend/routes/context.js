@@ -34,8 +34,7 @@ router.get('/', (req, res) => {
 
   // Inbox triage
   try {
-    const scanner = require('../services/inbox-scanner');
-    const inbox = scanner.getFlaggedItems();
+    const inbox = require('../services/email-triage').getFlaggedItems();
     result.inbox = inbox.items.slice(0, 10);
   } catch (e) {
     result.inbox = [];

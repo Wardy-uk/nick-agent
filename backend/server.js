@@ -309,8 +309,9 @@ async function start() {
   const webpushService = require('./services/webpush');
   webpushService.init();
 
-  const inboxScanner = require('./services/inbox-scanner');
-  inboxScanner.start();
+  // inbox-scanner retired 26 Aug 2026 — it was a second, unreconciled triage
+  // over the same mailbox, and the pile it built is what SARA was counting.
+  // `email-triage` (scheduler-driven) is the only inbox scan now.
 
   scheduler.start();
 

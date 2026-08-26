@@ -153,6 +153,15 @@ async function runTriage() {
     db.setState('email_triage', JSON.stringify(updated));
     db.setState('email_triage_time', String(Date.now()));
 
+    // Raise/refresh/clear the urgent-email banner off the set just stored.
+    // The retired scanner used to own this; the nudge now fires from the same
+    // pass that produces the list it describes. Never allowed to fail triage.
+    try {
+      require('./nudges').triggerUrgentEmailNudge();
+    } catch (e) {
+      console.warn('[EmailTriage] Failed to sync urgent email nudge:', e.message);
+    }
+
     const urgentCount = classified.filter(e => e.lane === 'urgent').length;
     const replyCount = classified.filter(e => e.lane === 'reply').length;
     console.log(`[EmailTriage] Classified ${classified.length} emails, ${urgentCount} urgent, ${replyCount} need reply`);
@@ -205,6 +214,64 @@ function getTriageByCategory() {
   };
 }
 
+// The ONE definition of "someone is waiting on Nick today" (26 Aug 2026).
+//
+// This used to live in nudges.js, computed against a SECOND, independent scan:
+// `inbox-scanner.js` writing the `inbox_items` table. Nothing reconciled the
+// two. Dismissing in the panel writes here and never wrote there, no frontend
+// ever called the scanner's dismiss route, and the 24-hour purge was reachable
+// only from a manual endpoint — so that table was a write-only pile going back
+// twelve days, and the push notification counted it. Measured the morning it
+// was found: SARA said **37 urgent emails**, the panel showed 3, and all 114
+// rows in the table had `dismissed = 0`. Two scanners were also paying the AI
+// to classify the same mailbox on two different schedules.
+//
+// So the scanner is retired and this is the only store. The nudge, the chat
+// context and the panel now read one blob through one predicate: the count
+// that interrupts Nick and the list he opens cannot describe different mail.
+function getUrgentEmails() {
+  return getStoredTriage().filter(e => !e.dismissed && e.lane === 'urgent');
+}
+
+const URGENCY_RANK = { high: 0, medium: 1, low: 2 };
+
+/**
+ * Everything triage is still holding, worst first — the chat and SARA context
+ * feed. Replaces `inbox-scanner.getFlaggedItems()` and keeps its shape so the
+ * consumers did not have to learn a second vocabulary.
+ *
+ * `lastRun` is null when triage has never run, and is NOT the same claim as an
+ * empty list: "we have not looked" must stay distinguishable from "your inbox
+ * is clear", which is the whole lesson of the pile this replaces.
+ */
+function getFlaggedItems() {
+  const items = getStoredTriage()
+    .filter(e => !e.dismissed && e.lane !== 'ignore')
+    .map(e => ({
+      emailId: e.id,
+      subject: e.subject,
+      from: e.from,
+      fromEmail: e.fromEmail,
+      urgency: e.urgency,
+      category: e.category,
+      // The blob carries no model-written summary — the deterministic reason
+      // and the preview are what we actually have. Stating the preview as a
+      // summary would be inventing one.
+      summary: (e.preview || '').slice(0, 160),
+      reason: e.reason,
+      received: e.received,
+      isRead: !!e.isRead,
+      hasAttachments: !!e.hasAttachments,
+    }))
+    .sort((a, b) => (URGENCY_RANK[a.urgency] ?? 3) - (URGENCY_RANK[b.urgency] ?? 3));
+
+  const lastRun = db.getState('email_triage_time');
+  return {
+    items,
+    lastScan: lastRun ? new Date(Number(lastRun)).toISOString() : null,
+  };
+}
+
 // #70 — why it was dismissed, not just that it was.
 //
 // "Done" and "Not relevant" called the identical endpoint, so the distinction
@@ -230,6 +297,11 @@ function dismissEmail(emailId, reason = 'unspecified') {
     console.log(`[Triage] Misranked — "${(item?.subject || emailId).slice(0, 80)}" `
       + `was ${item?.urgency || '?'}/${item?.category || '?'} and Nick says not relevant`);
   }
+
+  // Clearing the last urgent email should silence the banner on the spot, not
+  // at the next triage run. Actioning mail and watching the count stay put is
+  // exactly the bug this whole change exists to fix.
+  try { require('./nudges').triggerUrgentEmailNudge(); } catch {}
 }
 
 /**
@@ -272,6 +344,8 @@ function clearDismissed() {
 module.exports = {
   runTriage,
   getTriageByCategory,
+  getUrgentEmails,
+  getFlaggedItems,
   // Read-only accessor. The reply route needs the cached subject/sender to
   // record a sent reply (#69) without paying for a live Graph fetch — and a
   // fetch that can fail must not be on the path of bookkeeping for mail that

@@ -118,6 +118,11 @@ CREATE TABLE IF NOT EXISTS activity_log (
 
 CREATE INDEX IF NOT EXISTS idx_activity_date ON activity_log(date_key, event_type);
 
+-- RETIRED 26 Aug 2026. Written by nothing since `inbox-scanner.js` was removed:
+-- it was a second inbox triage nothing reconciled with the one the panel shows,
+-- and with no dismiss path reaching it, it only grew. Inbox state now lives in
+-- `agent_state.email_triage`. Kept (empty) rather than dropped — the definition
+-- is harmless and the history is not worth a destructive migration.
 CREATE TABLE IF NOT EXISTS inbox_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email_id TEXT NOT NULL UNIQUE,

@@ -603,45 +603,14 @@ function getRecentConversations(limit = 5) {
   return rows;
 }
 
-// Inbox item helpers
-function upsertInboxItem(item) {
-  run(`
-    INSERT OR REPLACE INTO inbox_items
-      (email_id, subject, from_name, from_email, urgency, category, summary, reason, received, is_read, has_attachments, dismissed, dismissed_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT dismissed FROM inbox_items WHERE email_id = ?), 0), (SELECT dismissed_at FROM inbox_items WHERE email_id = ?), COALESCE((SELECT created_at FROM inbox_items WHERE email_id = ?), CURRENT_TIMESTAMP))
-  `, [
-    item.emailId, item.subject, item.from, item.fromEmail,
-    item.urgency, item.category, item.summary, item.reason,
-    item.received, item.isRead ? 1 : 0, item.hasAttachments ? 1 : 0,
-    item.emailId, item.emailId, item.emailId
-  ]);
-}
-
-// Every email we have already triaged, dismissed or not. The inbox scanner
-// uses this to avoid paying to re-analyse the same unread mail every 10
-// minutes — 32 unread emails were being re-triaged 6 times an hour.
-function getTriagedEmailIds() {
-  return all('SELECT email_id FROM inbox_items').map(r => r.email_id);
-}
-
-function getActiveInboxItems() {
-  return all(
-    'SELECT * FROM inbox_items WHERE dismissed = 0 ORDER BY CASE urgency WHEN \'high\' THEN 0 WHEN \'medium\' THEN 1 WHEN \'low\' THEN 2 END, created_at DESC'
-  );
-}
-
-function dismissInboxItem(emailId) {
-  run("UPDATE inbox_items SET dismissed = 1, dismissed_at = datetime('now') WHERE email_id = ?", [emailId]);
-}
-
-function cleanupOldDismissed(daysOld = 7) {
-  run(`DELETE FROM inbox_items WHERE dismissed = 1 AND dismissed_at < datetime('now', '-${daysOld} days')`);
-}
-
-function clearStaleInboxItems() {
-  // Remove non-dismissed items older than 24 hours (they'll be re-scanned if still relevant)
-  run("DELETE FROM inbox_items WHERE dismissed = 0 AND created_at < datetime('now', '-1 day')");
-}
+// Inbox item helpers RETIRED 26 Aug 2026 with `inbox-scanner.js`.
+//
+// The `inbox_items` table is left defined but is written by nothing: it was a
+// second triage store that nothing reconciled with the one the panel renders,
+// and because no frontend ever called its dismiss route it only ever grew. The
+// urgent-email push notification counted it — 37 against a panel showing 3.
+// Inbox state lives in `agent_state.email_triage`, and `email-triage.js` is the
+// only thing that reads or writes it. Do not resurrect these.
 
 // Embedding helpers — multi-chunk: each file can have multiple chunks
 function saveEmbedding(relativePath, contentHash, embedding, chunkText, fileModified, chunkIndex = 0) {
@@ -1348,12 +1317,6 @@ module.exports = {
   saveDailySummary,
   getDailySummaries,
   getTodayActivity,
-  upsertInboxItem,
-  getActiveInboxItems,
-  getTriagedEmailIds,
-  dismissInboxItem,
-  cleanupOldDismissed,
-  clearStaleInboxItems,
   saveEmbedding,
   getEmbedding,
   getEmbeddingChunkCount,

@@ -55,28 +55,11 @@ router.get('/calendar', async (req, res) => {
   }
 });
 
-// GET /api/microsoft/inbox — flagged items from inbox scanner
-router.get('/inbox', (req, res) => {
-  const scanner = require('../services/inbox-scanner');
-  res.json(scanner.getFlaggedItems());
-});
-
-// POST /api/microsoft/inbox/scan — trigger manual scan
-router.post('/inbox/scan', async (req, res) => {
-  const scanner = require('../services/inbox-scanner');
-  scanner.scanInbox(); // fire and forget
-  res.json({ success: true, message: 'Scan started' });
-});
-
-// POST /api/microsoft/inbox/dismiss — dismiss a single inbox item
-router.post('/inbox/dismiss', (req, res) => {
-  const { emailId } = req.body;
-  if (!emailId) return res.status(400).json({ error: 'emailId required' });
-  const scanner = require('../services/inbox-scanner');
-  scanner.dismissItem(emailId);
-  try { require('../services/activity').trackNudgeDismiss('inbox'); } catch {}
-  res.json({ success: true });
-});
+// The three /inbox routes here (list, scan, dismiss) were removed on 26 Aug
+// 2026 with the inbox-scanner they served. No frontend had ever called any of
+// them — which is why nothing could empty the table they wrote to, and why the
+// urgent-email push spent twelve days counting mail Nick had already actioned.
+// Inbox triage is `/api/email/triage/*` and nothing else.
 
 // GET /api/microsoft/planner/tasks — fetch Planner tasks
 router.get('/planner/tasks', async (req, res) => {

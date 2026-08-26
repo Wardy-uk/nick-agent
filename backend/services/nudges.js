@@ -351,21 +351,18 @@ function buildEscalationMessage(items) {
     : `${n} escalations waiting on you — oldest is ${oldest.key}${age}.`;
 }
 
-// Only the lanes that mean "someone is waiting on Nick today"
-const URGENT_EMAIL_CATEGORIES = ['action-required', 'decision-needed', 'escalation'];
-
+// Asked, never re-derived: `email-triage` owns what "urgent" means, the same
+// way `action-presenter` owns what "leaves the building" means. This banner and
+// the list Nick opens must be the same mail — they were not, and the count on
+// the notification ran twelve days ahead of the panel (26 Aug 2026).
 function getUrgentEmails() {
-  try {
-    return db.getActiveInboxItems().filter(e =>
-      e.urgency === 'high' && URGENT_EMAIL_CATEGORIES.includes((e.category || '').toLowerCase())
-    );
-  } catch { return []; }
+  try { return require('./email-triage').getUrgentEmails(); } catch { return []; }
 }
 
 function buildEmailMessage(items) {
   if (!items || items.length === 0) return null;
-  const [first] = items; // getActiveInboxItems() sorts urgent first
-  const from = first.from_name || first.from_email;
+  const [first] = items;
+  const from = first.from || first.fromEmail;
   const n = items.length;
   if (n === 1) {
     return from ? `1 urgent email needs a reply — from ${from}.` : '1 urgent email needs a reply.';
@@ -725,6 +722,10 @@ module.exports = {
   NUDGE_TYPES,
   // Exported for tests — the tone ladder is a design decision worth pinning.
   getNagMessage,
+  // Exported so a test can prove this banner and the Inbox panel describe the
+  // same mail. They did not, for twelve days (26 Aug 2026).
+  getUrgentEmails,
+  buildEmailMessage,
   triggerStandupNudge,
   triggerTodoNudge,
   triggerEscalationNudge,

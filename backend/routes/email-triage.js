@@ -362,9 +362,6 @@ router.post('/triage/clear', async (req, res) => {
     emailTriage.clearDismissed();
     const db = require('../db/database');
     db.setState('email_triage', '[]');
-    db.clearStaleInboxItems();
-    // Also clear inbox scanner items
-    db.getDb().prepare('DELETE FROM inbox_items').run();
     db.setState('email_triage_time', '0');
     console.log('[EmailTriage] All triage data cleared');
     // Run fresh scan
