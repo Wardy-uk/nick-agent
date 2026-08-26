@@ -71,7 +71,9 @@ test('the score counts only what Nick has judged', () => {
   assert.equal(fb.judged, 3, 'the untouched one and the pre-#70 dismiss are not verdicts');
   assert.equal(fb.notRelevant, 2);
   assert.equal(fb.misrankRate, 67);
-  assert.deepEqual(fb.byCategory['high/action-required'], { judged: 3, notRelevant: 2 });
+  // `underRanked` joined the shape on 26 Aug with the "Needs action" button —
+  // triage can be wrong in two directions and both are counted now.
+  assert.deepEqual(fb.byCategory['high/action-required'], { judged: 3, notRelevant: 2, underRanked: 0 });
 });
 
 test('nothing judged reads as null, not as a perfect score', () => {

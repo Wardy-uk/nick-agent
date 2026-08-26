@@ -193,8 +193,17 @@ function compact(entry) {
 function readRollup() {
   try {
     const raw = JSON.parse(db.getState(FEEDBACK_ROLLUP_KEY) || '{}');
-    return { judged: raw.judged || 0, notRelevant: raw.notRelevant || 0, byCategory: raw.byCategory || {} };
-  } catch { return { judged: 0, notRelevant: 0, byCategory: {} }; }
+    // Every counter must be listed here. This normaliser is also what
+    // `foldUnderRanked` reads before incrementing, so a field it forgets is a
+    // field that silently resets to 0 on every write — `underRanked` could
+    // never have exceeded 1.
+    return {
+      judged: raw.judged || 0,
+      notRelevant: raw.notRelevant || 0,
+      underRanked: raw.underRanked || 0,
+      byCategory: raw.byCategory || {},
+    };
+  } catch { return { judged: 0, notRelevant: 0, underRanked: 0, byCategory: {} }; }
 }
 
 function isJudged(e) {
@@ -328,16 +337,24 @@ async function runTriage({ force = false } = {}) {
     // Store results
     const existing = getStoredTriage();
 
-    // Merge: keep existing dismissed items, add/update new ones
+    // Merge: keep existing dismissed items, add/update new ones.
+    //
+    // Nick's verdicts are the things a re-classification must NOT overwrite.
+    // That was already true of `dismissed`; it is equally true of a promotion,
+    // and at a 30-minute cadence a promotion that did not survive the merge
+    // would silently drop back to FYI within the half hour — the button would
+    // appear to work and then quietly undo itself.
     const updated = [
       ...existing.filter(e => e.dismissed),
       ...classified.map(e => {
         const prev = existing.find(p => p.id === e.id);
-        return {
+        return applyPromotion({
           ...e,
           dismissed: prev?.dismissed || false,
-          dismissedAt: prev?.dismissedAt || null
-        };
+          dismissedAt: prev?.dismissedAt || null,
+          promoted: prev?.promoted || false,
+          promotedAt: prev?.promotedAt || null,
+        });
       })
     ];
 
@@ -492,12 +509,82 @@ function dismissEmail(emailId, reason = 'unspecified') {
   try { require('./nudges').triggerUrgentEmailNudge(); } catch {}
 }
 
+// ── "This should have been an action" (26 Aug 2026) ─────────────────────────
+//
+// The mirror of "Not relevant", and the half that was missing. Triage can be
+// wrong in two directions, and only one of them had a button: over-ranking got
+// recorded as a misclassification, while under-ranking — the expensive
+// direction, since a buried ACTION is work Nick never sees — could only be
+// fixed by going and finding the email in Outlook, which teaches him the
+// classifier cannot be corrected.
+//
+// It is NOT a dismissal. "Not relevant" says "take this away"; this says "you
+// filed it wrong, keep it in front of me", so the email stays in the list and
+// moves to the ACTION group.
+//
+// Deliberately lands in `reply`, never `urgent`: the urgent lane is what drives
+// the push notification, and a correction Nick makes while reading the panel is
+// not a reason to interrupt the person already reading it.
+function applyPromotion(entry) {
+  if (!entry.promoted) return entry;
+  return {
+    ...entry,
+    category: 'ACTION',
+    lane: 'reply',
+    // Never demote something the rules already rated higher.
+    urgency: entry.urgency === 'high' ? 'high' : 'medium',
+    urgent: false,
+    needsReply: true,
+    reason: entry.reason ? `${entry.reason} · promoted by Nick` : 'promoted by Nick',
+  };
+}
+
+function promoteEmail(emailId) {
+  const all = getStoredTriage();
+  const item = all.find(e => e.id === emailId);
+  // Distinguishable from "promoted it": the caller can say so rather than
+  // reporting a success that moved nothing.
+  if (!item) return { ok: false, reason: 'not in triage' };
+  if (item.dismissed) return { ok: false, reason: 'already dismissed' };
+
+  const promotedAt = new Date().toISOString();
+  storeTriage(all.map(e => (
+    e.id === emailId ? applyPromotion({ ...e, promoted: true, promotedAt }) : e
+  )));
+
+  // Recorded against what triage SAID, not what it now says — the whole point
+  // is which verdict was wrong.
+  foldUnderRanked(item);
+  console.log(`[Triage] Under-ranked — "${(item.subject || emailId).slice(0, 80)}" `
+    + `was ${item.urgency || '?'}/${item.category || '?'} and Nick says it needs action`);
+
+  return { ok: true, promoted: true };
+}
+
+function foldUnderRanked(item) {
+  const rollup = readRollup();
+  const key = `${item.urgency || 'none'}/${item.category || 'none'}`;
+  rollup.byCategory[key] = rollup.byCategory[key] || { judged: 0, notRelevant: 0 };
+  rollup.byCategory[key].judged++;
+  rollup.byCategory[key].underRanked = (rollup.byCategory[key].underRanked || 0) + 1;
+  rollup.judged++;
+  rollup.underRanked = (rollup.underRanked || 0) + 1;
+  db.setState(FEEDBACK_ROLLUP_KEY, JSON.stringify(rollup));
+}
+
 /**
  * How the classifier is doing, by its own output, against Nick's verdict.
  *
  * Deliberately counts only what he has actually judged: an email still sitting
  * in triage is not evidence either way, and folding it in would make the score
  * improve simply because he has not got to it yet.
+ *
+ * `judged` counts VERDICTS, not emails — an email promoted and later marked
+ * done carries two, because Nick said two separate things about it. Triage can
+ * be wrong in both directions and `misrankRate` now covers both: over-ranking
+ * (`notRelevant`) and under-ranking (`underRanked`). A score that only ever
+ * counted the over-ranked half flattered the classifier for the failure that
+ * costs most — mail Nick never sees.
  */
 function getDismissFeedback() {
   // Live judgements plus the rollup of the ones pruned out of the blob. Reading
@@ -507,14 +594,15 @@ function getDismissFeedback() {
   const rollup = readRollup();
   const byCategory = {};
   for (const [key, v] of Object.entries(rollup.byCategory)) {
-    byCategory[key] = { judged: v.judged, notRelevant: v.notRelevant };
+    byCategory[key] = { judged: v.judged, notRelevant: v.notRelevant, underRanked: v.underRanked || 0 };
   }
   let judged = rollup.judged;
   let notRelevant = rollup.notRelevant;
+  const underRanked = rollup.underRanked || 0;
 
   for (const e of getStoredTriage().filter(isJudged)) {
     const key = `${e.urgency || 'none'}/${e.category || 'none'}`;
-    byCategory[key] = byCategory[key] || { judged: 0, notRelevant: 0 };
+    byCategory[key] = byCategory[key] || { judged: 0, notRelevant: 0, underRanked: 0 };
     byCategory[key].judged++;
     judged++;
     if (e.dismissReason === 'not-relevant') {
@@ -526,9 +614,15 @@ function getDismissFeedback() {
   return {
     judged,
     notRelevant,
+    underRanked,
     // Null rather than 0 when nothing has been judged — an untested classifier
     // is not a perfect one.
-    misrankRate: judged ? Math.round((notRelevant / judged) * 100) : null,
+    misrankRate: judged ? Math.round(((notRelevant + underRanked) / judged) * 100) : null,
+    // Kept separate so a rate that moved can be attributed to a direction:
+    // ranking things too high and burying things are different faults with
+    // different fixes.
+    overRankRate: judged ? Math.round((notRelevant / judged) * 100) : null,
+    underRankRate: judged ? Math.round((underRanked / judged) * 100) : null,
     byCategory,
   };
 }
@@ -550,6 +644,7 @@ module.exports = {
   // has already left.
   getStoredTriage,
   dismissEmail,
+  promoteEmail,
   getDismissFeedback,
   clearDismissed,
   TRIAGE_CACHE_TTL,

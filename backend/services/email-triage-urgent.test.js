@@ -233,6 +233,113 @@ test('a failed batch costs only itself, and unanswered mail says so', async () =
   }
 });
 
+// ── "This should have been an action" ──────────────────────────────────────
+
+test('promoting moves an email into ACTION without dismissing it', () => {
+  db.setState('email_triage_feedback_rollup', '');
+  seed([email({ id: 'fyi-1', lane: 'fyi', category: 'FYI', urgency: 'low' })]);
+
+  assert.equal(emailTriage.promoteEmail('fyi-1').ok, true);
+
+  const cat = emailTriage.getTriageByCategory();
+  assert.equal(cat.action.length, 1, 'it lands in the ACTION group');
+  assert.equal(cat.fyi.length, 0, 'and leaves FYI');
+  assert.ok(!cat.action[0].dismissed, 'it is NOT dismissed — it stays on screen');
+  // Never the urgent lane: that is what pushes a notification, and a correction
+  // made while reading the panel must not interrupt the person reading it.
+  assert.equal(cat.action[0].lane, 'reply');
+  assert.equal(emailTriage.getUrgentEmails().length, 0);
+});
+
+// The one that matters: at a 30-minute cadence a promotion that did not survive
+// the merge would silently drop back to FYI within the half hour, so the button
+// would appear to work and then quietly undo itself.
+test('a promotion survives the next re-classification', async () => {
+  const microsoft = require('./microsoft');
+  const aiProvider = require('./ai-provider');
+  const realFetch = microsoft.fetchRecentEmails;
+  const realAuth = microsoft.isAuthenticated;
+  const realTriage = aiProvider.triageEmails;
+
+  microsoft.isAuthenticated = async () => true;
+  microsoft.fetchRecentEmails = async () => [{
+    // Neutral on purpose: "digest", "weekly report" and friends are NOISE
+    // keywords that force IGNORE deterministically, which would land this in
+    // the wrong section before the promotion is even reached.
+    id: 'fyi-1', subject: 'Team notes from Tuesday', from: 'Someone', fromEmail: 's@example.com',
+    preview: 'Sharing where we got to.', received: new Date().toISOString(), isRead: true,
+  }];
+  // The model keeps calling it FYI — exactly the disagreement being overridden.
+  aiProvider.triageEmails = async () => ({
+    provider: 'stub',
+    text: JSON.stringify([{ index: 0, category: 'FYI', reason: 'digest' }]),
+  });
+
+  try {
+    db.setState('email_triage_feedback_rollup', '');
+    db.setState('email_triage_input', '');
+    seed([]);
+    await emailTriage.runTriage({ force: true });
+    assert.equal(emailTriage.getTriageByCategory().fyi.length, 1);
+
+    emailTriage.promoteEmail('fyi-1');
+    db.setState('email_triage_input', '');
+    await emailTriage.runTriage({ force: true });
+
+    const cat = emailTriage.getTriageByCategory();
+    assert.equal(cat.action.length, 1, 'still ACTION after a full re-classify');
+    assert.equal(cat.fyi.length, 0);
+    assert.equal(cat.action[0].promoted, true);
+  } finally {
+    microsoft.fetchRecentEmails = realFetch;
+    microsoft.isAuthenticated = realAuth;
+    aiProvider.triageEmails = realTriage;
+  }
+});
+
+test('promoting records the miss against what triage SAID', () => {
+  db.setState('email_triage_feedback_rollup', '');
+  seed([email({ id: 'fyi-1', lane: 'fyi', category: 'FYI', urgency: 'low' })]);
+  emailTriage.promoteEmail('fyi-1');
+
+  const fb = emailTriage.getDismissFeedback();
+  assert.equal(fb.underRanked, 1);
+  assert.equal(fb.judged, 1);
+  assert.equal(fb.underRankRate, 100);
+  assert.equal(fb.overRankRate, 0);
+  // Both directions count as a misrank — a score that only counted over-ranking
+  // flattered the classifier for the failure that costs most.
+  assert.equal(fb.misrankRate, 100);
+  assert.equal(fb.byCategory['low/FYI'].underRanked, 1, 'attributed to the verdict that was wrong');
+});
+
+// `readRollup` normalises the stored blob and is ALSO what the fold reads
+// before incrementing, so a counter it forgets to carry resets to 0 on every
+// write and can never reach 2. It shipped that way for exactly one test run.
+test('the under-ranked counter accumulates rather than resetting each time', () => {
+  db.setState('email_triage_feedback_rollup', '');
+  seed([
+    email({ id: 'a', lane: 'fyi', category: 'FYI', urgency: 'low' }),
+    email({ id: 'b', lane: 'fyi', category: 'FYI', urgency: 'low' }),
+    email({ id: 'c', lane: 'delegate', category: 'DELEGATE', urgency: 'low' }),
+  ]);
+  emailTriage.promoteEmail('a');
+  emailTriage.promoteEmail('b');
+  emailTriage.promoteEmail('c');
+
+  const fb = emailTriage.getDismissFeedback();
+  assert.equal(fb.underRanked, 3);
+  assert.equal(fb.judged, 3);
+  assert.equal(fb.byCategory['low/FYI'].underRanked, 2);
+  assert.equal(fb.byCategory['low/DELEGATE'].underRanked, 1);
+});
+
+test('promoting something that is gone reports it rather than claiming success', () => {
+  seed([email({ id: 'gone', dismissed: true, dismissedAt: new Date().toISOString() })]);
+  assert.deepEqual(emailTriage.promoteEmail('gone'), { ok: false, reason: 'already dismissed' });
+  assert.deepEqual(emailTriage.promoteEmail('never-seen'), { ok: false, reason: 'not in triage' });
+});
+
 // ── The store must not become the next pile ────────────────────────────────
 
 function daysAgo(n) {

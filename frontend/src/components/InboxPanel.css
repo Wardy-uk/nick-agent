@@ -230,6 +230,19 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+/* Amber: reads as "raise this", distinct from done (green), dismiss (muted)
+   and the view buttons (blue). Deliberately not the ACTION label's red — this
+   moves an email up, it does not declare it urgent. */
+.inbox-action-promote {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #f59e0b;
+}
+
+.inbox-action-promote:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.16);
+}
+
 .inbox-action-btn:disabled {
   opacity: 0.4;
   cursor: default;

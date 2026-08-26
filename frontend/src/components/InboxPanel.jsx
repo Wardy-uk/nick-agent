@@ -13,7 +13,7 @@ function timeAgo(timestamp) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
+function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied, onPromote }) {
   // mode: null | 'summary' | 'full' | 'reply'
   const [mode, setMode] = useState(null);
   const [summary, setSummary] = useState('');
@@ -308,6 +308,18 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied }) {
         >
           {busy ? '...' : 'Not relevant'}
         </button>
+        {/* The other direction. Only offered where there is somewhere to go:
+            on an ACTION card it would be a no-op button. */}
+        {email.category !== 'ACTION' && onPromote && (
+          <button
+            className="inbox-action-btn inbox-action-promote"
+            onClick={() => onPromote(email.id)}
+            disabled={busy}
+            title="Triage under-ranked this — move it to Action and record the miss"
+          >
+            {busy ? '...' : 'Needs action'}
+          </button>
+        )}
         <button
           className={`inbox-action-btn inbox-action-view${mode === 'summary' ? ' is-open' : ''}`}
           onClick={showSummary}
@@ -391,6 +403,24 @@ export default function InboxPanel({ focusContext }) {
       .catch(() => setDismissing(null));
   };
 
+  // The mirror of "Not relevant". Deliberately NOT a dismissal — the email
+  // moves up into ACTION and stays on screen, because the complaint being
+  // answered is "this should be in front of me", not "take it away".
+  const promote = (emailId) => {
+    setDismissing(emailId);
+    setDismissNote('');
+    fetch(apiUrl(`/api/email/triage/promote/${encodeURIComponent(emailId)}`), { method: 'POST' })
+      .then(r => r.json().then(d => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        // A promotion that moved nothing must say so rather than leaving the
+        // card sitting where it was with no explanation.
+        if (!ok) setDismissNote(d?.error ? `Could not move it: ${d.error}` : 'Could not move it.');
+        fetchTriage();
+        setDismissing(null);
+      })
+      .catch(() => { setDismissNote('Could not move it.'); setDismissing(null); });
+  };
+
   // The backend dismisses on send, so a reply just needs a refresh — and the
   // reply now leaves a record, so refresh that too or the section it just
   // joined would stay a send behind.
@@ -455,7 +485,7 @@ export default function InboxPanel({ focusContext }) {
         <div className="inbox-section">
           <div className="inbox-section-label inbox-section-action">ACTION ({action.length})</div>
           {(showAllAction ? action : action.slice(0, 5)).map(e => (
-            <EmailCard key={e.id} email={e} borderClass="urgency-high" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} />
+            <EmailCard key={e.id} email={e} borderClass="urgency-high" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} onPromote={promote} />
           ))}
           {!showAllAction && action.length > 5 && (
             <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={() => setShowAllAction(true)}>
@@ -475,7 +505,7 @@ export default function InboxPanel({ focusContext }) {
             <>
               <div className="inbox-section-label inbox-section-delegate">DELEGATE ({delegate.length})</div>
               {delegate.map(e => (
-                <EmailCard key={e.id} email={e} borderClass="urgency-medium" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} />
+                <EmailCard key={e.id} email={e} borderClass="urgency-medium" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} onPromote={promote} />
               ))}
             </>
           )}
@@ -491,7 +521,7 @@ export default function InboxPanel({ focusContext }) {
             {fyiOpen ? '▾' : '▸'} FYI ({fyiTotal})
           </button>
           {fyiOpen && [...fyi, ...ignore].map(e => (
-            <EmailCard key={e.id} email={e} borderClass="urgency-low" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} />
+            <EmailCard key={e.id} email={e} borderClass="urgency-low" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} onPromote={promote} />
           ))}
         </div>
       )}

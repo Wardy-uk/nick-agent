@@ -358,6 +358,26 @@ router.post('/triage/dismiss/:emailId', async (req, res) => {
   }
 });
 
+// POST /api/email/triage/promote/:emailId — "this should have been an action".
+//
+// The mirror of dismissing as `not-relevant`, and pointedly NOT a dismissal:
+// the email moves into the ACTION group and stays in the list. A literal path
+// segment, and safe here because it cannot be read as `/triage/:emailId` —
+// that route is declared further down, and Express matches in registration
+// order (#70, where "feedback" was parsed as an email id).
+router.post('/triage/promote/:emailId', (req, res) => {
+  try {
+    const emailId = decodeURIComponent(req.params.emailId);
+    const result = emailTriage.promoteEmail(emailId);
+    // A promotion that moved nothing says so rather than returning a success
+    // the panel would render as a change.
+    if (!result.ok) return res.status(404).json({ ok: false, error: result.reason });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // POST /api/email/triage/clear — clear all cached triage data and re-scan
 router.post('/triage/clear', async (req, res) => {
   try {
