@@ -1042,11 +1042,17 @@ function groupPlaudNotes(rawNotes, { includeRouted = CONSOLIDATE_ALL_PLAUD } = {
   }
   return [...groups.values()].map((group) => {
     group.notes.sort((a, b) => a.path.localeCompare(b.path));
-    group.summary = group.notes.find((note) => note.frontmatter.note_type === 'summary') || group.notes[0];
-    group.transcript = group.notes.find((note) => note.frontmatter.note_type === 'transcript') || null;
+    // ⚠ `parseFrontmatter` does NOT strip surrounding quotes, and plaud-sync
+    // writes `note_type: "summary"` quoted — so a bare `=== 'summary'` compares
+    // against the string `"summary"` INCLUDING the quotes and is false for every
+    // note the sync has ever written. `normalizePlaudId` in this same file already
+    // strips them, which is why grouping by id worked while the summary/transcript
+    // split silently did not. Same helper, applied to the same problem.
+    group.summary = group.notes.find((note) => cleanQuoted(note.frontmatter.note_type) === 'summary') || group.notes[0];
+    group.transcript = group.notes.find((note) => cleanQuoted(note.frontmatter.note_type) === 'transcript') || null;
     group.transcriptInsight = group.transcript ? getTranscriptInsight(group.transcript.path) : null;
     return group;
-  }).filter((group) => group.notes.some((note) => note.frontmatter.note_type === 'summary'));
+  }).filter((group) => group.notes.some((note) => cleanQuoted(note.frontmatter.note_type) === 'summary'));
 }
 
 async function resolveImportClassification(note) {
