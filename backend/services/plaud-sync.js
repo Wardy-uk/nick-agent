@@ -215,6 +215,54 @@ async function createClient() {
   return { client, transport };
 }
 
+// PLAUD's `get_file` returns valid JSON followed by a human-readable hint
+// paragraph in the SAME text block ("...the body lives behind `data_link`...").
+// `JSON.parse` rejects that as "Extra data" and the old fallback returned the raw
+// STRING — so `details.id`, `details.name` and `details.start_at` were all
+// undefined, and every note written between 19 and 26 Aug 2026 carried
+// `plaud_id: "undefined"`, a generic "Summary" title and the SYNC date instead of
+// the meeting date. The dedupe pass then correctly read them as duplicates and
+// archived the lot. Silent, because a string has properties — they are just
+// undefined — so nothing threw.
+//
+// So parse the LEADING JSON value and discard trailing prose. Only get_file is
+// affected today (list_files / get_note / get_transcript parse clean), but the
+// tolerance is in the shared helper because the next tool to grow a hint should
+// not cost another nine days of notes.
+function parseLeadingJson(text) {
+  const start = text.search(/[[{]/);
+  if (start === -1) return undefined;
+
+  const open = text[start];
+  const close = open === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === open) depth += 1;
+    else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1));
+        } catch {
+          return undefined;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 async function callTool(client, name, args = {}) {
   const result = await client.callTool({ name, arguments: args });
   const text = (result.content || [])
@@ -235,6 +283,8 @@ async function callTool(client, name, args = {}) {
   try {
     return JSON.parse(text);
   } catch {
+    const leading = parseLeadingJson(text);
+    if (leading !== undefined) return leading;
     return text;
   }
 }
@@ -283,6 +333,32 @@ async function withRetry(label, operation, options = {}) {
   }
 
   throw lastError;
+}
+
+// ⚠ The incremental window must LAG the last sync, not start at it.
+//
+// A recording is only ledgered once PLAUD has produced a summary; until then it
+// is correctly skipped as "not ready — retry next cycle". But the sync runs every
+// 30 minutes and succeeds, so `lastSuccessfulSyncAt` is always TODAY — which made
+// the effective window "today only". Anything still processing at midnight fell
+// out of the window and was never asked for again. Not theoretical: 22 of the 27
+// recordings between 19 and 27 Aug 2026 were stranded that way, including 1-2-1s
+// whose summaries PLAUD produced days later.
+//
+// The ledger (`shouldProcessRecording`) is what prevents rework, so widening the
+// window costs one larger `list_files` per sync and nothing else. It is a
+// LOOKBACK, not a full re-list — a full list is `{ incremental: false }`.
+const DEFAULT_SYNC_LOOKBACK_DAYS = Number(process.env.PLAUD_SYNC_LOOKBACK_DAYS || 14);
+
+function incrementalDateFrom(lastSuccessfulSyncAt, incremental, lookbackDays = DEFAULT_SYNC_LOOKBACK_DAYS) {
+  if (!incremental || !lastSuccessfulSyncAt) return undefined;
+
+  const last = new Date(lastSuccessfulSyncAt);
+  if (Number.isNaN(last.getTime())) return undefined;
+
+  const days = Number.isFinite(lookbackDays) && lookbackDays > 0 ? Math.floor(lookbackDays) : 0;
+  last.setUTCDate(last.getUTCDate() - days);
+  return last.toISOString().slice(0, 10);
 }
 
 async function listRecordings(client, dateFrom) {
@@ -446,6 +522,25 @@ function slugify(value) {
     .replace(/-+/g, '-');
 }
 
+// The metadata from `get_file` is what names the note, dates it and keys it to a
+// PLAUD recording. If it arrives unusable, the note that gets written is still a
+// perfectly valid file — just titled "Summary", dated today and carrying
+// `plaud_id: "undefined"` — which is indistinguishable from a real note until you
+// go looking for a meeting by name. Refusing costs one recording and a loud line
+// in the log; writing costs a note nobody can find and a ledger entry saying the
+// work is done.
+function assertUsableDetails(details, recordingId) {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    throw new Error(
+      `get_file returned ${Array.isArray(details) ? 'an array' : typeof details} for ${recordingId} — expected an object`
+    );
+  }
+  if (!details.id) {
+    throw new Error(`get_file returned no id for ${recordingId} — refusing to write a note with unknown metadata`);
+  }
+  return details;
+}
+
 function buildNoteBaseName(recording) {
   const stamp = recording.start_at || recording.created_at || new Date().toISOString();
   const datePrefix = new Date(stamp);
@@ -603,10 +698,7 @@ async function syncPlaudRecordings({ incremental = true } = {}) {
 
     const { client, transport } = await createClient();
     try {
-      const dateFrom =
-        incremental && syncState.lastSuccessfulSyncAt
-          ? new Date(syncState.lastSuccessfulSyncAt).toISOString().slice(0, 10)
-          : undefined;
+      const dateFrom = incrementalDateFrom(syncState.lastSuccessfulSyncAt, incremental);
 
       const recordings = await listRecordings(client, dateFrom);
       recordings.sort((a, b) => {
@@ -628,8 +720,11 @@ async function syncPlaudRecordings({ incremental = true } = {}) {
         }
 
         try {
-          const details = await withRetry(`get_file ${recording.id}`, () =>
-            callTool(client, 'get_file', { file_id: recording.id })
+          const details = assertUsableDetails(
+            await withRetry(`get_file ${recording.id}`, () =>
+              callTool(client, 'get_file', { file_id: recording.id })
+            ),
+            recording.id
           );
           const noteList = await withRetry(`get_note ${recording.id}`, () =>
             callTool(client, 'get_note', { file_id: recording.id })
@@ -937,7 +1032,10 @@ async function reconcilePlaudRecordings({ minJaccard = 0.5, write = true } = {})
 // of syncPlaudRecordings but always writes to default (new) paths and updates the
 // shared ledger so a crash resumes. Returns the routed summary path.
 async function processRecordingFresh(client, recording, syncState) {
-  const details = await withRetry(`get_file ${recording.id}`, () => callTool(client, 'get_file', { file_id: recording.id }));
+  const details = assertUsableDetails(
+    await withRetry(`get_file ${recording.id}`, () => callTool(client, 'get_file', { file_id: recording.id })),
+    recording.id
+  );
   const noteList = await withRetry(`get_note ${recording.id}`, () => callTool(client, 'get_note', { file_id: recording.id }));
 
   const preferredSummary = choosePreferredSummary(Array.isArray(noteList) ? noteList : []);
@@ -1163,5 +1261,14 @@ module.exports = {
   extractTranscriptSegments,
   htmlUnescape,
   // exported for tests / reuse
-  _internal: { titleTokens, jaccard, recordingDateStr, buildActiveNoteIndex },
+  _internal: {
+    titleTokens,
+    jaccard,
+    recordingDateStr,
+    buildActiveNoteIndex,
+    parseLeadingJson,
+    assertUsableDetails,
+    incrementalDateFrom,
+    buildNoteBaseName,
+  },
 };

@@ -103,3 +103,91 @@ test('renderTranscript and renderNote degrade gracefully on junk input', () => {
   assert.equal(renderNote(undefined), '');
   assert.equal(extractTranscriptSegments('not an array').length, 0);
 });
+
+// ═══════════════════════════════════════════════════════
+// The nine days of lost meeting notes (27 Aug 2026)
+//
+// Two independent bugs, both silent, that between them put 22 of 27 recordings
+// from 19-27 Aug nowhere and the other 5 in the vault under wrong names.
+// ═══════════════════════════════════════════════════════
+
+const {
+  parseLeadingJson,
+  assertUsableDetails,
+  incrementalDateFrom,
+  buildNoteBaseName,
+} = require('./plaud-sync')._internal;
+
+// The exact shape PLAUD's get_file returns: valid JSON, then a hint paragraph in
+// the SAME text block. JSON.parse rejects the whole thing as "Extra data".
+const GET_FILE_WITH_TRAILING_HINT = `{
+  "id": "05c90384b8b342d976f683bde0f25eb1",
+  "name": "Performance Review: Isabel Busk KPIs, Workflows, and Operational Planning",
+  "created_at": "2026-08-25T14:47:45",
+  "start_at": "2026-08-25T14:18:56",
+  "note_list": [{ "data_type": "auto_sum_note", "data_content": "a } brace { in a string" }]
+}
+
+Note: a block with an empty \`data_content\` — the body lives behind \`data_link\`, not missing.`;
+
+test('get_file JSON survives the trailing hint paragraph', () => {
+  assert.throws(() => JSON.parse(GET_FILE_WITH_TRAILING_HINT), 'precondition: plain JSON.parse must fail');
+
+  const parsed = parseLeadingJson(GET_FILE_WITH_TRAILING_HINT);
+  assert.equal(parsed.id, '05c90384b8b342d976f683bde0f25eb1');
+  assert.equal(parsed.start_at, '2026-08-25T14:18:56');
+  assert.match(parsed.name, /^Performance Review/);
+  // Braces inside strings must not close the object early.
+  assert.equal(parsed.note_list[0].data_content, 'a } brace { in a string');
+});
+
+test('parseLeadingJson handles arrays and refuses junk', () => {
+  assert.deepEqual(parseLeadingJson('[1, 2, 3]\n\nTrailing prose.'), [1, 2, 3]);
+  assert.equal(parseLeadingJson('no json here at all'), undefined);
+  assert.equal(parseLeadingJson('{ "unterminated": '), undefined, 'an unclosed object is not a value');
+});
+
+test('unusable get_file metadata is refused, never written as "undefined"', () => {
+  // The raw string is what the old fallback returned. A string has properties;
+  // they are just undefined — which is why this failed silently for nine days.
+  assert.throws(() => assertUsableDetails(GET_FILE_WITH_TRAILING_HINT, 'abc123'), /expected an object/);
+  assert.throws(() => assertUsableDetails(null, 'abc123'), /expected an object/);
+  assert.throws(() => assertUsableDetails([], 'abc123'), /an array/);
+  assert.throws(() => assertUsableDetails({ name: 'x' }, 'abc123'), /no id/);
+
+  const good = { id: 'abc123', name: 'Weekly Sync' };
+  assert.equal(assertUsableDetails(good, 'abc123'), good);
+});
+
+test('a string details object would have produced the exact broken filename', () => {
+  // Negative test: this is what the vault filled up with. If buildNoteBaseName
+  // is ever handed a non-object again the guard above is the only thing between
+  // it and "<sync date> – Summary 38.md".
+  const fromString = buildNoteBaseName(GET_FILE_WITH_TRAILING_HINT);
+  assert.ok(!fromString.includes('Performance-Review'), 'a string yields no title');
+
+  // What it should be, given a real object.
+  assert.equal(
+    buildNoteBaseName({ id: 'x', name: 'Performance Review: Isabel Busk', start_at: '2026-08-25T14:18:56' }),
+    '2026-08-25 Performance-Review-Isabel-Busk'
+  );
+});
+
+test('the incremental window lags the last sync instead of starting at it', () => {
+  // The bug: window == the sync date, so the sync only ever saw "today".
+  assert.equal(incrementalDateFrom('2026-08-27T16:03:13.389Z', true, 0), '2026-08-27');
+
+  // The fix: a recording from 19 Aug is still inside a 14-day lookback taken on
+  // 27 Aug, so a summary PLAUD finished days late is still collected.
+  assert.equal(incrementalDateFrom('2026-08-27T16:03:13.389Z', true, 14), '2026-08-13');
+  assert.equal(incrementalDateFrom('2026-08-27T16:03:13.389Z', true, 7), '2026-08-20');
+
+  // Month/year boundaries go through Date, not string maths.
+  assert.equal(incrementalDateFrom('2026-01-05T00:00:00.000Z', true, 14), '2025-12-22');
+});
+
+test('a full sync and an unusable stamp both mean "no window"', () => {
+  assert.equal(incrementalDateFrom('2026-08-27T16:03:13.389Z', false, 14), undefined, 'full sync lists everything');
+  assert.equal(incrementalDateFrom(null, true, 14), undefined, 'never synced -> list everything');
+  assert.equal(incrementalDateFrom('not a date', true, 14), undefined, 'unparseable stamp must not become NaN');
+});
