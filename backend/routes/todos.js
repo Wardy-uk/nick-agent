@@ -26,6 +26,11 @@ const MS_EDIT_REASONS = {
   nothing_to_change: 'Nothing was changed.',
 };
 
+// Refused by NEURO before the request ever left the building — a 400, not a
+// 502. The distinction is the point of the endpoint: "we would not send this"
+// and "Microsoft would not take it" are different problems with different fixes.
+const REFUSED_LOCALLY = new Set(['empty_title', 'bad_due_date', 'nothing_to_change', 'no_task_id']);
+
 // GET /api/todos — reads tasks from Obsidian vault + 90-day plan
 router.get('/', (req, res) => {
   try {
@@ -374,7 +379,15 @@ router.patch('/ms/:msId', async (req, res) => {
     if (!applied.length) {
       const first = (result.failed || [])[0];
       const reason = result.reason || first?.reason || 'unknown';
-      return res.status(reason === 'conflict' ? 409 : 502).json({
+      // A 502 says the upstream failed. Our OWN input rules run before a token
+      // is even fetched, so blaming Microsoft for them is a status code that
+      // sends the reader to the wrong system — and this is the one endpoint
+      // whose whole job is to be clear about which side refused.
+      const status = REFUSED_LOCALLY.has(reason) ? 400
+        : reason === 'conflict' ? 409
+        : reason === 'auth' || reason === 'scope' ? 503
+        : 502;
+      return res.status(status).json({
         ok: false,
         pushed: 'none',
         error: MS_EDIT_REASONS[reason] || `Microsoft rejected the edit (${reason})`,
