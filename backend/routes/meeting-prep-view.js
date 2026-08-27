@@ -356,6 +356,42 @@ function _buildPrep(meeting) {
   // 13-person standup, and that many blocks makes the card unreadable. 8 keeps
   // 1-2-1s and small team sessions (Tier Two Team Time is 7) and drops the rest;
   // the People board is where you go through everyone.
+  // Is anyone in this meeting actually on leave that day?
+  //
+  // Graph's `responseStatus` says whether they ACCEPTED, which is a different
+  // question and is usually stale — an invite accepted three weeks ago says
+  // nothing about the holiday booked since. People HR knows, so prep can say
+  // "Zoe is off" before Nick spends ten minutes preparing for a conversation
+  // that is not going to happen.
+  //
+  // Silent when it cannot tell. An absent flag must mean "nothing to report",
+  // never "I could not look" — so `awayUnknown` carries the difference rather
+  // than the card implying everyone is in.
+  try {
+    const availability = require('../services/team-availability');
+    const snap = availability.snapshot();
+    const day = String(meeting.start_time || '').slice(0, 10);
+    if (day) {
+      for (const att of prep.attendees) {
+        const info = availability.daysOffFor(att.name, snap);
+        if (info.known && info.dates.has(day)) {
+          const row = (snap.absences || []).find(
+            a => a.date === day && Number(a.rosterId) === Number(info.rosterId)
+          );
+          att.away = {
+            status: row?.status || 'annual_leave',
+            reason: row?.reason || null,
+          };
+        } else if (!info.known) {
+          att.awayUnknown = true;
+        }
+      }
+      prep.someoneAway = prep.attendees.filter(a => a.away).map(a => a.name);
+    }
+  } catch (e) {
+    console.warn('[MeetingPrep] Could not check attendee leave:', e.message);
+  }
+
   const ROOM_SIZE = 8;
   const MAX_TOPICS = 3;
   if (prep.attendees.length <= ROOM_SIZE) {

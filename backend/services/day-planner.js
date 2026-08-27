@@ -430,6 +430,27 @@ async function run(windowKey, { now = new Date(), apply = false, force = false }
     return { ok: true, skipped: 'not a working day', dateKey, window: windowKey, blocks: [] };
   }
 
+  // Nick's own booked leave. This writes real events into a real calendar on a
+  // timer, so a day off must stop it — filling a holiday with focus blocks is
+  // the most visible way this feature could embarrass itself.
+  //
+  // Checked ONLY when it can be checked: `known:false` carries on and plans as
+  // before, the same fail-open call the nudge path makes. Silently planning
+  // nothing because the bridge was down would look exactly like a quiet day.
+  try {
+    const availability = require('./team-availability');
+    const mine = availability.selfAbsenceOn(dateKey, availability.snapshot(now));
+    if (mine.off) {
+      return {
+        ok: true,
+        skipped: `on leave — ${mine.detail || mine.status.replace(/_/g, ' ')}`,
+        dateKey, window: windowKey, blocks: [],
+      };
+    }
+  } catch (e) {
+    console.warn('[DayPlanner] Could not check leave, planning anyway:', e.message);
+  }
+
   const input = gather(now);
   const mult = estimateMultiplier(input.samples);
   const nowMin = now.getHours() * 60 + now.getMinutes();
