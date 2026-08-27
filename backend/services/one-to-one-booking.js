@@ -371,12 +371,22 @@ async function book({ person, start, end, email, subject, durationMinutes, skipC
     console.warn('[1-2-1] Could not stamp 1-2-1-booked:', e.message);
   }
 
+  // NOVA preps the 1-2-1 the day before, but only for a session it holds. Pushed after
+  // the event and the stamp so a NOVA outage can never cost us the booking itself; the
+  // morning reconciliation sweep re-sends anything that fails here.
+  const novaPush = await require('./nova-121-sync').pushBooking(person, start.split('T')[0], {
+    outlookEventId: result.event?.id || null,
+  });
+
   return {
     ok: true,
     person,
     event: result.event,
     invited: Boolean(email),
     durationMinutes: durationMinutes || DEFAULT_DURATION_MIN,
+    // Surfaced rather than swallowed: a booking NOVA never heard about is a 1-2-1 with
+    // no prep, and the caller is the only one still in a position to say so out loud.
+    novaSynced: novaPush.ok,
   };
 }
 
@@ -592,6 +602,12 @@ async function reschedule({ person, eventId, start, end, reason = null, skipClas
   const moves = recordMove(person, { from: previousStart, to: start, reason });
   console.log(`[1-2-1] Moved ${person}: ${previousStart || '(unknown)'} -> ${start} (move ${moves.length})`);
 
+  // Moving the meeting has to move NOVA's session too, or the prep email goes out for
+  // the old date — or, worse, not at all, because NOVA already logged it as sent.
+  const novaPush = await require('./nova-121-sync').pushBooking(person, start.split('T')[0], {
+    outlookEventId: eventId,
+  });
+
   return {
     ok: true,
     person,
@@ -599,6 +615,7 @@ async function reschedule({ person, eventId, start, end, reason = null, skipClas
     movedFrom: previousStart,
     moveCount: moves.length,
     previousMoves: moves.slice(0, 5),
+    novaSynced: novaPush.ok,
   };
 }
 

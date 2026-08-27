@@ -79,7 +79,12 @@ async function call(path, { method = 'GET', body, timeoutMs = TIMEOUT_MS } = {})
 
   const payload = await res.json().catch(() => ({}));
   if (!res.ok || payload?.ok === false) {
-    throw new Error(payload?.error || `NOVA ${method} ${path} failed (${res.status})`);
+    const err = new Error(payload?.error || `NOVA ${method} ${path} failed (${res.status})`);
+    // The status is the difference between "retry this" and "stop asking". A 404 from
+    // the 1-2-1 bridge means NOVA has no roster entry for that person — replaying it
+    // every morning would never succeed and would bury the real failures in noise.
+    err.status = res.status;
+    throw err;
   }
   return payload.data;
 }
@@ -122,4 +127,36 @@ async function escalate({ ticketKey, reasonCode, neededBy, notes }) {
   });
 }
 
-module.exports = { isConfigured, listUrgencyReasons, listEscalations, getTicket, escalate, call };
+// ── 1-2-1 loop ──────────────────────────────────────────────────────────────
+//
+// NEURO books the 1-2-1; NOVA preps and runs it. NOVA's day-before prep job only fires
+// for a session it holds as 'scheduled', and until this existed nothing created one —
+// the prep email had never been sent, not once, in the two months the job had been live.
+
+/** Tell NOVA a 1-2-1 is booked (or has moved). Idempotent at the far end. */
+async function push121Booking({ agentName, date, outlookEventId }) {
+  return call('/api/neuro-bridge/121/booking', {
+    method: 'POST',
+    body: { agentName, date, outlookEventId: outlookEventId || undefined },
+  });
+}
+
+/** Tell NOVA the 1-2-1 has come out of the diary. */
+async function cancel121({ agentName }) {
+  return call('/api/neuro-bridge/121/cancel', { method: 'POST', body: { agentName } });
+}
+
+/** Push a person's cadence, in days. `null` = off the rota (`cadence: n/a`). */
+async function push121Cadence({ agentName, cadenceDays }) {
+  return call('/api/neuro-bridge/121/cadence', { method: 'POST', body: { agentName, cadenceDays } });
+}
+
+/** What NOVA believes is booked, plus its roster — the reconciliation and drift feed. */
+async function get121State({ days = 60 } = {}) {
+  return call(`/api/neuro-bridge/121/state?days=${encodeURIComponent(days)}`);
+}
+
+module.exports = {
+  isConfigured, listUrgencyReasons, listEscalations, getTicket, escalate, call,
+  push121Booking, cancel121, push121Cadence, get121State,
+};

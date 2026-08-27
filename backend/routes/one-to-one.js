@@ -70,6 +70,24 @@ router.post('/tracker', (req, res) => {
   }
 });
 
+/**
+ * POST /api/1to1/nova-sync { apply? } — reconcile bookings + cadence into NOVA.
+ *
+ * Dry-run by default, returning exactly what it would push. The 06:20 cron calls this
+ * with apply, ahead of NOVA's 07:00 prep job; this exists so it can be inspected and
+ * forced without waiting for the morning. Also reports roster drift between the vault's
+ * direct reports and NOVA's plans, which nothing else compares.
+ */
+router.post('/nova-sync', async (req, res) => {
+  try {
+    const result = await require('../services/nova-121-sync').reconcile({ apply: req.body?.apply === true });
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    console.error('[1to1/nova-sync]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Propose a slot. Reads the calendar; creates nothing.
 router.post('/propose', async (req, res) => {
   try {

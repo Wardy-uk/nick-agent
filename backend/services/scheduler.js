@@ -189,6 +189,32 @@ function start() {
   // 9:10am weekdays — check 1-2-1 due dates
   cron.schedule('10 9 * * 1-5', () => { nudges.check121Nudges(); });
 
+  // 6:20am daily — push bookings + cadence into NOVA, ahead of its 07:00 prep job.
+  //
+  // DAILY, not weekdays: a 1-2-1 booked on a Friday for the Monday has to reach NOVA
+  // over the weekend, or Monday's prep never goes out. The inline push in book() is the
+  // fast path; this is the guarantee, because that push runs after the calendar event
+  // has already been created and so cannot fail loudly enough to stop anything.
+  cron.schedule('20 6 * * *', async () => {
+    try {
+      const sync = require('./nova-121-sync');
+      const r = await sync.reconcile({ apply: true });
+      if (!r.ok) { console.warn(`[Scheduler] NOVA 1-2-1 sync failed: ${r.error}`); return; }
+      if (r.pushed?.length || r.failed?.length || r.cadenceSet?.length) {
+        console.log(`[Scheduler] NOVA 1-2-1 sync: ${r.pushed.length} pushed, ${r.cadenceSet.length} cadence, ${r.failed.length} failed`);
+      }
+      const d = r.drift || {};
+      if (d.notInNova?.length || d.notInVault?.length || d.unknownCadence?.length) {
+        console.warn('[Scheduler] 1-2-1 roster drift —' +
+          ` not in NOVA: [${(d.notInNova || []).join(', ')}];` +
+          ` not in vault: [${(d.notInVault || []).join(', ')}];` +
+          ` unknown cadence: [${(d.unknownCadence || []).map(x => `${x.person}=${x.cadence}`).join(', ')}]`);
+      }
+    } catch (e) {
+      console.warn('[Scheduler] NOVA 1-2-1 sync threw:', e.message);
+    }
+  });
+
   // Retiring yesterday's banner is a DAILY job, not a weekday one — nagCheck
   // below runs Mon-Fri only, so a Saturday nudge survived the rollover and
   // Sunday raised a second row for the same fact (see clearStaleNudges).
