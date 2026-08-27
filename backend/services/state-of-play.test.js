@@ -26,7 +26,6 @@ const clean = (over = {}) => ({
   tasks: { open: 10, done: 2, moscow: {}, unprioritised: 0, estimated: 10, overdue: 0, dueToday: 0, noDueDate: 0, byContext: [], bySource: [] },
   commitments: { open: 0, people: 0, top: [] },
   approvals: { pending: 0, pendingByType: {}, lifetime: {}, recent: [] },
-  queue: { cached: 5, atRisk: 0, byStatus: [], fetchedAt: '2026-08-15 09:00:00', staleDays: 0 },
   inbox: { open: 0, byUrgency: {} },
   rituals: { days: [], standupDays: 5, eodDays: 5, window: 21 },
   vault: { chunks: 100, files: 10, entities: 0, links: 0, lastEmbedAt: null, lastEmbedDays: null },
@@ -41,41 +40,22 @@ test('a clean snapshot raises nothing and reads ok', () => {
   assert.equal(overall(issues), 'ok');
 });
 
-// ── Stale beats big ─────────────────────────────────────────────────────────
+// ── The Jira queue card ─────────────────────────────────────────────────────
 //
-// The bug this panel was built to catch: the Jira cache had been stale since
-// 3 July and every screen reading it looked fine. A stale cache is worse than a
-// large backlog, because the backlog is at least true.
+// Removed 27 Aug 2026 along with the cache it described. This panel was built to
+// catch exactly that bug — a cache with no writer, quietly serving twelve rows
+// frozen on 3 July to every screen that read it — and it did its job: the card
+// is what surfaced the decision. Both halves are now closed, so there is nothing
+// left for it to report.
 //
-// Downgraded from `critical` to `warn` on 27 Aug 2026, and the reason is that
-// the underlying harm was fixed rather than merely re-labelled. The cache was
-// never lagging — commit 48e6481 deleted the sync on 3 July and three later
-// commits reintroduced readers of what it left behind. Those readers now gate
-// on `getQueueSummary().fresh` and withhold the figures, so no screen shows
-// fiction any more. What survives is a switched-off feature, which is a
-// decision for Nick and not an emergency — and a board that cries critical at
-// a benign, already-contained condition is one nobody reads by week two, which
-// is this panel's own founding rule.
+// The general rule it taught survives in the job checks below: a stale source is
+// worse than a big number, because a big number is at least true.
 //
-// It still RANKS first among cache issues; it just no longer sets the overall
-// state to critical on its own.
+// Escalations were never part of this card and are live via their own path.
 
-test('a queue cache with no writer warns, and says the sync is gone', () => {
-  const issues = assess(clean({
-    queue: { cached: 12, atRisk: 4, byStatus: [], fetchedAt: '2026-07-03 19:11:19', staleDays: 43 },
-    tasks: { ...clean().tasks, overdue: 16 },
-  }));
-  assert.equal(issues[0].severity, 'warn');
-  assert.match(issues[0].title, /Jira queue has no sync/);
-  assert.match(issues[0].detail, /43 days/);
-  // The detail must point at the real fix, not imply a refresh would do it.
-  assert.match(issues[0].detail, /JIRA_QUEUE_SYNC_ENABLED/);
-  assert.match(issues[0].detail, /nothing writes it/);
-});
-
-test('a fresh cache inside the threshold raises nothing', () => {
-  const issues = assess(clean({ queue: { ...clean().queue, staleDays: 3 } }));
-  assert.equal(issues.filter(i => /Jira/.test(i.title)).length, 0);
+test('nothing in the snapshot mentions the Jira queue any more', () => {
+  const issues = assess(clean({ tasks: { ...clean().tasks, overdue: 16 } }));
+  assert.equal(issues.filter(i => /Jira|queue cache/i.test(i.title)).length, 0);
 });
 
 // ── Never-ran is not the same as long-ago ───────────────────────────────────
@@ -156,7 +136,6 @@ test('the worst commitment offender is named with a real age', () => {
 
 test('issues come back worst-first', () => {
   const issues = assess(clean({
-    queue: { ...clean().queue, staleDays: 43 },
     tasks: { ...clean().tasks, open: 147, estimated: 0, overdue: 16 },
     commitments: { open: 287, people: 29, top: [{ person: 'Chris', count: 31, oldest: '2026-04-30', ageDays: 107 }] },
   }));

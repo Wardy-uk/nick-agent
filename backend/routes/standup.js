@@ -39,21 +39,9 @@ async function buildStandupContext() {
     }
   } catch {}
 
-  let queueContext = '';
-  try {
-    const db = require('../db/database');
-    const queue = db.getQueueSummary();
-    // `fresh`, not `total > 0`. The cache has had no writer since 3 Jul and was
-    // still handing out that morning's twelve tickets seven weeks later — so the
-    // standup opened by telling Nick the state of a queue nobody had looked at.
-    // Saying nothing about the queue is correct; saying something false is not.
-    if (queue.fresh && queue.total > 0) {
-      queueContext = `Queue: ${queue.total} open tickets, ${queue.at_risk_count} at risk, ${queue.open_p1s} P1s.`;
-      if (queue.at_risk_tickets.length > 0) {
-        queueContext += ` At risk: ${queue.at_risk_tickets.slice(0, 3).map(t => t.ticket_key + ' ' + t.summary).join('; ')}.`;
-      }
-    }
-  } catch {}
+  // Queue context removed 27 Aug 2026 with the Jira queue cache — see
+  // db/database.js. The standup no longer opens on queue figures because
+  // nothing produces them; escalations reach Nick by their own live path.
 
   let planContext = '';
   try {
@@ -98,14 +86,13 @@ TODAY: ${dow} ${todayStr}${isMonday ? ' (Monday — ask about the week ahead, no
 
 CONTEXT:
 ${mustDoContext || ''}
-${queueContext || 'Queue data unavailable.'}
 ${planContext || ''}
 ${calendarContext || ''}
 ${carryOvers.length > 0 ? `Carry-overs from yesterday: ${carryOvers.join('; ')}` : 'No carry-overs.'}
 
 STANDUP FLOW — follow this exactly:
 
-Phase 1 (start): ${mustDoItems.length > 0 ? `Say "You have ${mustDoItems.length} must-dos today." Do NOT list them — they're shown separately in the UI. Give a brief morning context (2-3 lines max — queue status, at-risk, plan).` : 'Give a brief, sharp morning brief (2-3 lines max — queue status, any at-risk, one key thing from the plan).'} Then ask ONE question: "What's your main focus today?"
+Phase 1 (start): ${mustDoItems.length > 0 ? `Say "You have ${mustDoItems.length} must-dos today." Do NOT list them — they're shown separately in the UI. Give a brief morning context (2-3 lines max — the plan and what's in the diary).` : "Give a brief, sharp morning brief (2-3 lines max — one key thing from the plan, what's in the diary)."} Then ask ONE question: "What's your main focus today?"
 
 Phase 2 (after focus answer): Ask: "Any blockers or things that need escalating?"
 
@@ -131,9 +118,6 @@ ${carryOvers.length > 0 ? carryOvers.map(c => `- [ ] ${c}`).join('\n') : '- None
 
 ## Blockers
 [blockers Nick mentioned, or: - None]
-
-## Queue Watch
-${queueContext || '- No queue data'}
 
 ## Notes
 [any other notes from the conversation]
@@ -267,14 +251,7 @@ async function buildEodContext() {
     if (parts.length > 0) statsContext = `Activity today: ${parts.join(', ')}.`;
   } catch {}
 
-  let queueContext = '';
-  try {
-    const db = require('../db/database');
-    const queue = db.getQueueSummary();
-    if (queue.fresh && queue.total > 0) {
-      queueContext = `Queue at EOD: ${queue.total} open tickets, ${queue.at_risk_count} at risk, ${queue.open_p1s} P1s.`;
-    }
-  } catch {}
+  // Queue context removed 27 Aug 2026 — see db/database.js.
 
   const focusSummary = focusItems.length > 0
     ? `Morning focus items: ${focusItems.map(f => `${f.done ? '✓' : '○'} ${f.text}`).join('; ')}`
@@ -293,7 +270,6 @@ CONTEXT:
 ${focusSummary}
 ${carrySummary}
 ${statsContext || 'No activity data available.'}
-${queueContext || ''}
 
 EOD FLOW — follow this exactly:
 
@@ -316,8 +292,6 @@ Phase 4 (finalise): Say "Writing your EOD now..." then output the EOD section in
 **Feeling:** [how Nick is feeling]
 
 **Focus check:** [brief summary — e.g. "2/3 focus items done, carry-over cleared"]
-
-${queueContext ? `**Queue:** ${queueContext}` : ''}
 ===EOD_NOTE_END===
 
 RULES:
@@ -712,18 +686,6 @@ router.post('/submit-guided', (req, res) => {
       } catch {}
     }
 
-    // Queue
-    let queueLine = '- No queue data';
-    try {
-      const db = require('../db/database');
-      const queue = db.getQueueSummary();
-      // This one goes into the daily note, so a wrong figure is written to the
-      // vault and read back as history.
-      if (queue.fresh && queue.total > 0) {
-        queueLine = `- ${queue.total} open tickets, ${queue.at_risk_count} at risk, ${queue.open_p1s} P1s`;
-      }
-    } catch {}
-
     const content = `---
 type: daily
 date: ${todayStr}
@@ -739,9 +701,6 @@ ${carrySection}
 ${droppedSection}
 ## Blockers
 - ${blockers === 'None' || !blockers.trim() ? 'None' : blockers}
-
-## Queue Watch
-${queueLine}
 
 ## Notes
 ${extra && extra.trim() ? `- ${extra}` : '- None'}
@@ -772,15 +731,7 @@ router.post('/eod/submit-guided', (req, res) => {
     const didntGo = answers[1] || 'Nothing flagged';
     const feeling = answers[2] || '';
 
-    // Queue context
-    let queueLine = '';
-    try {
-      const db = require('../db/database');
-      const queue = db.getQueueSummary();
-      if (queue.fresh && queue.total > 0) queueLine = `\n**Queue:** ${queue.total} open, ${queue.at_risk_count} at risk`;
-    } catch {}
-
-    const eodContent = `\n## EOD — ${todayStr}\n\n**Win:** ${win}\n\n**Didn't go to plan:** ${didntGo}\n\n**Feeling:** ${feeling || 'Not noted'}${queueLine}\n`;
+    const eodContent = `\n## EOD — ${todayStr}\n\n**Win:** ${win}\n\n**Didn't go to plan:** ${didntGo}\n\n**Feeling:** ${feeling || 'Not noted'}\n`;
 
     obsidianService.appendToDailyNote(eodContent);
     nudges.markEodDone();
@@ -981,17 +932,7 @@ router.post('/eod', (req, res) => {
   ].filter(l => l !== '');
   const filePath = obsidianService.appendToDailyNote(lines.join('\n'));
   nudges.markEodDone();
-  try {
-    const db = require('../db/database');
-    const queue = db.getQueueSummary();
-    // A "snapshot" of a cache nobody has refreshed is not a measurement — it
-    // writes the same frozen numbers into the trend every single day and makes
-    // a dead queue look like a perfectly stable one.
-    if (queue.fresh) {
-      require('../services/activity').trackQueueSnapshot(
-        queue.at_risk_count || 0, queue.total || 0, queue.open_p1s || 0);
-    }
-  } catch {}
+  // The EOD queue snapshot is gone with the queue cache (27 Aug 2026).
   res.json({ success: true, path: filePath });
 });
 
@@ -1478,13 +1419,6 @@ router.post('/eod/interactive', async (req, res) => {
         obsidianService.appendToDailyNote('\n' + noteContent);
         nudges.markEodDone();
         console.log(`[EOD] Interactive EOD complete — note appended (via ${usedOllama ? 'Ollama' : 'Claude'})`);
-        try {
-          const db = require('../db/database');
-          const queue = db.getQueueSummary();
-          if (queue.fresh) {
-            require('../services/activity').trackQueueSnapshot(queue.at_risk_count || 0, queue.total || 0, queue.open_p1s || 0);
-          }
-        } catch {}
         try { require('../services/activity').trackEodDone(); } catch {}
         safeSend(`data: ${JSON.stringify({ type: 'done', noteSaved: true })}\n\n`);
       } catch (e) {

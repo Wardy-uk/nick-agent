@@ -80,7 +80,7 @@ async function enhanceFocus({ items, context, tone, primaryItem }) {
 
   // Build a compact context summary for the prompt (keep it small)
   const contextLines = [];
-  if (context.queueSummary?.total) contextLines.push(`Queue: ${context.queueSummary.total} tickets, ${(context.queueSummary.at_risk_tickets || []).length} at risk`);
+  // Queue line removed 27 Aug 2026 with the Jira queue cache — see db/database.js.
   if (context.standupDone === false) contextLines.push('Standup not done yet');
   if (context.snoozeCount > 0) contextLines.push(`${context.snoozeCount} snoozes today`);
   const ctxStr = contextLines.length > 0 ? contextLines.join('. ') + '.' : 'Normal day.';

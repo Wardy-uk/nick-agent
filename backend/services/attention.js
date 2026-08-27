@@ -399,10 +399,15 @@ async function gather(now = new Date()) {
   }
 
   if (ctx) {
+    // `known: true` because escalations ARE live — they come straight from Jira
+    // via syncEscalations, not from the queue cache that was removed on
+    // 27 Aug 2026. `breaching` is no longer supplied: it read
+    // `ctx.queueSummary.breaching`, a field working-memory never set, so it was
+    // always 0 and this state has only ever been driven by escalations.
+    // context-state defaults it to 0, so the shape is unchanged.
     inputs.queue = {
       known: true,
       unseenEscalations: Number(ctx.unseenEscalations) || 0,
-      breaching: Number(ctx.queueSummary?.breaching) || 0,
     };
     inputs.rituals = {
       known: true,

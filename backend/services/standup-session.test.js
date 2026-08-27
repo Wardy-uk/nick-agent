@@ -26,7 +26,6 @@ function fixture(kind = 'standup') {
         { key: 'review sla report', text: 'Review SLA report', daysCarried: 4 },
       ],
     },
-    queue: { total: 42, at_risk_count: 3, open_p1s: 1 },
     musts: [],
   });
   return s;
@@ -114,8 +113,12 @@ test('the daily note keeps the headings accountability parses back tomorrow', as
   assert.match(note, /~~Review SLA report~~/);
   // Undecided still carries.
   assert.match(note, /- \[ \] Book 1-2-1 with Abdi #carried-1d/);
-  // Queue context comes from the snapshot taken at session start.
-  assert.match(note, /42 open tickets, 3 at risk, 1 P1s/);
+  // The Jira queue cache was removed on 27 Aug 2026, so the note must carry no
+  // queue figures at all — not a "no queue data" placeholder either. A NEGATIVE
+  // assertion, because the failure this guards against is a figure quietly
+  // reappearing in the vault and being read back tomorrow as history.
+  assert.doesNotMatch(note, /## Queue Watch/);
+  assert.doesNotMatch(note, /open tickets|at risk|P1s|queue data/i);
 });
 
 test('an EOD section records what landed and what did not', async () => {

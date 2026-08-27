@@ -27,13 +27,11 @@ const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
 
 // ── Tool definitions (Anthropic tool-use schema) ─────────────────────────────
 
+// `get_queue` was removed on 27 Aug 2026 with the rest of the Jira queue cache —
+// see db/database.js. Chat has no queue tool rather than a tool that reports it
+// cannot see the queue, because the second still invites the question.
+// Escalations are unaffected and remain live.
 const TOOLS = [
-  {
-    name: 'get_queue',
-    tier: 'read',
-    description: 'Get the current Jira queue: total open tickets, how many are at SLA risk, open P1s, and the at-risk tickets themselves. Use when Nick asks about the queue, tickets, SLA or workload.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
   {
     name: 'get_tasks',
     tier: 'read',
@@ -235,34 +233,6 @@ async function execute(name, input = {}) {
 }
 
 const HANDLERS = {
-  get_queue() {
-    const q = db.getQueueSummary();
-    // The model must not be handed numbers it will state confidently. "We
-    // cannot see the queue" is a usable answer; a seven-week-old count is not.
-    if (!q.fresh) {
-      return {
-        ok: false,
-        reason: q.fetchedAt
-          ? `The Jira queue cache was last written ${Math.round(q.ageHours / 24)} days ago, so these figures are not current. Say the queue cannot be read rather than quoting them.`
-          : 'The Jira queue has never been cached, so there are no figures to give.',
-        stale: true,
-        fetchedAt: q.fetchedAt,
-      };
-    }
-    return {
-      ok: true,
-      total: q.total,
-      at_risk_count: q.at_risk_count,
-      open_p1s: q.open_p1s,
-      at_risk_tickets: (q.at_risk_tickets || []).slice(0, 10).map(t => ({
-        key: t.ticket_key,
-        summary: t.summary,
-        assignee: t.assignee,
-        sla_minutes_remaining: t.sla_remaining_minutes == null ? null : Math.round(t.sla_remaining_minutes),
-      })),
-    };
-  },
-
   get_tasks({ filter = 'open', limit = 20 }) {
     const taskStore = require('./task-store');
     const today = new Date().toISOString().split('T')[0];

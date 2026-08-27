@@ -345,14 +345,8 @@ export default function InsightsPanel({ onNavigate }) {
               <span className="insights-stat-value ok">{today.plan_tasks_done}</span>
             </div>
           )}
-          {today.queue_eod_total !== null && today.queue_eod_total !== undefined && (
-            <div className="insights-stat">
-              <span className="insights-stat-label">Queue EOD</span>
-              <span className={`insights-stat-value ${(today.queue_eod_at_risk || 0) > 0 ? 'warn' : ''}`}>
-                {today.queue_eod_total} open{(today.queue_eod_at_risk || 0) > 0 && ` · ${today.queue_eod_at_risk} at risk`}
-              </span>
-            </div>
-          )}
+          {/* Queue EOD stat removed 27 Aug 2026 with the Jira queue cache. It had
+              never rendered: activity_log held zero queue_snapshot rows. */}
           {today.standup_with_note !== undefined && today.standup_done && (
             <div className="insights-stat">
               <span className="insights-stat-label">Note saved</span>

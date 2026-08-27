@@ -275,23 +275,13 @@ async function buildContextBlock(queueSummary, dailyNote, previousNote, standupC
   const parts = [];
   const diagnostics = [];
 
-  // Queue — only for queue/general/standup intent
-  if (['queue', 'general', 'standup'].includes(intent) && queueSummary && queueSummary.total > 0) {
-    parts.push(`## Current Queue Status
-- Total open tickets: ${queueSummary.total}
-- At-risk (SLA < 2h): ${queueSummary.at_risk_count}
-- Open P1/Critical: ${queueSummary.open_p1s}
-
-${queueSummary.at_risk_tickets.length > 0 ? '### At-Risk Tickets\n' + queueSummary.at_risk_tickets.slice(0, 5).map(t =>
-  `- ${t.ticket_key}: ${t.summary} (${t.sla_remaining_minutes ? Math.round(t.sla_remaining_minutes) + ' min remaining' : 'SLA unknown'}, assigned: ${t.assignee})`
-).join('\n') : ''}`);
-    diagnostics.push('queue: yes');
-  } else if (['queue', 'general', 'standup'].includes(intent)) {
-    parts.push('## Queue Status\nNo Jira data available yet.');
-    diagnostics.push('queue: empty');
-  } else {
-    diagnostics.push('queue: skipped (intent: ' + intent + ')');
-  }
+  // Queue block removed 27 Aug 2026 with the Jira queue cache — see
+  // db/database.js. `queueSummary` is now permanently null out of
+  // working-memory; the parameter is kept so callers need not change. The model
+  // is told nothing about the queue rather than being told it is empty, because
+  // "no Jira data available" invites the same confident answer the stale cache
+  // produced. Escalations still reach chat through their own live path.
+  diagnostics.push('queue: removed');
 
   // Behavioural patterns from activity log
   try {

@@ -58,10 +58,12 @@ function extractTopics(message) {
     .slice(0, 5);
 }
 
-function trackQueueSnapshot(atRisk, total, p1s) {
-  db.logActivity('queue_snapshot', { atRisk, total, p1s });
-}
-
+// trackQueueSnapshot removed 27 Aug 2026 with the Jira queue cache — see
+// db/database.js. The `queue_snapshot` rollup case went with it: checked against
+// the live DB first, and activity_log held **zero** such rows across 9,035
+// entries since 18 June. Both writers sat on EOD *completion* paths, and
+// `eod_done` has fired twice in that log's whole life — so there was no history
+// to keep, and nothing to prune.
 function trackPlanTaskToggled(taskDay, taskText, done) {
   if (done) db.logActivity('plan_task_done', { day: taskDay, text: taskText?.substring(0, 80) });
 }
@@ -155,11 +157,6 @@ function buildDailySummary(dateKey) {
         if (data.tab) {
           summary.tabs_opened[data.tab] = (summary.tabs_opened[data.tab] || 0) + 1;
         }
-        break;
-      case 'queue_snapshot':
-        summary.queue_eod_at_risk = data.atRisk || 0;
-        summary.queue_eod_total = data.total || 0;
-        summary.queue_eod_p1s = data.p1s || 0;
         break;
       case 'plan_task_done':
         summary.plan_tasks_done = (summary.plan_tasks_done || 0) + 1;
@@ -439,7 +436,6 @@ module.exports = {
   trackCapture,
   trackChatMessage,
   trackEodDone,
-  trackQueueSnapshot,
   trackPlanTaskToggled,
   trackOneTwoOneDone,
   trackImportsSweep,

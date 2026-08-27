@@ -36,9 +36,7 @@ const AI_CACHE_TTL = 3 * 60 * 1000;
  */
 function _buildFingerprint(ctx) {
   const parts = [
-    // Queue state
-    ctx.queueSummary?.total || 0,
-    (ctx.queueSummary?.at_risk_tickets || []).length,
+    // Escalation state (the queue cache was removed 27 Aug 2026)
     ctx.unseenEscalations || 0,
     // Nudge state
     (ctx.nudges || []).map(n => `${n.id}:${n.nag_count}`).join(','),
@@ -177,7 +175,6 @@ router.get('/', async (req, res) => {
         isWorkHours: ctx.timeContext.isWorkHours,
         standupDone: ctx.standupDone,
         eodDone: ctx.eodDone,
-        queueTotal: ctx.queueSummary?.total || 0,
         planProgress: ctx.ninetyDayPlan?.progress || null,
       },
       totalCandidates: result.totalCandidates,

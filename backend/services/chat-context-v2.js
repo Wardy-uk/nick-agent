@@ -54,14 +54,8 @@ async function buildChatContext(userMessage, options = {}) {
 
   const parts = [];
 
-  // ── 1. Queue summary (always, compact) ──
-  if (wm?.queueSummary?.total > 0) {
-    const q = wm.queueSummary;
-    // at_risk_count, NOT at_risk_tickets.length — working-memory slices that array to 10
-    // for rendering, so counting it reported "10 at risk" for any real figure of 10+.
-    const atRisk = q.at_risk_count ?? (q.at_risk_tickets || []).length;
-    parts.push(`Queue: ${q.total} tickets, ${atRisk} at risk, ${q.open_p1s || 0} P1s.`);
-  }
+  // Queue summary removed 27 Aug 2026 with the Jira queue cache — see
+  // db/database.js.
 
   // ── 2. Today status ──
   const statusParts = [];
@@ -167,7 +161,6 @@ async function buildChatContext(userMessage, options = {}) {
   const tokenEstimate = Math.round(contextBlock.length / 4); // rough estimate
 
   const sources = [];
-  if (wm?.queueSummary?.total > 0) sources.push('queue');
   if (wm?.todos?.active?.length > 0) sources.push(`todos:${wm.todos.active.length}`);
   if (wm?.ninetyDayPlan) sources.push(`plan:day${wm.ninetyDayPlan.currentDay}`);
   else sources.push('plan:MISSING');

@@ -647,16 +647,13 @@ server.tool('vault_plaud_repull_stubs',
 // Tools: Operational Context
 // ═══════════════════════════════════════════════════════
 
-server.tool('get_queue', 'Get Jira queue summary — tickets, SLA risk, escalations', {}, async () => {
-  const data = await neuroApi('/api/queue');
-  const atRisk = (data.at_risk_tickets || []).map(t => `- ${t.ticket_key}: ${t.summary} (${Math.round(t.sla_remaining_minutes || 0)}m SLA)`).join('\n');
-  return {
-    content: [{
-      type: 'text',
-      text: `Queue: ${data.total || 0} tickets, ${data.at_risk_count || 0} at risk, ${data.open_p1s || 0} P1s\n\n${atRisk || 'No at-risk tickets.'}`,
-    }],
-  };
-});
+// `get_queue` removed 27 Aug 2026 with the Jira queue cache — see
+// backend/db/database.js. Two things were wrong with it beyond the dead cache:
+// it called `/api/queue`, which never existed (the router only ever defined
+// `/summary`), so it had been 404ing; and it had no freshness gate, so had the
+// path been right it would have stated seven-week-old figures as current — the
+// one failure the backend readers were fixed to prevent.
+// Escalations are unaffected and remain live via the NEURO API.
 
 server.tool('get_next_meeting_prep', 'Get meeting prep for next upcoming calendar meeting (automatic, no params)', {}, async () => {
   const data = await neuroApi('/api/meeting-prep');

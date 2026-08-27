@@ -95,7 +95,7 @@ function readRecentNotes(lookbackDays) {
 
 /**
  * Build the full accountability picture for this morning's standup.
- * Everything here is derived from the vault + queue cache — no AI, no guessing.
+ * Everything here is derived from the vault — no AI, no guessing.
  */
 function buildAccountability({ lookbackDays = 14 } = {}) {
   const days = readRecentNotes(lookbackDays);
@@ -183,21 +183,8 @@ function buildAccountability({ lookbackDays = 14 } = {}) {
     overdueMustDos.sort((a, b) => b.daysLate - a.daysLate);
   } catch {}
 
-  // ── Queue pressure ──
-  let queue = null;
-  try {
-    const db = require('../db/database');
-    const q = db.getQueueSummary();
-    if (q.fresh && q.total > 0) {
-      queue = {
-        total: q.total,
-        atRisk: q.at_risk_count || 0,
-        p1s: q.open_p1s || 0,
-        atRiskTickets: (q.at_risk_tickets || []).slice(0, 3)
-          .map(t => ({ key: t.ticket_key, summary: t.summary })),
-      };
-    }
-  } catch {}
+  // Queue pressure removed 27 Aug 2026 with the Jira queue cache — see
+  // db/database.js. Nothing read this field, and nothing produces the figures.
 
   // ── 90-day plan slippage ──
   let plan = null;
@@ -244,7 +231,6 @@ function buildAccountability({ lookbackDays = 14 } = {}) {
     staleCount: stale.length,
     skippedDays: skipped,
     overdueMustDos,
-    queue,
     plan,
   };
 }

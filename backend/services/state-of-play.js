@@ -127,15 +127,6 @@ function snapshot() {
                   WHERE created_at >= date('now','-13 day') GROUP BY d ORDER BY d`),
   };
 
-  const jiraFetched = db.get("SELECT MAX(fetched_at) m FROM jira_tickets_cache")?.m || null;
-  const queue = {
-    cached: scalar("SELECT COUNT(*) c FROM jira_tickets_cache"),
-    atRisk: scalar("SELECT COUNT(*) c FROM jira_tickets_cache WHERE at_risk=1"),
-    byStatus: rows("SELECT status k, COUNT(*) c FROM jira_tickets_cache GROUP BY k ORDER BY c DESC"),
-    fetchedAt: jiraFetched,
-    staleDays: daysSince(jiraFetched),
-  };
-
   const inbox = {
     open: scalar("SELECT COUNT(*) c FROM inbox_items WHERE dismissed=0"),
     byUrgency: tally(rows("SELECT urgency k, COUNT(*) c FROM inbox_items WHERE dismissed=0 GROUP BY k"), 'k'),
@@ -187,7 +178,7 @@ function snapshot() {
 
   return {
     generatedAt: new Date().toISOString(),
-    tasks, commitments, approvals, queue, inbox, rituals, vault, jobs, calendar,
+    tasks, commitments, approvals, inbox, rituals, vault, jobs, calendar,
   };
 }
 
@@ -202,24 +193,12 @@ function assess(s) {
   const issues = [];
   const add = (severity, title, detail, view) => issues.push({ severity, title, detail, view });
 
-  // Stale caches first. A stale cache is worse than a big number, because a big
-  // number is at least true — a stale one is a screen quietly showing fiction.
-  // ⚠ "Stale" was the wrong word and it sent the reader after the wrong fix.
-  // The Jira queue was DELETED on 3 Jul (48e6481, "too much noise") along with
-  // the sync that wrote this table, so there is no lagging job to restart —
-  // `upsertTicket` has had no caller since. Readers were then reintroduced by
-  // three later commits and quietly served the twelve rows left behind.
-  //
-  // Consumers now gate on `getQueueSummary().fresh`, so those figures are no
-  // longer repeated at Nick. What is left is a decision only he can make —
-  // switch the sync back on, or finish the deletion — so this says that
-  // instead of implying a refresh would fix it.
-  if (s.queue.staleDays !== null && s.queue.staleDays > DAILY_STALE_DAYS) {
-    add('warn', 'Jira queue has no sync',
-      `The queue cache was last written ${s.queue.staleDays} days ago and nothing writes it — the sync was removed on 3 July. `
-      + `Queue figures are now withheld rather than quoted. Set JIRA_QUEUE_SYNC_ENABLED=true to turn it back on, or drop the readers for good.`,
-      'admin');
-  }
+  // The Jira queue card is gone (27 Aug 2026). It reported a cache with no
+  // writer — the queue feature was deleted on 3 July and readers were later
+  // reintroduced against the rows it left behind. Both halves are now finished:
+  // the readers were removed with the cache, so there is no longer a decision
+  // outstanding for this panel to chase. Escalations were never part of it and
+  // remain live. See db/database.js.
 
   for (const job of s.jobs) {
     if (job.state === 'stale') {

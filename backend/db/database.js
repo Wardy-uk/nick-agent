@@ -327,88 +327,26 @@ function getConversationHistory(conversationId, limit = 20) {
   return rows.reverse();
 }
 
-// Jira cache helpers
-function upsertTicket(ticket) {
-  run(`
-    INSERT OR REPLACE INTO jira_tickets_cache
-      (ticket_key, summary, status, priority, assignee, sla_remaining_minutes, sla_name, at_risk, raw_json, fetched_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `, [
-    ticket.ticket_key,
-    ticket.summary || null,
-    ticket.status || null,
-    ticket.priority || null,
-    ticket.assignee || null,
-    ticket.sla_remaining_minutes != null ? ticket.sla_remaining_minutes : null,
-    ticket.sla_name || null,
-    ticket.at_risk ? 1 : 0,
-    ticket.raw_json || null
-  ]);
-}
-
-function clearStaleTickets() {
-  run('DELETE FROM jira_tickets_cache');
-}
-
-function getAllTickets() {
-  return all('SELECT * FROM jira_tickets_cache ORDER BY sla_remaining_minutes ASC');
-}
-
-function getAtRiskTickets() {
-  return all('SELECT * FROM jira_tickets_cache WHERE at_risk = 1 ORDER BY sla_remaining_minutes ASC');
-}
-
-// How old the queue cache may be before its figures stop being usable. The
-// queue moves all day, so anything beyond a few hours is a different day's news.
-const QUEUE_STALE_HOURS = 6;
-
-/**
- * The queue, WITH the age of the answer attached.
- *
- * ⚠ Read `fresh` before quoting any of these numbers. On 27 Aug 2026 this
- * function was serving a snapshot of 12 tickets frozen on 3 July — 54 days — to
- * eight callers, every one of which guarded on `total > 0` and then stated the
- * figure as current: chat's `get_queue` tool, `/api/queue/summary`, three
- * standup prompts, the EOD prompt, `standup-accountability` and
- * `working-memory` (which feeds the briefing and chat RAG).
- *
- * The cause is worth keeping, because "refresh the cache" is the wrong fix:
- * commit 48e6481 (3 Jul) DELETED the Jira queue deliberately — "too much noise"
- * — including the sync that wrote this table. `upsertTicket` has had no caller
- * since. Then three later commits reintroduced READERS: routes/queue.js on
- * 15 Jul, working-memory and chat-tools on 14 Aug. Nobody noticed, because the
- * table still held the twelve rows that were in it the morning it was switched
- * off, so every reader got plausible data forever.
- *
- * A cache with no writer is not a stale cache, and callers must be able to tell
- * the difference. `fresh: false` means say nothing rather than say this.
- */
-function getQueueSummary() {
-  const allTickets = getAllTickets();
-  const atRisk = allTickets.filter(t => t.at_risk);
-  const p1 = allTickets.filter(t => {
-    const p = (t.priority || '').toLowerCase();
-    return p.includes('highest') || p === 'p1' || p === 'critical';
-  });
-
-  const fetchedAt = get('SELECT MAX(fetched_at) m FROM jira_tickets_cache')?.m || null;
-  const ageHours = fetchedAt
-    ? (Date.now() - new Date(`${fetchedAt.replace(' ', 'T')}Z`).getTime()) / 3600000
-    : null;
-
-  return {
-    total: allTickets.length,
-    at_risk_count: atRisk.length,
-    open_p1s: p1.length,
-    at_risk_tickets: atRisk,
-    tickets: allTickets,
-    // Never been fetched and fetched-long-ago are both "do not quote this", but
-    // they are different facts and are reported as different facts.
-    fetchedAt,
-    ageHours: ageHours === null ? null : Math.round(ageHours * 10) / 10,
-    fresh: ageHours !== null && ageHours <= QUEUE_STALE_HOURS,
-  };
-}
+// ── Jira queue cache: REMOVED 27 Aug 2026 ────────────────────────────────────
+//
+// The queue feature was deleted on 3 July 2026 (48e6481, "too much noise") — a
+// product decision — along with the sync that wrote `jira_tickets_cache`. Three
+// later commits then reintroduced READERS of the table it left behind, so for
+// seven weeks NEURO quoted the twelve rows frozen there as current fact in
+// standups, EOD notes, the daily note, chat and the briefing. Every reader
+// guarded on `total > 0`, which is true of stale data.
+//
+// Gating those readers on freshness stopped the lying; this finishes the
+// deletion, because dead-but-readable code is how the bug happened in the first
+// place. `upsertTicket`, `clearStaleTickets`, `getAllTickets`,
+// `getAtRiskTickets` and `getQueueSummary` are gone with their callers.
+//
+// ⚠ ESCALATIONS ARE UNAFFECTED and always were. `routes/escalation.js` queries
+// Jira live via `/rest/api/3/search/jql` plus NOVA's escalation_log, and never
+// touched this cache. SLA-at-risk awareness is what was given up here; if it is
+// ever wanted back, build it on that live path rather than resurrecting a cache.
+//
+// The table itself is left defined and empty in schema.sql — see the note there.
 
 // Decision helpers
 function saveDecision(conversationId, decisionText) {
@@ -1385,11 +1323,6 @@ module.exports = {
   saveMessage,
   getConversationHistory,
   getRecentConversations,
-  upsertTicket,
-  clearStaleTickets,
-  getAllTickets,
-  getAtRiskTickets,
-  getQueueSummary,
   saveDecision,
   setState,
   getState,

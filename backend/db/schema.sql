@@ -9,6 +9,15 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS idx_conversations_conv_id
   ON conversations(conversation_id, created_at DESC);
 
+-- ⚠ DEAD as of 27 Aug 2026. The Jira queue feature was removed on 3 July 2026
+-- (48e6481, "too much noise") and the readers that had been reintroduced against
+-- the rows it left behind were removed on 27 Aug — see the note in
+-- db/database.js. Nothing reads or writes this table.
+--
+-- Left defined and empty deliberately, following `inbox_items`: dropping it is a
+-- destructive migration that buys nothing, and the twelve rows still in it are
+-- the only surviving evidence of what the queue looked like on 3 July.
+-- Escalations never used this table and are unaffected.
 CREATE TABLE IF NOT EXISTS jira_tickets_cache (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ticket_key TEXT NOT NULL UNIQUE,

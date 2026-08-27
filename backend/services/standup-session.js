@@ -145,7 +145,9 @@ async function buildContext(kind) {
 
   try {
     const wm = await require('./working-memory').getContext();
-    ctx.queue = wm.queueSummary || null;
+    // ctx.queue removed 27 Aug 2026 with the Jira queue cache — see
+    // db/database.js. Escalations below are live and are what actually needs
+    // naming in a standup.
     ctx.escalations = wm.unseenEscalationList || [];
     ctx.calendar = (wm.calendar || [])
       .filter(e => !e.is_all_day)
@@ -199,9 +201,6 @@ function _renderContext(ctx) {
     parts.push(`\nNo standup on: ${acc.skippedDays.join(', ')}.`);
   }
 
-  if (ctx.queue?.total) {
-    parts.push(`\nQUEUE: ${ctx.queue.total} open, ${ctx.queue.at_risk_count} at SLA risk, ${ctx.queue.open_p1s} P1.`);
-  }
   if (ctx.escalations?.length) {
     parts.push(`ESCALATIONS unanswered: ${ctx.escalations.slice(0, 4).map(e => `${e.key} (${e.summary})`).join('; ')}`);
   }
@@ -661,11 +660,6 @@ function _renderDailyNote(session) {
 
   if (!focusLines.length) focusLines.push('- [ ] (no focus agreed) #focus');
 
-  const q = session.context.queue;
-  const queueLine = q?.total
-    ? `- ${q.total} open tickets, ${q.at_risk_count} at risk, ${q.open_p1s} P1s`
-    : '- No queue data';
-
   return `---
 type: daily
 date: ${session.dateKey}
@@ -681,9 +675,6 @@ ${carried.length ? carried.join('\n') : '- None'}
 ${dropped.length ? `\n## Decided\n${dropped.join('\n')}\n` : ''}
 ## Blockers
 - ${o.blockers || 'None'}
-
-## Queue Watch
-${queueLine}
 ${o.mood ? `\n## Mood\n- ${o.mood}\n` : ''}`;
 }
 

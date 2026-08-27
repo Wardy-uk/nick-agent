@@ -80,26 +80,13 @@ async function refresh() {
     const ninetyDayPlan = null;
     const planSummary = null;
 
-    // Jira queue (fast — SQLite). Four consumers read ctx.queueSummary — chat
-    // context, the SARA tone builder and the Focus stats — and none of them ever
-    // saw anything, because nothing set it. The full ticket list is dropped: this
-    // cache is held for 10 minutes and read on every chat turn, so it carries the
-    // counts plus the at-risk few that actually get rendered.
-    let queueSummary = null;
-    try {
-      const q = db.getQueueSummary();
-      // Left null when the cache is not fresh. This object reaches the briefing
-      // and every chat turn's RAG context, so a stale figure here is repeated
-      // back to Nick as fact more often than anywhere else in NEURO.
-      if (q.fresh) {
-        queueSummary = {
-          total: q.total,
-          at_risk_count: q.at_risk_count,
-          open_p1s: q.open_p1s,
-          at_risk_tickets: (q.at_risk_tickets || []).slice(0, 10),
-        };
-      }
-    } catch (e) { console.warn('[WorkingMemory] getQueueSummary failed:', e.message); }
+    // Jira queue removed 27 Aug 2026 — see db/database.js. `queueSummary` is
+    // kept in the returned shape as a permanent null so the six downstream
+    // readers (chat context, the SARA tone builder, Focus stats, claude.js's
+    // context block, attention, standup-session) stay valid and silent rather
+    // than throwing. Escalations reach these consumers via `unseenEscalations`,
+    // which is live and unaffected.
+    const queueSummary = null;
 
     // Today's calendar (fast — SQLite)
     let calendar = [];
