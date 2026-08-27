@@ -188,7 +188,7 @@ function buildAccountability({ lookbackDays = 14 } = {}) {
   try {
     const db = require('../db/database');
     const q = db.getQueueSummary();
-    if (q.total > 0) {
+    if (q.fresh && q.total > 0) {
       queue = {
         total: q.total,
         atRisk: q.at_risk_count || 0,

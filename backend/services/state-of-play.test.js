@@ -46,16 +46,31 @@ test('a clean snapshot raises nothing and reads ok', () => {
 // The bug this panel was built to catch: the Jira cache had been stale since
 // 3 July and every screen reading it looked fine. A stale cache is worse than a
 // large backlog, because the backlog is at least true.
+//
+// Downgraded from `critical` to `warn` on 27 Aug 2026, and the reason is that
+// the underlying harm was fixed rather than merely re-labelled. The cache was
+// never lagging — commit 48e6481 deleted the sync on 3 July and three later
+// commits reintroduced readers of what it left behind. Those readers now gate
+// on `getQueueSummary().fresh` and withhold the figures, so no screen shows
+// fiction any more. What survives is a switched-off feature, which is a
+// decision for Nick and not an emergency — and a board that cries critical at
+// a benign, already-contained condition is one nobody reads by week two, which
+// is this panel's own founding rule.
+//
+// It still RANKS first among cache issues; it just no longer sets the overall
+// state to critical on its own.
 
-test('a stale Jira cache is critical and outranks everything else', () => {
+test('a queue cache with no writer warns, and says the sync is gone', () => {
   const issues = assess(clean({
     queue: { cached: 12, atRisk: 4, byStatus: [], fetchedAt: '2026-07-03 19:11:19', staleDays: 43 },
     tasks: { ...clean().tasks, overdue: 16 },
   }));
-  assert.equal(issues[0].severity, 'critical');
-  assert.match(issues[0].title, /Jira queue cache is stale/);
+  assert.equal(issues[0].severity, 'warn');
+  assert.match(issues[0].title, /Jira queue has no sync/);
   assert.match(issues[0].detail, /43 days/);
-  assert.equal(overall(issues), 'critical');
+  // The detail must point at the real fix, not imply a refresh would do it.
+  assert.match(issues[0].detail, /JIRA_QUEUE_SYNC_ENABLED/);
+  assert.match(issues[0].detail, /nothing writes it/);
 });
 
 test('a fresh cache inside the threshold raises nothing', () => {

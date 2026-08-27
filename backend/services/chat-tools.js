@@ -237,6 +237,18 @@ async function execute(name, input = {}) {
 const HANDLERS = {
   get_queue() {
     const q = db.getQueueSummary();
+    // The model must not be handed numbers it will state confidently. "We
+    // cannot see the queue" is a usable answer; a seven-week-old count is not.
+    if (!q.fresh) {
+      return {
+        ok: false,
+        reason: q.fetchedAt
+          ? `The Jira queue cache was last written ${Math.round(q.ageHours / 24)} days ago, so these figures are not current. Say the queue cannot be read rather than quoting them.`
+          : 'The Jira queue has never been cached, so there are no figures to give.',
+        stale: true,
+        fetchedAt: q.fetchedAt,
+      };
+    }
     return {
       ok: true,
       total: q.total,

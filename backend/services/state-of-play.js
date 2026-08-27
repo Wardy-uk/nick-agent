@@ -204,10 +204,21 @@ function assess(s) {
 
   // Stale caches first. A stale cache is worse than a big number, because a big
   // number is at least true — a stale one is a screen quietly showing fiction.
+  // ⚠ "Stale" was the wrong word and it sent the reader after the wrong fix.
+  // The Jira queue was DELETED on 3 Jul (48e6481, "too much noise") along with
+  // the sync that wrote this table, so there is no lagging job to restart —
+  // `upsertTicket` has had no caller since. Readers were then reintroduced by
+  // three later commits and quietly served the twelve rows left behind.
+  //
+  // Consumers now gate on `getQueueSummary().fresh`, so those figures are no
+  // longer repeated at Nick. What is left is a decision only he can make —
+  // switch the sync back on, or finish the deletion — so this says that
+  // instead of implying a refresh would fix it.
   if (s.queue.staleDays !== null && s.queue.staleDays > DAILY_STALE_DAYS) {
-    add('critical', 'Jira queue cache is stale',
-      `Last fetched ${s.queue.staleDays} days ago — the queue figures on every other screen are that old.`,
-      'escalations');
+    add('warn', 'Jira queue has no sync',
+      `The queue cache was last written ${s.queue.staleDays} days ago and nothing writes it — the sync was removed on 3 July. `
+      + `Queue figures are now withheld rather than quoted. Set JIRA_QUEUE_SYNC_ENABLED=true to turn it back on, or drop the readers for good.`,
+      'admin');
   }
 
   for (const job of s.jobs) {

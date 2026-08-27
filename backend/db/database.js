@@ -350,6 +350,31 @@ function getAtRiskTickets() {
   return all('SELECT * FROM jira_tickets_cache WHERE at_risk = 1 ORDER BY sla_remaining_minutes ASC');
 }
 
+// How old the queue cache may be before its figures stop being usable. The
+// queue moves all day, so anything beyond a few hours is a different day's news.
+const QUEUE_STALE_HOURS = 6;
+
+/**
+ * The queue, WITH the age of the answer attached.
+ *
+ * ⚠ Read `fresh` before quoting any of these numbers. On 27 Aug 2026 this
+ * function was serving a snapshot of 12 tickets frozen on 3 July — 54 days — to
+ * eight callers, every one of which guarded on `total > 0` and then stated the
+ * figure as current: chat's `get_queue` tool, `/api/queue/summary`, three
+ * standup prompts, the EOD prompt, `standup-accountability` and
+ * `working-memory` (which feeds the briefing and chat RAG).
+ *
+ * The cause is worth keeping, because "refresh the cache" is the wrong fix:
+ * commit 48e6481 (3 Jul) DELETED the Jira queue deliberately — "too much noise"
+ * — including the sync that wrote this table. `upsertTicket` has had no caller
+ * since. Then three later commits reintroduced READERS: routes/queue.js on
+ * 15 Jul, working-memory and chat-tools on 14 Aug. Nobody noticed, because the
+ * table still held the twelve rows that were in it the morning it was switched
+ * off, so every reader got plausible data forever.
+ *
+ * A cache with no writer is not a stale cache, and callers must be able to tell
+ * the difference. `fresh: false` means say nothing rather than say this.
+ */
 function getQueueSummary() {
   const allTickets = getAllTickets();
   const atRisk = allTickets.filter(t => t.at_risk);
@@ -357,12 +382,23 @@ function getQueueSummary() {
     const p = (t.priority || '').toLowerCase();
     return p.includes('highest') || p === 'p1' || p === 'critical';
   });
+
+  const fetchedAt = get('SELECT MAX(fetched_at) m FROM jira_tickets_cache')?.m || null;
+  const ageHours = fetchedAt
+    ? (Date.now() - new Date(`${fetchedAt.replace(' ', 'T')}Z`).getTime()) / 3600000
+    : null;
+
   return {
     total: allTickets.length,
     at_risk_count: atRisk.length,
     open_p1s: p1.length,
     at_risk_tickets: atRisk,
-    tickets: allTickets
+    tickets: allTickets,
+    // Never been fetched and fetched-long-ago are both "do not quote this", but
+    // they are different facts and are reported as different facts.
+    fetchedAt,
+    ageHours: ageHours === null ? null : Math.round(ageHours * 10) / 10,
+    fresh: ageHours !== null && ageHours <= QUEUE_STALE_HOURS,
   };
 }
 

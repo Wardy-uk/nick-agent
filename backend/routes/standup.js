@@ -43,7 +43,11 @@ async function buildStandupContext() {
   try {
     const db = require('../db/database');
     const queue = db.getQueueSummary();
-    if (queue.total > 0) {
+    // `fresh`, not `total > 0`. The cache has had no writer since 3 Jul and was
+    // still handing out that morning's twelve tickets seven weeks later — so the
+    // standup opened by telling Nick the state of a queue nobody had looked at.
+    // Saying nothing about the queue is correct; saying something false is not.
+    if (queue.fresh && queue.total > 0) {
       queueContext = `Queue: ${queue.total} open tickets, ${queue.at_risk_count} at risk, ${queue.open_p1s} P1s.`;
       if (queue.at_risk_tickets.length > 0) {
         queueContext += ` At risk: ${queue.at_risk_tickets.slice(0, 3).map(t => t.ticket_key + ' ' + t.summary).join('; ')}.`;
@@ -267,7 +271,7 @@ async function buildEodContext() {
   try {
     const db = require('../db/database');
     const queue = db.getQueueSummary();
-    if (queue.total > 0) {
+    if (queue.fresh && queue.total > 0) {
       queueContext = `Queue at EOD: ${queue.total} open tickets, ${queue.at_risk_count} at risk, ${queue.open_p1s} P1s.`;
     }
   } catch {}
@@ -713,7 +717,9 @@ router.post('/submit-guided', (req, res) => {
     try {
       const db = require('../db/database');
       const queue = db.getQueueSummary();
-      if (queue.total > 0) {
+      // This one goes into the daily note, so a wrong figure is written to the
+      // vault and read back as history.
+      if (queue.fresh && queue.total > 0) {
         queueLine = `- ${queue.total} open tickets, ${queue.at_risk_count} at risk, ${queue.open_p1s} P1s`;
       }
     } catch {}
@@ -771,7 +777,7 @@ router.post('/eod/submit-guided', (req, res) => {
     try {
       const db = require('../db/database');
       const queue = db.getQueueSummary();
-      if (queue.total > 0) queueLine = `\n**Queue:** ${queue.total} open, ${queue.at_risk_count} at risk`;
+      if (queue.fresh && queue.total > 0) queueLine = `\n**Queue:** ${queue.total} open, ${queue.at_risk_count} at risk`;
     } catch {}
 
     const eodContent = `\n## EOD — ${todayStr}\n\n**Win:** ${win}\n\n**Didn't go to plan:** ${didntGo}\n\n**Feeling:** ${feeling || 'Not noted'}${queueLine}\n`;
@@ -978,8 +984,13 @@ router.post('/eod', (req, res) => {
   try {
     const db = require('../db/database');
     const queue = db.getQueueSummary();
-    require('../services/activity').trackQueueSnapshot(
-      queue.at_risk_count || 0, queue.total || 0, queue.open_p1s || 0);
+    // A "snapshot" of a cache nobody has refreshed is not a measurement — it
+    // writes the same frozen numbers into the trend every single day and makes
+    // a dead queue look like a perfectly stable one.
+    if (queue.fresh) {
+      require('../services/activity').trackQueueSnapshot(
+        queue.at_risk_count || 0, queue.total || 0, queue.open_p1s || 0);
+    }
   } catch {}
   res.json({ success: true, path: filePath });
 });
@@ -1470,7 +1481,9 @@ router.post('/eod/interactive', async (req, res) => {
         try {
           const db = require('../db/database');
           const queue = db.getQueueSummary();
-          require('../services/activity').trackQueueSnapshot(queue.at_risk_count || 0, queue.total || 0, queue.open_p1s || 0);
+          if (queue.fresh) {
+            require('../services/activity').trackQueueSnapshot(queue.at_risk_count || 0, queue.total || 0, queue.open_p1s || 0);
+          }
         } catch {}
         try { require('../services/activity').trackEodDone(); } catch {}
         safeSend(`data: ${JSON.stringify({ type: 'done', noteSaved: true })}\n\n`);

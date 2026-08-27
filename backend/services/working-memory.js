@@ -88,12 +88,17 @@ async function refresh() {
     let queueSummary = null;
     try {
       const q = db.getQueueSummary();
-      queueSummary = {
-        total: q.total,
-        at_risk_count: q.at_risk_count,
-        open_p1s: q.open_p1s,
-        at_risk_tickets: (q.at_risk_tickets || []).slice(0, 10),
-      };
+      // Left null when the cache is not fresh. This object reaches the briefing
+      // and every chat turn's RAG context, so a stale figure here is repeated
+      // back to Nick as fact more often than anywhere else in NEURO.
+      if (q.fresh) {
+        queueSummary = {
+          total: q.total,
+          at_risk_count: q.at_risk_count,
+          open_p1s: q.open_p1s,
+          at_risk_tickets: (q.at_risk_tickets || []).slice(0, 10),
+        };
+      }
     } catch (e) { console.warn('[WorkingMemory] getQueueSummary failed:', e.message); }
 
     // Today's calendar (fast — SQLite)

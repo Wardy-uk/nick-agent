@@ -435,7 +435,93 @@ function decorateWithReplyState(escalations) {
   });
 }
 
-// ── Polling (escalations only) ───────────────────────────────────────────────
+// ── Queue sync (OFF by default) ──────────────────────────────────────────────
+
+/**
+ * Refill `jira_tickets_cache`, the table eight callers read and nothing has
+ * written since 3 July 2026.
+ *
+ * ⚠ DEFAULT OFF, deliberately. Commit 48e6481 deleted the whole queue feature
+ * with the reason "too much noise", and that was a product decision, not a bug.
+ * What WAS a bug is that three later commits reintroduced readers of the cache
+ * it left behind, so NEURO spent seven weeks quoting a frozen snapshot of twelve
+ * tickets in standups, EOD notes, chat and the briefing. That half is fixed
+ * regardless of this flag — every consumer now gates on `getQueueSummary().fresh`
+ * and says nothing rather than something false.
+ *
+ * This exists so the choice is one env var rather than a rebuild: turn it on and
+ * the queue context comes back, leave it off and the readers stay silent.
+ *
+ * Note the endpoint. The legacy `/rest/api/3/search` this feature originally used
+ * now answers 410 Gone — Atlassian removed it — so a straight revert of 48e6481
+ * would not have worked. `/rest/api/3/search/jql` is what the escalation path
+ * already uses and is verified working.
+ */
+const QUEUE_SYNC_ENABLED = process.env.JIRA_QUEUE_SYNC_ENABLED === 'true';
+const QUEUE_PAGE_SIZE = 100;
+const QUEUE_FIELDS = ['summary', 'status', 'priority', 'assignee'];
+
+async function syncQueue() {
+  if (!isConfigured()) return { ok: false, reason: 'not configured' };
+  if (!QUEUE_SYNC_ENABLED) return { ok: false, reason: 'disabled' };
+
+  const jql = `project = ${JIRA_PROJECT_KEY} AND resolution = Unresolved `
+    + `AND status not in (CLOSED, Done, Resolved) ORDER BY created DESC`;
+
+  try {
+    const result = await jiraRequest('/rest/api/3/search/jql', {
+      method: 'POST',
+      body: { jql, fields: QUEUE_FIELDS, maxResults: QUEUE_PAGE_SIZE },
+    });
+
+    const issues = result?.issues || [];
+
+    // A structurally valid response carrying no issues is treated as a FAILURE
+    // and does not wipe a good cache — the bank-holidays rule. An empty queue
+    // and a query that quietly stopped matching look identical otherwise, and
+    // this cache's whole failure mode has been looking plausible while wrong.
+    if (!issues.length) {
+      console.warn('[Jira] Queue sync returned 0 issues — keeping the previous cache rather than emptying it');
+      return { ok: false, reason: 'empty result', kept: true };
+    }
+
+    // `/search/jql` dropped `total`, so `isLast` is the only cap signal. Same
+    // species as the calendar $top=50 and the 1,958-key JQL: a silent cap here
+    // would understate the queue for ever, so it is said out loud.
+    if (result?.isLast === false) {
+      console.warn(`[Jira] Queue sync capped at ${QUEUE_PAGE_SIZE} — the queue is larger than the cache`);
+    }
+
+    db.clearStaleTickets();
+    for (const issue of issues) {
+      const f = issue.fields || {};
+      db.upsertTicket({
+        ticket_key: issue.key,
+        summary: f.summary || null,
+        status: f.status?.name || null,
+        priority: f.priority?.name || null,
+        assignee: f.assignee?.displayName || null,
+        // SLA data lived in the deleted flagged-ticket path and is not fetched
+        // here. NULL, never 0 — an unknown SLA must not read as "no time left",
+        // and `at_risk` stays false rather than being guessed from a priority.
+        sla_remaining_minutes: null,
+        sla_name: null,
+        at_risk: false,
+        raw_json: null,
+      });
+    }
+
+    console.log(`[Jira] Queue synced — ${issues.length} tickets`);
+    return { ok: true, count: issues.length, capped: result?.isLast === false };
+  } catch (e) {
+    // Loud, and the cache is left alone. A failed refresh must not look like an
+    // empty queue.
+    console.error('[Jira] Queue sync failed:', e.message);
+    return { ok: false, reason: e.message };
+  }
+}
+
+// ── Polling ──────────────────────────────────────────────────────────────────
 
 function startPolling() {
   if (!isConfigured()) {
@@ -443,15 +529,18 @@ function startPolling() {
     return;
   }
 
-  setTimeout(() => {
-    syncEscalations().catch(err => console.error('[Jira] Initial sync error:', err.message));
-  }, 5000);
-
-  pollTimer = setInterval(() => {
+  const tick = () => {
     syncEscalations().catch(err => console.error('[Jira] Poll error:', err.message));
-  }, POLL_INTERVAL_MS);
+    if (QUEUE_SYNC_ENABLED) {
+      syncQueue().catch(err => console.error('[Jira] Queue poll error:', err.message));
+    }
+  };
 
-  console.log(`[Jira] Escalation polling started — every ${POLL_INTERVAL_MS / 1000}s`);
+  setTimeout(tick, 5000);
+  pollTimer = setInterval(tick, POLL_INTERVAL_MS);
+
+  console.log(`[Jira] Polling started — every ${POLL_INTERVAL_MS / 1000}s`
+    + ` (escalations${QUEUE_SYNC_ENABLED ? ' + queue' : '; queue sync off'})`);
 }
 
 function stopPolling() {
@@ -468,6 +557,7 @@ module.exports = {
   fetchActiveEscalations,
   fetchOpenIssuesByKey,
   syncEscalations,
+  syncQueue,
   markEscalationsSeen,
   getUnseenEscalationCount,
   getUnseenEscalations,
