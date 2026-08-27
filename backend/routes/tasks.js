@@ -48,7 +48,7 @@ router.get('/untriaged', (req, res) => {
 // POST /api/tasks — create (route 2: NEURO direct)
 router.post('/', (req, res) => {
   try {
-    const { text, moscow, priority, due_date, source, notes, origin_path, origin_line, estimateMinutes } = req.body;
+    const { text, moscow, priority, due_date, source, notes, origin_path, origin_line, estimateMinutes, estimateExact } = req.body;
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'text is required' });
     const result = taskStore.createTask({
       text, moscow, priority, due_date, notes, origin_path, origin_line,
@@ -58,6 +58,8 @@ router.post('/', (req, res) => {
       // the silent drop meant every freshly created task blocked at the assumed
       // thirty minutes.
       estimateMinutes,
+      // A typed number is honoured exactly; a preset still snaps to a bucket.
+      estimateExact,
       source: source || 'manual',
     });
     res.json({ ok: true, ...result });

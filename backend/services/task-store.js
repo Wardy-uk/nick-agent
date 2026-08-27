@@ -215,7 +215,10 @@ function createTask(input = {}) {
     context,
     notes: input.notes || null,
     ms_id: input.ms_id || null,
-    estimate_minutes: normEstimate(input.estimateMinutes ?? input.estimate_minutes),
+    estimate_minutes: normEstimate(
+      input.estimateMinutes ?? input.estimate_minutes,
+      { exact: input.estimateExact === true },
+    ),
     dedupe_key: key,
   });
 
@@ -241,17 +244,34 @@ function normMoscow(value) {
  * buckets are also honest about the precision the data supports.
  *
  * Anything unrecognised returns null — NOT ESTIMATED — rather than a guess.
+ *
+ * ⚠ The top bucket used to be 240 and anything above it was CLAMPED to 240, so
+ * a task Nick knew was a two-day job was recorded as four hours, silently, and
+ * then offered up by time-fit and the day planner as something that fits in an
+ * afternoon. A ceiling that quietly rewrites the answer is worse than no
+ * estimate at all. Above the top bucket the value now rounds UP to the whole
+ * hour instead — the same direction the buckets round, and never downwards.
+ *
+ * `exact` is the escape hatch for a number Nick TYPED. The buckets exist
+ * because nobody has "37 minutes" to give; someone who has gone and entered it
+ * does, and snapping it is the planner disagreeing with him about his own work
+ * (task-blocks' rule for a requested window, one level down).
  */
-const ESTIMATE_BUCKETS = [5, 15, 30, 60, 120, 240];
+const ESTIMATE_BUCKETS = [5, 15, 30, 60, 120, 240, 360, 480];
+// A working week. Past this it is a project, not a task, and a number that big
+// is far likelier to be a typo than an estimate.
+const MAX_ESTIMATE_MINUTES = 2400;
 
-function normEstimate(value) {
+function normEstimate(value, { exact = false } = {}) {
   if (value == null || value === '') return null;
   const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return null;
+  if (!Number.isFinite(n) || n <= 0 || n > MAX_ESTIMATE_MINUTES) return null;
+  if (exact) return Math.ceil(n);
   // Snap up: a task that takes "about 20 minutes" should not be offered for a
   // 15-minute gap. Rounding the wrong way here is how a system that promises
   // "this fits" stops being trusted.
-  return ESTIMATE_BUCKETS.find(b => n <= b) || ESTIMATE_BUCKETS[ESTIMATE_BUCKETS.length - 1];
+  const bucket = ESTIMATE_BUCKETS.find(b => n <= b);
+  return bucket == null ? Math.ceil(n / 60) * 60 : bucket;
 }
 
 /** Accepts 1-3, "1".."3", or the legacy high/normal/low strings. */
@@ -287,7 +307,12 @@ function updateTask(id, fields = {}) {
   }
   if ('priority' in fields) patch.priority = normPriority(fields.priority);
   if ('estimateMinutes' in fields || 'estimate_minutes' in fields) {
-    patch.estimate_minutes = normEstimate(fields.estimateMinutes ?? fields.estimate_minutes);
+    // `estimateExact` says the number was typed, not picked off a preset — see
+    // normEstimate. A preset still snaps.
+    patch.estimate_minutes = normEstimate(
+      fields.estimateMinutes ?? fields.estimate_minutes,
+      { exact: fields.estimateExact === true },
+    );
   }
   if ('due_date' in fields) patch.due_date = fields.due_date || null;
   if ('notes' in fields) patch.notes = fields.notes || null;
@@ -378,6 +403,7 @@ module.exports = {
   legacyPriority,
   listTasks,
   normalizeText,
+  normEstimate,
   normMoscow,
   normPriority,
   scheduleExport,

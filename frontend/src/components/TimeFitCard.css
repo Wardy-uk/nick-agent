@@ -79,6 +79,23 @@
   border-radius: 4px;
 }
 
+.tf-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.tf-custom-input {
+  width: 60px;
+  font-size: 11px;
+  padding: 2px 4px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
 .tf-foot {
   display: flex;
   gap: 12px;

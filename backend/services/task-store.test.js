@@ -50,6 +50,45 @@ test('priority accepts 1-3 and the legacy high/normal/low strings', () => {
   assert.equal(taskStore.normPriority(9), null);
 });
 
+test('an estimate snaps UP to a bucket, and never past the top one', () => {
+  assert.equal(taskStore.normEstimate(20), 30);
+  assert.equal(taskStore.normEstimate(240), 240);
+  assert.equal(taskStore.normEstimate('60'), 60);
+  assert.equal(taskStore.normEstimate(0), null);
+  assert.equal(taskStore.normEstimate('nonsense'), null);
+});
+
+// The bug: the top bucket was 240 and everything above it was CLAMPED to 240,
+// so a two-day job was silently recorded as half a day and then offered up as
+// something that fits in an afternoon.
+test('a task longer than the longest bucket is not rewritten as half a day', () => {
+  assert.equal(taskStore.normEstimate(300), 360);
+  assert.equal(taskStore.normEstimate(480), 480);
+  assert.equal(taskStore.normEstimate(600), 600);   // rounds up by the hour, never down
+  assert.equal(taskStore.normEstimate(601), 660);
+  assert.equal(taskStore.normEstimate(9000), null); // past a working week is a typo, not an estimate
+});
+
+// A preset is a guess and gets rounded; a number Nick typed is not.
+test('an exact estimate is honoured as given', () => {
+  assert.equal(taskStore.normEstimate(270, { exact: true }), 270);
+  assert.equal(taskStore.normEstimate(270), 360);
+  assert.equal(taskStore.normEstimate(37, { exact: true }), 37);
+  assert.equal(taskStore.normEstimate(0, { exact: true }), null);
+});
+
+test('exactness survives the write, both on create and on patch', () => {
+  const { id } = taskStore.createTask({
+    text: 'Rebuild the KPI pack from source', estimateMinutes: 450, estimateExact: true, skipExport: true,
+  });
+  assert.equal(db.getTaskRow(id).estimate_minutes, 450);
+
+  taskStore.updateTask(id, { estimateMinutes: 450 });          // no flag → a preset → snaps
+  assert.equal(db.getTaskRow(id).estimate_minutes, 480);
+  taskStore.updateTask(id, { estimateMinutes: 450, estimateExact: true });
+  assert.equal(db.getTaskRow(id).estimate_minutes, 450);
+});
+
 test('capture lines give up their inline hints', () => {
   const parsed = drain.parseCaptureLine('Chase Maria about the Krista issue !must p3 @2026-08-20');
   assert.equal(parsed.text, 'Chase Maria about the Krista issue');

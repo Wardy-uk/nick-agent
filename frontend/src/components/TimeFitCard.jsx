@@ -31,13 +31,28 @@ const BUCKETS = [
   { minutes: 60, label: '1 hr' },
   { minutes: 120, label: '2 hr' },
   { minutes: 240, label: 'half a day' },
+  { minutes: 480, label: 'a full day' },
 ];
+
+// A working week, matching task-store's own ceiling. Past that it is a project.
+const MAX_ESTIMATE_MINUTES = 2400;
+
+// "420 min" is a number you have to do arithmetic on to understand.
+function formatMinutes(m) {
+  if (m == null) return '—';
+  if (m < 60) return `${m} min`;
+  const hours = m / 60;
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} hr`;
+}
 
 export default function TimeFitCard() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [override, setOverride] = useState(null);
   const [savingId, setSavingId] = useState(null);
+  // The row currently showing the "how many hours?" box, if any.
+  const [customId, setCustomId] = useState(null);
+  const [customHours, setCustomHours] = useState('');
 
   const load = useCallback((minutes = override) => {
     const qs = minutes ? `?minutes=${minutes}` : '';
@@ -49,18 +64,30 @@ export default function TimeFitCard() {
 
   useEffect(() => { load(); }, [load]);
 
-  const setEstimate = async (taskId, minutes) => {
+  // `exact` marks a number Nick typed rather than one he picked. The backend
+  // snaps a preset to a bucket and leaves a typed number alone — a duration
+  // someone went and entered is not a guess in need of rounding.
+  const setEstimate = async (taskId, minutes, exact = false) => {
     if (!taskId) return;
     setSavingId(taskId);
     try {
       await fetch(apiUrl(`/api/tasks/${taskId}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estimateMinutes: minutes }),
+        body: JSON.stringify({ estimateMinutes: minutes, estimateExact: exact }),
       });
     } catch { /* the reload below is the feedback */ }
     setSavingId(null);
+    setCustomId(null);
+    setCustomHours('');
     load();
+  };
+
+  const saveCustom = (taskId) => {
+    const hours = Number(customHours);
+    if (!Number.isFinite(hours) || hours <= 0) return;
+    const minutes = Math.min(Math.round(hours * 60), MAX_ESTIMATE_MINUTES);
+    setEstimate(taskId, minutes, true);
   };
 
   if (error) return null;          // never let this push a real error at anyone
@@ -121,19 +148,50 @@ export default function TimeFitCard() {
             <li className="tf-row" key={item.task_id || item.text}>
               <span className="tf-text">{item.text}</span>
               <span className={`tf-mins${item.assumed ? ' tf-assumed' : ''}`}>
-                {item.minutes} min{item.assumed && <em> assumed</em>}
+                {formatMinutes(item.minutes)}{item.assumed && <em> assumed</em>}
               </span>
               {/* Fix the assumption right where it is showing. */}
-              <select
-                className="tf-est"
-                value=""
-                disabled={savingId === item.task_id}
-                onChange={e => setEstimate(item.task_id, Number(e.target.value))}
-                aria-label="How long does this take?"
-              >
-                <option value="">{item.assumed ? 'How long?' : 'Change'}</option>
-                {BUCKETS.map(b => <option key={b.minutes} value={b.minutes}>{b.label}</option>)}
-              </select>
+              {customId === item.task_id ? (
+                <span className="tf-custom">
+                  <input
+                    className="tf-custom-input"
+                    type="number"
+                    min="0.25"
+                    max={MAX_ESTIMATE_MINUTES / 60}
+                    step="0.25"
+                    autoFocus
+                    value={customHours}
+                    placeholder="hours"
+                    disabled={savingId === item.task_id}
+                    onChange={e => setCustomHours(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') saveCustom(item.task_id);
+                      if (e.key === 'Escape') { setCustomId(null); setCustomHours(''); }
+                    }}
+                    aria-label="How many hours does this take?"
+                  />
+                  <button className="tf-inline" onClick={() => saveCustom(item.task_id)}>Save</button>
+                  <button className="tf-inline" onClick={() => { setCustomId(null); setCustomHours(''); }}>Cancel</button>
+                </span>
+              ) : (
+                <select
+                  className="tf-est"
+                  value=""
+                  disabled={savingId === item.task_id}
+                  onChange={e => {
+                    if (e.target.value === 'custom') { setCustomId(item.task_id); setCustomHours(''); }
+                    else setEstimate(item.task_id, Number(e.target.value));
+                  }}
+                  aria-label="How long does this take?"
+                >
+                  <option value="">{item.assumed ? 'How long?' : 'Change'}</option>
+                  {BUCKETS.map(b => <option key={b.minutes} value={b.minutes}>{b.label}</option>)}
+                  {/* The presets stop at a day. Some things are bigger than the
+                      longest preset, and a list that cannot say so quietly files
+                      a two-day job as a four-hour one. */}
+                  <option value="custom">Custom…</option>
+                </select>
+              )}
             </li>
           ))}
         </ul>
