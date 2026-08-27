@@ -189,6 +189,25 @@ function laneReason(task, todayStr = todayDateString()) {
   return 'High-signal task';
 }
 
+/**
+ * Planner's percentComplete for a Microsoft-backed row, or null.
+ *
+ * `syncMicrosoftTasks` renders it as a "(75%)" suffix on the mirror line, so
+ * this reads back a number NEURO itself wrote. Null — never 0 — when there is
+ * no marker: Planner omits the suffix at 0%, but so does a To Do task that has
+ * no such field at all, and "not started" is a different fact from "this kind
+ * of task cannot say". Only the marker NEURO writes counts, so a percentage a
+ * human typed into a NEURO task's own text is not mistaken for Planner state.
+ */
+function msPercentComplete(task) {
+  if (task.task_id != null) return null;              // NEURO owns it; status is the field
+  if (!task.ms_id) return null;                       // not a Microsoft row
+  const m = /\((\d{1,3})%\)/.exec(task.text || '');
+  if (!m) return null;
+  const pct = Number(m[1]);
+  return pct >= 0 && pct <= 100 ? pct : null;
+}
+
 function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5) {
   return (tasks || [])
     .map((task) => decorateTask(task, todayStr))
@@ -227,6 +246,18 @@ function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5) {
       // `dueToday` came to be read as undefined by `buildFollowThroughCandidate`
       // (#73/#74). The WIP badge and its toggle both key on this.
       status: task.status || 'open',
+      // ⚠ Planner progress that ALREADY EXISTS, recovered from the text.
+      //
+      // `syncMicrosoftTasks` writes Planner's percentComplete into the mirror
+      // line as a "(75%)" suffix, so the number is already on screen — Nick's
+      // Must Move lane shows "Re-instate reglar 121s with team (75%)" and that
+      // 75 is Planner's, not something he typed. Nothing had ever read it back,
+      // so NEURO could not tell a task three-quarters done from an untouched
+      // one, and a WIP button that blindly PATCHed percentComplete=50 would
+      // have REDUCED it — destroying real progress in a shared board his team
+      // reads. Parsed here rather than in the client because the format is
+      // NEURO's own output and the rule belongs with a test.
+      percentComplete: msPercentComplete(task),
       filePath: task.filePath || null,
       lineNumber: task.lineNumber != null ? task.lineNumber : null,
       ageDays: task.ageDays,

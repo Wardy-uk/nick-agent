@@ -996,9 +996,18 @@ async function completeTodoTask(taskId, listId = null) {
 
 // Planner PATCHes are optimistically concurrent — Graph rejects them without a
 // matching If-Match etag, so read the task first.
-async function completePlannerTask(taskId) {
+/**
+ * Set a Planner task's progress. Planner has exactly three states and they are
+ * expressed as one number: 0 not started, 50 in progress, 100 complete.
+ *
+ * Generalised out of `completePlannerTask` so "started" and "done" travel the
+ * same path — the etag read, the If-Match write and the failure reasons are
+ * identical, and a second copy would drift on the half that matters (Planner
+ * rejects a PATCH without a fresh etag, so the read is not optional).
+ */
+async function setPlannerPercent(taskId, percent) {
   const token = await getAccessToken();
-  if (!token) return { completed: false, reason: 'auth' };
+  if (!token) return { ok: false, reason: 'auth' };
 
   let etag = null;
   try {
@@ -1007,21 +1016,65 @@ async function completePlannerTask(taskId) {
   } catch (e) {
     console.warn(`[Planner] Could not read ${taskId}: ${e.message}`);
   }
-  if (!etag) return { completed: false, reason: 'not_found' };
+  if (!etag) return { ok: false, reason: 'not_found' };
 
   const result = await graphWrite(
     `/planner/tasks/${encodeURIComponent(taskId)}`,
     'PATCH',
-    { percentComplete: 100 },
+    { percentComplete: percent },
     token,
     { 'If-Match': etag }
   );
   if (!result.ok) {
-    console.warn(`[Planner] Complete failed for ${taskId}: ${result.reason} ${result.detail || ''}`);
-    return { completed: false, reason: result.reason };
+    console.warn(`[Planner] percentComplete=${percent} failed for ${taskId}: ${result.reason} ${result.detail || ''}`);
+    return { ok: false, reason: result.reason };
   }
-  console.log(`[Planner] Completed ${taskId}`);
-  return { completed: true, kind: 'planner' };
+  console.log(`[Planner] ${taskId} → ${percent}%`);
+  return { ok: true, kind: 'planner' };
+}
+
+async function completePlannerTask(taskId) {
+  const r = await setPlannerPercent(taskId, 100);
+  return r.ok ? { completed: true, kind: 'planner' } : { completed: false, reason: r.reason };
+}
+
+/**
+ * Mark a Microsoft-owned task started, or put it back to not started.
+ *
+ * ⚠ This WRITES to a shared Planner board, so Nick's team can see it. That is
+ * the point rather than a side effect — a task he has actually started reading
+ * as "not started" to everyone else is the thing worth fixing — but it is why
+ * this is not silently inferred from anything. It happens only on his click.
+ *
+ * To Do has its own vocabulary (`status: inProgress|notStarted`) and no etag
+ * requirement, so the two are not merged into one call.
+ */
+async function setMicrosoftTaskProgress(taskId, started, source = null, listId = null) {
+  if (!taskId) return { ok: false, reason: 'no_task_id' };
+
+  if (/planner/i.test(source || '')) return setPlannerPercent(taskId, started ? 50 : 0);
+
+  if (/todo|to-do/i.test(source || '')) {
+    const token = await getAccessToken();
+    if (!token) return { ok: false, reason: 'auth' };
+    // Same resolver completion uses — the persisted task→list cache with a
+    // one-off walk on a miss. A second lookup path here would heal differently.
+    const list = listId || await _resolveTodoList(taskId, token);
+    if (!list) return { ok: false, reason: 'list_not_found' };
+    const result = await graphWrite(
+      `/me/todo/lists/${encodeURIComponent(list)}/tasks/${encodeURIComponent(taskId)}`,
+      'PATCH',
+      { status: started ? 'inProgress' : 'notStarted' },
+      token
+    );
+    return result.ok ? { ok: true, kind: 'todo' } : { ok: false, reason: result.reason };
+  }
+
+  // Unknown source: try Planner, fall back to To Do. Same order and the same
+  // reasoning as completeMicrosoftTask — a wrong hint sends it to the wrong API.
+  const planner = await setPlannerPercent(taskId, started ? 50 : 0);
+  if (planner.ok) return planner;
+  return setMicrosoftTaskProgress(taskId, started, 'todo', listId);
 }
 
 // Complete by id, using the vault's section label as a hint. Without one, try
@@ -1449,6 +1502,8 @@ module.exports = {
   completeTodoTask,
   completePlannerTask,
   completeMicrosoftTask,
+  setPlannerPercent,
+  setMicrosoftTaskProgress,
   graphFetch,
   graphWrite,
   // pure, exported for the tests — the map surgery is the part worth pinning

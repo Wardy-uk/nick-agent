@@ -194,3 +194,42 @@ test('a task with no status reads as open, never undefined', () => {
   ], '2026-08-27');
   assert.strictEqual(lane[0].status, 'open', 'undefined would make the WIP toggle one-way');
 });
+
+// ── Planner progress is read, never invented or overwritten ─────────────────
+//
+// syncMicrosoftTasks renders Planner's percentComplete into the mirror line as
+// a "(75%)" suffix, so the number is already on Nick's screen. Nothing read it
+// back, so a WIP button that PATCHed percentComplete=50 would have REDUCED a
+// task already at 75% — destroying real progress on a board his team reads.
+
+test('a Planner row reports the progress already in its text', () => {
+  const lane = buildTodayLane([
+    { ms_id: 'p1', text: 'Re-instate reglar 121s with team (75%)', source: 'MS Planner', moscow: 'must', priority: 'high' },
+  ], '2026-08-27');
+  assert.strictEqual(lane[0].percentComplete, 75);
+});
+
+test('a Planner row with no marker is null, not zero', () => {
+  // Planner omits the suffix at 0%, and a To Do task has no such field at all.
+  // "Not started" and "cannot say" are different facts.
+  const lane = buildTodayLane([
+    { ms_id: 'p2', text: 'Brief TPJ and Dev teams', source: 'MS Planner', moscow: 'must', priority: 'high' },
+  ], '2026-08-27');
+  assert.strictEqual(lane[0].percentComplete, null);
+});
+
+test('a NEURO task never reports Planner progress, even if its text has a percentage', () => {
+  // Nick writing "(50%)" into his own task's wording is not Planner state, and
+  // reading it as such would put a WIP badge on an untouched task.
+  const lane = buildTodayLane([
+    { task_id: 9, text: 'Cut the backlog (50%) by Friday', status: 'open', moscow: 'must', priority: 'high' },
+  ], '2026-08-27');
+  assert.strictEqual(lane[0].percentComplete, null);
+});
+
+test('a nonsense percentage is rejected rather than carried', () => {
+  const lane = buildTodayLane([
+    { ms_id: 'p3', text: 'Weird one (999%)', source: 'MS Planner', moscow: 'must', priority: 'high' },
+  ], '2026-08-27');
+  assert.strictEqual(lane[0].percentComplete, null);
+});

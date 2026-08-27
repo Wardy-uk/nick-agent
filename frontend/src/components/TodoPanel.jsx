@@ -429,6 +429,20 @@ function SuggestedTodoQueue({ items, actingId, selected, onToggleSelect, onSelec
  * display key — parseVaultTodos numbers todos as it walks them — so ticking by
  * it would complete an unrelated task.
  */
+/**
+ * Who can hold a "started" state, and under what key.
+ *
+ * A NEURO row keeps it in `tasks.status`. A Microsoft row keeps it in Planner or
+ * To Do, because Microsoft owns that task — a local copy would be a second
+ * source of truth for a field they already have. A daily-note checkbox has
+ * neither and gets no button rather than a broken one.
+ */
+function wipKeyFor(todo) {
+  if (todo.task_id) return `wip:${todo.task_id}`;
+  if (todo.ms_id) return `wip:ms:${todo.ms_id}`;
+  return null;
+}
+
 function MustMoveLane({ items, toggling, onToggle, onSetWip }) {
   if (!items.length) return null;
 
@@ -448,8 +462,18 @@ function MustMoveLane({ items, toggling, onToggle, onSetWip }) {
           // and the checkbox says so rather than failing on click.
           const toggleKey = item.task_id ? `task:${item.task_id}` : `${item.filePath}:${item.lineNumber}`;
           const canComplete = Boolean(item.task_id) || (item.filePath && item.lineNumber != null);
-          const wipKey = `wip:${item.task_id}`;
-          const isWip = item.status === 'in-progress';
+          const wipKey = wipKeyFor(item);
+          const pct = item.percentComplete;
+          // A Microsoft row is already in progress if Planner says so. That is
+          // read, not clicked — those tasks were at 75% and 25% before this
+          // button existed.
+          const isWip = item.status === 'in-progress' || (pct != null && pct > 0 && pct < 100);
+          // Never offer a control that would LOWER progress Planner already
+          // holds. Starting something at 0% is safe; "un-starting" a task at
+          // 75% would throw away real work on a board Nick's team reads, so
+          // above zero this renders as a badge and Planner stays the place to
+          // change it.
+          const canToggleWip = Boolean(wipKey) && (item.task_id ? true : !(pct > 0));
           return (
           <div key={item.id} className={`todo-suggestion-card${isWip ? ' todo-suggestion-card-wip' : ''}`}>
             <button
@@ -470,7 +494,11 @@ function MustMoveLane({ items, toggling, onToggle, onSetWip }) {
               <div className="todo-suggestion-meta">
                 {/* WIP first, because it is the one tag that describes what is
                     happening now rather than how the task was filed. */}
-                {isWip && <span className="todo-tag todo-tag-wip">WIP</span>}
+                {isWip && (
+                  <span className="todo-tag todo-tag-wip">
+                    {pct != null && pct > 0 ? `WIP ${pct}%` : 'WIP'}
+                  </span>
+                )}
                 <span className="todo-tag">{item.moscow}</span>
                 {item.context && <span className="todo-tag">{item.context}</span>}
                 {typeof item.ageDays === 'number' && item.ageDays > 0 && (
@@ -479,18 +507,27 @@ function MustMoveLane({ items, toggling, onToggle, onSetWip }) {
                 {item.due_date && <span className="todo-due">{formatDue(item.due_date)}</span>}
               </div>
             </div>
-            {/* Only DB-owned tasks can hold a status. A Microsoft line or a
-                daily-note checkbox has no row to put it on, so the button is
-                absent rather than present-and-broken. */}
-            {item.task_id && (
+            {/* Absent, not disabled, when nothing can hold the state — a
+                daily-note checkbox has neither a NEURO row nor an ms_id. */}
+            {canToggleWip && (
               <button
                 className={`todo-wip-btn${isWip ? ' active' : ''}`}
                 disabled={toggling[wipKey]}
-                title={isWip ? 'Started — click to put it back to not started' : 'Mark as work in progress (it stays in this lane)'}
+                title={isWip
+                  ? 'Started — click to put it back to not started'
+                  : item.task_id
+                    ? 'Mark as work in progress (it stays in this lane)'
+                    : 'Mark in progress — this updates Planner, so your team sees it too'}
                 onClick={() => onSetWip(item)}
               >
                 {toggling[wipKey] ? '…' : isWip ? '● WIP' : 'WIP'}
               </button>
+            )}
+            {!canToggleWip && pct > 0 && (
+              // Already under way in Planner. Shown, not offered — see above.
+              <span className="todo-wip-btn active" title={`Planner has this at ${pct}% — change it there`}>
+                ● {pct}%
+              </span>
             )}
           </div>
           );
@@ -707,17 +744,34 @@ export default function TodoPanel({ focusContext, onClearContext }) {
    * to carry the status, and the button says so rather than failing on click.
    */
   const setWip = async (todo) => {
-    if (!todo.task_id) return;
-    const key = `wip:${todo.task_id}`;
+    const key = wipKeyFor(todo);
+    if (!key) return;
+    const starting = todo.status !== 'in-progress';
     setToggling(prev => ({ ...prev, [key]: true }));
     try {
-      const next = todo.status === 'in-progress' ? 'open' : 'in-progress';
-      const res = await fetch(apiUrl(`/api/tasks/${todo.task_id}`), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: next }),
-      });
-      if (!res.ok) console.error('[TodoPanel] WIP toggle failed:', res.status);
+      let res;
+      if (todo.task_id) {
+        res = await fetch(apiUrl(`/api/tasks/${todo.task_id}`), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: starting ? 'in-progress' : 'open' }),
+        });
+      } else {
+        // Microsoft owns this one, so its progress goes to Planner/To Do rather
+        // than into a shadow copy here. Four of five Must Move rows are Planner
+        // tasks, so without this the button would be missing from most of the
+        // lane it was asked for.
+        res = await fetch(apiUrl('/api/todos/wip-ms'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ msId: todo.ms_id, source: todo.source, started: starting }),
+        });
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        console.error('[TodoPanel] WIP toggle failed:', res.status, body.error || '');
+        setHoldNotice({ reason: body.error || 'Could not update Microsoft', text: todo.text });
+      }
       if (mode === 'focused') refreshFocus(); else await fetchTodos();
     } catch (e) {
       console.error('[TodoPanel] WIP toggle error:', e);

@@ -220,6 +220,49 @@ router.post('/toggle', (req, res) => {
   }
 });
 
+/**
+ * POST /api/todos/wip-ms — mark a Microsoft-owned task started, or put it back.
+ *
+ * Four of the five rows in Nick's Must Move lane are MS Planner tasks, so a WIP
+ * button that only worked on NEURO-owned rows would be missing from exactly the
+ * work he wanted to mark. Microsoft owns those tasks, so the status belongs
+ * there — Planner's own in-progress state — rather than in a shadow copy NEURO
+ * keeps beside it. Storing it locally would be a second source of truth for a
+ * field Microsoft already has, which is the thing task-dedupe exists to undo.
+ *
+ * ⚠ NO webhook fallback, unlike complete-ms. Power Automate's flow completes a
+ * task; there is nothing behind it for progress, and reporting `pushed: none`
+ * honestly beats inventing a path that does not exist.
+ */
+router.post('/wip-ms', async (req, res) => {
+  try {
+    const { msId, source, listId, started } = req.body || {};
+    if (!msId) return res.status(400).json({ error: 'msId required' });
+
+    const result = await microsoft.setMicrosoftTaskProgress(
+      msId, started !== false, source || null, listId || null
+    );
+    if (result.ok) return res.json({ ok: true, pushed: result.kind || 'graph', started: started !== false });
+
+    const reasons = {
+      auth: 'Microsoft sign-in expired — reconnect 365.',
+      scope: 'Tasks permission not granted — re-consent to Microsoft.',
+      list_not_found: 'Could not find the task in any To Do list.',
+      not_found: 'Task not found in Planner.',
+    };
+    // The click did nothing, and says so. A silent failure here would leave the
+    // button looking like it worked while Planner still reads "not started".
+    res.status(502).json({
+      ok: false,
+      pushed: 'none',
+      error: reasons[result.reason] || `Microsoft push failed (${result.reason})`,
+    });
+  } catch (e) {
+    console.error('[Todos] MS WIP error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/todos/complete-ms — complete a Microsoft To-Do/Planner task and
 // toggle the vault mirror. Pushes over Graph and reports whether it landed;
 // Power Automate stays as the fallback for when Graph auth is expired.
