@@ -88,6 +88,26 @@ router.post('/nova-sync', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/1to1/nova-writeback { apply?, since? } — pull completed 1-2-1s from NOVA
+ * into the People cards, then regenerate the tracker.
+ *
+ * Dry-run by default. The 22:20 cron calls this with apply; `since` overrides the
+ * watermark for a backfill.
+ */
+router.post('/nova-writeback', async (req, res) => {
+  try {
+    const result = await require('../services/nova-121-writeback').writeBack({
+      apply: req.body?.apply === true,
+      since: typeof req.body?.since === 'string' ? req.body.since : null,
+    });
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    console.error('[1to1/nova-writeback]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Propose a slot. Reads the calendar; creates nothing.
 router.post('/propose', async (req, res) => {
   try {

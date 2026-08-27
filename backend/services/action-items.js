@@ -98,6 +98,11 @@ function findActionItems({ person, status = 'open', daysBack = 90 } = {}) {
     path.join(vault, 'Meetings'),
     path.join(vault, 'Tasks'),
     path.join(vault, 'Documents', 'HR'),
+    // People cards carry the commitments made in NOVA 1-2-1s, written back by
+    // nova-121-writeback. Without this they were parseable but unreachable — the whole
+    // point of writing them in Obsidian task syntax is that this finds them. Safe to add:
+    // People notes carried no checkboxes at all before that job existed.
+    path.join(vault, 'People'),
   ];
 
   const results = [];
@@ -136,4 +141,7 @@ function findActionItems({ person, status = 'open', daysBack = 90 } = {}) {
   return results;
 }
 
-module.exports = { findActionItems };
+// `parseActionLine` is exported so nova-121-writeback can prove, in a test, that the
+// lines it writes into People cards are actually readable by this parser. The two are a
+// contract — writer and reader of the same syntax — and it was only checked by eye.
+module.exports = { findActionItems, _internals: { parseActionLine } };

@@ -156,7 +156,17 @@ async function get121State({ days = 60 } = {}) {
   return call(`/api/neuro-bridge/121/state?days=${encodeURIComponent(days)}`);
 }
 
+/**
+ * 1-2-1s NOVA has finished running, with the actions agreed in them.
+ *
+ * A nightly batch rather than an interactive path, and it reads two tables on a
+ * DTU-limited instance, so it gets a longer leash than the escalation default.
+ */
+async function get121Completed({ since }) {
+  return call(`/api/neuro-bridge/121/completed?since=${encodeURIComponent(since)}`, { timeoutMs: 60000 });
+}
+
 module.exports = {
   isConfigured, listUrgencyReasons, listEscalations, getTicket, escalate, call,
-  push121Booking, cancel121, push121Cadence, get121State,
+  push121Booking, cancel121, push121Cadence, get121State, get121Completed,
 };

@@ -215,6 +215,7 @@ function start() {
     }
   });
 
+
   // Retiring yesterday's banner is a DAILY job, not a weekday one — nagCheck
   // below runs Mon-Fri only, so a Saturday nudge survived the rollover and
   // Sunday raised a second row for the same fact (see clearStaleNudges).
@@ -448,6 +449,27 @@ function start() {
     } catch (e) {
       console.error('[Scheduler] 1-2-1 sync failed:', e.message);
     }
+    // Then pull the 1-2-1s NOVA has RUN back into the same cards — actions agreed in
+    // the click-through, plus `last-1-2-1` from its `completed_at`.
+    //
+    // Hung off the rollup rather than given its own cron for the same reason the tracker
+    // hangs off syncPeopleNotes: both write `last-1-2-1`, from different evidence, and a
+    // separate schedule only HOPES the detector has finished. Here the order is a fact.
+    // It runs after the detector on purpose — a written-up note is the stronger claim.
+    (async () => {
+      try {
+        const wb = await require('./nova-121-writeback').writeBack({ apply: true });
+        if (!wb.ok) { console.warn(`[Scheduler] NOVA 1-2-1 write-back failed: ${wb.error}`); return; }
+        if (wb.people.length || wb.failed.length || wb.skipped.length) {
+          const actions = wb.people.reduce((n, p) => n + p.newActions, 0);
+          console.log(`[Scheduler] NOVA 1-2-1 write-back: ${wb.people.length} card(s), ${actions} new action(s), ${wb.skipped.length} skipped, ${wb.failed.length} failed`);
+          for (const s of wb.skipped) console.warn(`[Scheduler] 1-2-1 write-back skipped ${s.person}: ${s.reason}`);
+          for (const f of wb.failed) console.warn(`[Scheduler] 1-2-1 write-back failed ${f.person}: ${f.error}`);
+        }
+      } catch (e) {
+        console.warn('[Scheduler] NOVA 1-2-1 write-back threw:', e.message);
+      }
+    })();
     // People gap — nothing else in NEURO ever proposed a People note, so the
     // roster only grew when Nick typed one in and every consumer keyed off it
     // stayed capped. READ-ONLY: reports to Vault Audit, creation is an explicit
