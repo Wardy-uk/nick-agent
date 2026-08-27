@@ -14,7 +14,22 @@ const knowledgeGaps = require('./knowledge-gaps');
 const vaultHooks = require('./vault-hooks');
 
 const VAULT_PATH = () => process.env.OBSIDIAN_VAULT_PATH || '';
-const RAW_FOLDERS = ['Plaud/Summaries', 'Meetings/transcripts', 'Imports', 'Meetings', 'Daily'];
+// ⚠ `Meetings/transcripts` is where transcripts were SUPPOSED to land and holds
+// zero files — `backend/.env` sets `PLAUD_TRANSCRIPT_FOLDER=Plaud/Transcripts`,
+// which is where all 311 of them actually are. Scanning an empty folder finds
+// nothing and raises nothing, so the raw-intake pass had never read a transcript.
+// Both are listed: the configured one because it is the truth, the old one
+// because `imports.canonicalizePlaudTranscript` can still put a rescued stray
+// there. Measured before changing: adding the folder moves consolidation items
+// 2 -> 2, so this reads more and writes nothing new (see groupPlaudNotes).
+const RAW_FOLDERS = [
+  'Plaud/Summaries',
+  'Plaud/Transcripts',
+  'Meetings/transcripts',
+  'Imports',
+  'Meetings',
+  'Daily',
+];
 const TRUSTED_ROOTS = ['Knowledge', 'Projects', 'Areas', 'People', 'Documents'];
 const REFLECTION_DIR = 'Reflections/Knowledge';
 const REPORT_DIR = 'Documents/System/SARA Import Reports';
@@ -270,7 +285,10 @@ function noteDateParts(note) {
 function scorePromotionCandidate(note) {
   let score = 0;
   if (note.path.startsWith('Plaud/Summaries/')) score += 5;
-  if (note.path.startsWith('Meetings/transcripts/')) score += 3;
+  // Both transcript locations score the same — the folder a transcript sits in is
+  // a deployment detail, not a statement about how good a promotion candidate it
+  // is. Scoring only the empty one meant this arm had never fired.
+  if (note.path.startsWith('Meetings/transcripts/') || note.path.startsWith('Plaud/Transcripts/')) score += 3;
   if (note.path.startsWith('Meetings/')) score += 2;
   if (note.wordCount > 350) score += 2;
   if (note.links > 0) score += 1;

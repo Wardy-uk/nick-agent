@@ -281,7 +281,25 @@ function canonicalizePlaudTranscript(transcriptPath, { summaryRelativePath = nul
   let finalRelativePath = currentRelative;
   let finalFullPath = transcriptPath;
 
-  if (currentRelative !== canonical.relativePath) {
+  // ⚠ A transcript already inside the CONFIGURED transcript folder is where it is
+  // meant to be — leave it alone.
+  //
+  // This function hardcodes `Meetings/transcripts/YYYY/MM/`, but the live sync
+  // writes to `PLAUD_TRANSCRIPT_FOLDER` (`Plaud/Transcripts` on the Pi), and all
+  // 311 transcripts are there. Without this guard, running `/api/plaud/cleanup`
+  // relocates every one of them — and because `routePlaudSummary` runs BEFORE the
+  // move with the pre-move path, each summary's `transcript_path:` is left
+  // pointing at a file that is no longer there. 300+ broken links, from a
+  // maintenance endpoint whose whole job is tidying up.
+  //
+  // Rescuing a genuinely stray transcript from somewhere else still works — that
+  // is what this was for. It just stops being a mass relocation.
+  const configuredRoot = String(process.env.PLAUD_TRANSCRIPT_FOLDER || 'Meetings/transcripts')
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+  const alreadyInPlace = currentRelative.startsWith(`${configuredRoot}/`);
+
+  if (!alreadyInPlace && currentRelative !== canonical.relativePath) {
     const canonicalFullPath = path.join(vaultPath, canonical.relativePath);
     if (fs.existsSync(canonicalFullPath) && path.resolve(canonicalFullPath) !== path.resolve(transcriptPath)) {
       const parsed = path.parse(canonical.relativePath);
