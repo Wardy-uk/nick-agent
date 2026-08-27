@@ -247,6 +247,8 @@ Run it roughly like this, adapting to his answers:
 5. When you have the focus, call set_focus, then tell him you're done and he can go.
 
 ## Rules
+- If today's focus IS a carried commitment, resolve it with resolve_commitment("today") — do NOT also list it as a new focus item. They are one job, and treating them as two is how the list breeds.
+- The carried list is what the NOTES say, not what Nick remembers. If he says he never committed to something, or has no idea what it refers to, believe him: drop it with resolve_commitment and move on. Do not argue him through it, and do not keep re-asking about the same item.
 - Challenge vague commitments ONCE, then accept what he gives you and move on. Pushing twice is nagging, and nagging is what makes him close the tab.
 - If he says he is struggling, drop the process. Ask what is in the way. The ritual matters less than the answer.
 - Never guess a commitment key or task id — use the ones in the context.
@@ -569,6 +571,27 @@ function _weekString(d) {
   return `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
 }
 
+// The same commitment worded two ways is one commitment. Reuses task-dedupe's
+// matcher at the CAPTURE threshold (0.85), not its own 0.42 — measured on Nick's
+// real note: "Verify and compile her response" against "Verify and compile
+// Phillipa's email response" scores 1.0 (containment), while "Handle Phillipa's
+// email" against "Collate Phillipa's data and reply within the hour" scores
+// 0.076 and correctly stays a separate line. Conservative on purpose: a missed
+// merge leaves a visible duplicate, a wrong merge silently deletes a commitment
+// from the note Nick works from.
+const FOCUS_DUPE_SCORE = 0.85;
+
+function _findDuplicate(text, existing) {
+  if (!existing.length) return -1;
+  try {
+    const hit = require('./task-dedupe').findEquivalent(text, existing, { minScore: FOCUS_DUPE_SCORE });
+    return hit ? hit.index : -1;
+  } catch {
+    // No matcher is not a reason to lose a line — fall back to exact text.
+    return existing.findIndex(e => e.trim().toLowerCase() === String(text).trim().toLowerCase());
+  }
+}
+
 /**
  * Build the morning daily note. Same section headings as the old guided flow —
  * standup-accountability parses them back tomorrow to work out what was carried,
@@ -580,18 +603,60 @@ function _renderDailyNote(session) {
   const acc = session.context.accountability;
   const byKey = new Map((o.commitments || []).map(c => [c.key, c]));
 
-  const focusLines = (o.focus || []).map(text => `- [ ] ${text} #focus`);
+  // ⚠ Today's focus and the carried list OVERLAP, and until 27 Aug 2026 nothing
+  // reconciled them. `o.focus` is what Nick agreed this morning; the carried
+  // list is what he agreed on previous mornings — and the commonest case by far
+  // is that they are THE SAME COMMITMENT, because a thing he did not finish
+  // yesterday is exactly the thing he commits to today.
+  //
+  // Rendered separately, one job appeared twice in Focus Today: his note on
+  // 27 Aug held "Review Vantage prototype and sign off" byte-identically twice,
+  // and "Verify and compile her response" beside "Verify and compile Phillipa's
+  // email response". Six lines for three jobs.
+  //
+  // It compounds, which is what made it worth chasing rather than tidying:
+  // today's Focus Today is what standup-accountability parses as tomorrow's
+  // carry source, so every duplicate is re-read as another distinct open
+  // commitment the next morning. That is why SARA opened the standup insisting
+  // on "four escalations" Nick had no memory of and could not find in his
+  // calendar, then contradicted herself about which day they came from. She was
+  // not malfunctioning; she was reasoning faithfully over a list that had been
+  // quietly breeding.
+  //
+  // The carried version WINS on a match, because `#carried-Nd` is the useful
+  // half — it is the only thing on the line that says how long this has been
+  // rolling, and that age is what the day-3 decision rule keys on.
+  const seen = [];
+  const focusLines = [];
+  const addFocus = (text, suffix) => {
+    const dupIndex = _findDuplicate(text, seen);
+    if (dupIndex !== -1) {
+      // Same job, said twice. Keep whichever line carries the provenance.
+      if (suffix.includes('#carried')) focusLines[dupIndex] = `- [ ] ${text} ${suffix}`;
+      return;
+    }
+    seen.push(text);
+    focusLines.push(`- [ ] ${text} ${suffix}`);
+  };
+
+  for (const text of (o.focus || [])) addFocus(text, '#focus');
 
   const carried = [];
   const dropped = [];
   for (const c of (acc?.openCommitments || [])) {
     const decision = byKey.get(c.key);
-    if (!decision) { carried.push(`- [ ] ${c.text} #carried-${c.daysCarried}d`); continue; }
-    if (decision.decision === 'today') focusLines.push(`- [ ] ${c.text} #focus #carried-${c.daysCarried}d`);
+    const tag = `#carried-${c.daysCarried}d`;
+    if (!decision) {
+      // Not decided this morning — but if today's focus already covers it, it
+      // must NOT also sit in Carry-Overs, or tomorrow reads one job as two.
+      if (_findDuplicate(c.text, seen) === -1) carried.push(`- [ ] ${c.text} ${tag}`);
+      continue;
+    }
+    if (decision.decision === 'today') addFocus(c.text, `#focus ${tag}`);
     else if (decision.decision === 'dropped') dropped.push(`- ~~${c.text}~~ (dropped after ${c.daysCarried} days)`);
     else if (decision.decision === 'scheduled') dropped.push(`- ${c.text} → scheduled for ${decision.due_date || 'a date'}`);
     else if (decision.decision === 'done') dropped.push(`- ~~${c.text}~~ (already done)`);
-    else carried.push(`- [ ] ${c.text} #carried-${c.daysCarried}d`);
+    else if (_findDuplicate(c.text, seen) === -1) carried.push(`- [ ] ${c.text} ${tag}`);
   }
 
   if (!focusLines.length) focusLines.push('- [ ] (no focus agreed) #focus');

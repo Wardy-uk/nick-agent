@@ -37,6 +37,10 @@ const SECONDARY_ITEMS = [
   // read-only streak history. Only the history had a menu entry, so the ritual
   // itself was reachable only from a nudge banner or a push notification.
   { id: 'standup',    label: 'Standup',   icon: '✎' },
+  // Same reasoning one ritual later: EOD was reachable only from an "EOD"
+  // button inside the standup screen, so "how do I start end of day?" had no
+  // answer you could find by looking.
+  { id: 'eod',        label: 'End of day', icon: '✓' },
   { id: 'standups',   label: 'Standup history', icon: '>' },
   { id: 'journal',    label: 'Journal',   icon: '>' },
   // #28 — the route and the table both existed and nothing read them. A panel

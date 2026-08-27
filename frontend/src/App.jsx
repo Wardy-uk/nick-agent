@@ -272,6 +272,10 @@ function AuthenticatedApp() {
       case 'today': return <AdhdPanel onNavigate={handleNavigate} />;
       case 'dashboard': return <Dashboard onNavigate={handleNavigate} />;
       case 'standup': return <StandupEditor />;
+      // EOD is the same screen with the end-of-day half already open. It had no
+      // menu entry at all and sat behind a three-letter button in the standup
+      // header — the identical hole the 'standup' entry above was added to fix.
+      case 'eod': return <StandupEditor startWithEod />;
       case 'people': return <PeopleBoard />;
       case 'plan': return <NinetyDayPlan />;
       case 'todos': return <TodoPanel focusContext={navContext} onClearContext={() => setNavContext(null)} />;

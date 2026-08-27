@@ -116,13 +116,15 @@ function TodayStandup() {
   );
 }
 
-export default function StandupEditor() {
+export default function StandupEditor({ startWithEod = false }) {
   const [mode, setMode] = useState('guided'); // 'guided' | 'manual'
   const [content, setContent] = useState('');
   const [contentSet, setContentSet] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
-  const [showEod, setShowEod] = useState(false);
+  // Arriving from the "End of day" menu entry opens straight into EOD rather
+  // than the morning standup.
+  const [showEod, setShowEod] = useState(startWithEod);
   const [eodMode, setEodMode] = useState('guided'); // 'guided' | 'quick'
   const [guidedDone, setGuidedDone] = useState(false);
   const [forceRedo, setForceRedo] = useState(false);
@@ -145,9 +147,10 @@ export default function StandupEditor() {
 
   // Auto-show EOD after 5pm
   useEffect(() => {
+    if (startWithEod) return;
     const now = new Date();
     if (now.getDay() >= 1 && now.getDay() <= 5 && now.getHours() >= 17) setShowEod(true);
-  }, []);
+  }, [startWithEod]);
 
   const handleSaveToDaily = async () => {
     setSaving(true);
@@ -227,10 +230,17 @@ export default function StandupEditor() {
       {/* Guided mode — now a real conversation with the brain, not a fixed
           three-question stepper. The transcript lives on the Pi, so a dropped
           request is a retry rather than a lost standup. */}
-      {mode === 'guided' && !standupDone && (
+      {mode === 'guided' && !standupDone && !guidedDone && (
         <StandupSession
           kind="standup"
-          onDone={() => { setGuidedDone(true); setForceRedo(false); setMode('manual'); }}
+          // ⚠ Do NOT setMode('manual') here. Finishing used to flip to manual,
+          // which meant the "Standup done — written to vault" panel below (gated
+          // on mode === 'guided') was unreachable BY CONSTRUCTION: pressing
+          // "Write the daily note" appeared to abandon the conversation and drop
+          // Nick into a raw editor holding the empty `## Yesterday / ## Today`
+          // template. The note had in fact been written; nothing on screen said
+          // so, and the empty template read as if the standup had been lost.
+          onDone={() => { setGuidedDone(true); setForceRedo(false); }}
           onSwitchToManual={() => setMode('manual')}
         />
       )}
