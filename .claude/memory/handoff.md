@@ -79,6 +79,40 @@ seen a dry run himself.
 7. **`feat(standup)` 2e5eb8d** — SARA identity on the standup/EOD conversation.
    The prompt already used `VOICE_FULL`; the screen never said whose it was.
 
+8. **`feat/fix(tasks)` e5c11fc + 12b8c34** — WIP button on Must Move Today.
+   `in-progress` was already a valid status with no way to set it. Task STAYS
+   in the lane (Nick's call). Two traps: `buildTodayLane`'s whitelist dropped
+   `status` (toggle would have been one-way), and **Planner rows already carry
+   real progress** — see mistakes.md.
+
+## ⚠ OPEN — can NEURO read Nick's leave from NOVA? (unresolved)
+
+Nick: *"I should be [in it] — but not sure how it's all mapped together."* So
+this needs VERIFYING, not assuming, before anything is built.
+
+What is established:
+- `agent_availability` in the **NOVA** database (`bym-asqlep01`, db `NOVA`) is
+  live: 114 rows, 14 distinct people, 13 May → 10 Sep, last sync 11:34 on
+  27 Aug, `source: 'peoplehr'`, statuses `annual_leave`/`sick` with reasons.
+- `roster_id` = **`dbo.Agent.AgentId`** in the KPI db (`TechSupportJSM`),
+  filtered `IsActive = 1 AND Department = 'NT'` — the ticket-assignment agent
+  pool. Nick manages that pool, so he may well not be in it. 14 people vs his
+  13 reports is suggestive and proves nothing.
+- **Could not resolve the mapping**: NOVA's own `agent_roster` table is EMPTY
+  (0 rows), and `kpi_sql_password` is absent from NOVA's `settings` table, so
+  `getKpiPool()` returns null and `dbo.Agent` is unreachable from here.
+- NOVA's `/availability/snapshot|upcoming|capacity` exist but sit behind
+  `requireAreaAccess` JWT, which the bridge secret does not satisfy — #65's
+  exact species. A bridge route is needed, precedent `neuro-bridge-kpi.ts`
+  with the shared `bridgeAuth`.
+
+Next step: get `dbo.Agent` readable (KPI credential, or `claude_readonly` per
+the global CLAUDE.md rule) and check for a Nick row with a `PeopleHrId`. If he
+is absent, the feed is still worth having — it tells NEURO who on his TEAM is
+off, for meeting prep, 1-2-1 booking and the day planner. The leave button
+stays either way: it works with NOVA or the Pi unreachable, and covers leave
+decided that morning.
+
 ## ⏳ PARKED — one interface, the chat (Nick, 27 Aug)
 
 "Maybe the longer term plan should be that there is only one interface — the
