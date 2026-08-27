@@ -1006,9 +1006,29 @@ function getTranscriptInsight(transcriptPath) {
   }
 }
 
-function groupPlaudNotes(rawNotes) {
+// ⚠ This grouping is why Plaud consolidation runs on 2 recordings out of 222.
+//
+// It pairs a recording's summary with its transcript by `plaud_id`, and only
+// considers notes under `Plaud/`. That was true when both halves lived there.
+// Summaries are now ROUTED OUT to `Meetings/YYYY/MM/` — 222 notes there carry a
+// `plaud_id` — so nearly every group ends up transcript-only and is dropped by
+// the `some(note_type === 'summary')` filter below. Silent: a pipeline that
+// processes 2 items looks identical to one with nothing to do.
+//
+// Widening it to key on `plaud_id` wherever the note lives is a DECISION, not a
+// bug fix: the consolidated note lands in `Meetings/YYYY/MM/` — the same folder
+// as the summary it was built from — so switching this on writes ~222 notes,
+// each one sitting beside the note it consolidates, at 30 an hour. Hence a flag,
+// default OFF, so the measurement and a sample can be taken without the
+// scheduler acting on it.
+const CONSOLIDATE_ALL_PLAUD = String(process.env.PLAUD_CONSOLIDATE_ALL || '').toLowerCase() === 'true';
+
+function groupPlaudNotes(rawNotes, { includeRouted = CONSOLIDATE_ALL_PLAUD } = {}) {
   const groups = new Map();
-  for (const note of rawNotes.filter((item) => item.path.startsWith('Plaud/'))) {
+  const inScope = (item) =>
+    item.path.startsWith('Plaud/') || (includeRouted && Boolean(item.frontmatter.plaud_id));
+
+  for (const note of rawNotes.filter(inScope)) {
     const plaudId = normalizePlaudId(note.frontmatter.plaud_id) || note.path;
     if (!groups.has(plaudId)) {
       groups.set(plaudId, {
