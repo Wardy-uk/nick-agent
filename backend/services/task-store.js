@@ -82,6 +82,12 @@ function toTodoShape(row) {
     source: 'NEURO',
     taskSource: row.source,
     ms_id: row.ms_id || null,
+    // Carried so a linked task's card can still say which Microsoft board the
+    // work is on. The Microsoft mirror line is suppressed once a pair is linked,
+    // so without these the provenance disappears at exactly the moment Nick
+    // confirmed it. Null throughout for a task NEURO alone owns.
+    msSource: row.ms_source || null,
+    msPlan: row.ms_plan || null,
     mustdo: row.moscow === 'must',
     moscow: row.moscow || null,
     moscowProposed: Boolean(row.moscow_proposed),

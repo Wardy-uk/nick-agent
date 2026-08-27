@@ -234,6 +234,10 @@ function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5) {
       // instead — the same owner order completeTask uses everywhere else.
       task_id: task.task_id != null ? task.task_id : null,
       ms_id: task.ms_id || null,
+      // The Planner board / To Do list, so a lane row names it like the list
+      // does. Null when unknown — never a stand-in for "we could not read it".
+      msPlan: task.msPlan || null,
+      msSource: task.msSource || null,
       text: task.text,
       priority: task.priority,
       moscow: task.moscow,

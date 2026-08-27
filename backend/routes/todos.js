@@ -36,6 +36,10 @@ router.get('/', (req, res) => {
       source: t.source || null,
       done: t.status === 'done' ? 1 : 0,
       ms_id: t.ms_id || null,
+      // Which Planner board / To Do list it belongs to. Null is a real answer —
+      // the card says nothing rather than naming a board NEURO could not read.
+      msPlan: t.msPlan || null,
+      msSource: t.msSource || null,
       mustdo: t.mustdo || false,
       vault_task: true,
       filePath: t.filePath || null,
@@ -141,6 +145,8 @@ router.get('/focus', async (req, res) => {
         source: t.source || null,
         done: t.status === 'done' ? 1 : 0,
         ms_id: t.ms_id || null,
+        msPlan: t.msPlan || null,
+        msSource: t.msSource || null,
         vault_task: true,
         filePath: t.filePath || null,
         lineNumber: t.lineNumber != null ? t.lineNumber : null,

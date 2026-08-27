@@ -861,6 +861,96 @@ async function fetchPlannerTasks() {
   return null;
 }
 
+// ── Which Planner plan is a task in? ─────────────────────────────────────────
+//
+// `/me/planner/tasks` returns a bare `planId` and no title, so every Planner
+// task NEURO mirrors reads simply "MS Planner" — true of all of them, and so
+// no help at all in telling which board a task belongs to. Graph has no batch
+// read for plan titles, so they are fetched one at a time and cached: there is
+// a handful of plans behind hundreds of tasks.
+//
+// A title that cannot be read stays UNKNOWN — never the plan id, never a guess.
+// A card naming the wrong board is worse than one naming none.
+const PLANNER_PLAN_CACHE_KEY = 'ms_planner_plan_titles';
+// A plan can be renamed, and a permanently cached title would never notice.
+const PLAN_TITLE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+let _plannerPlanTitles = null;
+
+function _plannerPlanCache() {
+  if (_plannerPlanTitles) return _plannerPlanTitles;
+  _plannerPlanTitles = new Map();
+  try {
+    const raw = require('../db/database').getState(PLANNER_PLAN_CACHE_KEY);
+    if (raw) {
+      for (const [planId, entry] of Object.entries(JSON.parse(raw))) {
+        if (planId && entry && entry.title) _plannerPlanTitles.set(planId, entry);
+      }
+    }
+  } catch (e) {
+    console.warn('[Planner] plan title cache load failed:', e.message);
+  }
+  return _plannerPlanTitles;
+}
+
+function _savePlannerPlanCache() {
+  try {
+    require('../db/database').setState(
+      PLANNER_PLAN_CACHE_KEY,
+      JSON.stringify(Object.fromEntries(_plannerPlanCache()))
+    );
+  } catch (e) {
+    console.warn('[Planner] plan title cache save failed:', e.message);
+  }
+}
+
+/**
+ * planId → plan title, for the ids asked for. A plan whose title could not be
+ * read is simply ABSENT from the map rather than present with a placeholder —
+ * the caller has to be able to tell "the board is X" from "we could not look".
+ *
+ * A stale cached title is preferred over nothing when the refresh fails: the
+ * board was called that last week, which beats the card going blank because
+ * Graph blinked.
+ */
+async function fetchPlannerPlanNames(planIds, now = Date.now()) {
+  const wanted = [...new Set((planIds || []).filter(Boolean))];
+  const out = new Map();
+  if (!wanted.length) return out;
+
+  const cache = _plannerPlanCache();
+  const stale = [];
+  for (const id of wanted) {
+    const hit = cache.get(id);
+    if (hit) out.set(id, hit.title);
+    if (!hit || !(now - (hit.at || 0) < PLAN_TITLE_TTL_MS)) stale.push(id);
+  }
+  if (!stale.length) return out;
+
+  const token = await getAccessToken();
+  if (!token) return out;
+
+  let changed = false;
+  for (const id of stale) {
+    try {
+      const plan = await graphFetch(`/planner/plans/${id}`, token);
+      const title = plan && typeof plan.title === 'string' ? plan.title.trim() : '';
+      if (title) {
+        out.set(id, title);
+        cache.set(id, { title, at: now });
+        changed = true;
+      } else if (!out.has(id)) {
+        console.warn(`[Planner] plan ${id} returned no title — tasks in it stay unattributed`);
+      }
+    } catch (e) {
+      // Keeps whatever the cache already had, if anything.
+      console.warn(`[Planner] plan ${id} title unavailable: ${e.message}`);
+    }
+  }
+  if (changed) _savePlannerPlanCache();
+  return out;
+}
+
 // Create a To-Do task via bridge
 async function createTodoTask(listId, title, body) {
   if (isBridgeConfigured()) {
@@ -1496,6 +1586,7 @@ module.exports = {
   fetchTodoLists,
   fetchTodoTasks,
   fetchPlannerTasks,
+  fetchPlannerPlanNames,
   createTodoTask,
   updateTodoTask,
   updatePlannerTask,

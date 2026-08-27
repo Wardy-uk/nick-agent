@@ -76,7 +76,7 @@ export default function TaskDedupe() {
     setBusyKey(pair.pairKey);
     try {
       const body = kind === 'link'
-        ? { taskId: pair.neuro.id, msId: pair.ms.ms_id, msSource: pair.ms.source }
+        ? { taskId: pair.neuro.id, msId: pair.ms.ms_id, msSource: pair.ms.source, msPlan: pair.ms.msPlan || null }
         : { taskId: pair.neuro.id, msId: pair.ms.ms_id };
       const res = await fetch(apiUrl(`/api/task-dedupe/${kind}`), {
         method: 'POST',
@@ -195,7 +195,9 @@ export default function TaskDedupe() {
                   />
                   <div className="dedupe-vs">vs</div>
                   <Side
-                    label={pair.ms.source || 'Microsoft'}
+                    label={pair.ms.msPlan
+                      ? `${pair.ms.source || 'Microsoft'} · ${pair.ms.msPlan}`
+                      : (pair.ms.source || 'Microsoft')}
                     tone="ms"
                     text={pair.ms.text}
                     due={pair.ms.due_date}
@@ -236,7 +238,11 @@ export default function TaskDedupe() {
               {links.map(l => (
                 <div key={l.taskId} className="dedupe-link-row">
                   <span className="dedupe-link-text">{l.text}</span>
-                  <span className="dedupe-chip dedupe-chip-quiet">{l.ms_source || 'Microsoft'}</span>
+                  <span className="dedupe-chip dedupe-chip-quiet">
+                    {/* The board, when it is known — "MS Planner" alone is true
+                        of every Planner task and so identifies none of them. */}
+                    {l.ms_plan ? `${l.ms_source || 'Microsoft'} · ${l.ms_plan}` : (l.ms_source || 'Microsoft')}
+                  </span>
                   <button
                     className="dedupe-btn dedupe-btn-small"
                     disabled={busyKey === `unlink-${l.taskId}`}

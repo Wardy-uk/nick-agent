@@ -26,6 +26,12 @@ function todayDateString() {
   return d.toISOString().split('T')[0]; // YYYY-MM-DD
 }
 
+// The `### ` heading `syncMicrosoftTasks` writes over Microsoft tasks whose plan
+// or list could not be read, and which `parseVaultTodos` reads back as null.
+// Written and parsed in one place so the two halves cannot drift — a heading the
+// parser did not recognise would arrive on a card as a literal plan name.
+const PLAN_UNKNOWN_HEADING = '(plan unknown)';
+
 // Daily notes
 function readTodayDailyNote() {
   const notePath = path.join(getVaultPath(), 'Daily', `${todayDateString()}.md`);
@@ -338,12 +344,23 @@ function parseVaultTodos(options = {}) {
     const content = fs.readFileSync(msPath, 'utf-8');
     const lines = content.split('\n');
     let msSection = 'Planner';
+    // The Planner board / To Do list the following tasks belong to, from the
+    // `### ` heading above them. Null until one is seen, and reset by every `## `
+    // — a plan name leaking across the Planner/ToDo boundary would file a task
+    // under a board it is not on.
+    let msPlan = null;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+      if (line.startsWith('### ')) {
+        const heading = line.slice(4).trim();
+        msPlan = heading && heading !== PLAN_UNKNOWN_HEADING ? heading : null;
+        continue;
+      }
       if (line.startsWith('## ')) {
         if (line.includes('Planner')) msSection = 'MS Planner';
         else if (line.includes('ToDo')) msSection = 'MS ToDo';
+        msPlan = null;
         continue;
       }
 
@@ -356,6 +373,7 @@ function parseVaultTodos(options = {}) {
         // ticked off. Unlinking in the review screen brings this line straight back.
         if (task.ms_id && linkedMs.has(task.ms_id)) continue;
         task.source = msSection;
+        task.msPlan = msPlan;
         task.priority = mergePriority(task.priority, 'normal');
         task.filePath = msPath;
         task.lineNumber = i;
@@ -1644,13 +1662,36 @@ async function syncMicrosoftTasks() {
         if (b.dueDateTime) return 1;
         return (a.title || '').localeCompare(b.title || '');
       });
+
+      // Which board each task lives on. Grouped under a `### <plan>` heading
+      // rather than appended to the line, so the plan survives the parse without
+      // any of it landing in the task's own text.
+      const planTitles = await microsoft.fetchPlannerPlanNames(active.map(t => t.planId));
+      const byPlan = new Map();
       for (const t of active) {
-        const due = t.dueDateTime ? ` 📅 ${t.dueDateTime.split('T')[0]}` : '';
-        const pct = t.percentComplete > 0 ? ` (${t.percentComplete}%)` : '';
-        lines.push(`- [ ] ${t.title}${pct}${due} <!--id:${t.id}-->`);
-        plannerCount++;
+        // A plan whose title could not be read groups under PLAN_UNKNOWN_HEADING
+        // — the parser reads that back as null. Never the raw planId: a GUID is
+        // not a board name, and printing one asserts a plan Nick cannot identify.
+        const heading = planTitles.get(t.planId) || PLAN_UNKNOWN_HEADING;
+        if (!byPlan.has(heading)) byPlan.set(heading, []);
+        byPlan.get(heading).push(t);
       }
-      lines.push('');
+      // Named plans first, alphabetically; the unattributed pile last.
+      const headings = [...byPlan.keys()].sort((a, b) => {
+        if (a === PLAN_UNKNOWN_HEADING) return 1;
+        if (b === PLAN_UNKNOWN_HEADING) return -1;
+        return a.localeCompare(b);
+      });
+      for (const heading of headings) {
+        lines.push(`### ${heading}`, '');
+        for (const t of byPlan.get(heading)) {
+          const due = t.dueDateTime ? ` 📅 ${t.dueDateTime.split('T')[0]}` : '';
+          const pct = t.percentComplete > 0 ? ` (${t.percentComplete}%)` : '';
+          lines.push(`- [ ] ${t.title}${pct}${due} <!--id:${t.id}-->`);
+          plannerCount++;
+        }
+        lines.push('');
+      }
     }
   } catch (e) {
     console.error('[Sync] Planner fetch failed:', e.message);
@@ -1668,7 +1709,10 @@ async function syncMicrosoftTasks() {
         if (list.wellknownListName === 'flaggedEmails') continue;
         const tasks = await microsoft.fetchTodoTasks(list.id);
         if (tasks && tasks.length > 0) {
-          if (list.displayName !== 'Tasks') lines.push(`### ${list.displayName}`, '');
+          // Always name the list, including the default "Tasks". It used to be
+          // omitted as noise, which left every task in it with no list at all —
+          // and "which list is this in" is exactly the question being answered.
+          lines.push(`### ${list.displayName || PLAN_UNKNOWN_HEADING}`, '');
           const active = tasks.filter(t => t.status !== 'completed');
           active.sort((a, b) => {
             const aDue = a.dueDateTime?.dateTime || '';

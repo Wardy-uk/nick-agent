@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../api';
 import { completeTask } from '../completeTask';
 import DueControl from '../components/DueControl';
+import { msPlanBadge } from '../../../../shared/ms-task.cjs';
 import './Tasks.css';
 
 // Tasks = the list you can actually work from on the phone.
@@ -148,7 +149,11 @@ export default function Tasks() {
         </div>
       )}
 
-      {items.map((item) => (
+      {items.map((item) => {
+        // The source badge beside it already reads "MS Planner"/"MS ToDo" on a
+        // file-backed mirror; a linked NEURO row's reads "NEURO" and needs it.
+        const plan = msPlanBadge(item, { withSystem: !String(item.source || '').startsWith('MS ') });
+        return (
         <div className={`card tasks__item${done[item.id] ? ' tasks__item--done' : ''}`} key={item.id}>
           <button
             className="tasks__tick"
@@ -165,10 +170,14 @@ export default function Tasks() {
                   so it lives inline on the row rather than behind an edit view. */}
               <DueControl task={item} onChanged={load} />
               {item.source && <span className="tasks__source">{item.source}</span>}
+              {/* Which Planner board / To Do list. Absent when NEURO could not
+                  read it, rather than naming a board the task may not be on. */}
+              {plan && <span className="tasks__plan">{plan}</span>}
             </div>
           </div>
         </div>
-      ))}
+        );
+      })}
 
       {data && data.hidden > 0 && (
         <div className="tasks__hidden">{data.hidden} more not shown — the brain ranked these first.</div>

@@ -268,6 +268,9 @@ function rankCandidates({ neuroTasks = [], msTasks = [], dismissed = new Set(), 
           text: m.task.text,
           due_date: m.task.due_date || null,
           source: m.task.source || null,
+          // The board it sits on. Carried into the link so a confirmed pair can
+          // still say where the Microsoft half lives once its line is suppressed.
+          msPlan: m.task.msPlan || null,
         },
       });
     }
@@ -338,6 +341,7 @@ function matchText({ texts = [], tasks = [], msTasks = [], minScore = MIN_SCORE,
         origin_path: t.origin_path || null,
         ms_id: t.ms_id || null,
         ms_source: t.ms_source || null,
+        ms_plan: t.ms_plan || null,
       },
     })),
     // A Microsoft line already merged into a task would otherwise be offered
@@ -354,6 +358,8 @@ function matchText({ texts = [], tasks = [], msTasks = [], minScore = MIN_SCORE,
           text: m.text,
           due_date: m.due_date || null,
           ms_source: normaliseMsSource(m.source) || m.source || 'Microsoft',
+          // Which board/list it is on, so the review screen names it too.
+          ms_plan: m.msPlan || null,
         },
       })),
   ].filter(c => c.tokens.size > 0);
@@ -440,7 +446,7 @@ function undismissPair(taskId, msId) {
  * pushes completion to Graph. Nothing is deleted in Microsoft — the task stays
  * there, and stays open until it is actually finished.
  */
-function linkPair(taskId, msId, msSource = null) {
+function linkPair(taskId, msId, msSource = null, msPlan = null) {
   const id = Number(taskId);
   if (!Number.isInteger(id) || !msId) throw new Error('taskId and msId are required');
 
@@ -456,7 +462,14 @@ function linkPair(taskId, msId, msSource = null) {
     .find(t => t.ms_id === msId && t.id !== id);
   if (clash) return { ok: false, reason: 'ms_task_already_linked', linkedTo: clash.id };
 
-  db.updateTaskRow(id, { ms_id: msId, ms_source: normaliseMsSource(msSource) });
+  // ms_plan is display only — the board the Microsoft half sits on, so the card
+  // can go on saying so once the Microsoft line stops listing separately. An
+  // unknown plan is stored as null, never as the Microsoft source doubling for it.
+  db.updateTaskRow(id, {
+    ms_id: msId,
+    ms_source: normaliseMsSource(msSource),
+    ms_plan: (typeof msPlan === 'string' && msPlan.trim()) ? msPlan.trim() : null,
+  });
   taskStore.scheduleExport();
 
   // A pair that has been linked should not also sit in the rejected pile.
@@ -470,7 +483,7 @@ function unlinkPair(taskId) {
   const row = db.getTaskRow(id);
   if (!row) return { ok: false, reason: 'task_not_found' };
   if (!row.ms_id) return { ok: false, reason: 'not_linked' };
-  db.updateTaskRow(id, { ms_id: null, ms_source: null });
+  db.updateTaskRow(id, { ms_id: null, ms_source: null, ms_plan: null });
   taskStore.scheduleExport();
   return { ok: true, task: db.getTaskRow(id) };
 }
@@ -496,6 +509,7 @@ function listLinks() {
       status: t.status,
       ms_id: t.ms_id,
       ms_source: t.ms_source || null,
+      ms_plan: t.ms_plan || null,
     }));
 }
 

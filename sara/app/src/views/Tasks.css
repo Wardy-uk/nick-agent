@@ -113,6 +113,18 @@
 .tasks__due--over { color: #ff9db0; }
 .tasks__source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
 
+/* The Planner board / To Do list. Quieter than the source badge beside it —
+   it says where the work lives, not what to do about it. */
+.tasks__plan {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 55%;
+  color: var(--muted);
+  border-left: 1px solid var(--line);
+  padding-left: 0.4rem;
+}
+
 .tasks__hidden {
   text-align: center;
   color: var(--muted);

@@ -429,6 +429,30 @@
   background: rgba(92, 100, 120, 0.15);
 }
 
+/* The Planner board / To Do list a Microsoft task sits on. Quieter than the
+   source badge it follows: "MS Planner" says which system owns the task, this
+   says which board — and only appears when NEURO actually read one. */
+.todo-ms-plan {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(92, 100, 120, 0.08);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* In the must-move lane the tags are flat labels, not pills — match them. */
+.todo-tag.todo-ms-plan {
+  text-transform: none;
+  background: none;
+  border-radius: 0;
+  padding: 0 8px 0 0;
+}
+
 /* Must-move lane tags. `.todo-source` shares a pill shape with the buttons
    beside it, and read as controls in the lane — they are static spans with no
    handler, so the UI was telling you something false about itself. Flatter,

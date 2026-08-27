@@ -2,10 +2,18 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { apiUrl } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import { duePresets } from '../../../shared/due-dates.cjs';
+import { msPlanBadge } from '../../../shared/ms-task.cjs';
 import TimeFitCard from './TimeFitCard';
 import TaskDedupe from './TaskDedupe';
 import TaskBlocks, { BlockTimeControl } from './TaskBlocks';
 import './TodoPanel.css';
+
+// Beside a source badge. A file-backed mirror's badge already reads "MS Planner"
+// / "MS ToDo", so the plan badge drops the system there; a LINKED NEURO row's
+// badge reads "NEURO", so it keeps it — that row has no other Microsoft marker.
+function planBadge(todo) {
+  return msPlanBadge(todo, { withSystem: !String((todo && todo.source) || '').startsWith('MS ') });
+}
 
 function sourceClass(source) {
   if (!source) return '';
@@ -156,7 +164,8 @@ function MoscowReview({ onClose }) {
             </span>
           )}
           {current.source && <span className={`todo-source ${sourceClass(current.source)}`}>{current.source}</span>}
-          {current.due_date && <span className={`todo-due ${isOverdue(current.due_date) ? 'due-overdue' : ''}`}>{formatDue(current.due_date)}</span>}
+          {planBadge(current) && <span className="todo-ms-plan" title="Microsoft board / list">{planBadge(current)}</span>}
+          {current.due_date &&<span className={`todo-due ${isOverdue(current.due_date) ? 'due-overdue' : ''}`}>{formatDue(current.due_date)}</span>}
         </div>
       </div>
 
@@ -288,6 +297,9 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch }) {
         <span className={`todo-text ${isExpanded ? '' : 'todo-text-truncated'}`}>{todo.text}</span>
         <div className="todo-meta-row">
           {todo.source && <span className={`todo-source ${sourceClass(todo.source)}`}>{todo.source}</span>}
+          {/* Which Planner board / To Do list this is on. Absent when NEURO
+              could not read it — never a placeholder standing in for a board. */}
+          {planBadge(todo) && <span className="todo-ms-plan" title="Microsoft board / list">{planBadge(todo)}</span>}
           {todo.moscow && (
             <span className={`todo-moscow-badge ${todo.moscow}`} title={todo.moscowProposed ? 'Proposed by the 12 Aug triage, not yet confirmed' : undefined}>
               {todo.moscow}{todo.moscowProposed ? '?' : ''}
@@ -505,6 +517,9 @@ function MustMoveLane({ items, toggling, onToggle, onSetWip }) {
                 )}
                 <span className="todo-tag">{item.moscow}</span>
                 {item.context && <span className="todo-tag">{item.context}</span>}
+                {/* The lane names no source, so for a Microsoft row this is the
+                    only thing on the card saying whose board the work is on. */}
+                {msPlanBadge(item) && <span className="todo-tag todo-ms-plan" title="Microsoft board / list">{msPlanBadge(item)}</span>}
                 {typeof item.ageDays === 'number' && item.ageDays > 0 && (
                   <span className="todo-tag todo-tag-age">{item.ageDays}d old</span>
                 )}
@@ -1239,6 +1254,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
                   <span className="todo-text">{todo.text}</span>
                   <div className="todo-meta-row">
                     {todo.source && <span className={`todo-source ${sourceClass(todo.source)}`}>{todo.source}</span>}
+                    {planBadge(todo) && <span className="todo-ms-plan" title="Microsoft board / list">{planBadge(todo)}</span>}
                   </div>
                 </div>
               </div>

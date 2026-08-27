@@ -123,11 +123,11 @@ router.post('/match', (req, res) => {
   }
 });
 
-// POST /api/task-dedupe/link — { taskId, msId, msSource } — these ARE the same task
+// POST /api/task-dedupe/link — { taskId, msId, msSource, msPlan } — same task
 router.post('/link', (req, res) => {
   try {
-    const { taskId, msId, msSource } = req.body || {};
-    const result = dedupe.linkPair(taskId, msId, msSource || null);
+    const { taskId, msId, msSource, msPlan } = req.body || {};
+    const result = dedupe.linkPair(taskId, msId, msSource || null, msPlan || null);
     if (!result.ok) return res.status(409).json(result);
     res.json(result);
   } catch (e) {

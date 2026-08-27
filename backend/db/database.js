@@ -102,6 +102,14 @@ async function init() {
       db.exec('ALTER TABLE tasks ADD COLUMN ms_source TEXT');
       console.log('[DB] tasks.ms_source added');
     }
+    // Migration: tasks.ms_plan — the Planner board or To Do list a linked
+    // Microsoft task sits on, so the card can say which one. Display only; the
+    // completion push reads ms_source, not this. NULL means "we don't know",
+    // which is what a card must show rather than naming the wrong board.
+    if (taskColumns.length && !taskColumns.includes('ms_plan')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN ms_plan TEXT');
+      console.log('[DB] tasks.ms_plan added');
+    }
   } catch (e) {
     console.error('[DB] tasks migration check failed:', e.message);
   }
@@ -1049,7 +1057,7 @@ function deleteTaskMoscow(filePath, lineNumber, text) {
 
 const TASK_FIELDS = [
   'text', 'status', 'moscow', 'moscow_proposed', 'priority', 'due_date', 'source',
-  'origin_path', 'origin_line', 'context', 'notes', 'ms_id', 'ms_source',
+  'origin_path', 'origin_line', 'context', 'notes', 'ms_id', 'ms_source', 'ms_plan',
   'estimate_minutes',
 ];
 
