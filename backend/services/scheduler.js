@@ -491,6 +491,42 @@ function start() {
     }
   });
 
+  // ── The half-day planner ───────────────────────────────────────────────────
+  //
+  // 07:15 plans the morning, 12:30 plans the afternoon, and both CREATE the
+  // blocks rather than proposing them (Nick's call, 27 Aug). The half-day
+  // horizon is the point: his diary moves under him, so an afternoon planned at
+  // dawn is planned against a calendar that no longer exists by lunchtime.
+  //
+  // Both are no-ops unless DAY_PLANNER_ENABLED=true, and `run()` takes its own
+  // lock — these two can overlap a manual apply from the route, which is the
+  // case that turned 27 Plaud blocks into 52 real calendar events.
+  //
+  // Deliberately NOT a TRACKED_JOBS/catch-up job. Catch-up exists to replay a
+  // missed slot, and replaying this one is exactly wrong: a morning plan fired
+  // at 14:00 because the Pi was rebooting would block time that has already
+  // gone. A missed half-day should stay missed.
+  const planHalf = (windowKey) => async () => {
+    try {
+      const result = await require('./day-planner').run(windowKey, { apply: true });
+      if (result.skipped) {
+        console.log(`[Scheduler] Day plan (${windowKey}) skipped: ${result.skipped}`);
+      } else if (result.created?.length) {
+        console.log(`[Scheduler] Day plan (${windowKey}): ${result.created.length} block(s) created`);
+      } else {
+        console.log(`[Scheduler] Day plan (${windowKey}): nothing blocked — ${result.reason || result.error || 'no reason given'}`);
+      }
+      if (result.failed?.length) {
+        console.warn(`[Scheduler] Day plan (${windowKey}) had ${result.failed.length} failure(s): `
+          + result.failed.map(f => `${f.startTime} ${f.error}`).join('; '));
+      }
+    } catch (e) {
+      console.error(`[Scheduler] Day plan (${windowKey}) failed:`, e.message);
+    }
+  };
+  cron.schedule('15 7 * * 1-5', planHalf('morning'));
+  cron.schedule('30 12 * * 1-5', planHalf('afternoon'));
+
   // Hourly — regenerate the read-only task export note. Writes already trigger an
   // export; this is the belt-and-braces pass so the "last exported" stamp in the vault
   // stays current, which is what tells Nick whether the offline copy can be trusted.

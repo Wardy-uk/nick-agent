@@ -196,6 +196,7 @@ app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/task-dedupe', require('./routes/task-dedupe'));
 // Same reason, same trap.
 app.use('/api/task-blocks', require('./routes/task-blocks'));
+app.use('/api/day-plan', require('./routes/day-planner'));
 app.use('/api/calendar', require('./routes/calendar'));
 app.use('/api/adhd', require('./routes/adhd'));
 app.use('/api/wins', require('./routes/wins'));
