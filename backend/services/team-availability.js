@@ -59,11 +59,56 @@ function isSelf(row, matcher) {
  * Pull from NOVA and cache. Never throws — a failed refresh leaves the previous
  * copy in place, which is the whole point of caching it.
  */
+/**
+ * One bridge GET.
+ *
+ * ⚠ This SHOULD be `microsoft.novaBridgeFetch`, which already does the health
+ * tracking and the nested-error detection. It is not exported — a one-line
+ * addition to that module's `module.exports` — and `microsoft.js` was held by a
+ * concurrent session when this shipped, so committing the fix would have swept
+ * 91 lines of someone else's unfinished Planner work into this change. That has
+ * gone wrong here before, twice. Switch to the shared helper once the export
+ * lands; see the handoff.
+ *
+ * Kept deliberately thin so there is as little as possible to converge later.
+ */
+async function bridgeGet(path, params = {}) {
+  const baseUrl = process.env.NOVA_BRIDGE_URL;
+  const secret = process.env.NOVA_BRIDGE_SECRET;
+  if (!baseUrl || !secret) return null;
+
+  const url = new URL(`/api/neuro-bridge${path}`, baseUrl);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+  }
+
+  const res = await fetch(url.toString(), {
+    headers: { 'x-neuro-bridge-secret': secret },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    // 401/404 means the request fell past the bridge router into NOVA's own
+    // app auth — the path is not deployed, which is a different thing from a
+    // bad call and is worth saying out loud.
+    const unsupported = res.status === 401 || res.status === 404;
+    console.warn(`[TeamAvailability] ${path} returned ${res.status}`
+      + (unsupported ? ' — NOVA does not serve this path' : ''));
+    return null;
+  }
+  const json = await res.json();
+  if (!json.ok) {
+    console.warn(`[TeamAvailability] ${path} reported failure:`, json.error || 'unknown');
+    return null;
+  }
+  // Every bridge route nests its payload under `data`. Returning it top-level
+  // is a real bug that has already cost one round trip here.
+  return json.data ?? null;
+}
+
 async function refresh({ days = WINDOW_DAYS } = {}) {
-  const microsoft = require('./microsoft');
   let payload = null;
   try {
-    payload = await microsoft.novaBridgeFetch('/availability', { days });
+    payload = await bridgeGet('/availability', { days });
   } catch (e) {
     console.warn('[TeamAvailability] Bridge call threw:', e.message);
   }
