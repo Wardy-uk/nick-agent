@@ -429,7 +429,7 @@ function SuggestedTodoQueue({ items, actingId, selected, onToggleSelect, onSelec
  * display key — parseVaultTodos numbers todos as it walks them — so ticking by
  * it would complete an unrelated task.
  */
-function MustMoveLane({ items, toggling, onToggle }) {
+function MustMoveLane({ items, toggling, onToggle, onSetWip }) {
   if (!items.length) return null;
 
   return (
@@ -448,8 +448,10 @@ function MustMoveLane({ items, toggling, onToggle }) {
           // and the checkbox says so rather than failing on click.
           const toggleKey = item.task_id ? `task:${item.task_id}` : `${item.filePath}:${item.lineNumber}`;
           const canComplete = Boolean(item.task_id) || (item.filePath && item.lineNumber != null);
+          const wipKey = `wip:${item.task_id}`;
+          const isWip = item.status === 'in-progress';
           return (
-          <div key={item.id} className="todo-suggestion-card">
+          <div key={item.id} className={`todo-suggestion-card${isWip ? ' todo-suggestion-card-wip' : ''}`}>
             <button
               className={`todo-checkbox ${toggling[toggleKey] ? 'toggling' : ''}`}
               disabled={!canComplete || toggling[toggleKey]}
@@ -466,6 +468,9 @@ function MustMoveLane({ items, toggling, onToggle }) {
                   classification visible instead of merely plausible. */}
               {item.why && <div className="todo-suggestion-why">{item.why}</div>}
               <div className="todo-suggestion-meta">
+                {/* WIP first, because it is the one tag that describes what is
+                    happening now rather than how the task was filed. */}
+                {isWip && <span className="todo-tag todo-tag-wip">WIP</span>}
                 <span className="todo-tag">{item.moscow}</span>
                 {item.context && <span className="todo-tag">{item.context}</span>}
                 {typeof item.ageDays === 'number' && item.ageDays > 0 && (
@@ -474,6 +479,19 @@ function MustMoveLane({ items, toggling, onToggle }) {
                 {item.due_date && <span className="todo-due">{formatDue(item.due_date)}</span>}
               </div>
             </div>
+            {/* Only DB-owned tasks can hold a status. A Microsoft line or a
+                daily-note checkbox has no row to put it on, so the button is
+                absent rather than present-and-broken. */}
+            {item.task_id && (
+              <button
+                className={`todo-wip-btn${isWip ? ' active' : ''}`}
+                disabled={toggling[wipKey]}
+                title={isWip ? 'Started — click to put it back to not started' : 'Mark as work in progress (it stays in this lane)'}
+                onClick={() => onSetWip(item)}
+              >
+                {toggling[wipKey] ? '…' : isWip ? '● WIP' : 'WIP'}
+              </button>
+            )}
           </div>
           );
         })}
@@ -669,6 +687,42 @@ export default function TodoPanel({ focusContext, onClearContext }) {
       console.error('[TodoPanel] Add task error:', e);
     }
     setAdding(false);
+  };
+
+  /**
+   * Mark a task started, or put it back.
+   *
+   * `in-progress` has been a valid status since the task store was written —
+   * VALID_STATUS carries it, `activeTodos()` selects it, and the task-block hold
+   * already parks work there. Nothing had ever been able to SET it, so the state
+   * existed and was unreachable: the same hole as TodoPanel having no menu entry
+   * and EOD having no nav item.
+   *
+   * The task deliberately STAYS in the Must Move lane (Nick's call, 27 Aug) —
+   * marking something started must not be a way to make it disappear, which is
+   * the failure mode of every "snooze" affordance on a list like this. It only
+   * changes how it looks.
+   *
+   * DB-owned tasks only. A file-backed line (Microsoft, a daily note) has no row
+   * to carry the status, and the button says so rather than failing on click.
+   */
+  const setWip = async (todo) => {
+    if (!todo.task_id) return;
+    const key = `wip:${todo.task_id}`;
+    setToggling(prev => ({ ...prev, [key]: true }));
+    try {
+      const next = todo.status === 'in-progress' ? 'open' : 'in-progress';
+      const res = await fetch(apiUrl(`/api/tasks/${todo.task_id}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: next }),
+      });
+      if (!res.ok) console.error('[TodoPanel] WIP toggle failed:', res.status);
+      if (mode === 'focused') refreshFocus(); else await fetchTodos();
+    } catch (e) {
+      console.error('[TodoPanel] WIP toggle error:', e);
+    }
+    setToggling(prev => ({ ...prev, [key]: false }));
   };
 
   const toggleTodo = async (todo) => {
@@ -1010,7 +1064,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           held open because it has not been written up is a task the lane will
           keep offering, so the explanation has to arrive before the list does. */}
       <TaskBlocks />
-      <MustMoveLane items={todayLane} toggling={toggling} onToggle={toggleTodo} />
+      <MustMoveLane items={todayLane} toggling={toggling} onToggle={toggleTodo} onSetWip={setWip} />
 
       <div className="todo-add">
         <input

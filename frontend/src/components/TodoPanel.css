@@ -967,6 +967,52 @@
   margin-top: 2px;
 }
 
+/* ── Work in progress ──
+   A started task KEEPS its place in the lane (Nick's call, 27 Aug) — marking
+   something started must not become a way to make it vanish, which is the
+   failure mode of every snooze-shaped control on a list like this. So the
+   card changes appearance without changing position: a left accent bar and a
+   WIP tag, enough to scan past, not enough to look finished. */
+.todo-suggestion-card-wip {
+  border-left: 3px solid var(--warn, #d99a2b);
+  background: color-mix(in srgb, var(--warn, #d99a2b) 6%, var(--bg-card));
+}
+
+.todo-tag-wip {
+  background: color-mix(in srgb, var(--warn, #d99a2b) 22%, transparent);
+  color: var(--warn, #d99a2b);
+  font-weight: 700;
+  letter-spacing: 0.6px;
+}
+
+.todo-wip-btn {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.todo-wip-btn:hover:not(:disabled) {
+  color: var(--warn, #d99a2b);
+  border-color: var(--warn, #d99a2b);
+}
+
+.todo-wip-btn.active {
+  color: var(--warn, #d99a2b);
+  border-color: var(--warn, #d99a2b);
+  background: color-mix(in srgb, var(--warn, #d99a2b) 12%, transparent);
+}
+
+.todo-wip-btn:disabled { opacity: 0.5; cursor: default; }
+
 .todo-suggestions-mustmove .todo-suggestion-main {
   flex: 1;
   min-width: 0;

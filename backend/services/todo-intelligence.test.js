@@ -165,3 +165,32 @@ test('a Microsoft-backed lane row keeps its ms_id, so the push can follow', () =
 
   assert.equal(lane[0].ms_id, 'g2D79J0Bpkq');
 });
+
+// ── WIP survives into the lane ───────────────────────────────────────────────
+//
+// `buildTodayLane` returns an explicit whitelist, so a field left out of it is
+// silently `undefined` on the client — which is exactly how `overdue` and
+// `dueToday` came to be unreadable by `buildFollowThroughCandidate` (#73/#74).
+// The WIP badge and its toggle both key on `status`, and a dropped status would
+// make the button one-way: every click would send 'in-progress' and nothing
+// could ever go back to 'open'.
+
+test('the lane carries a task\'s status, so WIP can be shown and undone', () => {
+  const lane = buildTodayLane([
+    { task_id: 1, text: 'Started thing', status: 'in-progress', moscow: 'must', priority: 'high' },
+    { task_id: 2, text: 'Untouched thing', status: 'open', moscow: 'must', priority: 'high' },
+  ], '2026-08-27');
+
+  const started = lane.find(r => r.task_id === 1);
+  const untouched = lane.find(r => r.task_id === 2);
+  assert.ok(started, 'the in-progress task must still appear — WIP does not remove it from the lane');
+  assert.strictEqual(started.status, 'in-progress');
+  assert.strictEqual(untouched.status, 'open');
+});
+
+test('a task with no status reads as open, never undefined', () => {
+  const lane = buildTodayLane([
+    { task_id: 3, text: 'No status field', moscow: 'must', priority: 'high' },
+  ], '2026-08-27');
+  assert.strictEqual(lane[0].status, 'open', 'undefined would make the WIP toggle one-way');
+});

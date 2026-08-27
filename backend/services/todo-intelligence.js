@@ -221,6 +221,12 @@ function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5) {
       context: task.context,
       due_date: task.due_date || null,
       source: task.source || null,
+      // Carried so the lane can show WORK ALREADY STARTED rather than treating
+      // every row as untouched. This whitelist is explicit, so a field absent
+      // here is silently undefined on the client — which is how `overdue` and
+      // `dueToday` came to be read as undefined by `buildFollowThroughCandidate`
+      // (#73/#74). The WIP badge and its toggle both key on this.
+      status: task.status || 'open',
       filePath: task.filePath || null,
       lineNumber: task.lineNumber != null ? task.lineNumber : null,
       ageDays: task.ageDays,
