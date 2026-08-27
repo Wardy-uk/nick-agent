@@ -51,6 +51,131 @@ function isPastStandupCutoff(now = new Date()) {
   return now.getHours() >= 12;
 }
 
+// ── Days Nick is not working ─────────────────────────────────────────────────
+//
+// Two separate reasons a ritual nudge must not fire, and they are kept apart
+// because they are answerable by different things and Nick can only control one.
+//
+//   BANK HOLIDAY — the crons are already `* * 1-5`, so weekends were handled,
+//     but nothing in the nudge path had ever heard of a bank holiday. This is
+//     the sixth place in the repo where "working day" quietly meant Mon-Fri
+//     (see the working-days note in CLAUDE.md), and it was days from proving
+//     it: Monday 31 Aug 2026 is the Summer bank holiday, and without this the
+//     standup, todo and EOD nudges would all have fired on a day off.
+//
+//   ANNUAL LEAVE — Nick's own declaration, because nothing else can know. Graph
+//     OOF events exist and `working-days.leaveDates()` reads them, but they
+//     depend on him having blocked it out in Outlook AND on Graph answering;
+//     a button that works with the Pi offline and needs no calendar is the one
+//     he will actually press when he is already on holiday.
+//
+// ⚠ THE LINE THIS DRAWS: nudges go quiet, alarms still ring. Everything in
+// NUDGE_TYPES is a nudge about Nick's working rhythm — including the escalation
+// and email BANNERS — and none of it should chase him on a day off. The
+// separate `escalation_alert` / `system_alert` pushes (briefing.js, watchdog)
+// are in webpush's ALWAYS_DELIVER and are deliberately NOT touched: those are
+// "something is on fire", and going quiet on those is a bigger decision than a
+// leave button should be allowed to make on its own.
+
+const LEAVE_KEY = 'nudges_leave_until';
+const MAX_LEAVE_DAYS = 60;
+
+/**
+ * Read leave state. PURE — takes the stored value and `now`, resolves no clock
+ * and no DB, so the boundary behaviour pins without either.
+ *
+ * `until` is an INCLUSIVE date string. Storing a date rather than a timestamp
+ * is deliberate: "back on Monday" is a fact about a day, and a millisecond
+ * deadline set at 16:00 on the Friday would silently end leave mid-afternoon on
+ * the last day of it.
+ */
+function leaveState(raw, now = new Date()) {
+  if (!raw) return { onLeave: false, until: null, daysRemaining: 0 };
+  const until = String(raw).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return { onLeave: false, until: null, daysRemaining: 0 };
+
+  // Local date, never toISOString() — the Pi may run UTC and that would end
+  // leave an hour early on the last evening.
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  if (today > until) return { onLeave: false, until, daysRemaining: 0, expired: true };
+
+  const msPerDay = 86400000;
+  const daysRemaining = Math.max(0, Math.round(
+    (new Date(`${until}T00:00:00`) - new Date(`${today}T00:00:00`)) / msPerDay
+  )) + 1;
+  return { onLeave: true, until, daysRemaining };
+}
+
+/** Leave state from the store. */
+function getLeave(now = new Date()) {
+  return leaveState(db.getState(LEAVE_KEY), now);
+}
+
+/**
+ * "I'm on annual leave." `days` counts TODAY as the first day, so the common
+ * case — pressing it on the morning of a day off — is `days: 1`.
+ */
+function setLeave(days = 1, now = new Date()) {
+  const n = Math.min(MAX_LEAVE_DAYS, Math.max(1, Math.round(Number(days) || 1)));
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + (n - 1));
+  const until = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
+  db.setState(LEAVE_KEY, until);
+
+  // Clear what is already on screen. Setting leave while a standup banner is up
+  // and leaving it there would make the button look broken at the exact moment
+  // it is being trusted.
+  let cleared = 0;
+  try {
+    for (const nudge of db.getActiveNudges()) { db.completeNudge(nudge.id); cleared += 1; }
+  } catch (e) {
+    console.warn('[Nudge] Could not clear active nudges on leave:', e.message);
+  }
+  broadcast({ type: 'nudge_cleared', nudge_type: 'all' });
+  broadcast({ type: 'leave_set', until, days: n });
+  console.log(`[Nudge] Annual leave until ${until} (${n} day(s)) — ${cleared} nudge(s) cleared`);
+  return { ok: true, until, days: n, cleared };
+}
+
+/** Back early. The way out is not optional — plans change. */
+function clearLeave() {
+  db.setState(LEAVE_KEY, '');
+  broadcast({ type: 'leave_cleared' });
+  console.log('[Nudge] Annual leave cleared — nudges resume');
+  return { ok: true };
+}
+
+/**
+ * Should ritual nudges be suppressed right now, and WHY?
+ *
+ * Returns a reason rather than a bare boolean so the log and the banner can say
+ * which of the two it was — "you're on leave" and "it's a bank holiday" are
+ * different facts and a silent suppression is indistinguishable from a broken
+ * nudge.
+ */
+function nudgeSuppression(now = new Date()) {
+  const leave = getLeave(now);
+  if (leave.onLeave) {
+    return { suppressed: true, reason: 'annual leave', until: leave.until, daysRemaining: leave.daysRemaining };
+  }
+  try {
+    const shared = require('../../shared/working-days.cjs');
+    const workingDays = require('./working-days');
+    if (!shared.isWorkingDay(now, workingDays.holidaySet())) {
+      const why = shared.nonWorkingReason
+        ? shared.nonWorkingReason(now, workingDays.holidaySet())
+        : 'not a working day';
+      return { suppressed: true, reason: why || 'not a working day' };
+    }
+  } catch (e) {
+    // Fail OPEN here, and only here. Being unable to read the holiday list is
+    // not a reason to stop nudging for ever — the cost of a wrong nudge on a
+    // bank holiday is an annoyance, the cost of silently never nudging again is
+    // the whole feature. The opposite call to booking a meeting on Christmas.
+    console.warn('[Nudge] Could not check working day, assuming it is one:', e.message);
+  }
+  return { suppressed: false, reason: null };
+}
+
 // Nudge messages escalate with nag count
 const STANDUP_MESSAGES = [
   // Opening — light, time-neutral. Nags 1-2.
@@ -247,6 +372,9 @@ function getFollowThroughTodo() {
 // Called by cron — creates the initial nudge at 9am
 // Now context-aware: checks if user is active, in a meeting, or standup already started
 function triggerStandupNudge() {
+  const away = nudgeSuppression();
+  if (away.suppressed) { console.log(`[Nudge] standup skipped — ${away.reason}`); return; }
+
   const dateKey = todayKey();
   const existing = db.getActiveNudgeByTypeAndDate('standup', dateKey);
 
@@ -313,6 +441,9 @@ function triggerStandupNudge() {
 }
 
 function triggerTodoNudge() {
+  const away = nudgeSuppression();
+  if (away.suppressed) { console.log(`[Nudge] todo skipped — ${away.reason}`); return; }
+
   const dateKey = todayKey();
   const existing = db.getActiveNudgeByTypeAndDate('todo', dateKey);
 
@@ -438,6 +569,9 @@ function clearStaleNudges() {
 }
 
 function nagCheck() {
+  const away = nudgeSuppression();
+  if (away.suppressed) { console.log(`[Nudge] nag cycle skipped — ${away.reason}`); return; }
+
   clearStaleNudges();
   const nudges = db.getActiveNudges();
 
@@ -541,9 +675,17 @@ function startupCheck() {
   const day = now.getDay(); // 0=Sun, 6=Sat
   const hour = now.getHours();
 
-  // Only on weekdays, after 9am, before 5pm
-  if (day >= 1 && day <= 5 && hour >= 9 && hour < 17) {
-    console.log('[Nudge] Startup check — after 9am on weekday, triggering nudges');
+  // Working hours only. The `day >= 1 && day <= 5` that used to live here was
+  // the seventh hand-rolled Mon-Fri in the repo; the triggers themselves now
+  // gate on `nudgeSuppression()`, which also knows about bank holidays and
+  // annual leave, so the hour window is all that is left to check here.
+  if (hour >= 9 && hour < 17) {
+    const away = nudgeSuppression(now);
+    if (away.suppressed) {
+      console.log(`[Nudge] Startup check — not nudging: ${away.reason}`);
+      return;
+    }
+    console.log('[Nudge] Startup check — working hours on a working day, triggering nudges');
     if (!isPastStandupCutoff(now)) triggerStandupNudge();
     triggerTodoNudge();
   }
@@ -562,6 +704,9 @@ function markStandupDone() {
 // Fire a nudge at 75% of plan duration reminding Nick to plan the next plan
 // Only fires once per plan — tracked in agent_state
 function checkPlanMilestoneNudge() {
+  const away = nudgeSuppression();
+  if (away.suppressed) { console.log(`[Nudge] plan milestone skipped — ${away.reason}`); return; }
+
   try {
     const startDate = new Date(process.env.PLAN_START_DATE || '2026-03-16');
     const planDays = parseInt(process.env.PLAN_DURATION_DAYS || '90', 10);
@@ -609,6 +754,9 @@ function getSnoozeState() {
 
 // Check for upcoming/overdue 1-2-1s and nudge once per day
 function check121Nudges() {
+  const away = nudgeSuppression();
+  if (away.suppressed) { console.log(`[Nudge] 1-2-1 skipped — ${away.reason}`); return; }
+
   try {
     const upcoming = obsidian.getUpcoming121s(2);
     if (upcoming.length === 0) return;
@@ -644,6 +792,9 @@ function check121Nudges() {
 
 // EOD ritual nudge — fires at 5pm weekdays
 function triggerEodNudge() {
+  const away = nudgeSuppression();
+  if (away.suppressed) { console.log(`[Nudge] EOD skipped — ${away.reason}`); return; }
+
   const dailyNote = obsidian.readTodayDailyNote();
   if (dailyNote && (dailyNote.includes('## EOD') ||
       (dailyNote.includes('## Wins Today') && !dailyNote.match(/## Wins Today\s*\n-\s*\n/)))) return;
@@ -683,6 +834,9 @@ function markEodDone() {
 
 // Journal nudge — fires at configured time (default 21:00)
 function triggerJournalNudge() {
+  const away = nudgeSuppression();
+  if (away.suppressed) { console.log(`[Nudge] journal skipped — ${away.reason}`); return; }
+
   // Skip if journal already done today
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || '';
   const path = require('path');
@@ -742,5 +896,12 @@ module.exports = {
   markEodDone,
   triggerJournalNudge,
   markJournalDone,
-  isStandupDone
+  isStandupDone,
+  // Leave + working-day suppression. `leaveState` is pure and is the half worth
+  // pinning; the rest read or write the store.
+  leaveState,
+  getLeave,
+  setLeave,
+  clearLeave,
+  nudgeSuppression,
 };

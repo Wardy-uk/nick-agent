@@ -20,10 +20,31 @@ const SNOOZE_OPTIONS = [
   }
 ];
 
+// Annual leave, in DAYS — a different question from snooze, which is one nudge
+// for some minutes. Today counts as day 1, so "today" is 1.
+//
+// `days` is a function for the same reason SNOOZE_OPTIONS' `minutes` is: "rest
+// of this week" has to be measured from the day it is pressed. A flat 5 would
+// run to next Tuesday if pressed on a Thursday, which is the sort of quietly
+// wrong that only shows up as nudges arriving on a day off.
+const LEAVE_OPTIONS = [
+  { label: '🌴 On leave today', days: () => 1 },
+  {
+    label: '🌴 Rest of this week',
+    days: () => {
+      const dow = new Date().getDay();          // 0=Sun … 6=Sat
+      if (dow === 0 || dow === 6) return 1;     // pressed at the weekend: just today
+      return 6 - dow;                           // through Friday, today inclusive
+    },
+  },
+  { label: '🌴 Two weeks', days: () => 14 },
+];
+
 export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal, onGoToPeople, onGoToBriefing, onGoToInbox }) {
   const transform = useMemo(() => (json) => ({
     nudges: json.nudges || [],
-    snoozeState: json.snoozeState || {}
+    snoozeState: json.snoozeState || {},
+    leave: json.leave || null,
   }), []);
   const { data: nudgeData } = useCachedFetch('/api/nudges', { interval: 30000, transform });
   const [nudges, setNudges] = useState([]);
@@ -66,6 +87,19 @@ export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal,
     setSnoozed(newSnoozed);
     setNow(current);
   }, [nudgeData]);
+
+  // "I'm on annual leave" — every ritual nudge off for N days, not one type for
+  // N minutes. Deliberately a separate control from snooze: a week off expressed
+  // as repeated snoozes is a lie the moment one of them lapses.
+  const handleLeave = (days) => {
+    setMenuOpen(null);
+    setNudges([]);                       // optimistic — the server clears them too
+    fetch(apiUrl('/api/nudges/leave'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days })
+    }).catch(console.error);
+  };
 
   const handleSnooze = (type, minutes) => {
     setMenuOpen(null);
@@ -188,6 +222,22 @@ export default function NudgeBanner({ onGoToStandup, onGoToTodos, onGoToJournal,
                         key={opt.label}
                         className="nudge-snooze-option"
                         onClick={() => handleSnooze(nudge.type, opt.minutes())}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                    {/* Leave lives at the bottom of the snooze menu because
+                        that is where Nick already goes to make a nudge stop.
+                        It is separated, and worded as days not minutes, so it
+                        cannot be mistaken for another snooze — this one
+                        silences every ritual, not just this banner. */}
+                    <div className="nudge-snooze-sep" />
+                    {LEAVE_OPTIONS.map(opt => (
+                      <button
+                        key={opt.label}
+                        className="nudge-snooze-option nudge-leave-option"
+                        onClick={() => handleLeave(opt.days())}
+                        title="Silences every ritual nudge. Escalation and system alerts still come through."
                       >
                         {opt.label}
                       </button>

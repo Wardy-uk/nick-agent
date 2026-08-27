@@ -118,6 +118,24 @@
   color: var(--text-primary);
 }
 
+/* Leave is not another snooze duration — it silences every ritual, for days.
+   The rule and the wider min-width keep it from being tapped by accident while
+   reaching for "3 hours". */
+.nudge-snooze-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
+.nudge-leave-option {
+  color: var(--text-muted);
+}
+
+.nudge-leave-option:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
 .nudge-snooze {
   font-family: var(--font-mono);
   font-size: 11px;

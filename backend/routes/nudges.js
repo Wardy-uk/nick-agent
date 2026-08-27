@@ -3,11 +3,41 @@ const router = express.Router();
 const db = require('../db/database');
 const nudges = require('../services/nudges');
 
-// GET /api/nudges — active nudges + snooze state
+// GET /api/nudges — active nudges + snooze state + why nothing is nudging
 router.get('/', (req, res) => {
   const active = db.getActiveNudges();
   const snoozeState = nudges.getSnoozeState();
-  res.json({ nudges: active, snoozeState });
+  // `suppression` travels with the payload so a quiet banner can SAY why it is
+  // quiet. Silence that looks identical to a broken nudge is what makes Nick
+  // stop trusting the thing.
+  res.json({
+    nudges: active,
+    snoozeState,
+    leave: nudges.getLeave(),
+    suppression: nudges.nudgeSuppression(),
+  });
+});
+
+// ── Annual leave ─────────────────────────────────────────────────────────────
+//
+// Distinct from snooze, and deliberately not built on it. Snooze is per-type and
+// measured in minutes ("not now"); leave is every ritual at once and measured in
+// DAYS ("not this week"). Expressing a week off as eight separate 24-hour
+// snoozes would be a lie the moment one of them lapsed.
+
+// POST /api/nudges/leave  { days }  — today counts as day 1.
+router.post('/leave', (req, res) => {
+  const days = req.body?.days ?? req.query.days ?? 1;
+  const n = Number(days);
+  if (!Number.isFinite(n) || n < 1) {
+    return res.status(400).json({ ok: false, error: 'days must be a positive number' });
+  }
+  res.json(nudges.setLeave(n));
+});
+
+// DELETE /api/nudges/leave — back early. Not optional; plans change.
+router.delete('/leave', (req, res) => {
+  res.json(nudges.clearLeave());
 });
 
 // SSE stream for real-time nudges
