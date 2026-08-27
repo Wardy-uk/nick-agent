@@ -191,3 +191,15 @@ test('a full sync and an unusable stamp both mean "no window"', () => {
   assert.equal(incrementalDateFrom(null, true, 14), undefined, 'never synced -> list everything');
   assert.equal(incrementalDateFrom('not a date', true, 14), undefined, 'unparseable stamp must not become NaN');
 });
+
+test('an MCP timeout is retryable — "timed out" is not "timeout"', () => {
+  const { isRetryableError } = require('./plaud-sync')._internal;
+
+  // The exact string all 4 recordings in the failed ledger died on. `timeout`
+  // does not appear in it, so every one failed on its first attempt.
+  assert.ok(isRetryableError(new Error('MCP error -32001: Request timed out')));
+
+  assert.ok(isRetryableError(new Error('socket hang up')));
+  assert.ok(isRetryableError(new Error('429 Too Many Requests')));
+  assert.ok(!isRetryableError(new Error('get_file returned no id for abc123')));
+});

@@ -303,6 +303,10 @@ function isRetryableError(error) {
   return (
     isRateLimitError(error) ||
     message.includes('timeout') ||
+    // The MCP SDK phrases its own timeout as "Request timed out" (-32001), which
+    // `timeout` does not match — so every one of the 4 recordings in the failed
+    // ledger died on its first attempt without a single retry.
+    message.includes('timed out') ||
     message.includes('temporar') ||
     message.includes('econnreset') ||
     message.includes('socket hang up')
@@ -1270,5 +1274,6 @@ module.exports = {
     assertUsableDetails,
     incrementalDateFrom,
     buildNoteBaseName,
+    isRetryableError,
   },
 };
