@@ -48,7 +48,47 @@
   color: var(--text-primary);
   align-self: flex-end;
 }
-.ss__typing { color: var(--text-muted); letter-spacing: 0.2em; }
+.ss__typing .ss__msg-body { color: var(--text-muted); letter-spacing: 0.2em; }
+
+/* ── Whose conversation this is ──
+   Same treatment as ChatPanel's message labels (9px mono, uppercase, accent),
+   because SARA appearing in two visually unrelated ways reads as two
+   assistants. The bubble already says who is speaking by its side and colour;
+   the label is what says it is HER. */
+.ss__who {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0 0.25rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.7rem;
+}
+.ss__who-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.ss__who-what {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ss__msg-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.ss__msg-label--user { color: var(--text-muted); }
+.ss__msg-body { white-space: pre-wrap; }
 
 /* ── Error: never a dead end ── */
 .ss__error {

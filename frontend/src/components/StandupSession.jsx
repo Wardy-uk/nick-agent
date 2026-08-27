@@ -164,6 +164,19 @@ export default function StandupSession({ kind = 'standup', onDone, onSwitchToMan
 
   return (
     <div className="ss">
+      {/* Whose conversation this is. The prompt has composed from sara-voice's
+          VOICE_FULL since 17 Aug, so the words were always hers — but nothing
+          on this screen or the EOD one ever SAID so, and an unattributed
+          message bubble reads as a form, not as talking to someone. Matches
+          ChatPanel's presentation deliberately: two surfaces where SARA speaks
+          should not look like two different assistants. */}
+      <div className="ss__who">
+        <span className="ss__who-name">SARA</span>
+        <span className="ss__who-what">
+          {kind === 'eod' ? 'End of day' : 'Morning standup'}
+        </span>
+      </div>
+
       {session?.degraded && (
         <div className="ss__banner ss__banner--warn">
           Running without tools — I can talk this through but can't record decisions myself.
@@ -176,9 +189,19 @@ export default function StandupSession({ kind = 'standup', onDone, onSwitchToMan
           // The opening "Let's do my standup." is a trigger, not something he said.
           .slice(1)
           .map((m, i) => (
-            <div key={i} className={`ss__msg ss__msg--${m.role}`}>{m.content}</div>
+            <div key={i} className={`ss__msg ss__msg--${m.role}`}>
+              <span className={`ss__msg-label ss__msg-label--${m.role}`}>
+                {m.role === 'assistant' ? 'SARA' : 'You'}
+              </span>
+              <div className="ss__msg-body">{m.content}</div>
+            </div>
           ))}
-        {sending && <div className="ss__msg ss__msg--assistant ss__typing">…</div>}
+        {sending && (
+          <div className="ss__msg ss__msg--assistant ss__typing">
+            <span className="ss__msg-label ss__msg-label--assistant">SARA</span>
+            <div className="ss__msg-body">…</div>
+          </div>
+        )}
         <div ref={endRef} />
       </div>
 

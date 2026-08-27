@@ -180,13 +180,25 @@ export default function StandupEditor({ startWithEod = false }) {
           </div>
           {eodMode === 'guided'
             ? (
+              // Carries its own SARA header.
               <StandupSession
                 kind="eod"
                 onDone={() => { setShowEod(false); setEodMode('quick'); }}
                 onSwitchToManual={() => setEodMode('quick')}
               />
             )
-            : <EodCapture onDone={() => setShowEod(false)} />
+            : (
+              <>
+                {/* Quick EOD is a form, not a conversation, but it is still
+                    her asking — the screen should not go anonymous just
+                    because the input got shorter. */}
+                <div className="ss__who">
+                  <span className="ss__who-name">SARA</span>
+                  <span className="ss__who-what">End of day — the short version</span>
+                </div>
+                <EodCapture onDone={() => setShowEod(false)} />
+              </>
+            )
           }
         </div>
       )}
