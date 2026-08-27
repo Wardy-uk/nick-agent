@@ -236,13 +236,36 @@ router.post('/toggle', (req, res) => {
  */
 router.post('/wip-ms', async (req, res) => {
   try {
-    const { msId, source, listId, started } = req.body || {};
+    const { msId, source, listId, started, filePath, lineNumber } = req.body || {};
     if (!msId) return res.status(400).json({ error: 'msId required' });
 
+    const wantStarted = started !== false;
+
+    // Mirror FIRST, exactly as complete-ms does. The lane reads this file, not
+    // Graph, and it is only rewritten by syncMicrosoftTasks on a schedule — so
+    // without this the push lands on Planner and NEURO shows the old value for
+    // up to an hour. Four clicks reached Graph with nothing changing on screen,
+    // which is indistinguishable from a dead button.
+    let mirrored = false;
+    if (filePath && lineNumber != null) {
+      try {
+        obsidian.setTaskPercent(filePath, lineNumber, wantStarted ? 50 : 0);
+        mirrored = true;
+      } catch (e) {
+        console.warn('[Todos] Could not update the mirror line:', e.message);
+      }
+    }
+
     const result = await microsoft.setMicrosoftTaskProgress(
-      msId, started !== false, source || null, listId || null
+      msId, wantStarted, source || null, listId || null
     );
-    if (result.ok) return res.json({ ok: true, pushed: result.kind || 'graph', started: started !== false });
+    if (result.ok) return res.json({ ok: true, pushed: result.kind || 'graph', started: wantStarted, mirrored });
+
+    // Graph refused, so put the mirror back rather than leaving NEURO claiming
+    // a state Planner does not hold.
+    if (mirrored) {
+      try { obsidian.setTaskPercent(filePath, lineNumber, wantStarted ? 0 : 50); } catch { /* best effort */ }
+    }
 
     const reasons = {
       auth: 'Microsoft sign-in expired — reconnect 365.',

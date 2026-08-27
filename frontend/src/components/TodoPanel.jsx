@@ -468,12 +468,16 @@ function MustMoveLane({ items, toggling, onToggle, onSetWip }) {
           // read, not clicked — those tasks were at 75% and 25% before this
           // button existed.
           const isWip = item.status === 'in-progress' || (pct != null && pct > 0 && pct < 100);
-          // Never offer a control that would LOWER progress Planner already
-          // holds. Starting something at 0% is safe; "un-starting" a task at
-          // 75% would throw away real work on a board Nick's team reads, so
-          // above zero this renders as a badge and Planner stays the place to
-          // change it.
-          const canToggleWip = Boolean(wipKey) && (item.task_id ? true : !(pct > 0));
+          // Never offer a control that would LOWER progress this button did not
+          // set. Planner's own UI has three states and writes 0 / 50 / 100, so
+          // 50 IS the canonical "in progress" and toggling it back to 0 is a
+          // real undo. Any OTHER non-zero value (Nick's tasks sit at 25 and 75)
+          // came from someone setting the number directly, and overwriting it
+          // would throw away real work on a board his team reads — so those
+          // render as a read-only badge and Planner stays the place to change
+          // them.
+          const msProgressIsOurs = pct == null || pct === 0 || pct === 50;
+          const canToggleWip = Boolean(wipKey) && (item.task_id ? true : msProgressIsOurs);
           return (
           <div key={item.id} className={`todo-suggestion-card${isWip ? ' todo-suggestion-card-wip' : ''}`}>
             <button
@@ -746,7 +750,12 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   const setWip = async (todo) => {
     const key = wipKeyFor(todo);
     if (!key) return;
-    const starting = todo.status !== 'in-progress';
+    // A Microsoft row's started-ness lives in Planner's percentComplete, not in
+    // the mirror's checkbox — that line is `- [ ]` whatever the progress is, so
+    // reading `status` here would make the button one-way.
+    const starting = todo.task_id
+      ? todo.status !== 'in-progress'
+      : !(todo.percentComplete > 0);
     setToggling(prev => ({ ...prev, [key]: true }));
     try {
       let res;
@@ -764,7 +773,16 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         res = await fetch(apiUrl('/api/todos/wip-ms'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ msId: todo.ms_id, source: todo.source, started: starting }),
+          // filePath/lineNumber let the server update the mirror the lane reads
+          // from. Without them the push reaches Planner and the screen does not
+          // change for an hour, which is what made this look like a dead button.
+          body: JSON.stringify({
+            msId: todo.ms_id,
+            source: todo.source,
+            started: starting,
+            filePath: todo.filePath,
+            lineNumber: todo.lineNumber,
+          }),
         });
       }
       if (!res.ok) {

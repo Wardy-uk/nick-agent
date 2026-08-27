@@ -1079,6 +1079,60 @@ function toggleTask(filePath, lineNumber) {
   return newStatus === 'x' ? 'done' : 'open';
 }
 
+/**
+ * Rewrite the "(50%)" progress marker on one Microsoft-mirror task line.
+ *
+ * ⚠ Why this exists: the WIP push reached Planner correctly and the button
+ * still looked broken. The lane READS from `Tasks/Microsoft Tasks.md`, which is
+ * only rewritten by `syncMicrosoftTasks()` on its schedule — so Planner said
+ * 50% while NEURO went on showing the old value for up to an hour, and four
+ * clicks landed on Graph with nothing at all changing on screen.
+ *
+ * `complete-ms` had already solved the same problem the same way: toggle the
+ * vault line first for instant feedback, then push. This is that, for progress.
+ *
+ * The marker format is NEURO's own (`syncMicrosoftTasks` writes
+ * `- [ ] Title (50%) 📅 date <!--id:xxx-->`), so it is stripped and reinserted
+ * immediately after the title — before the due date and the id comment, which
+ * must both survive or the line stops being parseable and completion breaks.
+ */
+function setTaskPercent(filePath, lineNumber, percent) {
+  if (!fs.existsSync(filePath)) throw new Error('File not found');
+
+  const content = fs.readFileSync(filePath, 'utf-8');
+  // Vault notes are mixed CRLF/LF and this line is rewritten in place, so the
+  // original ending is preserved rather than normalised across the whole file.
+  const lines = content.split('\n');
+  if (lineNumber < 0 || lineNumber >= lines.length) throw new Error('Line number out of range');
+
+  const raw = lines[lineNumber];
+  const cr = raw.endsWith('\r') ? '\r' : '';
+  const line = cr ? raw.slice(0, -1) : raw;
+
+  const m = line.match(/^(\s*-\s+\[[ x>\/]\]\s+)(.*)$/);
+  if (!m) throw new Error('Not a task line');
+
+  let body = m[2];
+  // Drop any existing marker wherever it sits.
+  body = body.replace(/\s*\((?:\d{1,3})%\)/, '');
+
+  // Everything from the due date or the id comment onward is the tail; the
+  // marker goes before it.
+  const tailAt = body.search(/\s*(?:📅|<!--id:)/);
+  const head = (tailAt === -1 ? body : body.slice(0, tailAt)).trimEnd();
+  const tail = tailAt === -1 ? '' : body.slice(tailAt);
+
+  // 0 and 100 carry no marker — 0 is how Planner renders "not started", and a
+  // completed task leaves this file entirely on the next sync.
+  const marker = percent > 0 && percent < 100 ? ` (${percent}%)` : '';
+  lines[lineNumber] = `${m[1]}${head}${marker}${tail}${cr}`;
+
+  fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
+  try { require('./vault-cache').invalidate('task-percent'); } catch {}
+  try { require('./vault-hooks').onVaultWrite(filePath, 'task-percent'); } catch {}
+  return percent;
+}
+
 // Ritual state — reads Scripts/ritual-state.json from vault
 function readRitualState() {
   const statePath = path.join(getVaultPath(), 'Scripts', 'ritual-state.json');
@@ -1762,6 +1816,7 @@ module.exports = {
   fetchCalendarEvents,
   parseNinetyDayPlan,
   toggleTask,
+  setTaskPercent,
   readRitualState,
   readPreviousDailyNote,
   searchVault,
