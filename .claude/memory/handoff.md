@@ -113,6 +113,13 @@ window 27 Aug → 10 Sep; `me: {off:false, known:true, reason:"no booked
 absence", rosterId:24}` — the genuine all-clear, matched by id; Zoe Rees and
 Isabel Busk off tomorrow; nudges still firing today because Nick is working.
 
+**Three consumers wired (27 Aug, `364cd20`):** 1-2-1 booking skips days the
+person is off (proved live — Zoe Rees off 28–31 Aug, proposal came back 1 Sep;
+Friday 28th is a working day and would have been offered otherwise), the day
+planner skips Nick's own booked leave, and meeting prep flags an attendee who
+is away. Unknown never blocks; every caller reports whether it actually
+checked.
+
 ⚠ **ONE TIDY-UP OWED.** `team-availability.js` has its own `bridgeGet()`
 instead of using `microsoft.novaBridgeFetch`, which already does bridge health
 tracking and nested-error detection. That helper is simply **not in
