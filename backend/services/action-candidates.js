@@ -381,6 +381,15 @@ function syncNoteActionCandidates(relativePath) {
   // because scanRecentNotes() and the routes still tally it.
   const autoPromoted = 0;
   let pending = 0;
+  let folded = 0;
+
+  // Everything already queued from a DIFFERENT note. `existing` above is scoped
+  // to this one, which is correct for superseding but is exactly why the queue
+  // filled up: Plaud writes a dozen summary variants of one recording, each
+  // lands as its own note, and each extraction is blind to the other eleven.
+  // Live proof at the time of writing — 258 pending, 54 distinct, with single
+  // commitments repeated fourteen times.
+  const crossPool = loadCrossNotePool(relativePath);
 
   for (const candidate of candidates) {
     const alreadyTracked = existing.some((action) => {
@@ -389,6 +398,22 @@ function syncNoteActionCandidates(relativePath) {
       return getActionSignature(action) === candidate.semanticSignature;
     });
     if (alreadyTracked) continue;
+
+    // Same commitment, different note. Fold rather than create — and fold
+    // LOSSLESSLY: the wording and the source line are appended to the survivor,
+    // so nothing a meeting said is discarded, it is just no longer a separate
+    // row Nick has to read. If the survivor is later rejected it drops out of
+    // the pending pool and a fresh copy is created on the next sync, which is
+    // the right way round: a rejection should not silently suppress the next
+    // sighting for ever.
+    const twin = crossPool.match(candidate.text);
+    if (twin) {
+      if (recordSighting(twin.action, candidate, twin.score)) {
+        console.log(`[ActionCandidates] Folded "${candidate.text.slice(0, 60)}" into #${twin.action.id} (${twin.score})`);
+        folded += 1;
+      }
+      continue;
+    }
 
     const handled = reviewState.handled[candidate.semanticSignature];
     if (handled?.status === 'rejected' || handled?.status === 'executed' || handled?.status === 'ignored') {
@@ -422,6 +447,12 @@ function syncNoteActionCandidates(relativePath) {
     // the task list without Nick approving it from the queue. If auto-promote is
     // ever wanted again, make this function async first.
     pending += 1;
+
+    // A note can carry two wordings of one commitment. Adding what was just
+    // created to the pool means the second folds into the first instead of the
+    // pair surviving together — the `seen` set above only catches them when the
+    // text is byte-identical.
+    crossPool.add(db.getSaraAction(actionId));
   }
 
   writeReviewState(relativePath, {
@@ -430,7 +461,117 @@ function syncNoteActionCandidates(relativePath) {
     reviewedAt: new Date().toISOString(),
   });
 
-  return { created, autoPromoted, pending, superseded, candidates };
+  return { created, autoPromoted, pending, superseded, folded, candidates };
+}
+
+// ── Cross-note duplicate folding ─────────────────────────────────────────────
+
+// Bounded because it is loaded on every note sync and the table churns. 2,000 is
+// far above the worst pending queue ever observed (930) while still being a real
+// bound rather than "all of them" — and a cap that could bite is logged, because
+// a silent one here would quietly stop folding exactly when the pile is biggest.
+const CROSS_POOL_LIMIT = 2000;
+
+// Off is a supported state, not a bug: if folding is ever wrong for a corpus,
+// the queue filling up again is recoverable and a wrongly-merged commitment is
+// harder to notice.
+const DEDUPE_ENABLED = process.env.CAPTURE_DEDUPE_ENABLED !== 'false';
+
+/**
+ * The fold does NOT inherit task-dedupe's 0.42, and that is the whole finding.
+ *
+ * 0.42 was measured on NEURO tasks against Microsoft tasks — two independently
+ * worded lists. This corpus is the opposite: every row is an action extracted
+ * from Nick's own meetings, so they all read "Nick will <verb> the <support
+ * noun>" and share his stock vocabulary almost completely. Scored against the
+ * live queue on 27 Aug 2026 (258 pending, 54 distinct), 0.42 merged two pairs
+ * and BOTH were wrong — the worst folded "meet Naomi on 26/27 Aug to review and
+ * sign the risk assessment" into "complete the remaining sections of the risk
+ * assessment form", which would have hidden a dated meeting behind a form.
+ *
+ * Measured separation in the real operating condition (scored against the whole
+ * pool, which is what changes the IDF and therefore the scores):
+ *
+ *   exact repeat .................. 1.000
+ *   case / punctuation variant .... 1.000
+ *   minor reword .................. 1.000
+ *   same job, one clause dropped .. 1.000
+ *   ── the gap ──
+ *   worst live false positive ..... 0.499
+ *   genuinely new commitment ...... 0.150
+ *
+ * 0.85 sits in that gap. It is deliberately at the conservative end, because the
+ * two directions are not symmetric: a missed fold leaves a duplicate row, which
+ * is visible, cheap and the status quo — while a wrong fold hides a real
+ * commitment inside an unrelated one, silently, in the queue Nick uses to find
+ * what he owes. Duplicates are an annoyance; a lost commitment is the failure.
+ */
+const FOLD_SCORE = 0.85;
+
+/**
+ * Pending capture_todos raised from OTHER notes, ready to be scored against.
+ *
+ * Uses `task-dedupe`'s matcher rather than a second one, so the threshold that
+ * was measured against Nick's own corpus (0.42, with the highest-scoring
+ * non-duplicate at 0.397) is the threshold that applies here.
+ */
+function loadCrossNotePool(relativePath) {
+  const rows = [];
+  if (DEDUPE_ENABLED) {
+    try {
+      const all = db.getPendingSaraActionsByType('capture_todo', CROSS_POOL_LIMIT);
+      if (all.length === CROSS_POOL_LIMIT) {
+        console.warn(`[ActionCandidates] Cross-note pool hit its ${CROSS_POOL_LIMIT} cap — folding may miss older duplicates`);
+      }
+      for (const row of all) {
+        if ((row.payload?.sourcePath || null) === relativePath) continue;
+        if (!row.payload?.text) continue;
+        rows.push(row);
+      }
+    } catch (e) {
+      // A pool that could not be read must not look like "no duplicates exist".
+      console.warn('[ActionCandidates] Could not load cross-note pool, folding disabled for this run:', e.message);
+      return { match: () => null, add: () => {} };
+    }
+  }
+
+  return {
+    match(text) {
+      if (!DEDUPE_ENABLED || !rows.length) return null;
+      // Lazily required: task-dedupe pulls in task-store, and this module is
+      // loaded from the vault hooks at startup.
+      const taskDedupe = require('./task-dedupe');
+      const hit = taskDedupe.findEquivalent(text, rows.map(r => r.payload.text), { minScore: FOLD_SCORE });
+      return hit ? { action: rows[hit.index], score: hit.score } : null;
+    },
+    add(row) {
+      if (row?.payload?.text) rows.push(row);
+    },
+  };
+}
+
+/**
+ * Attach a duplicate sighting to the action that survived. Returns false when
+ * this exact candidate is already on it, so a re-sync cannot inflate the count.
+ */
+function recordSighting(action, candidate, score) {
+  const payload = { ...action.payload };
+  const sightings = Array.isArray(payload.sightings) ? [...payload.sightings] : [];
+  if (sightings.some(s => s.focusItemId === candidate.focusItemId)) return false;
+
+  sightings.push({
+    focusItemId: candidate.focusItemId,
+    sourcePath: candidate.sourcePath,
+    sourceLine: candidate.sourceLine,
+    // Kept verbatim. The whole point of folding rather than dropping is that the
+    // other meeting's wording survives somewhere Nick can still read it.
+    text: candidate.text,
+    score,
+    at: new Date().toISOString(),
+  });
+  payload.sightings = sightings;
+
+  return db.updateSaraActionPayload(action.id, payload);
 }
 
 // ── Meeting action extraction (PLAUD "## Next Arrangements") ─────────────────

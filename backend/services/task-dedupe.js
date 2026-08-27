@@ -514,10 +514,55 @@ function linkedMsIds() {
   return ids;
 }
 
+/**
+ * The best equivalent of `text` among `others`, or null. PURE — no DB, no clock.
+ *
+ * The text-against-text case, which `matchText` does not cover: that one scores
+ * queries against task ROWS and returns their ids, and the caller here has no
+ * rows, only strings that may or may not already be saying the same thing.
+ *
+ * This exists for the capture_todo flood. Plaud writes several summary variants
+ * of one recording, `action-candidates` extracts from each note independently,
+ * and its only dedupe is `getSaraActionsBySource` — scoped to ONE note by
+ * design, so fourteen notes describing one meeting produce fourteen copies of
+ * every commitment in it. Measured on the live queue: 258 pending, 54 distinct.
+ *
+ * Reuses `scorePair`/`tokenize`/`buildIdf` rather than growing a second matcher,
+ * so the threshold that was measured against Nick's corpus is the threshold that
+ * applies here too. The IDF is built over the whole set including the query, so
+ * his stock vocabulary ("review", "ticket", "process") stays correctly cheap —
+ * which is the entire reason a plain overlap would not do this job.
+ */
+function findEquivalent(text, others = [], { minScore = MIN_SCORE } = {}) {
+  const aTokens = tokenize(text || '');
+  if (!aTokens.size) return null;
+
+  const otherTokens = others.map(o => tokenize(o || ''));
+  const idf = buildIdf([aTokens, ...otherTokens]);
+
+  let best = null;
+  for (let i = 0; i < otherTokens.length; i++) {
+    if (!otherTokens[i].size) continue;
+    const result = scorePair(aTokens, otherTokens[i], idf);
+    if (result.score < minScore) continue;
+    if (!best || result.score > best.score) {
+      best = {
+        index: i,
+        score: result.score,
+        containment: result.containment,
+        jaccard: result.jaccard,
+        shared: distinctiveShared(result.shared, idf),
+      };
+    }
+  }
+  return best;
+}
+
 module.exports = {
   MIN_SCORE,
   STRONG_SCORE,
   buildIdf,
+  findEquivalent,
   dismissPair,
   dismissedKeySet,
   linkPair,
