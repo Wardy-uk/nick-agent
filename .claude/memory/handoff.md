@@ -85,33 +85,41 @@ seen a dry run himself.
    `status` (toggle would have been one-way), and **Planner rows already carry
    real progress** — see mistakes.md.
 
-## ⚠ OPEN — can NEURO read Nick's leave from NOVA? (unresolved)
+## ▶ NEXT — read Nick's leave from NOVA (answered, not yet built)
 
-Nick: *"I should be [in it] — but not sure how it's all mapped together."* So
-this needs VERIFYING, not assuming, before anything is built.
+**Nick IS in the feed.** He resolved the mapping himself (27 Aug):
+`AgentId 24, Nick Ward, Team Support, Department NT, IsActive 1,
+PeopleHrId D2V00244` — and roster_id 24 already appears in
+`agent_availability`. All 13 active NT agents carry a PeopleHrId, so nobody
+falls through.
 
-What is established:
-- `agent_availability` in the **NOVA** database (`bym-asqlep01`, db `NOVA`) is
-  live: 114 rows, 14 distinct people, 13 May → 10 Sep, last sync 11:34 on
-  27 Aug, `source: 'peoplehr'`, statuses `annual_leave`/`sick` with reasons.
-- `roster_id` = **`dbo.Agent.AgentId`** in the KPI db (`TechSupportJSM`),
-  filtered `IsActive = 1 AND Department = 'NT'` — the ticket-assignment agent
-  pool. Nick manages that pool, so he may well not be in it. 14 people vs his
-  13 reports is suggestive and proves nothing.
-- **Could not resolve the mapping**: NOVA's own `agent_roster` table is EMPTY
-  (0 rows), and `kpi_sql_password` is absent from NOVA's `settings` table, so
-  `getKpiPool()` returns null and `dbo.Agent` is unreachable from here.
-- NOVA's `/availability/snapshot|upcoming|capacity` exist but sit behind
-  `requireAreaAccess` JWT, which the bridge secret does not satisfy — #65's
-  exact species. A bridge route is needed, precedent `neuro-bridge-kpi.ts`
-  with the shared `bridgeAuth`.
+The chain, which is why it looks unmapped: **PeopleHR EmployeeId →
+`dbo.Agent.PeopleHrId` → `AgentId` → `agent_availability.roster_id`.**
+`agent_availability` stores NO names and there is no FK or join table — it is
+a bare integer pointing at a different server (`TechSupportJSM`). Names are
+stitched on at READ time by `agent-availability.ts` (`getDaySnapshot` builds a
+Map keyed on AgentId). That is also why NOVA's own `agent_roster` table being
+empty is a red herring — nothing uses it for this.
 
-Next step: get `dbo.Agent` readable (KPI credential, or `claude_readonly` per
-the global CLAUDE.md rule) and check for a Nick row with a `PeopleHrId`. If he
-is absent, the feed is still worth having — it tells NEURO who on his TEAM is
-off, for meeting prep, 1-2-1 booking and the day planner. The leave button
-stays either way: it works with NOVA or the Pi unreachable, and covers leave
-decided that morning.
+⚠ **The feed only carries APPROVED leave.** Nick has an absence tomorrow that
+is not yet approved and there are no rows for him in the next 14 days. So the
+NOVA feed and the 🌴 button are COMPLEMENTARY, not primary-and-fallback: the
+feed is authoritative for booked-and-approved leave, the button covers leave
+that is unapproved, same-day, or decided that morning — and it still works
+with NOVA or the Pi unreachable.
+
+To build:
+1. NOVA: an availability route on the bridge. `/availability/*` exists but sits
+   behind `requireAreaAccess` JWT, which the bridge secret does not satisfy
+   (#65's species). Precedent: `neuro-bridge-kpi.ts` with the shared
+   `bridgeAuth` export.
+2. NEURO: fold it into `nudges.nudgeSuppression()` alongside bank holidays and
+   the manual flag, naming WHICH source said so (the `working-days.status()`
+   pattern — never a bare boolean).
+3. Bonus, arguably the bigger win: it also tells NEURO **who on the team is
+   off**, for meeting prep, 1-2-1 booking and the day planner. Nick is already
+   building an "Away Tomorrow" section in NOVA; 28 Aug has 2 agents booked
+   (roster 9 and 25), so it has real content to render.
 
 ## ⏳ PARKED — one interface, the chat (Nick, 27 Aug)
 
