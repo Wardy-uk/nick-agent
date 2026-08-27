@@ -108,7 +108,21 @@ feed is authoritative for booked-and-approved leave, the button covers leave
 that is unapproved, same-day, or decided that morning — and it still works
 with NOVA or the Pi unreachable.
 
-**BUILT — one deploy step outstanding.**
+**✅ LIVE AND VERIFIED (27 Aug).** End to end: `roster=13`, `absenceDays=20`,
+window 27 Aug → 10 Sep; `me: {off:false, known:true, reason:"no booked
+absence", rosterId:24}` — the genuine all-clear, matched by id; Zoe Rees and
+Isabel Busk off tomorrow; nudges still firing today because Nick is working.
+
+⚠ **ONE TIDY-UP OWED.** `team-availability.js` has its own `bridgeGet()`
+instead of using `microsoft.novaBridgeFetch`, which already does bridge health
+tracking and nested-error detection. That helper is simply **not in
+microsoft.js's `module.exports`** — a one-line fix — but that file was held by
+a concurrent session with 91 lines of unfinished Planner work, and
+`git commit -o` takes the whole path, which would have swept their work into
+the commit (that has gone wrong here twice). **Next session: add
+`novaBridgeFetch` to microsoft.js's exports and delete `bridgeGet`.**
+
+
 
 - **NOVA** `da42b2a` on branch **`nova-codex`** (pushed): `routes/neuro-bridge-availability.ts`,
   `GET /api/neuro-bridge/availability?days=14`. Reuses `AgentAvailabilityService`
