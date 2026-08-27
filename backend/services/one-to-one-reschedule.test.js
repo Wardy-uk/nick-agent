@@ -162,3 +162,28 @@ test('a meeting that merely names the person is not treated as their 1-2-1', asy
   const r = await booking.findOneToOne('Hope Goodall');
   assert.strictEqual(r.ok, false, 'a handover meeting is not a 1-2-1');
 });
+
+// ── A proposal must be a proposal, not two loose fields ─────────────────────
+//
+// `describe()` is async. Spreading it WITHOUT awaiting yields `{}` — silently,
+// with no error — so `propose()` once returned literally
+// `{"awayCheck":"checked","awayNote":null}` and nothing else: no person, no
+// slot, no attendee. It reached the Pi that way because the fields that were
+// added were present and looked right.
+//
+// This asserts the source awaits at every describe() call site rather than
+// exercising the network path, which needs a calendar and a vault.
+
+test('every describe() call is awaited — spreading a promise yields {}', () => {
+  const fs = require('fs');
+  const src = fs.readFileSync(require.resolve('./one-to-one-booking'), 'utf-8');
+  const calls = [...src.matchAll(/\bdescribe\(/g)]
+    // Skip the declaration itself — only CALLS need awaiting.
+    .filter(m => !/function\s+$/.test(src.slice(Math.max(0, m.index - 20), m.index)));
+  assert.ok(calls.length >= 2, `expected at least two call sites, found ${calls.length}`);
+  for (const m of calls) {
+    const before = src.slice(Math.max(0, m.index - 12), m.index);
+    assert.match(before, /await\s+$/,
+      `describe() called without await near: ${src.slice(m.index - 40, m.index + 30).replace(/\n/g, ' ')}`);
+  }
+});

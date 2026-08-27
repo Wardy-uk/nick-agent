@@ -277,9 +277,17 @@ async function propose(name, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
   // The proposal states whether the other person's leave was actually consulted.
   // A confirm dialog that silently means "I did not look" is how an invite ends
   // up in someone's holiday.
-  return { ...describe(name, slot, { durationMinutes, fmDue, latest }),
+  //
+  // ⚠ `describe` is ASYNC. Spreading it without awaiting yields `{}` — no
+  // error, no warning — and the whole proposal silently collapses to just the
+  // two fields added here. It shipped that way for one deploy: the route
+  // answered `{"awayCheck":"checked","awayNote":null}` and nothing else.
+  const proposal = await describe(name, slot, { durationMinutes, fmDue, latest });
+  return {
+    ...proposal,
     awayCheck: away.checked ? 'checked' : 'unknown',
-    awayNote: away.checked ? null : `Could not check ${name}'s leave — ${away.reason}` };
+    awayNote: away.checked ? null : `Could not check ${name}'s leave — ${away.reason}`,
+  };
 }
 
 /**
