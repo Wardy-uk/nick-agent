@@ -11,8 +11,58 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
-const { leaveState } = require('./nudges');
+// `leaveState` is pure, but `nudgeSuppression` reads the leave key and the
+// bank-holiday cache, so it needs a database. A SCRATCH one — never the real
+// file (see mistakes.md, 2026-08-13).
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'neuro-leave-'));
+process.env.NEURO_DB_PATH = path.join(root, 'leave.db');
+
+const db = require('../db/database');
+const { leaveState, nudgeSuppression, setLeave, clearLeave } = require('./nudges');
+
+test.before(async () => { await db.init(); });
+
+// ── The other reason nudges stay quiet ──────────────────────────────────────
+//
+// `nudgeSuppression` takes `now`, so the bank-holiday branch is checkable
+// without waiting for one. This is the branch that fires first in anger:
+// Monday 31 Aug 2026 is the Summer bank holiday.
+
+test('a bank holiday suppresses ritual nudges', () => {
+  const s = nudgeSuppression(new Date('2026-08-31T09:00:00'));
+  assert.equal(s.suppressed, true, 'the Summer bank holiday is not a working day');
+  assert.match(String(s.reason), /holiday|working/i, 'and it says which reason it was');
+});
+
+test('a weekend suppresses ritual nudges', () => {
+  assert.equal(nudgeSuppression(new Date('2026-08-29T09:00:00')).suppressed, true, 'Saturday');
+  assert.equal(nudgeSuppression(new Date('2026-08-30T09:00:00')).suppressed, true, 'Sunday');
+});
+
+test('an ordinary working day does NOT suppress', () => {
+  const s = nudgeSuppression(new Date('2026-08-27T09:00:00'));
+  assert.equal(s.suppressed, false, 'Thursday 27 Aug is a normal working day');
+  assert.equal(s.reason, null);
+});
+
+test('leave beats a working day, and clearing it lets nudges resume', () => {
+  // The round trip through the store, which is what the button actually does.
+  const thursday = new Date('2026-08-27T09:00:00');
+  clearLeave();
+  assert.equal(nudgeSuppression(thursday).suppressed, false);
+
+  setLeave(1, thursday);
+  const on = nudgeSuppression(thursday);
+  assert.equal(on.suppressed, true);
+  assert.equal(on.reason, 'annual leave', 'the reason names leave, not the weekday');
+
+  clearLeave();
+  assert.equal(nudgeSuppression(thursday).suppressed, false, 'back early must actually work');
+});
 
 const at = (iso) => new Date(iso);
 
