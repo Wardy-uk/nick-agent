@@ -1096,7 +1096,7 @@ function toggleTask(filePath, lineNumber) {
  * immediately after the title — before the due date and the id comment, which
  * must both survive or the line stops being parseable and completion breaks.
  */
-function setTaskPercent(filePath, lineNumber, percent) {
+function setTaskPercent(filePath, lineNumber, percent, expectedId = null) {
   if (!fs.existsSync(filePath)) throw new Error('File not found');
 
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -1111,6 +1111,24 @@ function setTaskPercent(filePath, lineNumber, percent) {
 
   const m = line.match(/^(\s*-\s+\[[ x>\/]\]\s+)(.*)$/);
   if (!m) throw new Error('Not a task line');
+
+  // ⚠ A line number is a POSITION and the task is an IDENTITY. This file is
+  // regenerated wholesale by syncMicrosoftTasks, so a client holding a lane
+  // fetched before a resync can hand back a number that now points at someone
+  // else's task — and the marker would be written onto the wrong row silently.
+  // Proved by accident while testing: a probe paired one task's id with another
+  // task's line and put "(50%)" on a row sitting at 75%. Graph took the right
+  // task, the vault took the wrong line, and only the next resync undid it.
+  //
+  // The line already carries the id the caller thinks it is editing, so this is
+  // checkable rather than assumable. Dedupe on identity, never on a positional
+  // attribute a concurrent writer controls.
+  if (expectedId) {
+    const onLine = /<!--id:([^>]*?)-->/.exec(line)?.[1] || null;
+    if (onLine !== expectedId) {
+      throw new Error(`Line ${lineNumber} holds ${onLine || 'no id'}, expected ${expectedId} — refusing to edit the wrong task`);
+    }
+  }
 
   let body = m[2];
   // Drop any existing marker wherever it sits.

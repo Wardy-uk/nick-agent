@@ -249,7 +249,9 @@ router.post('/wip-ms', async (req, res) => {
     let mirrored = false;
     if (filePath && lineNumber != null) {
       try {
-        obsidian.setTaskPercent(filePath, lineNumber, wantStarted ? 50 : 0);
+        // msId is passed as the expected id: the mirror line must be the task
+        // Graph is about to be told about, not merely the line at that offset.
+        obsidian.setTaskPercent(filePath, lineNumber, wantStarted ? 50 : 0, msId);
         mirrored = true;
       } catch (e) {
         console.warn('[Todos] Could not update the mirror line:', e.message);
@@ -264,7 +266,7 @@ router.post('/wip-ms', async (req, res) => {
     // Graph refused, so put the mirror back rather than leaving NEURO claiming
     // a state Planner does not hold.
     if (mirrored) {
-      try { obsidian.setTaskPercent(filePath, lineNumber, wantStarted ? 0 : 50); } catch { /* best effort */ }
+      try { obsidian.setTaskPercent(filePath, lineNumber, wantStarted ? 0 : 50, msId); } catch { /* best effort */ }
     }
 
     const reasons = {

@@ -53,3 +53,42 @@ test('a non-task line is refused rather than mangled', () => {
   fs.writeFileSync(f, '# Heading\n');
   assert.throws(() => obsidian.setTaskPercent(f, 0, 50), /Not a task line/);
 });
+
+// ── A line number is a position; the task is an identity ────────────────────
+//
+// This file is regenerated wholesale by syncMicrosoftTasks, so a client holding
+// a lane fetched before a resync can hand back an offset that now points at a
+// different task. Proved by accident: a probe paired one task's id with
+// another's line and wrote "(50%)" onto a row sitting at 75%.
+
+test('refuses to edit a line whose id is not the expected task', () => {
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pct-')), 'm.md');
+  fs.writeFileSync(f, '- [ ] Someone else (75%) <!--id:THEIRS-->\n');
+  assert.throws(
+    () => obsidian.setTaskPercent(f, 0, 50, 'MINE'),
+    /refusing to edit the wrong task/
+  );
+  assert.match(fs.readFileSync(f, 'utf-8'), /\(75%\)/, 'the row must be untouched');
+});
+
+test('edits happily when the id on the line matches', () => {
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pct-')), 'm.md');
+  fs.writeFileSync(f, '- [ ] My task <!--id:MINE-->\n');
+  obsidian.setTaskPercent(f, 0, 50, 'MINE');
+  assert.match(fs.readFileSync(f, 'utf-8'), /My task \(50%\) <!--id:MINE-->/);
+});
+
+test('a line with no id is refused when an id was expected', () => {
+  // Better to do nothing than to guess: an unidentified line cannot be proved
+  // to be the right one.
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pct-')), 'm.md');
+  fs.writeFileSync(f, '- [ ] No id here\n');
+  assert.throws(() => obsidian.setTaskPercent(f, 0, 50, 'MINE'), /expected MINE/);
+});
+
+test('no expected id keeps the old permissive behaviour for other callers', () => {
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pct-')), 'm.md');
+  fs.writeFileSync(f, '- [ ] Anything <!--id:whatever-->\n');
+  obsidian.setTaskPercent(f, 0, 50);
+  assert.match(fs.readFileSync(f, 'utf-8'), /\(50%\)/);
+});
