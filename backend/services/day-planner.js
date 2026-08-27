@@ -318,9 +318,16 @@ function gather(now = new Date()) {
   try {
     const taskStore = require('./task-store');
     const { rankTasks } = require('./task-scoring');
+    // ⚠ `activeTodos()` returns the LEGACY todo shape, not task rows: the id is
+    // `task_id` and the estimate is `estimateMinutes`. Reading `id` /
+    // `estimate_minutes` here filtered all 148 open tasks out and the planner
+    // reported "nothing open to schedule" against a full backlog — which looks
+    // exactly like a quiet day rather than a bug. A file-backed line (Microsoft,
+    // a daily note) has a null task_id and genuinely cannot be blocked, so the
+    // filter itself is right; it was reading the wrong key.
     tasks = rankTasks(taskStore.activeTodos(), dateKey)
-      .filter(t => Number.isInteger(t.id))       // only NEURO-owned rows can be blocked
-      .map(t => ({ id: t.id, text: t.text, estimateMinutes: t.estimate_minutes ?? null }));
+      .map(toPlannerTask)
+      .filter(Boolean);
   } catch (e) {
     gaps.push(`tasks unreadable: ${e.message}`);
   }
@@ -358,6 +365,31 @@ function gather(now = new Date()) {
   }
 
   return { dateKey, tasks, busy, calendarKnown, gaps, samples: durationSamples() };
+}
+
+/**
+ * One entry from `task-store.activeTodos()` into what the planner packs, or
+ * null if it cannot be blocked. PURE, and exported, because getting it wrong is
+ * SILENT.
+ *
+ * ⚠ `activeTodos()` returns the LEGACY todo shape, not a task row: the id is
+ * `task_id` and the estimate is `estimateMinutes`. The first cut of this read
+ * `id` and `estimate_minutes`, which filtered all 148 open tasks out — and the
+ * planner then reported "nothing open to schedule" against a full backlog,
+ * which reads as a quiet day rather than a bug. Nothing threw and nothing
+ * logged; only a dry run against the live server showed it.
+ *
+ * Dropping a null `task_id` is correct and stays: a file-backed line (a
+ * Microsoft task, a daily-note checkbox) is owned elsewhere and task-blocks
+ * cannot schedule it.
+ */
+function toPlannerTask(todo) {
+  if (!todo || !Number.isInteger(todo.task_id)) return null;
+  return {
+    id: todo.task_id,
+    text: todo.text,
+    estimateMinutes: todo.estimateMinutes ?? null,
+  };
 }
 
 /** Planned-vs-actual pairs from every finished focus session and closed block. */
@@ -524,6 +556,7 @@ module.exports = {
   ENABLED,
   run,
   gather,
+  toPlannerTask,
   durationSamples,
   MAX_BLOCKS_PER_HALF,
   MAX_TASKS_PER_BLOCK,

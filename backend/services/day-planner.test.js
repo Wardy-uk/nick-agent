@@ -75,6 +75,44 @@ test('an assumed duration IS inflated, because the assumption is known wrong', (
   assert.equal(sized % 5, 0, 'lands on a readable five minutes');
 });
 
+// ── The shape contract ───────────────────────────────────────────────────────
+//
+// This is the bug that shipped and was caught only by a dry run against the
+// live server: `activeTodos()` returns the LEGACY todo shape, so the id is
+// `task_id` and the estimate is `estimateMinutes`. Reading `id` /
+// `estimate_minutes` silently filtered out all 148 open tasks and the planner
+// announced "nothing open to schedule" against a full backlog. Nothing threw.
+// A wrong key here does not fail loudly — it produces an empty, plausible day.
+
+test('a NEURO task row maps across, reading task_id and estimateMinutes', () => {
+  const mapped = planner.toPlannerTask({
+    task_id: 58,
+    text: 'Build succession plan',
+    estimateMinutes: 45,
+    source: 'NEURO',
+    filePath: null,
+  });
+  assert.deepEqual(mapped, { id: 58, text: 'Build succession plan', estimateMinutes: 45 });
+});
+
+test('a missing estimate maps to null, never to a number', () => {
+  const mapped = planner.toPlannerTask({ task_id: 1, text: 'x', estimateMinutes: null });
+  assert.strictEqual(mapped.estimateMinutes, null, 'null means "assume", 0 would mean "instant"');
+});
+
+test('a file-backed line is dropped, because nothing can block it', () => {
+  // Microsoft owns this one; task-blocks has no row to attach to.
+  assert.strictEqual(planner.toPlannerTask({
+    task_id: null, text: 'Succession plan', source: 'MS Planner',
+  }), null);
+});
+
+test('the row-shaped keys are NOT accepted — that was the bug', () => {
+  // If someone later passes raw task rows in, this must fail loudly in a test
+  // rather than quietly producing an empty plan.
+  assert.strictEqual(planner.toPlannerTask({ id: 58, text: 'x', estimate_minutes: 45 }), null);
+});
+
 // ── Gaps ─────────────────────────────────────────────────────────────────────
 
 test('a meeting is a wall, and the buffer is honoured on both sides', () => {
