@@ -195,6 +195,45 @@ function selfAbsenceOn(dateStr, snap, matcher = selfMatcher()) {
   };
 }
 
+/**
+ * The days a named person is booked off, as a Set of `YYYY-MM-DD`. PURE.
+ *
+ * ⚠ `known` is the load-bearing half and it is NOT the same as an empty set.
+ * A booking caller must be able to tell "he is available all fortnight" from
+ * "I have no idea whether he is available", because the two license opposite
+ * behaviour: the first is a green light, the second is only a reason to carry
+ * on as before. Returning a bare Set would collapse them, and the collapse
+ * fails in the expensive direction — a 1-2-1 invite emailed to someone sitting
+ * on a beach.
+ *
+ * Matched on FULL name only. `entities.getRoster()` has the same rule for the
+ * same reason: a first name is an identifier only when it maps to exactly one
+ * person, and this roster has two Nathans' worth of that problem waiting.
+ */
+function daysOffFor(personName, snap) {
+  const empty = new Set();
+  if (!snap?.known) return { known: false, reason: 'no availability data', dates: empty };
+  if (!snap.rosterCount) return { known: false, reason: 'roster empty', dates: empty };
+
+  const wanted = String(personName || '').trim().toLowerCase();
+  if (!wanted) return { known: false, reason: 'no name given', dates: empty };
+
+  const row = (snap.roster || []).find(r => String(r.name || '').trim().toLowerCase() === wanted);
+  if (!row) return { known: false, reason: `${personName} is not in the NOVA roster`, dates: empty };
+  if (row.syncable === false) {
+    // No People HR id, so this person's absences never sync and they always
+    // look available. Reporting that as "free" would be the feed's worst lie.
+    return { known: false, reason: `${personName} has no People HR id`, dates: empty };
+  }
+
+  const dates = new Set(
+    (snap.absences || [])
+      .filter(a => Number(a.rosterId) === Number(row.rosterId))
+      .map(a => a.date)
+  );
+  return { known: true, rosterId: row.rosterId, dates, coversTo: snap.to || null };
+}
+
 /** Everyone else who is off on a date — meeting prep, 1-2-1 booking, planning. */
 function othersOff(dateStr, snap, matcher = selfMatcher()) {
   if (!snap?.known) return [];
@@ -233,6 +272,7 @@ module.exports = {
   status,
   // pure, and the half worth pinning
   selfAbsenceOn,
+  daysOffFor,
   othersOff,
   isSelf,
   selfMatcher,

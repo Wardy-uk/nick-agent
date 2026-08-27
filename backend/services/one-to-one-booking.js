@@ -141,11 +141,28 @@ function minutesToClock(dayStr, minutes) {
  * The shared slot search. Pure with respect to `events` — it never fetches, so
  * a batch can hand it one calendar read plus the slots it has already handed
  * out, and each subsequent person is placed around them.
+ *
+ * `personOff` is the set of dates the OTHER person is booked off, or null when
+ * that could not be established.
+ *
+ * ⚠ Until this existed the search could only see NICK's diary. Only his own
+ * leave was avoidable (`showAs: 'oof'` among the events); the person being
+ * invited could be on a beach and the slot would look perfectly free, because
+ * NEURO does not hold their calendar — reading a colleague's free/busy needs
+ * `Calendars.Read.Shared`, which it has never had. `book()` emails a real
+ * invite to a real direct report, so that is not a cosmetic miss.
+ *
+ * NULL means "could not tell" and deliberately does NOT block. Refusing to
+ * book because NOVA is unreachable would take the feature down every time the
+ * bridge hiccups, and the status quo — booking blind, as it always has — is
+ * survivable. What must not happen is a blind booking that CLAIMS to have
+ * checked, which is why callers surface `awayCheck` rather than swallowing it.
  */
-function findSlot(events, from, durationMinutes) {
+function findSlot(events, from, durationMinutes, personOff = null) {
   for (let i = 0; i <= SEARCH_DAYS; i++) {
     const day = addDays(from, i);
     if (!isWorkingDay(day, events)) continue;
+    if (personOff && personOff.has(dateStr(day))) continue;
     if (countOneToOnes(day, events) >= MAX_PER_DAY) continue;
     for (const window of [PM_WINDOW, AM_WINDOW]) {
       const gap = findGapInWindow(day, events, window, durationMinutes);
@@ -160,6 +177,31 @@ function findSlot(events, from, durationMinutes) {
     }
   }
   return null;
+}
+
+/**
+ * When is this person booked off? A synchronous cache read — `team-availability`
+ * refreshes from NOVA on its own schedule, and a booking flow must not wait on
+ * the bridge.
+ *
+ * Never throws and never blocks: an unreadable feed returns `known:false`, and
+ * every caller treats that as "carry on as before, but say so".
+ */
+function awayFor(personName) {
+  try {
+    const availability = require('./team-availability');
+    const info = availability.daysOffFor(personName, availability.snapshot());
+    return {
+      checked: info.known,
+      dates: info.known ? info.dates : null,
+      // Named so a proposal can say WHY it could not check, rather than
+      // implying it did.
+      reason: info.known ? null : info.reason,
+      coversTo: info.coversTo || null,
+    };
+  } catch (e) {
+    return { checked: false, dates: null, reason: e.message, coversTo: null };
+  }
 }
 
 /** A held slot, shaped like a calendar event so the next search sees it. */
@@ -222,11 +264,22 @@ async function propose(name, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
     return { ok: false, error: `Could not read the calendar: ${e.message}` };
   }
 
-  const slot = findSlot(events, from, durationMinutes);
+  const away = awayFor(name);
+  const slot = findSlot(events, from, durationMinutes, away.dates);
   if (!slot) {
-    return { ok: false, error: `No free ${durationMinutes}-minute slot in the next ${SEARCH_DAYS} days` };
+    return {
+      ok: false,
+      error: `No free ${durationMinutes}-minute slot in the next ${SEARCH_DAYS} days`
+        + (away.checked && away.dates.size ? ` (${name} is off ${away.dates.size} of them)` : ''),
+      awayCheck: away.checked ? 'checked' : 'unknown',
+    };
   }
-  return describe(name, slot, { durationMinutes, fmDue, latest });
+  // The proposal states whether the other person's leave was actually consulted.
+  // A confirm dialog that silently means "I did not look" is how an invite ends
+  // up in someone's holiday.
+  return { ...describe(name, slot, { durationMinutes, fmDue, latest }),
+    awayCheck: away.checked ? 'checked' : 'unknown',
+    awayNote: away.checked ? null : `Could not check ${name}'s leave — ${away.reason}` };
 }
 
 /**
@@ -274,12 +327,23 @@ async function planAll(names, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
 
   const planned = [];
   const skipped = [];
+  const awayChecked = [];
+  const awayUnchecked = [];
   for (const c of candidates) {
     // Honour each person's own due date — someone not due yet is not pulled forward.
     const earliest = earliestDate({ nextDue: c.fmDue });
-    const slot = findSlot(events, earliest, durationMinutes);
+    // Per person: each has their own leave, so this cannot be hoisted out of
+    // the loop the way the calendar read can.
+    const away = awayFor(c.name);
+    if (away.checked) awayChecked.push(c.name); else awayUnchecked.push({ person: c.name, reason: away.reason });
+
+    const slot = findSlot(events, earliest, durationMinutes, away.dates);
     if (!slot) {
-      skipped.push({ person: c.name, reason: `no free slot in the next ${SEARCH_DAYS} days` });
+      skipped.push({
+        person: c.name,
+        reason: `no free slot in the next ${SEARCH_DAYS} days`
+          + (away.checked && away.dates.size ? ` (off for ${away.dates.size} of them)` : ''),
+      });
       continue;
     }
     reserve(events, c.name, slot);
@@ -294,6 +358,11 @@ async function planAll(names, { durationMinutes = DEFAULT_DURATION_MIN } = {}) {
     notBookable,
     totalRequested: wanted.length,
     withoutInvite: planned.filter(p => !p.attendee?.email).map(p => p.person),
+    // `bookAll` emails real invites, so the confirm screen must be able to say
+    // whose leave was actually consulted and whose could not be. A batch that
+    // silently checked nobody looks identical to one that checked everybody.
+    awayChecked,
+    awayUnchecked,
   };
 }
 
@@ -535,9 +604,18 @@ async function proposeReschedule(name, { after = null, durationMinutes = null } 
   }
 
   const without = (events || []).filter(e => e.id !== current.id);
-  const slot = findSlot(without, earliest, minutes);
+  // Moving a 1-2-1 onto a day the person is off is the same mistake as booking
+  // one there, and Graph mails them an "updated" notice either way.
+  const away = awayFor(name);
+  const slot = findSlot(without, earliest, minutes, away.dates);
   if (!slot) {
-    return { ok: false, error: `No free ${minutes}-minute slot in the next ${SEARCH_DAYS} days`, current };
+    return {
+      ok: false,
+      error: `No free ${minutes}-minute slot in the next ${SEARCH_DAYS} days`
+        + (away.checked && away.dates.size ? ` (${name} is off ${away.dates.size} of them)` : ''),
+      current,
+      awayCheck: away.checked ? 'checked' : 'unknown',
+    };
   }
 
   const attendee = await resolveAttendee(name);
@@ -552,6 +630,8 @@ async function proposeReschedule(name, { after = null, durationMinutes = null } 
     eventId: current.id,
     moveCount: priorMoves.length,
     previousMoves: priorMoves.slice(0, 5),
+    awayCheck: away.checked ? 'checked' : 'unknown',
+    awayNote: away.checked ? null : `Could not check ${name}'s leave — ${away.reason}`,
     // Surfaced so the confirm screen can say it out loud rather than NEURO
     // quietly moving the same 1-2-1 for the fourth time.
     warning: priorMoves.length >= 2

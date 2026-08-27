@@ -123,3 +123,50 @@ test('othersOff lists the team and excludes Nick', () => {
 test('othersOff on an unknown snapshot is empty, not invented', () => {
   assert.deepEqual(ta.othersOff('2026-08-28', { known: false }), []);
 });
+
+// ── daysOffFor: what the 1-2-1 booker asks ──────────────────────────────────
+//
+// `known` is the load-bearing half and is NOT the same as an empty set. "He is
+// free all fortnight" and "I have no idea" license opposite behaviour, and
+// collapsing them fails in the expensive direction — a real invite emailed to
+// someone on a beach.
+
+test('a person with booked leave returns those dates', () => {
+  const r = ta.daysOffFor('Hope Goodall', snap({
+    absences: [
+      { rosterId: 9, date: '2026-08-28', status: 'annual_leave' },
+      { rosterId: 9, date: '2026-08-31', status: 'annual_leave' },
+      { rosterId: 24, date: '2026-08-28', status: 'sick' },
+    ],
+  }));
+  assert.equal(r.known, true);
+  assert.deepEqual([...r.dates].sort(), ['2026-08-28', '2026-08-31']);
+});
+
+test('a person with no leave is KNOWN free, not unknown', () => {
+  const r = ta.daysOffFor('Hope Goodall', snap());
+  assert.equal(r.known, true, 'we looked and she has nothing booked');
+  assert.equal(r.dates.size, 0);
+});
+
+test('an unknown name is NOT reported as free', () => {
+  const r = ta.daysOffFor('Someone Else', snap());
+  assert.equal(r.known, false);
+  assert.equal(r.dates.size, 0, 'and the empty set must never be read as an all-clear');
+  assert.match(r.reason, /not in the NOVA roster/);
+});
+
+test('a person who cannot sync is unknown, however empty their absences look', () => {
+  const r = ta.daysOffFor('Hope Goodall', snap({ roster: [ME, { ...HOPE, syncable: false }] }));
+  assert.equal(r.known, false);
+  assert.match(r.reason, /People HR id/);
+});
+
+test('no snapshot at all is unknown', () => {
+  assert.equal(ta.daysOffFor('Hope Goodall', { known: false }).known, false);
+});
+
+test('matching is on FULL name and is case-insensitive', () => {
+  assert.equal(ta.daysOffFor('hope goodall', snap()).known, true);
+  assert.equal(ta.daysOffFor('Hope', snap()).known, false, 'a first name is not an identifier');
+});
