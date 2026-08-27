@@ -1169,6 +1169,92 @@ function setTaskPercent(filePath, lineNumber, percent, expectedId = null) {
   return percent;
 }
 
+/**
+ * Rewrite the title and/or due date on one Microsoft-mirror task line.
+ *
+ * The sibling of `setTaskPercent`, and it exists for the same reason: Graph has
+ * the edit, `Tasks/Microsoft Tasks.md` is only rewritten by `syncMicrosoftTasks`
+ * on its schedule, and until then every NEURO surface reads the OLD wording. An
+ * edit that lands in Planner and leaves the list unchanged is indistinguishable
+ * from one that failed.
+ *
+ * This is a repaint, not a store. Graph is authoritative and the next sync
+ * overwrites whatever is here — so it is only ever asked to reflect a write that
+ * has ALREADY succeeded, and only the fields that succeeded.
+ *
+ * The progress marker, the ⚡ importance flag and the `<!--id:-->` comment all
+ * survive: the line has to stay parseable or completion stops working on it.
+ */
+function setTaskFields(filePath, lineNumber, fields = {}, expectedId = null) {
+  if (!fs.existsSync(filePath)) throw new Error('File not found');
+
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.split('\n');
+  if (lineNumber < 0 || lineNumber >= lines.length) throw new Error('Line number out of range');
+
+  const raw = lines[lineNumber];
+  const cr = raw.endsWith('\r') ? '\r' : '';
+  const line = cr ? raw.slice(0, -1) : raw;
+
+  const m = line.match(/^(\s*-\s+\[[ x>\/]\]\s+)(.*)$/);
+  if (!m) throw new Error('Not a task line');
+
+  // ⚠ A line number is a POSITION and the task is an IDENTITY — see
+  // setTaskPercent. This file is regenerated wholesale, so a client holding a
+  // list fetched before a resync can hand back a number pointing at someone
+  // else's task, and a RENAME written onto the wrong row is far worse than a
+  // stray progress marker: it would look like Nick's own edit.
+  const onLine = /<!--id:([^>]*?)-->/.exec(line)?.[1] || null;
+  if (expectedId && onLine !== expectedId) {
+    throw new Error(`Line ${lineNumber} holds ${onLine || 'no id'}, expected ${expectedId} — refusing to edit the wrong task`);
+  }
+
+  let body = m[2];
+
+  // Pull the parts out in the order syncMicrosoftTasks writes them:
+  //   Title (50%) ⚡ 📅 2026-08-27 <!--id:xxx-->
+  const idComment = /\s*<!--id:[^>]*?-->\s*$/.exec(body);
+  // Fully trimmed: the parts are rejoined with a single space, so a retained
+  // leading one doubles up.
+  const idPart = idComment ? idComment[0].trim() : '';
+  if (idComment) body = body.slice(0, idComment.index);
+
+  const dueMatch = /\s*📅\s*\d{4}-\d{2}-\d{2}/.exec(body);
+  let duePart = dueMatch ? dueMatch[0].trim() : '';
+  if (dueMatch) body = body.slice(0, dueMatch.index) + body.slice(dueMatch.index + dueMatch[0].length);
+
+  const pctMatch = /\s*\((\d{1,3})%\)/.exec(body);
+  const pctPart = pctMatch ? ` (${pctMatch[1]}%)` : '';
+  if (pctMatch) body = body.slice(0, pctMatch.index) + body.slice(pctMatch.index + pctMatch[0].length);
+
+  const impMatch = /\s*⚡/.exec(body);
+  const impPart = impMatch ? ' ⚡' : '';
+  if (impMatch) body = body.slice(0, impMatch.index) + body.slice(impMatch.index + impMatch[0].length);
+
+  // An ABSENT title keeps whatever is on the line; a title that was supplied and
+  // is empty is a refusal, not a fallback — silently keeping the old wording
+  // would report a save that did not happen.
+  let title = body.trim();
+  if (typeof fields.title === 'string') title = fields.title.trim();
+  // Only a title reaching the line can break the format. A due date is a fixed
+  // shape and the id comment is stripped above, but a pasted title carrying
+  // either would produce a line that parses back as something else.
+  title = title.replace(/<!--[\s\S]*?-->/g, '').replace(/📅\s*\d{4}-\d{2}-\d{2}/g, '').trim();
+  if (!title) throw new Error('Refusing to write an empty task line');
+
+  if (fields.dueDate !== undefined) {
+    duePart = fields.dueDate ? `📅 ${fields.dueDate}` : '';
+  }
+
+  const rebuilt = [title + pctPart + impPart, duePart, idPart].filter(Boolean).join(' ');
+  lines[lineNumber] = `${m[1]}${rebuilt}${cr}`;
+
+  fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
+  try { require('./vault-cache').invalidate('task-fields'); } catch {}
+  try { require('./vault-hooks').onVaultWrite(filePath, 'task-fields'); } catch {}
+  return { title, dueDate: fields.dueDate !== undefined ? fields.dueDate : (/(\d{4}-\d{2}-\d{2})/.exec(duePart)?.[1] || null) };
+}
+
 // Ritual state — reads Scripts/ritual-state.json from vault
 function readRitualState() {
   const statePath = path.join(getVaultPath(), 'Scripts', 'ritual-state.json');
@@ -1879,6 +1965,7 @@ module.exports = {
   parseNinetyDayPlan,
   toggleTask,
   setTaskPercent,
+  setTaskFields,
   readRitualState,
   readPreviousDailyNote,
   searchVault,

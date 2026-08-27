@@ -276,8 +276,195 @@ function TaskControls({ todo, onPatch, busy }) {
   );
 }
 
+/**
+ * Editing a task Microsoft owns.
+ *
+ * Microsoft stays the source of truth — this reads live from Graph and PATCHes
+ * back; nothing is stored locally. Three fields only (title, due, notes),
+ * because assignments, buckets and checklists are board structure other people
+ * maintain and there is no undo for them from here.
+ *
+ * ⚠ The fields are READ on expand rather than taken from the row. The row comes
+ * from `Tasks/Microsoft Tasks.md`, which carries no description at all — so a
+ * notes box filled from it would render empty over a Planner description that
+ * has content, and the first save would erase it. When the description could not
+ * be read the box is disabled and says so, rather than offering an empty one.
+ */
+function MicrosoftTaskControls({ todo, onSaved }) {
+  const [state, setState] = useState({ status: 'loading' });
+  const [title, setTitle] = useState('');
+  const [due, setDue] = useState('');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const isPlanner = /planner/i.test(todo.source || todo.msSource || '');
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ status: 'loading' });
+    setError(null);
+    setResult(null);
+    const qs = new URLSearchParams({ source: todo.source || '' }).toString();
+    fetch(apiUrl(`/api/todos/ms/${encodeURIComponent(todo.ms_id)}?${qs}`))
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok || !json.ok) {
+          setState({ status: 'error', error: json.error || 'Could not read this task from Microsoft.' });
+          return;
+        }
+        setTitle(json.title || '');
+        setDue(json.dueDate || '');
+        setNotes(json.notes || '');
+        setState({ status: 'ready', loaded: json });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: 'error', error: 'Could not reach Microsoft.' });
+      });
+    return () => { cancelled = true; };
+  }, [todo.ms_id, todo.source]);
+
+  if (state.status === 'loading') {
+    return <div className="todo-edit todo-edit-readonly">Reading it from Microsoft…</div>;
+  }
+  if (state.status === 'error') {
+    // Distinct from "there is nothing here": the task exists, NEURO could not
+    // look. Editing is refused rather than offered over values it never read.
+    return <div className="todo-edit todo-edit-readonly">{state.error} Editing is off until it can be read.</div>;
+  }
+
+  const loaded = state.loaded;
+  const changed = {};
+  if (title.trim() && title.trim() !== (loaded.title || '')) changed.title = title.trim();
+  if (due !== (loaded.dueDate || '')) changed.dueDate = due || null;
+  if (loaded.notesReadable && notes !== (loaded.notes || '')) changed.notes = notes;
+  const dirty = Object.keys(changed).length > 0;
+
+  async function save() {
+    // A rename on Planner is visible to the whole board, and there is no undo
+    // from NEURO. Everything else here is private or trivially reversible, so
+    // this is the one thing that stops and asks.
+    if (changed.title && isPlanner) {
+      const ok = window.confirm(
+        `Rename this in Planner?\n\n"${loaded.title}"\n→ "${changed.title}"\n\n`
+        + 'Planner boards are shared — your team will see the new name.'
+      );
+      if (!ok) return;
+    }
+    setSaving(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch(apiUrl(`/api/todos/ms/${encodeURIComponent(todo.ms_id)}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...changed,
+          source: todo.source || null,
+          listId: loaded.listId || null,
+          // Lets the server repaint the mirror line so the list stops showing
+          // the old wording. It re-checks the ms_id before touching it.
+          filePath: todo.filePath || null,
+          lineNumber: todo.lineNumber != null ? todo.lineNumber : null,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.applied?.length) {
+        setError(json.error || 'Microsoft rejected the edit.');
+        return;
+      }
+      // A partial save is a real outcome — Planner's description sits behind its
+      // own etag, so notes can fail while the title lands. Saying "saved" over
+      // that would be the silent half-failure this whole path avoids.
+      setResult(json);
+      setState({ status: 'ready', loaded: { ...loaded, ...changed } });
+      if (onSaved) onSaved();
+    } catch {
+      setError('Could not reach NEURO.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="todo-edit" onClick={(e) => e.stopPropagation()}>
+      <div className="todo-edit-group todo-edit-stack">
+        <span className="todo-edit-label">Title</span>
+        <input
+          className="todo-edit-input"
+          value={title}
+          disabled={saving}
+          onChange={(e) => setTitle(e.target.value)}
+        />
+      </div>
+
+      <div className="todo-edit-group">
+        <span className="todo-edit-label">Due</span>
+        {duePresets().map(p => (
+          <button
+            key={p.id}
+            className={`todo-edit-btn${due === p.date ? ' active' : ''}`}
+            disabled={saving}
+            onClick={() => setDue(p.date)}
+          >{p.label}</button>
+        ))}
+        <input
+          type="date"
+          className="todo-edit-date"
+          value={due}
+          disabled={saving}
+          onChange={(e) => setDue(e.target.value || '')}
+        />
+        {due && (
+          <button className="todo-edit-btn" disabled={saving} onClick={() => setDue('')}>Clear</button>
+        )}
+      </div>
+
+      <div className="todo-edit-group todo-edit-stack">
+        <span className="todo-edit-label">Notes</span>
+        {loaded.notesReadable ? (
+          <textarea
+            className="todo-edit-textarea"
+            value={notes}
+            rows={3}
+            disabled={saving}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        ) : (
+          <span className="todo-edit-note">
+            The description could not be read, so it is not editable here — saving would overwrite
+            whatever Planner actually holds.
+          </span>
+        )}
+      </div>
+
+      <div className="todo-edit-group">
+        <button className="btn btn-primary btn-sm" disabled={!dirty || saving} onClick={save}>
+          {saving ? 'Saving…' : `Save to ${isPlanner ? 'Planner' : 'To Do'}`}
+        </button>
+        <span className="todo-edit-note">
+          {isPlanner
+            ? 'Planner owns this task — the change goes straight to the board.'
+            : 'Microsoft To Do owns this task — the change goes straight to your list.'}
+        </span>
+      </div>
+
+      {error && <div className="todo-edit-error">{error}</div>}
+      {result && (
+        <div className="todo-edit-note">
+          Saved: {result.applied.join(', ')}.
+          {result.failed?.length > 0 && ` Not saved: ${result.failed.map(f => f.field).join(', ')} — reopen and try again.`}
+          {result.applied.length > 0 && !result.mirrored && ' The list here may show the old wording until the next sync.'}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Shared todo item renderer ──
-function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch }) {
+function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRefresh }) {
   const overdue = isOverdue(todo.due_date);
   const dueLabel = formatDue(todo.due_date);
   const toggleKey = todo.task_id ? `task:${todo.task_id}` : `${todo.filePath}:${todo.lineNumber}`;
@@ -313,7 +500,12 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch }) {
         {isExpanded && editable && (
           <TaskControls todo={todo} busy={Boolean(isToggling)} onPatch={(fields) => onPatch(todo, fields)} />
         )}
-        {isExpanded && !editable && (
+        {/* A Microsoft task is editable here now — Microsoft still owns it, so
+            the edit is a PATCH to Graph rather than anything stored locally. */}
+        {isExpanded && !editable && todo.ms_id && (
+          <MicrosoftTaskControls todo={todo} onSaved={onRefresh} />
+        )}
+        {isExpanded && !editable && !todo.ms_id && (
           <div className="todo-edit todo-edit-readonly">
             Mirrored from {todo.source} — edit it there. Only tasks NEURO owns are editable here.
           </div>
@@ -872,6 +1064,15 @@ export default function TodoPanel({ focusContext, onClearContext }) {
     setToggling(prev => ({ ...prev, [key]: false }));
   };
 
+  // Reload after a write that happened somewhere other than this component —
+  // the same short delay the toggle path uses, so the vault cache has invalidated
+  // before the refetch and the row does not come back with the old wording.
+  const refreshAfterWrite = async () => {
+    await new Promise(r => setTimeout(r, 300));
+    if (mode === 'focused') refreshFocus();
+    else await fetchTodos();
+  };
+
   // ── Focused Mode Render ──
   if (mode === 'focused') {
     const items = (focusData?.items || []).map(applyLocal);
@@ -976,6 +1177,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
                   expanded={expanded}
                   onExpand={setExpanded}
                   onPatch={patchTask}
+                  onRefresh={refreshAfterWrite}
                 />
               ))}
             </div>
@@ -1226,6 +1428,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
               expanded={expanded}
               onExpand={setExpanded}
               onPatch={patchTask}
+              onRefresh={refreshAfterWrite}
             />
           ))}
         </div>

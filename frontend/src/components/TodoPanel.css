@@ -921,6 +921,47 @@
   border-radius: 3px;
 }
 
+/* Editing a task Microsoft owns. The title and notes need room to be read
+   before they are changed, so those two rows stack instead of sitting inline
+   with their label like the button groups do. */
+.todo-edit-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.todo-edit-input,
+.todo-edit-textarea {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  width: 100%;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.todo-edit-textarea {
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.todo-edit-note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* A refused or partial save. Stated, not swallowed — the edit is either in
+   Microsoft or it is not, and the difference has to be visible. */
+.todo-edit-error {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--danger, #ef4444);
+}
+
 .todo-moscow-badge {
   font-family: var(--font-mono);
   font-size: 10px;

@@ -1167,6 +1167,277 @@ async function setMicrosoftTaskProgress(taskId, started, source = null, listId =
   return setMicrosoftTaskProgress(taskId, started, 'todo', listId);
 }
 
+// ── Editing a Microsoft task from NEURO ──────────────────────────────────────
+//
+// Microsoft still OWNS these tasks: nothing is stored locally and there is no
+// shadow copy to reconcile — an edit is a PATCH to Graph, and the vault mirror
+// is repainted afterwards purely so the screen is not stale. That is what keeps
+// this from becoming the second source of truth task-dedupe exists to undo.
+//
+// Three fields, and the whitelist is the safety model: `title`, `dueDate`,
+// `notes`. Assignments, buckets, checklists and categories are board STRUCTURE
+// other people maintain, and deletion has no undo from here — none of them are
+// reachable through this function at all, rather than being guarded.
+//
+// ⚠ The two APIs fail differently and it matters. Planner PATCHes carry an
+// If-Match etag, so a stale write is REFUSED — which is what you want on a board
+// Nick's team reads. To Do has no etag, so a NEURO edit silently wins over
+// anything changed there since the last sync. Nothing can fix that; what limits
+// the damage is that only the fields Nick actually changed are sent, so a
+// concurrent edit to a different field survives.
+
+const EDITABLE_FIELDS = ['title', 'dueDate', 'notes'];
+
+/**
+ * A due date as each API wants it, from a plain YYYY-MM-DD.
+ *
+ * MIDDAY, deliberately. Planner stores an instant and renders it in the
+ * reader's zone, so midnight UTC lands on the previous day for anyone west of
+ * here — the same class of bug the calendar had. Midday cannot shift the date in
+ * any plausible offset. Null clears the date; undefined leaves it alone.
+ */
+function _plannerDue(dateStr) {
+  if (dateStr === null) return null;
+  return `${dateStr}T12:00:00Z`;
+}
+
+function _todoDue(dateStr) {
+  if (dateStr === null) return null;
+  // To Do takes wall-clock plus a zone NAME — no offset arithmetic by hand,
+  // same rule the calendar writes follow.
+  return { dateTime: `${dateStr}T12:00:00.0000000`, timeZone: EVENT_TIMEZONE };
+}
+
+/** YYYY-MM-DD out of whatever shape the API returned, or null. */
+function _dueDateOf(value) {
+  const raw = typeof value === 'string' ? value : value?.dateTime;
+  if (!raw) return null;
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(raw);
+  return m ? m[1] : null;
+}
+
+/**
+ * Read the editable fields of one Microsoft task, live from Graph.
+ *
+ * The vault mirror carries the title and the due date but NOT the description,
+ * so an editor built on the mirror alone would show an empty notes box over a
+ * Planner description that actually has content — and the first save would wipe
+ * it. Hence a real read, and `notesReadable: false` when the description could
+ * not be fetched, so the client can refuse to edit what it could not see.
+ */
+async function readMicrosoftTask(taskId, source = null, listId = null) {
+  if (!taskId) return { ok: false, reason: 'no_task_id' };
+  const token = await getAccessToken();
+  if (!token) return { ok: false, reason: 'auth' };
+
+  const isPlanner = /planner/i.test(source || '');
+  const isTodo = /todo|to-?do/i.test(source || '');
+
+  if (isPlanner || !isTodo) {
+    try {
+      const task = await graphFetch(`/planner/tasks/${encodeURIComponent(taskId)}`, token);
+      if (task?.id) {
+        // Details is a SEPARATE resource with its own etag. A failure here is
+        // reported, never rendered as an empty description.
+        let notes = null;
+        let notesReadable = false;
+        try {
+          const details = await graphFetch(`/planner/tasks/${encodeURIComponent(taskId)}/details`, token);
+          if (details) { notes = details.description || ''; notesReadable = true; }
+        } catch (e) {
+          console.warn(`[Planner] Could not read details for ${taskId}: ${e.message}`);
+        }
+        return {
+          ok: true,
+          kind: 'planner',
+          title: task.title || '',
+          dueDate: _dueDateOf(task.dueDateTime),
+          notes,
+          notesReadable,
+        };
+      }
+    } catch (e) {
+      console.warn(`[Planner] Could not read ${taskId}: ${e.message}`);
+    }
+    // An explicit Planner hint that did not resolve is a miss, not a licence to
+    // go looking in To Do — the same reasoning as completeMicrosoftTask.
+    if (isPlanner) return { ok: false, reason: 'not_found' };
+  }
+
+  const list = listId || await _resolveTodoList(taskId, token);
+  if (!list) return { ok: false, reason: 'list_not_found' };
+  try {
+    const task = await graphFetch(
+      `/me/todo/lists/${encodeURIComponent(list)}/tasks/${encodeURIComponent(taskId)}`, token
+    );
+    if (!task?.id) return { ok: false, reason: 'not_found' };
+    return {
+      ok: true,
+      kind: 'todo',
+      listId: list,
+      title: task.title || '',
+      dueDate: _dueDateOf(task.dueDateTime),
+      // To Do always returns a body, so this one is readable whenever the task is.
+      notes: task.body?.content ? String(task.body.content) : '',
+      notesReadable: true,
+    };
+  } catch (e) {
+    console.warn(`[ToDo] Could not read ${taskId}: ${e.message}`);
+    return { ok: false, reason: 'not_found' };
+  }
+}
+
+async function _updatePlannerFields(taskId, patch, token) {
+  const applied = [];
+  const failed = [];
+
+  const taskBody = {};
+  if (patch.title !== undefined) taskBody.title = patch.title;
+  if (patch.dueDate !== undefined) taskBody.dueDateTime = _plannerDue(patch.dueDate);
+
+  if (Object.keys(taskBody).length) {
+    // The etag has to be READ, not remembered: Planner rejects a PATCH carrying
+    // a stale one, which is exactly the protection wanted on a shared board.
+    let etag = null;
+    try {
+      const task = await graphFetch(`/planner/tasks/${encodeURIComponent(taskId)}`, token);
+      etag = task?.['@odata.etag'] || null;
+    } catch (e) {
+      console.warn(`[Planner] Could not read ${taskId}: ${e.message}`);
+    }
+    if (!etag) {
+      for (const f of Object.keys(patch)) if (f !== 'notes') failed.push({ field: f, reason: 'not_found' });
+    } else {
+      const result = await graphWrite(
+        `/planner/tasks/${encodeURIComponent(taskId)}`, 'PATCH', taskBody, token, { 'If-Match': etag }
+      );
+      for (const f of ['title', 'dueDate']) {
+        if (patch[f] === undefined) continue;
+        if (result.ok) applied.push(f);
+        // 412 is the whole point of the etag: somebody else changed the task
+        // while this edit was open, so it is refused rather than overwritten.
+        else failed.push({ field: f, reason: result.status === 412 ? 'conflict' : result.reason });
+      }
+      if (!result.ok) console.warn(`[Planner] Field PATCH failed for ${taskId}: ${result.reason} ${result.detail || ''}`);
+    }
+  }
+
+  if (patch.notes !== undefined) {
+    let detailEtag = null;
+    try {
+      const details = await graphFetch(`/planner/tasks/${encodeURIComponent(taskId)}/details`, token);
+      detailEtag = details?.['@odata.etag'] || null;
+    } catch (e) {
+      console.warn(`[Planner] Could not read details for ${taskId}: ${e.message}`);
+    }
+    if (!detailEtag) {
+      failed.push({ field: 'notes', reason: 'not_found' });
+    } else {
+      const result = await graphWrite(
+        `/planner/tasks/${encodeURIComponent(taskId)}/details`, 'PATCH',
+        { description: patch.notes }, token, { 'If-Match': detailEtag }
+      );
+      if (result.ok) applied.push('notes');
+      else failed.push({ field: 'notes', reason: result.status === 412 ? 'conflict' : result.reason });
+    }
+  }
+
+  return { applied, failed };
+}
+
+async function _updateTodoFields(taskId, patch, token, listId) {
+  const body = {};
+  if (patch.title !== undefined) body.title = patch.title;
+  if (patch.dueDate !== undefined) body.dueDateTime = _todoDue(patch.dueDate);
+  if (patch.notes !== undefined) body.body = { content: patch.notes, contentType: 'text' };
+
+  const fields = Object.keys(patch).filter(f => EDITABLE_FIELDS.includes(f));
+  const write = (list) => graphWrite(
+    `/me/todo/lists/${encodeURIComponent(list)}/tasks/${encodeURIComponent(taskId)}`,
+    'PATCH', body, token
+  );
+
+  let result = await write(listId);
+  // The same one re-walk completion does. A cached list survives restarts, so
+  // it can also be wrong across them, and healing differently here would mean
+  // two answers to "where does this task live".
+  if (!result.ok && result.status === 404) {
+    console.warn(`[ToDo] Cached list ${listId} no longer holds ${taskId} — re-resolving`);
+    _forgetTodoList(taskId);
+    const rewalked = await _resolveTodoList(taskId, token, { skipCache: true });
+    if (!rewalked) return { applied: [], failed: fields.map(f => ({ field: f, reason: 'list_not_found' })) };
+    result = await write(rewalked);
+  }
+  if (!result.ok) {
+    console.warn(`[ToDo] Field PATCH failed for ${taskId}: ${result.reason} ${result.detail || ''}`);
+    return { applied: [], failed: fields.map(f => ({ field: f, reason: result.reason })) };
+  }
+  return { applied: fields, failed: [] };
+}
+
+/**
+ * Edit a Microsoft task. `patch` may carry any of title / dueDate / notes; a
+ * field left UNDEFINED is not sent at all, which is what stops an editor open on
+ * a stale mirror from writing back three fields when Nick changed one.
+ *
+ * `dueDate: null` clears the date — distinct from undefined, and the difference
+ * has to survive all the way to Graph.
+ *
+ * Reports per field. A partial success is a real outcome (Planner's description
+ * lives behind its own etag, so notes can fail while the title lands) and saying
+ * "saved" over it would be the silent-failure shape this codebase keeps hitting.
+ */
+async function updateMicrosoftTaskFields(taskId, patch = {}, source = null, listId = null) {
+  if (!taskId) return { ok: false, reason: 'no_task_id' };
+
+  const clean = {};
+  for (const field of EDITABLE_FIELDS) {
+    if (patch[field] === undefined) continue;
+    if (field === 'dueDate') {
+      if (patch.dueDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(patch.dueDate))) {
+        return { ok: false, reason: 'bad_due_date' };
+      }
+      clean.dueDate = patch.dueDate === null ? null : String(patch.dueDate);
+      continue;
+    }
+    const value = String(patch[field] ?? '');
+    // An empty title would leave a nameless card on a shared board. Empty notes
+    // are a legitimate erase, so only the title is floored.
+    if (field === 'title' && !value.trim()) return { ok: false, reason: 'empty_title' };
+    clean[field] = field === 'title' ? value.trim() : value;
+  }
+  if (!Object.keys(clean).length) return { ok: false, reason: 'nothing_to_change' };
+
+  const token = await getAccessToken();
+  if (!token) return { ok: false, reason: 'auth' };
+
+  if (/planner/i.test(source || '')) {
+    const r = await _updatePlannerFields(taskId, clean, token);
+    return { ok: r.failed.length === 0, kind: 'planner', ...r };
+  }
+
+  if (/todo|to-?do/i.test(source || '')) {
+    const list = listId || await _resolveTodoList(taskId, token);
+    if (!list) {
+      return { ok: false, kind: 'todo', reason: 'list_not_found', applied: [], failed: Object.keys(clean).map(f => ({ field: f, reason: 'list_not_found' })) };
+    }
+    const r = await _updateTodoFields(taskId, clean, token, list);
+    return { ok: r.failed.length === 0, kind: 'todo', ...r };
+  }
+
+  // No hint. Planner first, then To Do — the same order and the same reasoning
+  // as completeMicrosoftTask, because a wrong guess writes to the wrong task.
+  const planner = await _updatePlannerFields(taskId, clean, token);
+  if (planner.failed.length === 0) return { ok: true, kind: 'planner', ...planner };
+  // Only fall through when Planner does not HAVE the task. A conflict or a
+  // permission failure is an answer about the right task and must not become a
+  // second write attempt against a different API.
+  if (!planner.failed.every(f => f.reason === 'not_found')) {
+    return { ok: false, kind: 'planner', ...planner };
+  }
+  return updateMicrosoftTaskFields(taskId, clean, 'todo', listId);
+}
+
 // Complete by id, using the vault's section label as a hint. Without one, try
 // Planner then To-Do.
 async function completeMicrosoftTask(taskId, source = null, listId = null) {
@@ -1593,6 +1864,12 @@ module.exports = {
   completeTodoTask,
   completePlannerTask,
   completeMicrosoftTask,
+  readMicrosoftTask,
+  updateMicrosoftTaskFields,
+  EDITABLE_FIELDS,
+  // Pure date shaping, exposed so the midday decision is pinned by a test
+  // rather than living only in a comment.
+  _internals: { _plannerDue, _todoDue, _dueDateOf },
   setPlannerPercent,
   setMicrosoftTaskProgress,
   graphFetch,

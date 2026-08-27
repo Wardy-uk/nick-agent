@@ -12,6 +12,20 @@ const microsoft = require('../services/microsoft');
 // reachable, so this is a render bound, not a storage one.
 const SUGGESTION_CAP = 200;
 
+// What a Graph failure MEANS, in words Nick can act on. `conflict` is the one
+// worth reading twice: Planner refused the write because somebody else changed
+// the task while the editor was open, which is the etag doing its job.
+const MS_EDIT_REASONS = {
+  auth: 'Microsoft sign-in expired — reconnect 365.',
+  scope: 'Tasks permission not granted — re-consent to Microsoft.',
+  conflict: 'Someone changed this task in Planner while you were editing — reopen it and try again.',
+  list_not_found: 'Could not find the task in any To Do list.',
+  not_found: 'Microsoft no longer has this task — it may have been completed or deleted.',
+  empty_title: 'A task needs a title.',
+  bad_due_date: 'Due date must be YYYY-MM-DD.',
+  nothing_to_change: 'Nothing was changed.',
+};
+
 // GET /api/todos — reads tasks from Obsidian vault + 90-day plan
 router.get('/', (req, res) => {
   try {
@@ -290,6 +304,110 @@ router.post('/wip-ms', async (req, res) => {
     });
   } catch (e) {
     console.error('[Todos] MS WIP error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/todos/ms/:msId — the editable fields of one Microsoft task, LIVE.
+ *
+ * Deliberately not served from the mirror. `Tasks/Microsoft Tasks.md` carries
+ * the title and the due date but never the description, so an editor built on it
+ * would show an empty notes box over a Planner description that has content —
+ * and the first save would erase it. `notesReadable: false` is the honest answer
+ * when the description could not be fetched, and the client refuses to edit what
+ * it could not read rather than offering an empty box.
+ *
+ * It is also the freshest read available, which matters on To Do: those PATCHes
+ * carry no etag, so what is on screen at save time is what wins.
+ */
+router.get('/ms/:msId', async (req, res) => {
+  try {
+    const { msId } = req.params;
+    const { source, listId } = req.query;
+    const result = await microsoft.readMicrosoftTask(msId, source || null, listId || null);
+    if (!result.ok) {
+      return res.status(result.reason === 'auth' ? 503 : 404).json({
+        ok: false,
+        error: MS_EDIT_REASONS[result.reason] || `Could not read the task (${result.reason})`,
+      });
+    }
+    res.json(result);
+  } catch (e) {
+    console.error('[Todos] MS read error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * PATCH /api/todos/ms/:msId — edit a Microsoft task from NEURO.
+ *
+ * Microsoft still owns it: this PATCHes Graph and then repaints the mirror line,
+ * and nothing is stored locally. Only the fields present in the body are sent,
+ * so an editor open on a stale row cannot write back three fields when one
+ * changed — the only defence there is on To Do, which has no etag.
+ *
+ * ⚠ GRAPH FIRST, mirror second — the opposite order to `wip-ms` and
+ * `complete-ms`, on purpose. Those write a state that is trivially reversible
+ * and where instant feedback is the whole point. A rename is neither: on Planner
+ * it is visible to Nick's team, and painting it into the vault before Graph has
+ * accepted it would show an edit that may never have landed. Only a field that
+ * actually SAVED reaches the mirror.
+ */
+router.patch('/ms/:msId', async (req, res) => {
+  try {
+    const { msId } = req.params;
+    const { source, listId, title, dueDate, notes, filePath, lineNumber } = req.body || {};
+    if (!msId) return res.status(400).json({ error: 'msId required' });
+
+    const patch = {};
+    if (title !== undefined) patch.title = title;
+    // null clears the date and undefined leaves it alone — the difference has to
+    // survive JSON, so it is only ever read as "was the key present".
+    if (dueDate !== undefined) patch.dueDate = dueDate === null || dueDate === '' ? null : dueDate;
+    if (notes !== undefined) patch.notes = notes;
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'nothing to change' });
+
+    const result = await microsoft.updateMicrosoftTaskFields(msId, patch, source || null, listId || null);
+
+    const applied = result.applied || [];
+    if (!applied.length) {
+      const first = (result.failed || [])[0];
+      const reason = result.reason || first?.reason || 'unknown';
+      return res.status(reason === 'conflict' ? 409 : 502).json({
+        ok: false,
+        pushed: 'none',
+        error: MS_EDIT_REASONS[reason] || `Microsoft rejected the edit (${reason})`,
+        failed: result.failed || [],
+      });
+    }
+
+    // Repaint the one line, and only with what Graph took. A failed notes write
+    // must not leave the title looking saved when it was not, or vice versa.
+    let mirrored = false;
+    if (filePath && lineNumber != null && (applied.includes('title') || applied.includes('dueDate'))) {
+      try {
+        const fields = {};
+        if (applied.includes('title')) fields.title = patch.title;
+        if (applied.includes('dueDate')) fields.dueDate = patch.dueDate;
+        obsidian.setTaskFields(filePath, lineNumber, fields, msId);
+        mirrored = true;
+      } catch (e) {
+        // The edit IS saved in Microsoft; only the local copy is stale, and the
+        // next sync fixes it. Worth saying, never worth failing the request.
+        console.warn('[Todos] Could not repaint the mirror line:', e.message);
+      }
+    }
+
+    res.json({
+      ok: (result.failed || []).length === 0,
+      pushed: result.kind || 'graph',
+      applied,
+      failed: result.failed || [],
+      mirrored,
+    });
+  } catch (e) {
+    console.error('[Todos] MS edit error:', e);
     res.status(500).json({ error: e.message });
   }
 });
