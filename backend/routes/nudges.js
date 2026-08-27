@@ -40,6 +40,41 @@ router.delete('/leave', (req, res) => {
   res.json(nudges.clearLeave());
 });
 
+/**
+ * GET /api/nudges/availability — who is off, and whether NEURO could tell.
+ *
+ * Reports the cached copy AND its provenance. "We could not ask NOVA" must stay
+ * distinguishable from "nobody is off"; the second is an all-clear and the
+ * first is not.
+ */
+router.get('/availability', (req, res) => {
+  try {
+    const availability = require('../services/team-availability');
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const snap = availability.snapshot(now);
+    res.json({
+      ok: true,
+      status: availability.status(now),
+      today: dateStr,
+      me: availability.selfAbsenceOn(dateStr, snap),
+      othersOffToday: availability.othersOff(dateStr, snap),
+      upcoming: (snap.absences || []).slice(0, 40),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/** Force a pull from NOVA rather than waiting for the half-hourly refresh. */
+router.post('/availability/refresh', async (req, res) => {
+  try {
+    res.json(await require('../services/team-availability').refresh());
+  } catch (e) {
+    res.status(502).json({ ok: false, error: e.message });
+  }
+});
+
 // SSE stream for real-time nudges
 router.get('/stream', (req, res) => {
   res.set({

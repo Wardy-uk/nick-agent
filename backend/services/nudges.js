@@ -155,8 +155,33 @@ function clearLeave() {
 function nudgeSuppression(now = new Date()) {
   const leave = getLeave(now);
   if (leave.onLeave) {
-    return { suppressed: true, reason: 'annual leave', until: leave.until, daysRemaining: leave.daysRemaining };
+    return { suppressed: true, reason: 'annual leave', until: leave.until, daysRemaining: leave.daysRemaining, source: 'manual' };
   }
+
+  // Booked leave, read from NOVA's People HR sync rather than declared. The
+  // manual flag above is checked FIRST on purpose: it is Nick saying so today,
+  // and it must win over a feed that only carries APPROVED leave and is a
+  // cached copy besides.
+  //
+  // A synchronous read of a cached blob — never a fetch. This function is
+  // called by seven triggers and must not do I/O.
+  try {
+    const availability = require('./team-availability');
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const mine = availability.selfAbsenceOn(dateStr, availability.snapshot(now));
+    if (mine.off) {
+      return {
+        suppressed: true,
+        reason: mine.detail ? `${mine.status.replace(/_/g, ' ')} — ${mine.detail}` : mine.status.replace(/_/g, ' '),
+        source: 'peoplehr',
+      };
+    }
+  } catch (e) {
+    // Same failure direction as the holiday check below: unable to ask is not a
+    // reason to stop nudging for ever.
+    console.warn('[Nudge] Could not read team availability:', e.message);
+  }
+
   try {
     const shared = require('../../shared/working-days.cjs');
     const workingDays = require('./working-days');

@@ -491,6 +491,22 @@ function start() {
     }
   });
 
+  // Who is off, from NOVA's People HR sync. Every 30 minutes and once shortly
+  // after boot, because `nudgeSuppression()` is synchronous and reads only the
+  // cache — nothing on the nudge path may wait on NOVA.
+  //
+  // Deliberately NOT a TRACKED_JOBS/catch-up job: it overwrites a cache from a
+  // trailing window, so a missed run self-corrects on the next one and there is
+  // nothing to replay — the same call bank-holidays and wins made. A failed
+  // refresh keeps the previous copy rather than emptying it.
+  const refreshAvailability = (why) => {
+    require('./team-availability').refresh()
+      .then(r => { if (!r.ok) console.warn(`[Scheduler] Availability refresh (${why}) failed`); })
+      .catch(e => console.error(`[Scheduler] Availability refresh (${why}) error:`, e.message));
+  };
+  setTimeout(() => refreshAvailability('startup'), 20000);
+  cron.schedule('*/30 * * * *', () => refreshAvailability('cron'));
+
   // ── The half-day planner ───────────────────────────────────────────────────
   //
   // 07:15 plans the morning, 12:30 plans the afternoon, and both CREATE the
