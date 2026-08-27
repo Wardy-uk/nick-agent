@@ -108,18 +108,29 @@ feed is authoritative for booked-and-approved leave, the button covers leave
 that is unapproved, same-day, or decided that morning — and it still works
 with NOVA or the Pi unreachable.
 
-To build:
-1. NOVA: an availability route on the bridge. `/availability/*` exists but sits
-   behind `requireAreaAccess` JWT, which the bridge secret does not satisfy
-   (#65's species). Precedent: `neuro-bridge-kpi.ts` with the shared
-   `bridgeAuth` export.
-2. NEURO: fold it into `nudges.nudgeSuppression()` alongside bank holidays and
-   the manual flag, naming WHICH source said so (the `working-days.status()`
-   pattern — never a bare boolean).
-3. Bonus, arguably the bigger win: it also tells NEURO **who on the team is
-   off**, for meeting prep, 1-2-1 booking and the day planner. Nick is already
-   building an "Away Tomorrow" section in NOVA; 28 Aug has 2 agents booked
-   (roster 9 and 25), so it has real content to render.
+**BUILT — one deploy step outstanding.**
+
+- **NOVA** `da42b2a` on branch **`nova-codex`** (pushed): `routes/neuro-bridge-availability.ts`,
+  `GET /api/neuro-bridge/availability?days=14`. Reuses `AgentAvailabilityService`
+  so it cannot drift from the Team Availability widget.
+- **NEURO** `aee9276` (deployed, 997/997): `services/team-availability.js`,
+  folded into `nudgeSuppression()`, refreshed every 30 min + 20s after boot,
+  `GET /api/nudges/availability` (+ `POST .../refresh`). `NOVA_AGENT_ID=24` set
+  in the Pi's `backend/.env`.
+
+⚠ **NOVA IS NOT DEPLOYED.** It is an IIS site — `make-deploy-zip.ps1` writes
+`NOVA-deploy.zip` to Nick's OneDrive Desktop, then `deploy/deploy.ps1` on the
+server. Not run: that is his production and his call. Verified live meanwhile:
+`/availability` answers 401 with `"Not authenticated"` (NOVA's APP auth, not
+`bridgeAuth`'s `"Unauthorized"`), which is the #65 signature for a route that
+has not shipped. The positive control `/status` returns 200 with the same
+secret, so the secret is fine.
+
+Until it ships NEURO reports `known:false, "never fetched"`, `suppressed:false`
+— it keeps nudging rather than going quiet on a failed read, which is the
+correct direction. **After the deploy**, `POST /api/nudges/availability/refresh`
+should return `ok:true` with a 13-agent roster; 28 Aug has roster 9 and 25
+booked, so that is the first real content.
 
 ## ⏳ PARKED — one interface, the chat (Nick, 27 Aug)
 
