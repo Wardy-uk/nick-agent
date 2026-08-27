@@ -60,6 +60,34 @@ seen a dry run himself.
   to review them first. The fold only prevents NEW duplicates; a backfill for
   the existing pile is NOT written. Do not bulk-reject without him.
 
+## Later the same day — nudges, standup, EOD (deployed, `2e5eb8d`)
+
+5. **`feat(nudges)` bb90027** — ritual nudges now gate on `nudgeSuppression()`:
+   bank holidays (the crons were already Mon-Fri; **nothing knew about bank
+   holidays, and Mon 31 Aug is one**) and a 🌴 **annual leave** button in the
+   snooze menu (today / rest of this week / two weeks). Leave is an INCLUSIVE
+   DATE, local time. The line drawn: **nudges go quiet, ALWAYS_DELIVER alarms
+   still ring** — say if that is wrong. Verified live end-to-end and cleared.
+6. **`fix(standup)` e0b51ff** — the "SARA is confused" bug. `_renderDailyNote`
+   built Focus Today from `o.focus` AND carried-resolved-today and reconciled
+   neither, so one job rendered twice (six lines for three jobs). Today's Focus
+   Today is tomorrow's carry source, so **duplicates breed** — that is where the
+   phantom "four escalations" came from. Deduped at 0.85, carried version wins.
+   Also: "Write the daily note" called `setMode('manual')`, making the success
+   panel unreachable by construction; and **EOD had no menu entry** — now
+   "End of day" in the sidebar.
+7. **`feat(standup)` 2e5eb8d** — SARA identity on the standup/EOD conversation.
+   The prompt already used `VOICE_FULL`; the screen never said whose it was.
+
+## ⏳ PARKED — one interface, the chat (Nick, 27 Aug)
+
+"Maybe the longer term plan should be that there is only one interface — the
+chat — and we do everything there... let's pick that up later." **Do not start
+migrating screens.** Recorded in CLAUDE.md as the tie-breaker for design calls
+in the meantime: prefer making a surface feel like talking to SARA over adding
+another panel. The 27 Aug measurements support it (26 flat tabs, `pi-health` the
+second most-opened screen).
+
 ## Still outstanding from Nick's four asks
 
 Two of his four were done (dedupe, planner). These were not:
