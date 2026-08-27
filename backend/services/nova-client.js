@@ -166,7 +166,28 @@ async function get121Completed({ since }) {
   return call(`/api/neuro-bridge/121/completed?since=${encodeURIComponent(since)}`, { timeoutMs: 60000 });
 }
 
+/**
+ * Offer NOVA a 1-2-1 transcript found in the vault. PROPOSES — NOVA holds it as a
+ * candidate until a human approves it, because attribution is a guess.
+ *
+ * Long timeout: the transcript itself is the payload and a 45-minute 1-2-1 is a lot of
+ * text to push over Tailscale.
+ */
+async function push121TranscriptCandidate({ plaudId, agentName, meetingDate, title, notePath, transcript, attribution }) {
+  return call('/api/neuro-bridge/121/transcript-candidate', {
+    method: 'POST',
+    timeoutMs: 60000,
+    body: { plaudId, agentName, meetingDate, title, notePath, transcript, attribution },
+  });
+}
+
+/** Recordings NOVA has already resolved, so a rejected one is never re-offered. */
+async function get121KnownRecordings() {
+  return call('/api/neuro-bridge/121/known-recordings');
+}
+
 module.exports = {
   isConfigured, listUrgencyReasons, listEscalations, getTicket, escalate, call,
   push121Booking, cancel121, push121Cadence, get121State, get121Completed,
+  push121TranscriptCandidate, get121KnownRecordings,
 };

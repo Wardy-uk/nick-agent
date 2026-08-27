@@ -189,6 +189,23 @@ function start() {
   // 9:10am weekdays — check 1-2-1 due dates
   cron.schedule('10 9 * * 1-5', () => { nudges.check121Nudges(); });
 
+  // Every 20 min in working hours — offer NOVA any 1-2-1 transcript that has landed in
+  // the vault. Frequent because Nick processes a recording and then goes looking for it
+  // in NOVA; a nightly sweep would mean the test he just ran shows nothing for hours.
+  // It only ever PROPOSES — NOVA holds each one until he approves it.
+  cron.schedule('*/20 7-19 * * *', async () => {
+    try {
+      const r = await require('./nova-121-transcripts').offerTranscripts({ apply: true });
+      if (!r.ok) { console.warn(`[Scheduler] 1-2-1 transcript offer failed: ${r.error}`); return; }
+      if (r.offered.length || r.skipped.length) {
+        console.log(`[Scheduler] 1-2-1 transcripts: ${r.offered.length} offered to NOVA, ${r.skipped.length} failed`);
+        for (const f of r.skipped) console.warn(`[Scheduler] transcript offer failed — ${f}`);
+      }
+    } catch (e) {
+      console.warn('[Scheduler] 1-2-1 transcript offer threw:', e.message);
+    }
+  });
+
   // 6:20am daily — push bookings + cadence into NOVA, ahead of its 07:00 prep job.
   //
   // DAILY, not weekdays: a 1-2-1 booked on a Friday for the Monday has to reach NOVA
