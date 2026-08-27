@@ -1,26 +1,89 @@
-# Session Handoff — 2026-08-17 (end of day, two parallel sessions)
+# Session Handoff — 2026-08-27 (review + three fixes)
 
-## What was done
-- **SARA voice unified across every surface she speaks from** (`3809eda` and earlier). Blocks extracted to `services/sara-voice.js`; chat, standup, EOD, journal and briefing all compose from it. Deployed and verified live — `[AIRouting] standup_questions: openrouter` with a briefing that names what slipped and asks one question at a time.
-- **Two router bypasses removed.** `routes/standup.js` and `routes/journal.js` called Ollama with a hardcoded `fetch` BEFORE `ai-routing`, so `standup_questions`/`eod_questions` never reached OpenRouter despite being in `LATENCY_SENSITIVE_TASKS`. No prompt rewrite could have landed without this.
-- Nudge pools, Focus card labels, push senders (all SARA now, never NEURO), `TONE_INSTRUCTIONS` third-person fix, two emoji removed.
-- Six tickets from the other session (#36, #31, #39, #13, #66, #104) plus Plaud blocks and the PIN rotation — detail archived in `handoff-2026-08-17-tickets-and-voice.md`.
+Started as "how's the tool looking?" — a product review against the live Pi DB,
+not a code read. It turned into four fixes. Pi is deployed and current.
 
-## What's still pending
-- **The Pi is 10 commits behind origin/main.** It sits at `3809eda`; everything from `8e69b29` to `ec80ff5` (1-2-1 tracker, Plaud write-up blocks, weekly risk report, crypt-secret rotation, PIN docs) is committed and pushed but NOT deployed. Deploy sequence is in the pi5-deployment memory.
-- `outcomes.test.js` — 2 failures, both date rollover. Fixtures pin `WED = 2026-08-12` while `outcomes.recent(4)`/`trend(5)` resolve "now" themselves, so the fixture week has fallen out of the window. It will fail every week from here. **Fix is to pass the date in, not to re-pin the fixture.** 570/572 otherwise.
+## The review finding that frames everything
 
-## Key decisions made
-- `VOICE_FULL` vs `VOICE_COMPACT` — the compact block exists because journal prompts and briefing synthesis can land on qwen2.5:1.5b with a 2048-token context, where a full personality spec crowds out the task and makes output *worse*. Don't grow it.
-- The technical-partner rules and the debugging order live in `claude.js`'s `SYSTEM_PROMPT` ONLY. The standup debugs nothing; carrying them in the shared block taxes every ritual message. `prompt-parity.test.js` asserts they stay out.
-- `action-presenter` and `watchdog` copy was already right and was deliberately left alone.
-- ⚠ **The voice must never reach anything outbound.** Email drafts, the 1-2-1 invite body and chase messages say "as Nick Ward" on purpose — that mail sends under his name.
+The engineering is strong; the ENGAGEMENT is collapsing, and the tool's own
+ledgers say so. From `activity_log`:
 
-## Files changed
-- `backend/services/sara-voice.js` — new; the one definition, two sizes.
-- `backend/services/{claude,standup-session,briefing,nudges,decision-engine,ai-provider,scheduler,imports}.js`, `backend/routes/{standup,journal,capture,imports}.js` — compose from it / copy fixes.
-- `backend/services/prompt-parity.test.js` — pins the consumer list, compact size, push sender, and the five behaviours the first cut compressed away.
-- `sara/app/src/views/{Focus,Tasks}.jsx` — celebration emoji removed.
+| | W32 (10–16) | W33 (17–23) | W34 (24–27) |
+|---|---|---|---|
+| `tab_open` | 266 | 89 | **17** |
+| tasks completed | 3 | 12 | **0** |
+| standups | 4 | 4 | **0** |
+| commits shipped | 235 | 64 | 21 |
 
-## Gotchas for next session
-- **Two sessions committing at once corrupted a commit today.** `82804bd` swept up another session's staged index under its own message, and because that index was staged against the pre-#13 commit, it silently REVERTED #13 — the prompt went back to naming Arman. Caught and fixed forward in `3809eda`. If parallel sessions run again: stage and commit in one action, or check `git log` immediately before committing. Already logged in `mistakes.md`.
+Lifetime: **16,637 sara_actions raised / 57 executed** (0.34%); **148 tasks open,
+15 ever completed**; **2 focus sessions ever**; **1 task_block ever** (ten tasks
+in a thirty-minute window, closed five minutes in). `pi-health` is the second
+most-opened screen (44) behind `briefing` (115) — the screens that report on the
+system beat the screens that move work. 26 tabs, flat.
+
+**The unifying fault: nothing arrives, everything must be gone to.** Vantage —
+the coaching layer, explicitly built because Nick's difficulty is *initiation* —
+has **no push code at all** (`grep -rE 'webpush|sendToAll|notification'` → zero).
+Neither did `task-blocks`. The only things that do arrive are the todo/email
+nags, which are the demand restated.
+
+## What was built (all deployed, `715cab0`)
+
+1. **`fix(jira)` 3125851** — the queue cache has had NO WRITER since 3 Jul
+   (48e6481 deleted it, "too much noise"); three later commits reintroduced
+   readers. Seven weeks of a frozen 12-ticket snapshot stated as fact in chat,
+   3 standup prompts, EOD, accountability and working-memory. Consumers now gate
+   on `getQueueSummary().fresh`. `syncQueue()` restored behind
+   `JIRA_QUEUE_SYNC_ENABLED` (**default off** — reversing the removal is Nick's
+   call). Legacy `/rest/api/3/search` is **410 Gone**; use `/search/jql`.
+2. **`feat(capture)` d680a4a** — cross-note fold. 258 pending → 54 distinct,
+   204 folded, 0 false merges. **FOLD_SCORE 0.85, NOT task-dedupe's 0.42** — see
+   mistakes.md; 0.42 hid a dated meeting inside a form task.
+3. **`feat(planner)` b29a063 + `fix` 715cab0** — `day-planner.js`, half-day
+   auto-planning at 07:15 / 12:30. **`DAY_PLANNER_ENABLED` default FALSE.**
+4. Deduped triage note written to the vault:
+   `Tasks/Captured commitments - triage 2026-08-27.md` (54 items, checkboxes).
+
+947/947 tests green on the Pi.
+
+## NEXT SESSION — start here
+
+**The planner is built, verified and NOT ARMED.** Live dry run today returned:
+morning → one 65m block at 11:50 holding task #60, correctly flagged
+`[assumed]` + `[tight]`; afternoon → "no free gap", correctly. Nick has not yet
+seen a dry run himself.
+
+- Show him `GET /api/day-plan?window=morning` output, then arm with
+  `DAY_PLANNER_ENABLED=true` in `backend/.env` + restart. **Do not arm it
+  unattended** — it writes real calendar events on a timer.
+- ⚠ **Nothing has been deleted from the 258 pending capture_todos.** Nick asked
+  to review them first. The fold only prevents NEW duplicates; a backfill for
+  the existing pile is NOT written. Do not bulk-reject without him.
+
+## Still outstanding from Nick's four asks
+
+Two of his four were done (dedupe, planner). These were not:
+
+- **"I can't find anything half the time"** — 26 flat tabs. Plan: rank the
+  sidebar by real `tab_open` counts and collapse `pi-health`/`admin`/`state`/
+  `insights` (88 opens of pure self-monitoring) into a **System** group.
+  TaskBlocks also needs lifting out of TodoPanel into its own destination — being
+  buried inside it is why he forgot it existed.
+- **NEURO ↔ Vantage** — Vantage already reads NEURO (`backend/services/neuro.js`
+  at `/mnt/data/vantage`, live at vantage.nickward.co.uk). Nothing goes the other
+  way. Cheapest win: surface Vantage's one coaching next-step in NEURO's
+  **briefing** (115 opens vs Vantage's zero this week), and let the planner pull
+  Vantage plan actions as block candidates. **Do not build a second push stack** —
+  NEURO's webpush has 4 live subscriptions and a governor.
+- **The boundary pushes (T−5 / T−0 / T+end)** are designed but NOT built. The
+  T+end prompt is what fixes the estimate problem: 148/148 open tasks carry no
+  estimate, and it is the only moment the real duration is known.
+
+## Gotchas
+
+- Non-interactive ssh has no node/npm/pm2: `export
+  PATH=/home/nickw/.nvm/versions/node/v22.22.2/bin:$PATH` first.
+- Live DB is `/home/nickw/nuero/backend/db/agent.db`. Open `?mode=ro`.
+- Verify behaviour by curling the RUNNING server, never a standalone `node -e`
+  against the same DB (no dotenv, own module caches, clobbers shared AI budget).
+- No other session was active today; tree was clean throughout.
