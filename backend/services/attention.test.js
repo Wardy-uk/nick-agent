@@ -335,3 +335,44 @@ test('agenda: cancelled, all-day and free blocks are not the day\'s shape', () =
   const a = agendaFor(cal, now);
   assert.deepEqual(a.events.map((e) => e.subject), ['Real']);
 });
+
+test('agenda: an empty evening rolls forward to tomorrow, and SAYS so', () => {
+  // A large widget that empties out at 17:00 every day is one that stops being
+  // looked at. `scope` exists so no renderer can label tomorrow as today.
+  const now = new Date('2026-08-28T17:41:00');
+  const today = { known: true, events: [
+    { start: '2026-08-28T17:15', end: '2026-08-28T17:30', subject: 'Gone', showAs: 'busy' },
+  ] };
+  const tomorrow = [
+    { start: '2026-08-29T11:00', end: '2026-08-29T11:30', subject: 'Later one', showAs: 'busy' },
+    { start: '2026-08-29T09:00', end: '2026-08-29T09:30', subject: 'First thing', showAs: 'busy' },
+  ];
+  const a = agendaFor(today, now, 4, tomorrow);
+  assert.equal(a.scope, 'tomorrow');
+  assert.deepEqual(a.events.map((e) => e.subject), ['First thing', 'Later one']);
+  // No countdown across a day boundary — "in 15 hours" reads as imminent.
+  assert.equal(a.events[0].minutesAway, null);
+  assert.equal(a.events[0].running, false);
+});
+
+test('agenda: today still wins while anything is left in it', () => {
+  const now = new Date('2026-08-28T14:00:00');
+  const today = { known: true, events: [
+    { start: '2026-08-28T16:00', end: '2026-08-28T16:30', subject: 'Still to come', showAs: 'busy' },
+  ] };
+  const a = agendaFor(today, now, 4, [
+    { start: '2026-08-29T09:00', end: '2026-08-29T09:30', subject: 'Tomorrow', showAs: 'busy' },
+  ]);
+  assert.equal(a.scope, 'today');
+  assert.deepEqual(a.events.map((e) => e.subject), ['Still to come']);
+});
+
+test('agenda: an unreadable diary never rolls forward', () => {
+  // known:false means we could not look. Filling that with tomorrow would turn
+  // "I cannot see your diary" into a confident statement about it.
+  const a = agendaFor({ known: false }, new Date('2026-08-28T17:41:00'), 4, [
+    { start: '2026-08-29T09:00', end: '2026-08-29T09:30', subject: 'Tomorrow', showAs: 'busy' },
+  ]);
+  assert.equal(a.known, false);
+  assert.deepEqual(a.events, []);
+});

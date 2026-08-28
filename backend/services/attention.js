@@ -382,8 +382,8 @@ function _calendarInput(gaps) {
  * ⚠ `known:false` is NOT an empty agenda. "The diary is clear" and "I could not
  * read the diary" license opposite behaviour, and only one of them is good news.
  */
-function agendaFor(calendar, now, limit = 4) {
-  if (!calendar || calendar.known !== true) return { known: false, events: [] };
+function agendaFor(calendar, now, limit = 4, tomorrow = null) {
+  if (!calendar || calendar.known !== true) return { known: false, events: [], scope: 'today' };
 
   const nowMs = now.getTime();
   const events = (calendar.events || [])
@@ -406,7 +406,62 @@ function agendaFor(calendar, now, limit = 4) {
       attendeesOther: e.attendeesOther,
     }));
 
-  return { known: true, events };
+  if (events.length) return { known: true, events, scope: 'today' };
+
+  // Nothing left today. By early evening that is the NORMAL state, and a
+  // surface that empties out at 17:00 every day is one that stops being looked
+  // at — so it rolls forward rather than going blank. `scope` is carried so a
+  // renderer never labels tomorrow's meetings as today's.
+  if (!Array.isArray(tomorrow) || !tomorrow.length) {
+    return { known: true, events: [], scope: 'today' };
+  }
+
+  const next = tomorrow
+    .filter((e) => !e.isCancelled && !e.isAllDay && e.showAs !== 'free')
+    .map((e) => ({ ...e, startMs: new Date(e.start).getTime() }))
+    .filter((e) => Number.isFinite(e.startMs))
+    .sort((a, b) => a.startMs - b.startMs)
+    .slice(0, limit)
+    .map((e) => ({
+      start: e.start,
+      subject: e.subject,
+      // No countdown across a day boundary: "in 15 hours" is not a useful fact
+      // and reads as though it were happening soon.
+      minutesAway: null,
+      running: false,
+      attendeesOther: e.attendeesOther,
+    }));
+
+  return { known: true, events: next, scope: next.length ? 'tomorrow' : 'today' };
+}
+
+/**
+ * Tomorrow's events, for the agenda's roll-forward only.
+ *
+ * Deliberately a separate read rather than a wider window on `_calendarInput`:
+ * context-state decides "am I in a meeting" and "is one starting soon" from
+ * that list, and quietly putting tomorrow in it would change what `current` and
+ * `next` mean everywhere. Returns [] on any failure — a roll-forward is a nicety
+ * and must never be the thing that breaks the feed.
+ */
+function _tomorrowEvents() {
+  try {
+    const db = require('../db/database');
+    const t = new Date();
+    t.setDate(t.getDate() + 1);
+    const rows = db.getCalendarEvents(_dayStart(t), _dayEnd(t)) || [];
+    return rows.map((r) => ({
+      start: r.start_time,
+      end: r.end_time,
+      subject: r.subject,
+      showAs: r.show_as,
+      isAllDay: r.is_all_day === 1,
+      isCancelled: r.show_as === 'cancelled',
+      attendeesOther: r.attendees_other === 1 ? true : r.attendees_other === 0 ? false : null,
+    }));
+  } catch (e) {
+    return [];
+  }
 }
 
 function _dayStart(d) {
@@ -581,7 +636,11 @@ async function build({ now = new Date() } = {}) {
     ...gated,
     // The rest of the day, for surfaces with room. Not part of the pool: an
     // agenda is the shape of the day, not a list of things to decide about.
-    agenda: agendaFor(inputs.calendar, now),
+    // Tomorrow is read SEPARATELY and passed in, rather than widening
+    // `_calendarInput`'s window — context-state reasons about "am I in a
+    // meeting" off that same list, and tomorrow's events in it would be a
+    // silent change to what "current" and "next" mean.
+    agenda: agendaFor(inputs.calendar, now, 4, _tomorrowEvents()),
     // A failed pool is a GAP, never an empty feed presented as a calm day.
     poolAvailable: poolError === null,
     poolSize: items.length,

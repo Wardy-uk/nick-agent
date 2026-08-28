@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v8';
+const VERSION = 'v9';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -682,7 +682,8 @@ function agenda(w, block, limit) {
   if (!events.length) return;
 
   rule(w, 9);
-  text(w, 'REST OF TODAY', { size: 9, color: MUTED, weight: 'bold' });
+  text(w, block.scope === 'tomorrow' ? 'TOMORROW' : 'REST OF TODAY',
+    { size: 9, color: MUTED, weight: 'bold' });
   w.addSpacer(6);
 
   for (let i = 0; i < events.length; i++) {
@@ -720,6 +721,42 @@ function agenda(w, block, limit) {
     }
     if (i < events.length - 1) w.addSpacer(6);
   }
+}
+
+/**
+ * What got done today. The bottom of a large widget was empty by early evening
+ * — the agenda runs out, the pool is small — and this is the one fact that is
+ * always available and always worth seeing.
+ *
+ * Deliberately the wins LEDGER rather than a count of ticked boxes: it was
+ * built because self-report starves, and a home screen is where it finally gets
+ * seen. Zero is rendered honestly; there is no encouraging version of an empty
+ * day, and inventing one is the register sara-voice rejects.
+ */
+function winsStrip(w, wins) {
+  if (!wins) return;
+  const done = Number(wins.doneToday);
+  if (!Number.isFinite(done)) return;
+
+  w.addSpacer(9);
+  const row = w.addStack();
+  row.centerAlignContent();
+  tile(row, 'todo', done > 0 ? HEX.positive : HEX.low, 15);
+  row.addSpacer(6);
+  text(row, done === 0 ? 'Nothing logged today'
+    : done === 1 ? '1 done today' : `${done} done today`,
+    { size: 11, color: done > 0 ? dyn(HEX.positive) : MUTED, weight: 'bold' });
+
+  const week = Number(wins.doneThisWeek);
+  if (Number.isFinite(week) && week > done) {
+    row.addSpacer(7);
+    text(row, `${week} this week`, { size: 10, color: MUTED });
+  }
+  row.addSpacer();
+
+  // A ledger that could not be read is NOT a day with nothing in it.
+  const gaps = Array.isArray(wins.gaps) ? wins.gaps.length : 0;
+  if (gaps) text(row, `${gaps} unread`, { size: 9, color: dyn(HEX.high) });
 }
 
 /** Held-back and unreadable counts. Never a bare number, never swallowed. */
@@ -958,7 +995,10 @@ function build(res, family, wins, weather) {
 
   // Only the large family has the height for the day's shape; on medium the
   // three attention rows already fill it, and a cramped agenda is worse than none.
-  if (family === 'large') agenda(w, d.agenda, 4);
+  if (family === 'large') {
+    agenda(w, d.agenda, 4);
+    winsStrip(w, wins);
+  }
 
   footer(w, d);
   w.addSpacer();
@@ -987,7 +1027,10 @@ const [res, weather] = await Promise.all([
 // Only spend a second request when the brain has actually said he is off duty.
 const duty = res.data && res.data.context && res.data.context.duty;
 const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
-const wins = offDuty ? await fetchWins(cfg) : null;
+// Off duty the wins ARE the view; on large they fill the strip at the bottom.
+// Anywhere else it would be a request bought for nothing.
+const needWins = !res.error && (offDuty || family === 'large');
+const wins = needWins ? await fetchWins(cfg) : null;
 
 const widget = build(res, family, wins, weather);
 
