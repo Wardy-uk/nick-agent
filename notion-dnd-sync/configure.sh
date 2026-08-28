@@ -9,8 +9,8 @@ install -d -m 700 "$config_dir"
 read -r -s -p 'Paste Notion token: ' token
 printf '\n'
 
-if [[ -z "$token" ]]; then
-  echo 'No token entered; configuration was not changed.' >&2
+if (( ${#token} < 20 )); then
+  echo 'The token was empty or too short; configuration was not changed.' >&2
   exit 1
 fi
 
