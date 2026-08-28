@@ -1,0 +1,16 @@
+[Unit]
+Description=NEURO ChatGPT campaign save page
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/mnt/data/nuero/backend/.env
+Environment=CAMPAIGN_SAVE_HOST=100.100.28.58
+Environment=CAMPAIGN_SAVE_PORT=3003
+ExecStart=/home/nickw/.nvm/versions/node/v22.23.2/bin/node /mnt/data/nuero/campaign-save/server.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
