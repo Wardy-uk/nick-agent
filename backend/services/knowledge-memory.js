@@ -272,7 +272,15 @@ function loadRawNotes() {
 }
 
 function noteDateParts(note) {
-  const stamp = note.frontmatter.start_at || note.frontmatter.created_at || note.modified || isoNow();
+  // ⚠ Same quote trap as the note_type comparisons: plaud-sync writes
+  // `start_at: "2026-08-25T14:18:56"` QUOTED, and `new Date('"2026-..."')` is
+  // Invalid Date, which falls through to `new Date()` below. So a consolidated
+  // note for a July meeting was dated TODAY and filed in the current month —
+  // silently, because a plausible date is indistinguishable from a correct one.
+  const stamp = cleanQuoted(note.frontmatter.start_at)
+    || cleanQuoted(note.frontmatter.created_at)
+    || note.modified
+    || isoNow();
   const date = new Date(stamp);
   const safe = Number.isNaN(date.getTime()) ? new Date() : date;
   return {

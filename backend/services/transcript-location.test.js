@@ -70,3 +70,35 @@ test('with no env var set, the default folder is what is protected', () => {
   assert.equal(alreadyInPlace('Meetings/transcripts/2026/08/x.md', undefined), true);
   assert.equal(alreadyInPlace('Plaud/Transcripts/x.md', undefined), false);
 });
+
+// ═══════════════════════════════════════════════════════
+// Frontmatter quotes (27 Aug 2026)
+//
+// `parseFrontmatter` does NOT strip surrounding quotes, and plaud-sync writes
+// every scalar quoted. `normalizePlaudId` in knowledge-memory already stripped
+// them — which is why grouping by id worked while everything else silently did
+// not. Two consequences, both invisible: the note_type split never matched, and
+// `new Date('"2026-07-16T..."')` is Invalid Date, so a consolidated note for a
+// July meeting was dated TODAY and filed under the current month.
+// ═══════════════════════════════════════════════════════
+
+const cleanQuoted = (value) => String(value || '').trim().replace(/^"+|"+$/g, '');
+
+test('a quoted frontmatter date must not silently become today', () => {
+  const quoted = '"2026-07-16T13:00:44"';
+
+  // The bug: quoted value parses to Invalid Date, and the fallback is now().
+  assert.ok(Number.isNaN(new Date(quoted).getTime()), 'precondition: quoted date is unparseable');
+
+  const fixed = new Date(cleanQuoted(quoted));
+  assert.ok(!Number.isNaN(fixed.getTime()));
+  assert.equal(fixed.toISOString().slice(0, 7), '2026-07', 'must keep the meeting month, not the sync month');
+});
+
+test('quoted note_type must still match', () => {
+  assert.notEqual('"summary"', 'summary', 'precondition: the raw value carries its quotes');
+  assert.equal(cleanQuoted('"summary"'), 'summary');
+  assert.equal(cleanQuoted('"transcript"'), 'transcript');
+  assert.equal(cleanQuoted('summary'), 'summary', 'unquoted legacy notes keep working');
+  assert.equal(cleanQuoted(undefined), '');
+});
