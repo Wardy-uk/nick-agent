@@ -35,6 +35,55 @@ const DEFAULT_URL = 'https://pi5.tailecb90f.ts.net';
 const APP_URL = 'https://sara.nickward.co.uk';
 const TIMEOUT_SECONDS = 12;
 
+// Bumped by hand on every change. It is rendered on the widget so "did my edit
+// actually land?" is answerable at a glance instead of by guessing — the whole
+// reason this and the self-update below exist.
+const VERSION = 'v5';
+const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
+
+// A marker that must appear in any download before it is allowed to overwrite
+// this file. A 404 page, a captive-portal splash or a truncated body are all
+// "structurally valid" strings, and none of them is a script.
+const SOURCE_MARKER = 'NEURO — Attention widget for Scriptable';
+
+/**
+ * Pull the latest version of this script over itself.
+ *
+ * ⚠ Runs ONLY on a manual in-app run, never from the widget. This executes code
+ * fetched from the internet on a device holding a NEURO API token, so it must
+ * be something Nick chose to do, not something that happens on a timer while
+ * the phone is in his pocket. The repo is public, so the trust here is in
+ * GitHub's account security — that is the whole of the threat model, and it is
+ * the reason this is not wired into the widget path.
+ *
+ * Returns 'updated' | 'current' | 'failed: <reason>'.
+ */
+async function selfUpdate() {
+  try {
+    const path = module.filename;
+    let fm;
+    try { fm = FileManager.iCloud(); } catch (e) { fm = FileManager.local(); }
+    if (!fm.fileExists(path)) fm = FileManager.local();
+
+    const req = new Request(SOURCE_URL);
+    req.timeoutInterval = TIMEOUT_SECONDS;
+    const latest = await req.loadString();
+
+    if (!latest || latest.indexOf(SOURCE_MARKER) === -1) return 'failed: not a script';
+
+    const current = fm.readString(path);
+    // Compare ignoring line endings — the repo is checked out CRLF on Windows
+    // and served LF, so a byte comparison would report an update every run.
+    const norm = (s) => String(s).replace(/\r\n/g, '\n');
+    if (norm(latest) === norm(current)) return 'current';
+
+    fm.writeString(path, latest);
+    return 'updated';
+  } catch (e) {
+    return `failed: ${(e && e.message) || 'unknown'}`;
+  }
+}
+
 // ── Config ──────────────────────────────────────────────────────────────────
 
 async function prompt(title, message, value, secure) {
@@ -315,7 +364,9 @@ function header(w, ctxLabel, stamp, alertPair) {
   }
 
   row.addSpacer();
-  text(row, stamp, { size: 10, color: MUTED });
+  // Version beside the time: the cheapest possible answer to "is this actually
+  // the new one?", which cost a round trip to work out once already.
+  text(row, `${VERSION} · ${stamp}`, { size: 10, color: MUTED });
   w.addSpacer(10);
 }
 
@@ -648,6 +699,11 @@ function build(res, family, wins) {
 
 // ── Entry ───────────────────────────────────────────────────────────────────
 
+// Manual run: update first, so the next widget refresh renders the new code.
+// The widget path never does this — see selfUpdate's warning.
+let updateNote = null;
+if (config.runsInApp) updateNote = await selfUpdate();
+
 const cfg = await loadConfig();
 const res = await fetchAttention(cfg);
 
@@ -661,6 +717,21 @@ const widget = build(res, config.runsInWidget ? config.widgetFamily : 'large', w
 if (config.runsInWidget) {
   Script.setWidget(widget);
 } else {
+  // Say out loud what the update did. "Nothing changed" is the one outcome that
+  // must not be silent, because it is indistinguishable from a broken edit.
+  if (updateNote === 'updated') {
+    const a = new Alert();
+    a.title = 'Script updated';
+    a.message = `Pulled the latest from GitHub. Running ${VERSION} — close and reopen this script to run the new code, then the widget will pick it up on its next refresh.`;
+    a.addAction('OK');
+    await a.present();
+  } else if (updateNote && updateNote.startsWith('failed')) {
+    const a = new Alert();
+    a.title = 'Update check failed';
+    a.message = `${updateNote}. Running the copy already on the phone (${VERSION}).`;
+    a.addAction('OK');
+    await a.present();
+  }
   await widget.presentLarge();
 }
 Script.complete();
