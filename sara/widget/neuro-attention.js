@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v12';
+const VERSION = 'v13';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -300,20 +300,21 @@ async function fetchWeather() {
  * Safari, NOT the SARA Mobile icon on the home screen — that is an iOS
  * limitation, not something this script can route around.
  *
- * ⚠ The Shortcuts workaround DOES NOT WORK either, and this is settled rather
- * than assumed: an installed PWA is a WEB CLIP, not an app, and Shortcuts'
- * "Open App" action only lists real apps — SARA Mobile does not appear in the
- * picker, so there is no Shortcut to point at. Turning this on by default cost
- * Nick a "file doesn't exist" dialog on every tap.
+ * The route is a Shortcut named by OPEN_SHORTCUT. `shortcuts://` DOES hand
+ * control away from the widget, so whatever that Shortcut can reach, this can.
  *
- * So a tap opens Safari, and that is the end of it on iOS. The widget is for
- * GLANCING; the SARA Mobile icon next to it is for OPENING. Keeping the https
- * route also keeps per-card tab routing, which the Shortcut would have lost.
+ * ⚠ Known limits, both learned the hard way:
+ *  1. Shortcuts' "Open App" action lists REAL APPS ONLY. An installed PWA is a
+ *     web clip and does not appear in that picker, so an Open App action cannot
+ *     target SARA Mobile. If the Shortcut ends up using "Open URLs" instead, it
+ *     lands in Safari — the same place as the plain https route, one hop later.
+ *  2. It costs the destination. "Open App" carries no URL, so per-card tab
+ *     routing is lost and the app opens wherever it left off.
  *
- * OPEN_SHORTCUT stays as a switch in case Apple ever changes this, but it is
- * OFF and should not be turned on without checking the picker first.
+ * Set OPEN_SHORTCUT to '' to go back to the direct https route, which is worse
+ * on which app opens and better on which tab.
  */
-const OPEN_SHORTCUT = '';
+const OPEN_SHORTCUT = 'Open SARA';
 
 function tabUrl(tab) {
   if (OPEN_SHORTCUT) {
