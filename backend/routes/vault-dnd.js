@@ -6,7 +6,9 @@ const path = require('path');
 
 const router = express.Router();
 
-const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
+// D&D may be isolated in its own Git checkout. Do not require it to share the
+// Syncthing/Obsidian Sync-managed personal vault.
+const VAULT_PATH = process.env.DND_VAULT_PATH || process.env.OBSIDIAN_VAULT_PATH || '';
 const DND_ROOT = normalizeRelative(process.env.DND_VAULT_ROOT || 'Projects/D&D');
 
 function normalizeRelative(input) {
