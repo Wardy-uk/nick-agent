@@ -7,10 +7,12 @@ const os = require('os');
 const path = require('path');
 const express = require('express');
 
-function freshRoute(vaultPath, apiKey) {
+function freshRoute(vaultPath, apiKey, readOnly = false) {
   process.env.OBSIDIAN_VAULT_PATH = vaultPath;
+  delete process.env.DND_VAULT_PATH;
   process.env.DND_VAULT_ROOT = 'Projects/D&D';
   process.env.DND_VAULT_API_KEY = apiKey;
+  process.env.DND_VAULT_READ_ONLY = readOnly ? 'true' : 'false';
   delete require.cache[require.resolve('./vault-dnd')];
   return require('./vault-dnd');
 }
@@ -93,5 +95,22 @@ test('D&D vault route search returns D&D-relative paths', async () => {
     assert.equal(searchRes.status, 200);
     const data = await searchRes.json();
     assert.deepEqual(data.results.map(r => r.path), ['NPCs/Bob.md']);
+  });
+});
+
+test('D&D vault route blocks writes in read-only mirror mode', async () => {
+  const vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'neuro-vault-dnd-read-only-'));
+  fs.mkdirSync(path.join(vaultPath, 'Projects', 'D&D'), { recursive: true });
+  const route = freshRoute(vaultPath, 'test-key', true);
+
+  await withServer(route, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/write`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Api-Key': 'test-key' },
+      body: JSON.stringify({ path: 'Campaign.md', content: '# Changed\n' }),
+    });
+
+    assert.equal(response.status, 403);
+    assert.equal(fs.existsSync(path.join(vaultPath, 'Projects', 'D&D', 'Campaign.md')), false);
   });
 });
