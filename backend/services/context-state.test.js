@@ -319,3 +319,87 @@ test('now is HONOURED, not read from the wall clock', () => {
   assert.notEqual(morning.label, evening.label);
   assert.equal(morning.at, TUE_0930.toISOString());
 });
+
+// ── On duty ─────────────────────────────────────────────────────────────────
+// `duty` decides what KIND of thing a surface shows; `activity` decides ranking.
+// They are separate questions and these tests exist to keep them separate.
+
+const { resolveDuty, ON_DUTY_START_HOUR, ON_DUTY_END_HOUR } = require('./context-state');
+
+const WORKING = { known: true, isWorkingDay: true };
+const NOT_WORKING = (reason) => ({ known: true, isWorkingDay: false, reason });
+
+test('duty: a weekday in hours is on duty', () => {
+  const d = resolveDuty(WORKING, new Date('2026-08-18T09:30:00'));
+  assert.equal(d.onDuty, true);
+  assert.equal(d.known, true);
+});
+
+test('duty: a non-working day is off duty, and says WHICH kind', () => {
+  // "Annual leave" and "Sunday" license the same behaviour but are different
+  // facts, and the reason is the interesting half on a day off.
+  const leave = resolveDuty(NOT_WORKING('annual leave'), new Date('2026-08-18T09:30:00'));
+  assert.equal(leave.onDuty, false);
+  assert.match(leave.reason, /annual leave/);
+
+  const weekend = resolveDuty(NOT_WORKING('weekend'), new Date('2026-08-16T09:30:00'));
+  assert.equal(weekend.onDuty, false);
+  assert.match(weekend.reason, /weekend/);
+});
+
+test('duty: a working day outside hours is off duty', () => {
+  // The case that motivated this: a Tuesday at 21:00 is a working DAY, so
+  // `activity` is steady and the widget would otherwise still be nagging.
+  const late = resolveDuty(WORKING, new Date('2026-08-18T21:00:00'));
+  assert.equal(late.onDuty, false);
+  assert.match(late.reason, /Outside working hours/);
+
+  const early = resolveDuty(WORKING, new Date('2026-08-18T06:30:00'));
+  assert.equal(early.onDuty, false);
+});
+
+test('duty: the boundaries are inclusive at the start and exclusive at the end', () => {
+  assert.equal(resolveDuty(WORKING, new Date('2026-08-18T08:00:00')).onDuty, true);
+  assert.equal(resolveDuty(WORKING, new Date('2026-08-18T17:59:00')).onDuty, true);
+  assert.equal(resolveDuty(WORKING, new Date('2026-08-18T18:00:00')).onDuty, false);
+});
+
+test('duty: UNKNOWN fails towards ON duty, and says so', () => {
+  // Off-duty rendering HIDES work. Hiding work because we could not read the
+  // calendar is the failure that ends the feature, so unknown must never be
+  // the reason a surface goes quiet — but it must still be distinguishable.
+  const d = resolveDuty({ known: false }, new Date('2026-08-18T09:30:00'));
+  assert.equal(d.onDuty, true);
+  assert.equal(d.known, false);
+  assert.match(d.reason, /Could not tell/);
+});
+
+test('duty rides on the context, and is not the same field as activity', () => {
+  const ctx = resolveContext(calm({ workingDay: NOT_WORKING('bank holiday') }), TUE_0930);
+  assert.equal(ctx.duty.onDuty, false);
+  assert.equal(ctx.activity, ACTIVITY.OFF);
+
+  // The separation that matters: a working day, in hours, but away from the
+  // desk is still ON duty.
+  const away = resolveContext(
+    calm({ workingDay: WORKING, location: { known: true, place: 'away' } }),
+    TUE_0930
+  );
+  assert.equal(away.activity, ACTIVITY.AWAY);
+  assert.equal(away.duty.onDuty, true);
+});
+
+test('the duty window is deliberately wider than the booking window', () => {
+  // Pinned against task-blocks rather than assumed equal: they answer different
+  // questions ("can a meeting go here" vs "is he working"), so a change to
+  // either should be a visible decision instead of silent drift.
+  const { DAY_START_MIN, DAY_END_MIN } = require('./task-blocks');
+  assert.ok(
+    ON_DUTY_START_HOUR * 60 <= DAY_START_MIN,
+    'duty must start no later than the first bookable minute'
+  );
+  assert.ok(
+    ON_DUTY_END_HOUR * 60 >= DAY_END_MIN,
+    'duty must end no earlier than the last bookable minute'
+  );
+});

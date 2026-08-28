@@ -39,6 +39,59 @@ const PRE_MEETING_MINUTES = 10;
 const MORNING_ENDS_HOUR = 11;
 const LATE_DAY_STARTS_HOUR = 16;
 
+// ── On duty ─────────────────────────────────────────────────────────────────
+//
+// Whether Nick is working right now, which is NOT the same question as
+// `activity`. He can be AWAY at 11am on a Tuesday (on duty, just not at his
+// desk) or STEADY at 22:00 on a Tuesday (a working day, but he has finished).
+// Surfaces use this to decide what KIND of thing to show, not how to rank.
+//
+// The window is deliberately WIDER than `task-blocks`' 09:00–17:30, because
+// that one answers "where can a meeting be booked", and you can plainly be
+// working at 08:15 when nothing can be booked then. Two different questions,
+// so two different numbers — pinned against each other by a test so a change to
+// either is a visible decision rather than drift.
+const ON_DUTY_START_HOUR = 8;
+const ON_DUTY_END_HOUR = 18;
+
+/**
+ * Is Nick on duty? PURE — `now` is passed, nothing is read from the clock.
+ *
+ * ⚠ Unknown resolves to ON duty. Off-duty rendering HIDES work, and hiding work
+ * on a bad guess is the failure that ends the feature — the same bar the gate
+ * applies to dropping. "We could not tell" must never be the reason a surface
+ * goes quiet, so `known` is reported separately from the answer.
+ */
+function resolveDuty(workingDay, now) {
+  const hour = now.getHours() + now.getMinutes() / 60;
+  const inHours = hour >= ON_DUTY_START_HOUR && hour < ON_DUTY_END_HOUR;
+
+  if (!known(workingDay)) {
+    return {
+      onDuty: true,
+      known: false,
+      reason: 'Could not tell what kind of day this is, so assuming a working one.',
+    };
+  }
+  if (workingDay.isWorkingDay === false) {
+    return {
+      onDuty: false,
+      known: true,
+      // The reason is the interesting part on a day off: "annual leave" and
+      // "Sunday" license the same behaviour but are not the same fact.
+      reason: workingDay.reason || 'Not a working day.',
+    };
+  }
+  if (!inHours) {
+    return {
+      onDuty: false,
+      known: true,
+      reason: `Outside working hours (${ON_DUTY_START_HOUR}:00–${ON_DUTY_END_HOUR}:00).`,
+    };
+  }
+  return { onDuty: true, known: true, reason: 'A working day, in hours.' };
+}
+
 // The bounded activity set, in the order it resolves. Nothing here is
 // open-ended or auto-discovered: adding a state is a deliberate act.
 const ACTIVITY = {
@@ -429,6 +482,7 @@ function resolveContext(inputs = {}, now = new Date()) {
     summary,
     place,
     quiet,
+    duty: resolveDuty(src.workingDay, at),
     confidence: deriveConfidence({ activity, knownCount, contradictions }),
     cannotSee: cannotSee(unknowns, activity),
     reasons,
@@ -441,7 +495,10 @@ function resolveContext(inputs = {}, now = new Date()) {
 
 module.exports = {
   resolveContext,
+  resolveDuty,
   cannotSee,
+  ON_DUTY_START_HOUR,
+  ON_DUTY_END_HOUR,
   ACTIVITY,
   INPUT_BLOCKS,
   PRE_MEETING_MINUTES,

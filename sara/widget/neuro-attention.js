@@ -88,6 +88,28 @@ async function fetchAttention({ base, token }) {
   }
 }
 
+/**
+ * Momentum, for the off-duty view. Fetched ONLY when the brain has said Nick is
+ * off duty, so a working day never pays for it.
+ *
+ * The DECISION (is he working) is the brain's and arrives on the attention
+ * payload as `context.duty`. This is only the CONTENT that decision calls for.
+ */
+async function fetchWins({ base, token }) {
+  try {
+    const req = new Request(`${base}/api/wins`);
+    req.headers = { 'X-NEURO-API-TOKEN': token };
+    req.timeoutInterval = TIMEOUT_SECONDS;
+    const json = await req.loadJSON();
+    if (!json || typeof json !== 'object' || json.ok === false) return null;
+    return json;
+  } catch (e) {
+    // A missing ledger is not worth failing the widget over — the off-duty view
+    // degrades to "you're off" with no numbers, which is still true.
+    return null;
+  }
+}
+
 // ── Look ────────────────────────────────────────────────────────────────────
 //
 // Design rules, so this stays legible rather than merely decorated:
@@ -325,7 +347,69 @@ function footer(w, d) {
   row.addSpacer();
 }
 
-function build(res, family) {
+/**
+ * The off-duty view: what you DID, not what you owe.
+ *
+ * A task list on a Saturday is the thing this whole feature exists to avoid —
+ * and the wins ledger was built precisely because the reward surface was
+ * starved while the nagging surfaces were not.
+ */
+function offDutyView(w, duty, wins) {
+  const row = w.addStack();
+  row.backgroundColor = CARD;
+  row.cornerRadius = 14;
+  row.setPadding(12, 12, 12, 12);
+  row.centerAlignContent();
+
+  // Prefer the week on a day off: `headline` describes TODAY and correctly
+  // returns null on zero, which a Saturday usually is. A week's total is the
+  // honest number to lead with, and there is no cheerful version of an empty one.
+  const week = wins && Number.isFinite(Number(wins.doneThisWeek)) ? Number(wins.doneThisWeek) : null;
+  const today = wins && Number.isFinite(Number(wins.doneToday)) ? Number(wins.doneToday) : null;
+
+  const title = week ? `${week} finished this week`
+    : today ? wins.headline
+      : 'Off duty';
+
+  tile(row, 'todo', week || today ? POSITIVE : ACCENTS.low, 30);
+  row.addSpacer(11);
+  const col = row.addStack();
+  col.layoutVertically();
+  text(col, title, { size: 15, weight: 'heavy', max: 2 });
+  col.addSpacer(3);
+  text(col, duty.reason || 'Not a working day.', { size: 12, color: MUTED, max: 2 });
+  row.addSpacer();
+
+  // The week's shape, by where the evidence came from. Only what the ledger
+  // actually holds — no invented categories, and nothing at all if it is empty.
+  const sources = wins && wins.bySource && typeof wins.bySource === 'object'
+    ? Object.entries(wins.bySource).filter(([, n]) => Number(n) > 0).slice(0, 4)
+    : [];
+  if (sources.length) {
+    w.addSpacer(9);
+    const strip = w.addStack();
+    strip.centerAlignContent();
+    for (let i = 0; i < sources.length; i++) {
+      if (i) strip.addSpacer(10);
+      text(strip, String(sources[i][1]), { size: 12, weight: 'bold', color: POSITIVE });
+      strip.addSpacer(3);
+      text(strip, sources[i][0], { size: 10, color: MUTED });
+    }
+    strip.addSpacer();
+  }
+
+  if (!wins) {
+    w.addSpacer(7);
+    // "We couldn't read the ledger" is not "you did nothing" — the distinction
+    // this whole codebase keeps insisting on, and never more worth keeping than
+    // on the one screen meant to be encouraging.
+    text(w, "Couldn't read the wins ledger.", { size: 10, color: MUTED });
+  }
+
+  w.url = tabUrl('today');
+}
+
+function build(res, family, wins) {
   const w = new ListWidget();
   bg(w);
   w.setPadding(14, 14, 14, 14);
@@ -347,6 +431,18 @@ function build(res, family) {
     || !d.primary
     || d.primary.kind === 'context';
   header(w, contextIsTheAnswer ? null : ctx.label, stamp, bad);
+
+  // Off duty: show what he did, not what he owes. ⚠ Except when something is
+  // genuinely on fire — hiding a breaching escalation because it is Saturday is
+  // the wrong failure, and `context-state` already treats a live work signal on
+  // a non-working day as a contradiction rather than an all-clear.
+  const duty = ctx.duty;
+  const onFire = d.primary && d.primary.urgency === 'critical';
+  if (!res.error && duty && duty.known && duty.onDuty === false && !onFire) {
+    offDutyView(w, duty, wins);
+    w.addSpacer();
+    return w;
+  }
 
   if (silence(w, d, res.error)) return w;
 
@@ -372,7 +468,13 @@ function build(res, family) {
 
 const cfg = await loadConfig();
 const res = await fetchAttention(cfg);
-const widget = build(res, config.runsInWidget ? config.widgetFamily : 'large');
+
+// Only spend a second request when the brain has actually said he is off duty.
+const duty = res.data && res.data.context && res.data.context.duty;
+const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
+const wins = offDuty ? await fetchWins(cfg) : null;
+
+const widget = build(res, config.runsInWidget ? config.widgetFamily : 'large', wins);
 
 if (config.runsInWidget) {
   Script.setWidget(widget);
