@@ -277,3 +277,61 @@ test('pure: the pool is not mutated', () => {
   gate(ctx(ACTIVITY.FIREFIGHTING), items);
   assert.equal(JSON.stringify(items), before);
 });
+
+// ── Agenda ──────────────────────────────────────────────────────────────────
+
+const { agendaFor } = require('./attention');
+
+test('agenda: an unreadable calendar is not an empty day', () => {
+  // The whole point. "Your diary is clear" and "I could not read your diary"
+  // license opposite behaviour and only one of them is good news.
+  const a = agendaFor({ known: false }, new Date('2026-08-28T14:00:00'));
+  assert.equal(a.known, false);
+  assert.deepEqual(a.events, []);
+});
+
+test('agenda: only what is LEFT of today, soonest first', () => {
+  const now = new Date('2026-08-28T14:00:00');
+  const cal = {
+    known: true,
+    events: [
+      { start: '2026-08-28T09:00', end: '2026-08-28T09:30', subject: 'Done already', showAs: 'busy' },
+      { start: '2026-08-28T16:00', end: '2026-08-28T16:30', subject: 'Later', showAs: 'busy' },
+      { start: '2026-08-28T15:00', end: '2026-08-28T15:30', subject: 'Sooner', showAs: 'busy' },
+    ],
+  };
+  const a = agendaFor(cal, now);
+  assert.equal(a.known, true);
+  assert.deepEqual(a.events.map((e) => e.subject), ['Sooner', 'Later']);
+  assert.equal(a.events[0].minutesAway, 60);
+});
+
+test('agenda: a meeting in progress is running, not "soon"', () => {
+  // A negative countdown rendered as "in -12 minutes" is the sort of thing that
+  // makes a widget look broken, so the two states are separated here rather
+  // than left for each renderer to work out.
+  const now = new Date('2026-08-28T14:10:00');
+  const cal = {
+    known: true,
+    events: [{ start: '2026-08-28T14:00', end: '2026-08-28T14:30', subject: 'Now', showAs: 'busy' }],
+  };
+  const a = agendaFor(cal, now);
+  assert.equal(a.events.length, 1);
+  assert.equal(a.events[0].running, true);
+  assert.ok(a.events[0].minutesAway < 0);
+});
+
+test('agenda: cancelled, all-day and free blocks are not the day\'s shape', () => {
+  const now = new Date('2026-08-28T09:00:00');
+  const cal = {
+    known: true,
+    events: [
+      { start: '2026-08-28T10:00', end: '2026-08-28T10:30', subject: 'Cancelled', showAs: 'cancelled', isCancelled: true },
+      { start: '2026-08-28T00:00', end: '2026-08-29T00:00', subject: 'Birthday', showAs: 'free', isAllDay: true },
+      { start: '2026-08-28T11:00', end: '2026-08-28T11:30', subject: 'Free block', showAs: 'free' },
+      { start: '2026-08-28T12:00', end: '2026-08-28T12:30', subject: 'Real', showAs: 'busy' },
+    ],
+  };
+  const a = agendaFor(cal, now);
+  assert.deepEqual(a.events.map((e) => e.subject), ['Real']);
+});

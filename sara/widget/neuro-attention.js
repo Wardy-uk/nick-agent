@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v7';
+const VERSION = 'v8';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -305,11 +305,11 @@ async function fetchWeather() {
  * "Open App" cannot carry a destination, so the app opens where it left off,
  * which is the Surface, which is showing this same feed anyway.
  *
- * Set OPEN_SHORTCUT to the Shortcut's exact name to use it. Left EMPTY by
- * default because a shortcuts:// link to a Shortcut that does not exist just
- * throws an error at you, which is worse than landing in Safari.
+ * OPEN_SHORTCUT is the Shortcut's exact name. It is ON because Nick wants the
+ * app, not Safari — but it REQUIRES a Shortcut of that name containing a single
+ * "Open App" action pointing at SARA Mobile. Set it to '' to go back to Safari.
  */
-const OPEN_SHORTCUT = '';
+const OPEN_SHORTCUT = 'Open SARA';
 
 function tabUrl(tab) {
   if (OPEN_SHORTCUT) {
@@ -330,6 +330,7 @@ const TILE_BG = Color.dynamic(new Color('#f4f4f6'), new Color('#3a3a3c'));
 const HEX = {
   critical: ['#d92d20', '#ff6b5e'],
   high: ['#b54708', '#ffa94d'],
+  medium: ['#0064d2', '#5ea9ff'],
   normal: ['#0064d2', '#5ea9ff'],
   low: ['#6a6a70', '#98989d'],
   positive: ['#1a7f4b', '#4ad07d'],
@@ -508,9 +509,20 @@ function header(w, ctxLabel, weather, alertPair) {
   clock.font = font(26, 'heavy');
   clock.textColor = INK;
   left.addSpacer(1);
-  text(left, new Date().toLocaleDateString('en-GB', {
+  const dateRow = left.addStack();
+  dateRow.centerAlignContent();
+  text(dateRow, new Date().toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'long',
   }), { size: 11, color: MUTED });
+  if (ctxLabel) {
+    dateRow.addSpacer(7);
+    // The context reads as a pill so it is obviously a STATE, not another item.
+    const pill = dateRow.addStack();
+    pill.cornerRadius = 7;
+    pill.backgroundColor = alertPair ? dyn(alertPair, 0.16) : TILE_BG;
+    pill.setPadding(2, 7, 2, 7);
+    text(pill, ctxLabel, { size: 10, color: alertPair ? dyn(alertPair) : MUTED });
+  }
 
   row.addSpacer();
 
@@ -540,31 +552,21 @@ function header(w, ctxLabel, weather, alertPair) {
       nextRow.addSpacer();
       text(nextRow, weather.next, { size: 10, color: MUTED });
     }
+  } else {
+    // Absent weather is indistinguishable from a design hole, and the cause is
+    // almost always a denied Location permission — which is fixable, but only
+    // if the widget says so.
+    const right = row.addStack();
+    right.layoutVertically();
+    const r1 = right.addStack();
+    r1.addSpacer();
+    text(r1, 'No forecast', { size: 11, color: MUTED });
+    const r2 = right.addStack();
+    r2.addSpacer();
+    text(r2, 'run the script, allow Location', { size: 9, color: MUTED });
   }
 
-  w.addSpacer(11);
-
-  // A hairline under the block, then SARA's own line. Two registers: the strip
-  // above is the world, everything below is her.
-  const bar = w.addStack();
-  bar.centerAlignContent();
-  tile(bar, 'context', alertPair || HEX.normal, 15);
-  bar.addSpacer(6);
-  text(bar, 'SARA', { size: 11, color: MUTED, weight: 'bold' });
-  if (ctxLabel) {
-    bar.addSpacer(6);
-    // The context reads as a pill so it is obviously a STATE, not another item.
-    const pill = bar.addStack();
-    pill.cornerRadius = 7;
-    pill.backgroundColor = TILE_BG;
-    pill.setPadding(2, 7, 2, 7);
-    text(pill, ctxLabel, { size: 10, color: MUTED });
-  }
-  bar.addSpacer();
-  // Version: the cheapest possible answer to "is this actually the new one?",
-  // which cost a round trip to work out once already.
-  text(bar, VERSION, { size: 9, color: MUTED });
-  w.addSpacer(9);
+  w.addSpacer(12);
 }
 
 /**
@@ -653,6 +655,71 @@ function silence(w, d, error) {
     return true;
   }
   return false;
+}
+
+/**
+ * The rest of the day.
+ *
+ * This is the half the attention feed deliberately does not carry: the pool is
+ * things needing a DECISION, and a meeting you have already accepted is not one
+ * of those. But "what is left today" is the single most glanceable fact a home
+ * screen can hold, and without it the widget was three admin tasks and a lot of
+ * black.
+ *
+ * ⚠ `known:false` is not an empty day — an unreadable diary says so rather than
+ * rendering as a clear afternoon.
+ */
+function agenda(w, block, limit) {
+  if (!block) return;
+
+  if (block.known === false) {
+    w.addSpacer(9);
+    text(w, "Couldn't read the diary", { size: 10, color: dyn(HEX.high) });
+    return;
+  }
+
+  const events = (block.events || []).slice(0, limit);
+  if (!events.length) return;
+
+  rule(w, 9);
+  text(w, 'REST OF TODAY', { size: 9, color: MUTED, weight: 'bold' });
+  w.addSpacer(6);
+
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    const row = w.addStack();
+    row.centerAlignContent();
+
+    const start = new Date(e.start);
+    const hhmm = Number.isNaN(start.getTime()) ? '--:--'
+      : `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
+
+    // A meeting in progress is a different fact from one coming up, and it is
+    // the one worth colouring — it is happening to Nick right now.
+    const live = e.running === true;
+    text(row, hhmm, { size: 11, color: live ? dyn(HEX.high) : MUTED, weight: live ? 'bold' : 'regular' });
+    row.addSpacer(9);
+    text(row, e.subject || 'Untitled', { size: 12, weight: live ? 'bold' : 'regular', max: 1 });
+    row.addSpacer();
+
+    // The countdown, right-aligned. Recomputed from the start time by the
+    // server on every build, so it cannot go stale the way a stored relative
+    // time does.
+    const mins = Number(e.minutesAway);
+    let chip = null;
+    if (live) chip = 'now';
+    else if (Number.isFinite(mins)) {
+      chip = mins < 60 ? `${mins}m` : `${Math.round(mins / 60)}h`;
+    }
+    if (chip) {
+      const pill = row.addStack();
+      pill.cornerRadius = 6;
+      pill.backgroundColor = live ? dyn(HEX.high, 0.16) : TILE_BG;
+      pill.setPadding(1, 6, 1, 6);
+      text(pill, chip, { size: 10, color: live ? dyn(HEX.high) : MUTED, weight: 'bold' });
+    }
+    if (i < events.length - 1) w.addSpacer(6);
+  }
 }
 
 /** Held-back and unreadable counts. Never a bare number, never swallowed. */
@@ -888,6 +955,10 @@ function build(res, family, wins, weather) {
       if (i < rest.length - 1) w.addSpacer(7);
     }
   }
+
+  // Only the large family has the height for the day's shape; on medium the
+  // three attention rows already fill it, and a cramped agenda is worse than none.
+  if (family === 'large') agenda(w, d.agenda, 4);
 
   footer(w, d);
   w.addSpacer();

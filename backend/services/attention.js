@@ -371,6 +371,44 @@ function _calendarInput(gaps) {
   }
 }
 
+/**
+ * What is LEFT of today, for a surface with room to show it.
+ *
+ * PURE, and deliberately separate from the attention pool: an agenda is not a
+ * list of things needing a decision, it is the shape of the rest of the day.
+ * Feeding meetings into `decision-engine` would make every one of them
+ * something to action, which is exactly the nagging this system exists to avoid.
+ *
+ * ⚠ `known:false` is NOT an empty agenda. "The diary is clear" and "I could not
+ * read the diary" license opposite behaviour, and only one of them is good news.
+ */
+function agendaFor(calendar, now, limit = 4) {
+  if (!calendar || calendar.known !== true) return { known: false, events: [] };
+
+  const nowMs = now.getTime();
+  const events = (calendar.events || [])
+    .filter((e) => !e.isCancelled && !e.isAllDay && e.showAs !== 'free')
+    .map((e) => {
+      const startMs = new Date(e.start).getTime();
+      const endMs = new Date(e.end).getTime();
+      return { ...e, startMs, endMs };
+    })
+    .filter((e) => Number.isFinite(e.endMs) && e.endMs > nowMs)
+    .sort((a, b) => a.startMs - b.startMs)
+    .slice(0, limit)
+    .map((e) => ({
+      start: e.start,
+      subject: e.subject,
+      // Minutes until it STARTS; negative while it is running, which is a
+      // different fact from "soon" and the renderer needs to tell them apart.
+      minutesAway: Math.round((e.startMs - nowMs) / 60000),
+      running: e.startMs <= nowMs,
+      attendeesOther: e.attendeesOther,
+    }));
+
+  return { known: true, events };
+}
+
 function _dayStart(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T00:00`;
 }
@@ -541,6 +579,9 @@ async function build({ now = new Date() } = {}) {
     generatedAt: now.toISOString(),
     context,
     ...gated,
+    // The rest of the day, for surfaces with room. Not part of the pool: an
+    // agenda is the shape of the day, not a list of things to decide about.
+    agenda: agendaFor(inputs.calendar, now),
     // A failed pool is a GAP, never an empty feed presented as a calm day.
     poolAvailable: poolError === null,
     poolSize: items.length,
@@ -548,4 +589,4 @@ async function build({ now = new Date() } = {}) {
   };
 }
 
-module.exports = { build, gather, gate, sayLine, SECONDARY_MAX };
+module.exports = { build, gather, gate, sayLine, agendaFor, SECONDARY_MAX };
