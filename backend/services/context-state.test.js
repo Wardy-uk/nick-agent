@@ -350,18 +350,18 @@ test('duty: a non-working day is off duty, and says WHICH kind', () => {
 test('duty: a working day outside hours is off duty', () => {
   // The case that motivated this: a Tuesday at 21:00 is a working DAY, so
   // `activity` is steady and the widget would otherwise still be nagging.
-  const late = resolveDuty(WORKING, new Date('2026-08-18T21:00:00'));
+  const late = resolveDuty(WORKING, new Date('2026-08-18T22:30:00'));
   assert.equal(late.onDuty, false);
   assert.match(late.reason, /Outside working hours/);
 
-  const early = resolveDuty(WORKING, new Date('2026-08-18T06:30:00'));
+  const early = resolveDuty(WORKING, new Date('2026-08-18T05:30:00'));
   assert.equal(early.onDuty, false);
 });
 
 test('duty: the boundaries are inclusive at the start and exclusive at the end', () => {
-  assert.equal(resolveDuty(WORKING, new Date('2026-08-18T08:00:00')).onDuty, true);
-  assert.equal(resolveDuty(WORKING, new Date('2026-08-18T17:59:00')).onDuty, true);
-  assert.equal(resolveDuty(WORKING, new Date('2026-08-18T18:00:00')).onDuty, false);
+  assert.equal(resolveDuty(WORKING, new Date('2026-08-18T07:00:00')).onDuty, true);
+  assert.equal(resolveDuty(WORKING, new Date('2026-08-18T21:59:00')).onDuty, true);
+  assert.equal(resolveDuty(WORKING, new Date('2026-08-18T22:00:00')).onDuty, false);
 });
 
 test('duty: UNKNOWN fails towards ON duty, and says so', () => {
@@ -402,4 +402,19 @@ test('the duty window is deliberately wider than the booking window', () => {
     ON_DUTY_END_HOUR * 60 >= DAY_END_MIN,
     'duty must end no earlier than the last bookable minute'
   );
+});
+
+test('duty: still working at 18:14 on a Friday', () => {
+  // The case that broke it. An 18:00 cutoff flipped the widget to a day-off
+  // view while Nick was demonstrably still at it, and off duty HIDES work.
+  assert.equal(resolveDuty(WORKING, new Date('2026-08-28T18:14:00')).onDuty, true);
+  assert.equal(resolveDuty(WORKING, new Date('2026-08-28T20:30:00')).onDuty, true);
+});
+
+test('duty hours mirror the push quiet-hours default, not a fresh guess', () => {
+  // NEURO already had one considered statement about when to leave Nick alone.
+  // A second, narrower one is how two parts of the system come to disagree
+  // about the same evening.
+  assert.equal(ON_DUTY_START_HOUR, 7);
+  assert.equal(ON_DUTY_END_HOUR, 22);
 });

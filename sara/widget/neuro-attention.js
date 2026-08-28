@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v14';
+const VERSION = 'v15';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -993,6 +993,10 @@ function build(res, family, wins, weather) {
   const onFire = d.primary && d.primary.urgency === 'critical';
   if (!res.error && duty && duty.known && duty.onDuty === false && !onFire) {
     offDutyView(w, duty, wins);
+    // The next working day still belongs here. On a Friday evening or a weekend
+    // "what is coming" is the most useful thing on the screen, and without it
+    // the off-duty view is one line and a chart in a large black rectangle.
+    if (family === 'large' || family === 'medium') agenda(w, d.agenda, family === 'large' ? 4 : 2);
     w.addSpacer();
     return w;
   }

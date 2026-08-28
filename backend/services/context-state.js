@@ -46,13 +46,19 @@ const LATE_DAY_STARTS_HOUR = 16;
 // desk) or STEADY at 22:00 on a Tuesday (a working day, but he has finished).
 // Surfaces use this to decide what KIND of thing to show, not how to rank.
 //
-// The window is deliberately WIDER than `task-blocks`' 09:00–17:30, because
-// that one answers "where can a meeting be booked", and you can plainly be
-// working at 08:15 when nothing can be booked then. Two different questions,
-// so two different numbers — pinned against each other by a test so a change to
-// either is a visible decision rather than drift.
-const ON_DUTY_START_HOUR = 8;
-const ON_DUTY_END_HOUR = 18;
+// ⚠ These MIRROR the `PUSH_QUIET_HOURS` default (22:00–07:00) rather than being
+// picked fresh. The first cut used 08:00–18:00 and was simply wrong: at 18:14 on
+// a Friday — plainly still working — the widget flipped to a day-off view and
+// hid the lot. NEURO already had exactly one considered statement about when
+// Nick should be left alone, and inventing a second, narrower one was the error.
+// A boundary this feature gets wrong is worse than no boundary at all, because
+// off duty HIDES work.
+//
+// Still wider than `task-blocks`' 09:00–17:30, which answers a different
+// question ("where can a meeting be booked"); pinned against it by a test so a
+// change to either is a visible decision rather than drift.
+const ON_DUTY_START_HOUR = 7;
+const ON_DUTY_END_HOUR = 22;
 
 /**
  * Is Nick on duty? PURE — `now` is passed, nothing is read from the clock.
