@@ -479,9 +479,29 @@ function renderNote(noteArray) {
     .join('\n\n---\n\n');
 }
 
-// get_transcript returns a `transaction` item whose data_content is a JSON string
-// of segments. Pull those out, ignoring any non-transaction items.
+/**
+ * Segments out of a get_transcript payload, in either shape PLAUD has used.
+ *
+ * ⚠ THE SHAPE CHANGED, AND IT FAILED SILENTLY. It used to be an ARRAY of items, one
+ * carrying `data_type: 'transaction'` with the segments as a JSON STRING in
+ * `data_content`. It is now a single OBJECT — `{ file_id, block, total, offset, limit,
+ * returned, next_cursor, segments: [...] }` — with the segments already parsed.
+ *
+ * The old code opened with `if (!Array.isArray(payload)) return []`, so the new object
+ * yielded nothing, `fetchTranscriptBody` retried three times, got nothing three times,
+ * and wrote a "No transcript returned by PLAUD" stub. It looked exactly like PLAUD being
+ * under load. 103 stub notes had accumulated in the vault by 2026-08-28, every recording
+ * since the change, while the transcripts sat in PLAUD perfectly intact.
+ *
+ * So both shapes are read, and the old one is kept rather than replaced: this has moved
+ * once and there is no reason to think it will not move back.
+ */
 function extractTranscriptSegments(payload) {
+  // New shape: the object carries `segments` directly.
+  if (payload && !Array.isArray(payload) && Array.isArray(payload.segments)) {
+    return payload.segments;
+  }
+
   if (!Array.isArray(payload)) return [];
 
   const transaction = payload.find((item) => item && item.data_type === 'transaction');
@@ -493,9 +513,15 @@ function extractTranscriptSegments(payload) {
       console.error('[PlaudSync] Failed to parse transcript transaction payload:', error.message);
     }
   }
+  // An array of bare segments, should it ever arrive that way.
+  if (payload.length && payload.every((x) => x && typeof x.content === 'string')) return payload;
 
   return [];
 }
+
+/** How many pages to follow before giving up. 50 segments a page — 40 pages is a very
+ *  long meeting, and the cap exists so a broken cursor cannot loop for ever. */
+const MAX_TRANSCRIPT_PAGES = 40;
 
 // Render segments using the real `speaker` name (NOT original_speaker, the raw
 // "Speaker N" label) with an mm:ss timestamp.
@@ -1174,10 +1200,40 @@ const STUB_MARKER = 'No transcript returned by Plaud';
 const PLAUD_BACKUP_REL = ['Scripts', '.lint-backups'];
 
 // Fetch + render a transcript, retrying on EMPTY (not just on thrown errors).
+/**
+ * The whole transcript, following PLAUD's pagination to the end.
+ *
+ * ⚠ IT PAGES, AND A SINGLE CALL IS NOT THE MEETING. One request returns 50 segments of
+ * a `total` that is routinely far higher — 50 of 94 on the recording this was found on.
+ * Rendering just the first page would write a transcript that stops halfway through the
+ * conversation with nothing to say it had, which is worse than the stub it replaced: a
+ * stub is visibly empty, half a meeting reads as the whole one.
+ *
+ * The empty-retry stays for the case it was written for — PLAUD genuinely returning
+ * nothing under load — but it now only fires when page ONE is empty.
+ */
 async function fetchTranscriptBody(client, id, { emptyRetries = 3, emptyDelayMs = 2500 } = {}) {
   for (let attempt = 0; attempt <= emptyRetries; attempt += 1) {
-    const payload = await withRetry(`get_transcript ${id}`, () => callTool(client, 'get_transcript', { file_id: id }));
-    const body = renderTranscript(extractTranscriptSegments(payload));
+    const segments = [];
+    let offset = 0;
+
+    for (let page = 0; page < MAX_TRANSCRIPT_PAGES; page += 1) {
+      const args = offset ? { file_id: id, offset } : { file_id: id };
+      const payload = await withRetry(`get_transcript ${id}@${offset}`, () => callTool(client, 'get_transcript', args));
+      const batch = extractTranscriptSegments(payload);
+      if (!batch.length) break;
+      segments.push(...batch);
+
+      // Stop on the totals rather than on the cursor alone: a server that stops sending
+      // `next_cursor` but still has rows would silently truncate, and one that repeats a
+      // cursor would loop.
+      const total = Number(payload && payload.total);
+      const next = offset + batch.length;
+      if (!Number.isFinite(total) || next >= total) break;
+      offset = next;
+    }
+
+    const body = renderTranscript(segments);
     if (body && body.trim()) return body;
     if (attempt < emptyRetries) await sleep(emptyDelayMs * (attempt + 1));
   }

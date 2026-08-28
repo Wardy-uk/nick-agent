@@ -203,3 +203,47 @@ test('an MCP timeout is retryable — "timed out" is not "timeout"', () => {
   assert.ok(isRetryableError(new Error('429 Too Many Requests')));
   assert.ok(!isRetryableError(new Error('get_file returned no id for abc123')));
 });
+
+// ---------------------------------------------------------------------------
+// The shape change that produced 103 stub notes
+// ---------------------------------------------------------------------------
+//
+// PLAUD's get_transcript used to answer with an ARRAY of items, one carrying the
+// segments as a JSON STRING in `data_content`. It now answers with a single OBJECT
+// holding parsed `segments` plus pagination. The old parser opened with
+// `if (!Array.isArray(payload)) return []`, so every transcript after the change read as
+// empty, retried three times, and was written as "No transcript returned by PLAUD" —
+// indistinguishable from PLAUD being under load, which is why it ran for months.
+
+test('the new paginated object shape yields its segments', () => {
+  const payload = {
+    file_id: 'abc', block: 'transaction', total: 94, offset: 0, limit: 50, returned: 2,
+    next_cursor: 'eyJvIjo1MH0',
+    segments: [
+      { start_time: 0, end_time: 8320, content: 'Hi Nick.', speaker: 'Nick Ward' },
+      { start_time: 8320, end_time: 34130, content: 'Afternoon.', speaker: 'Steve Ryan' },
+    ],
+  };
+  assert.equal(extractTranscriptSegments(payload).length, 2);
+  assert.match(renderTranscript(extractTranscriptSegments(payload)), /Nick Ward/);
+});
+
+test('the OLD array shape still works — it has moved once already', () => {
+  const payload = [{
+    data_type: 'transaction',
+    data_content: JSON.stringify([{ start_time: 0, content: 'Legacy', speaker: 'Nick Ward' }]),
+  }];
+  assert.equal(extractTranscriptSegments(payload).length, 1);
+});
+
+test('an empty or unrecognised payload is empty, not a throw', () => {
+  assert.deepEqual(extractTranscriptSegments(null), []);
+  assert.deepEqual(extractTranscriptSegments({}), []);
+  assert.deepEqual(extractTranscriptSegments([]), []);
+  assert.deepEqual(extractTranscriptSegments({ segments: 'nope' }), []);
+});
+
+test('an object with zero segments is empty — a real "no transcript"', () => {
+  // This is the case the stub genuinely exists for, and it must still be reachable.
+  assert.deepEqual(extractTranscriptSegments({ total: 0, segments: [] }), []);
+});
