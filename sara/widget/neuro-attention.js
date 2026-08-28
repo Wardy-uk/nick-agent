@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v9';
+const VERSION = 'v10';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -682,8 +682,12 @@ function agenda(w, block, limit) {
   if (!events.length) return;
 
   rule(w, 9);
-  text(w, block.scope === 'tomorrow' ? 'TOMORROW' : 'REST OF TODAY',
-    { size: 9, color: MUTED, weight: 'bold' });
+  // The scope is named by the server, so the heading is never a second opinion
+  // about which day these belong to.
+  const heading = !block.scope || block.scope === 'today'
+    ? 'REST OF TODAY'
+    : String(block.scope).toUpperCase();
+  text(w, heading, { size: 9, color: MUTED, weight: 'bold' });
   w.addSpacer(6);
 
   for (let i = 0; i < events.length; i++) {

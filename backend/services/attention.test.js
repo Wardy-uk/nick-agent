@@ -376,3 +376,27 @@ test('agenda: an unreadable diary never rolls forward', () => {
   assert.equal(a.known, false);
   assert.deepEqual(a.events, []);
 });
+
+test('agenda: rolls to the next day that HAS something, and names it', () => {
+  // Friday evening, nothing tomorrow (Saturday). Rolling only one day forward
+  // leaves the widget as empty as it was — which is the case Nick was looking
+  // at when he said it was still a bit meh.
+  const friday = new Date('2026-08-28T17:41:00');
+  const today = { known: true, events: [] };
+  const ahead = [
+    { start: '2026-08-31T09:30', end: '2026-08-31T10:00', subject: 'Monday standup', showAs: 'busy' },
+    { start: '2026-08-31T14:00', end: '2026-08-31T14:30', subject: 'Monday 1-2-1', showAs: 'busy' },
+    { start: '2026-09-01T09:00', end: '2026-09-01T09:30', subject: 'Tuesday thing', showAs: 'busy' },
+  ];
+  const a = agendaFor(today, friday, 4, ahead);
+  assert.equal(a.scope, 'monday');
+  // Only the first day WITH something — not a merged list across days.
+  assert.deepEqual(a.events.map((e) => e.subject), ['Monday standup', 'Monday 1-2-1']);
+});
+
+test('agenda: the day after today is still called "tomorrow"', () => {
+  const a = agendaFor({ known: true, events: [] }, new Date('2026-08-28T17:41:00'), 4, [
+    { start: '2026-08-29T10:00', end: '2026-08-29T10:30', subject: 'Saturday', showAs: 'busy' },
+  ]);
+  assert.equal(a.scope, 'tomorrow');
+});

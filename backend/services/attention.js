@@ -416,11 +416,20 @@ function agendaFor(calendar, now, limit = 4, tomorrow = null) {
     return { known: true, events: [], scope: 'today' };
   }
 
-  const next = tomorrow
+  // The FIRST day ahead that has anything, not merely tomorrow. Nick looks at
+  // this on a Friday evening, when tomorrow is a Saturday with nothing in it —
+  // rolling only one day forward leaves the widget just as empty as before.
+  const ahead = tomorrow
     .filter((e) => !e.isCancelled && !e.isAllDay && e.showAs !== 'free')
     .map((e) => ({ ...e, startMs: new Date(e.start).getTime() }))
     .filter((e) => Number.isFinite(e.startMs))
-    .sort((a, b) => a.startMs - b.startMs)
+    .sort((a, b) => a.startMs - b.startMs);
+
+  if (!ahead.length) return { known: true, events: [], scope: 'today' };
+
+  const firstDay = String(ahead[0].start).slice(0, 10);
+  const next = ahead
+    .filter((e) => String(e.start).slice(0, 10) === firstDay)
     .slice(0, limit)
     .map((e) => ({
       start: e.start,
@@ -432,7 +441,23 @@ function agendaFor(calendar, now, limit = 4, tomorrow = null) {
       attendeesOther: e.attendeesOther,
     }));
 
-  return { known: true, events: next, scope: next.length ? 'tomorrow' : 'today' };
+  if (!next.length) return { known: true, events: [], scope: 'today' };
+
+  // Name the day rather than saying "tomorrow" about a Monday. The renderer
+  // shows this verbatim, so the naming happens once, here.
+  const t = new Date(now);
+  t.setDate(t.getDate() + 1);
+  const isTomorrow = firstDay === [
+    t.getFullYear(),
+    String(t.getMonth() + 1).padStart(2, '0'),
+    String(t.getDate()).padStart(2, '0'),
+  ].join('-');
+
+  const scope = isTomorrow
+    ? 'tomorrow'
+    : new Date(`${firstDay}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'long' }).toLowerCase();
+
+  return { known: true, events: next, scope };
 }
 
 /**
@@ -444,12 +469,14 @@ function agendaFor(calendar, now, limit = 4, tomorrow = null) {
  * `next` mean everywhere. Returns [] on any failure — a roll-forward is a nicety
  * and must never be the thing that breaks the feed.
  */
-function _tomorrowEvents() {
+function _tomorrowEvents(days = 5) {
   try {
     const db = require('../db/database');
-    const t = new Date();
-    t.setDate(t.getDate() + 1);
-    const rows = db.getCalendarEvents(_dayStart(t), _dayEnd(t)) || [];
+    const from = new Date();
+    from.setDate(from.getDate() + 1);
+    const to = new Date();
+    to.setDate(to.getDate() + days);
+    const rows = db.getCalendarEvents(_dayStart(from), _dayEnd(to)) || [];
     return rows.map((r) => ({
       start: r.start_time,
       end: r.end_time,
