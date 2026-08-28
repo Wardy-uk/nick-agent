@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v10';
+const VERSION = 'v11';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -710,10 +710,15 @@ function agenda(w, block, limit) {
     // The countdown, right-aligned. Recomputed from the start time by the
     // server on every build, so it cannot go stale the way a stored relative
     // time does.
-    const mins = Number(e.minutesAway);
+    // ⚠ Test for null BEFORE coercing. Number(null) is 0 and Number.isFinite(0)
+    // is true, so coercing first turns "no countdown, this is another day" into
+    // a confident "0m" — which is precisely the wrong thing to say about a
+    // meeting on Monday.
+    const raw = e.minutesAway;
+    const mins = raw === null || raw === undefined ? null : Number(raw);
     let chip = null;
     if (live) chip = 'now';
-    else if (Number.isFinite(mins)) {
+    else if (mins !== null && Number.isFinite(mins)) {
       chip = mins < 60 ? `${mins}m` : `${Math.round(mins / 60)}h`;
     }
     if (chip) {
