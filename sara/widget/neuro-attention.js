@@ -24,6 +24,16 @@
 // 3. Long-press the home screen → add a Scriptable widget → pick "NEURO".
 //    Medium or large. Small shows the primary card only.
 //
+// ⚠ THIS FILE MUST CONTAIN NO BACKSLASHES — none, anywhere, including inside
+// regex literals and string escapes. It reaches the phone by being COPIED and
+// PASTED through Safari, and a backslash does not reliably survive that trip:
+// an escaped forward slash inside a regex literal arrived as a syntax error on
+// Nick's phone and the whole widget refused to parse. That rule covers COMMENTS
+// too — this one used to quote the offending pattern, and tripped its own test.
+// Use String.fromCharCode() for control characters,
+// split/join instead of regex replace, and endsWith/slice instead of anchors.
+// A test pins this so it cannot creep back in.
+//
 // The token is NEVER written into this file: the repo is public, and a
 // credential in a tracked file is exactly how the PIN leaked in July.
 // To change it later: run the script in-app and hold the Cancel-free prompt,
@@ -38,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v6';
+const VERSION = 'v7';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -74,7 +84,10 @@ async function selfUpdate() {
     const current = fm.readString(path);
     // Compare ignoring line endings — the repo is checked out CRLF on Windows
     // and served LF, so a byte comparison would report an update every run.
-    const norm = (s) => String(s).replace(/\r\n/g, '\n');
+    // Built from char codes rather than escapes: see the no-backslash rule above.
+    const CR = String.fromCharCode(13);
+    const LF = String.fromCharCode(10);
+    const norm = (s) => String(s).split(CR + LF).join(LF);
     if (norm(latest) === norm(current)) return 'current';
 
     fm.writeString(path, latest);
@@ -108,7 +121,15 @@ async function loadConfig() {
   if (config.runsInApp) {
     if (!base) {
       base = await prompt('NEURO base URL', 'Tailscale host serving the API.', DEFAULT_URL);
-      if (base) Keychain.set(KEY_URL, base.trim().replace(/\/+$/, ''));
+      if (base) {
+        // Trailing slashes stripped by hand rather than by regex — an escaped
+        // forward slash is precisely what a paste pipeline eats.
+        let clean = base.trim();
+        while (clean.length && clean.charAt(clean.length - 1) === '/') {
+          clean = clean.slice(0, -1);
+        }
+        Keychain.set(KEY_URL, clean);
+      }
     }
     if (!token) {
       token = await prompt('NEURO API token', 'NEURO_API_TOKEN from backend/.env. Stored in the iOS Keychain, not in the script.', '', true);
