@@ -173,11 +173,11 @@ async function get121Completed({ since }) {
  * Long timeout: the transcript itself is the payload and a 45-minute 1-2-1 is a lot of
  * text to push over Tailscale.
  */
-async function push121TranscriptCandidate({ plaudId, agentName, meetingDate, title, notePath, transcript, attribution }) {
+async function push121TranscriptCandidate(candidate) {
   return call('/api/neuro-bridge/121/transcript-candidate', {
     method: 'POST',
     timeoutMs: 60000,
-    body: { plaudId, agentName, meetingDate, title, notePath, transcript, attribution },
+    body: candidate,
   });
 }
 

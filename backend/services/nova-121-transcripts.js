@@ -86,6 +86,60 @@ function peopleLinks(fm) {
   return names;
 }
 
+/**
+ * Plaud writes `> Participants: [Nick Ward] [Maria Pappa]` into the summary body.
+ *
+ * This is by far the best attribution signal available and the first cut ignored it,
+ * falling back to first-name-in-title and answering "could not tell" for most notes.
+ * `[Speaker 3]` is Plaud failing to identify a voice — a placeholder, never a person, and
+ * treating it as one would attribute a meeting to somebody who was not named at all.
+ */
+const SPEAKER_PLACEHOLDER = /^speaker\s*\d+$/i;
+
+function participantsFrom(body) {
+  const m = String(body).match(/^\s*>?\s*Participants:\s*(.+)$/mi);
+  if (!m) return [];
+  return (m[1].match(/\[([^\]]+)\]/g) || [])
+    .map(x => x.slice(1, -1).trim())
+    .filter(x => x && !SPEAKER_PLACEHOLDER.test(x));
+}
+
+/**
+ * The part of the summary a human needs to judge whether this is the right person's
+ * 1-2-1 — the actual meeting notes, not the boilerplate Recording block above them.
+ */
+function summaryExcerptFrom(body, max = 1200) {
+  const text = String(body);
+  const start = text.search(/^##+\s*(Meeting Notes|Summary)\s*$/mi);
+  const from = start === -1 ? 0 : start;
+  return text.slice(from)
+    // Strip the quoted "Meeting Information" preamble; it is the same on every note.
+    .replace(/^>.*$/gm, '')
+    .replace(/^#+\s*/gm, '')
+    .split('\n').map(l => l.trim()).filter(Boolean).join('\n')
+    .slice(0, max);
+}
+
+/**
+ * The transcript note this summary points at, via `transcript_path` frontmatter.
+ *
+ * The transcripts live in `Plaud/Transcripts/`, NOT under `Meetings/` — which is why the
+ * first cut, walking only `Meetings/`, sent every candidate over saying "no transcript
+ * text". The summary note names its own twin, so follow that rather than guessing a path.
+ */
+function transcriptFor(fm) {
+  const rel = fm && fm.transcript_path;
+  if (!rel) return null;
+  try {
+    const abs = path.join(VAULT_PATH(), String(rel).replace(/\.md$/, '') + '.md');
+    const raw = fs.readFileSync(abs, 'utf-8').replace(/\r\n/g, '\n');
+    // Frontmatter off — the extractor wants the words, not the metadata.
+    return raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 function walk(dir, depth, out) {
   if (depth > 6) return out;
   let entries;
@@ -107,7 +161,7 @@ function walk(dir, depth, out) {
  * which is a fine outcome — NOVA shows the candidate with an empty dropdown and Nick
  * picks. Guessing here would be worse than not answering.
  */
-function attribute(fm, filePath, reports) {
+function attribute(fm, filePath, reports, body = '') {
   const byName = new Map(reports.map(p => [p.name.toLowerCase(), p.name]));
 
   // 1. The note is filed under Meetings/1-2-1/<Person>/ — the strongest signal there is,
@@ -118,7 +172,19 @@ function attribute(fm, filePath, reports) {
     return { person: byName.get(folder[1].toLowerCase()), attribution: 'note filed under their 1-2-1 folder' };
   }
 
-  // 2. Frontmatter `people:` links, minus Nick. Exactly one direct report left = it was
+  // 2. Plaud's own participant list — who was actually in the room, by voice. Exactly
+  //    one direct report among them means it was with them; several means it was a team
+  //    meeting and not anybody's 1-2-1.
+  const heard = participantsFrom(body).filter(n => byName.has(n.toLowerCase()));
+  const heardUnique = [...new Set(heard.map(n => byName.get(n.toLowerCase())))];
+  if (heardUnique.length === 1) {
+    return { person: heardUnique[0], attribution: 'the only direct report Plaud heard speaking' };
+  }
+  if (heardUnique.length > 1) {
+    return { person: null, attribution: `${heardUnique.length} direct reports in the room — not a 1-2-1` };
+  }
+
+  // 3. Frontmatter `people:` links, minus Nick. Exactly one direct report left = it was
   //    with them. Two or more and it was not a 1-2-1 at all, so we say nothing.
   const linked = peopleLinks(fm).filter(n => byName.has(n.toLowerCase()));
   if (linked.length === 1) {
@@ -128,7 +194,7 @@ function attribute(fm, filePath, reports) {
     return { person: null, attribution: `${linked.length} direct reports on the note — ambiguous` };
   }
 
-  // 3. A name in the title. Weakest, and offered as such.
+  // 4. A name in the title. Weakest, and offered as such.
   const title = String(fm?.title || path.basename(filePath, '.md'));
   const hit = reports.find(p => new RegExp(`\\b${p.name.split(' ')[0]}\\b`, 'i').test(title));
   if (hit) return { person: hit.name, attribution: 'first name in the recording title' };
@@ -190,18 +256,29 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
     // else in Meetings/ is a team meeting and not this feature's business.
     if (!inOneToOneFolder && !ONE_TO_ONE_TITLE.test(title)) continue;
 
-    const { person, attribution } = attribute(fm, file, reports);
-
-    // The transcript IS the payload — NOVA's extractor reads words, not a summary. A
-    // note with only a summary is still offered, so Nick can attach it, but it carries
-    // no text and the extractor will wait for one.
+    // Transcript notes are the summary's twin, sharing a plaud_id. Skip them: the
+    // summary is the one with the participants and the notes, and it points AT the
+    // transcript. Offering both would just fight over the same candidate row.
     const isTranscript = String(fm.type || '').toLowerCase() === 'transcript'
       || String(fm.note_type || '').toLowerCase() === 'transcript';
-    const transcript = isTranscript ? body.trim() : null;
+    if (isTranscript) continue;
+
+    const { person, attribution } = attribute(fm, file, reports, body);
+    const participants = participantsFrom(body);
+
+    // The transcript IS the payload — the extractor reads words, not a summary — and it
+    // lives in its own note that `transcript_path` points at. The first cut only looked
+    // at the note in hand, so every candidate arrived saying "no transcript text".
+    const transcript = transcriptFor(fm);
+    const durationMinutes = Number(fm.duration_ms)
+      ? Math.round(Number(fm.duration_ms) / 60000) : null;
 
     const candidate = {
       plaudId, agentName: person, meetingDate: date, title,
       notePath: rel, transcript, attribution,
+      participants: participants.join(', ') || null,
+      durationMinutes,
+      summaryExcerpt: summaryExcerptFrom(body),
     };
 
     if (!apply) { offered.push({ ...candidate, transcript: transcript ? `${transcript.length} chars` : null }); continue; }
@@ -217,4 +294,7 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
   return { ok: true, dryRun: !apply, offered, skipped, reports: reports.length };
 }
 
-module.exports = { offerTranscripts, _internals: { attribute, readNote, peopleLinks } };
+module.exports = {
+  offerTranscripts,
+  _internals: { attribute, readNote, peopleLinks, participantsFrom, summaryExcerptFrom },
+};

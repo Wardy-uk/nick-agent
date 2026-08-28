@@ -94,3 +94,69 @@ test('peopleLinks reads the YAML list form the vault actually uses', () => {
   );
   assert.deepEqual(peopleLinks({}), []);
 });
+
+// ---------------------------------------------------------------------------
+// Participants — the signal that actually works
+// ---------------------------------------------------------------------------
+//
+// The first cut ignored Plaud's own participant line and fell back to guessing from the
+// title, so most candidates arrived as "could not tell from the note". The summary says
+// who was in the room, by voice.
+
+const { participantsFrom, summaryExcerptFrom } = _internals;
+
+test('participants are read from the summary body', () => {
+  assert.deepEqual(
+    participantsFrom('> Participants: [Nick Ward] [Maria Pappa]\n## Meeting Notes'),
+    ['Nick Ward', 'Maria Pappa'],
+  );
+});
+
+test('a comma-separated list parses the same way', () => {
+  // The vault contains both spacings; neither is more correct than the other.
+  assert.deepEqual(
+    participantsFrom('> Participants: [Zoe Rees], [Nick Ward], [Stephen Mitchell]'),
+    ['Zoe Rees', 'Nick Ward', 'Stephen Mitchell'],
+  );
+});
+
+test('"Speaker N" is a failure to identify a voice, not a person', () => {
+  // Treating it as a name would attribute a 1-2-1 to somebody who was never named — and
+  // Plaud has already filed one of Nick's 1-2-1s with the other party as "Unknown Speaker 1".
+  assert.deepEqual(
+    participantsFrom('> Participants: [Speaker 1] [Nick Ward] [Speaker 3]'),
+    ['Nick Ward'],
+  );
+});
+
+test('no participants line is an empty list, not a throw', () => {
+  assert.deepEqual(participantsFrom('## Meeting Notes\n- something'), []);
+  assert.deepEqual(participantsFrom(''), []);
+});
+
+test('attribution prefers who was heard over what the title says', () => {
+  // The title names Zoe; the room contained Nathan. The recording is Nathan's.
+  const body = '> Participants: [Nick Ward] [Nathan Rutland]\n## Meeting Notes\n- x';
+  const r = attribute({ title: 'One-to-One with Zoe about handover' }, at('Meetings/2026/08/x.md'), REPORTS, body);
+  assert.equal(r.person, 'Nathan Rutland');
+  assert.match(r.attribution, /heard speaking/);
+});
+
+test('two direct reports in the room is not a 1-2-1', () => {
+  const body = '> Participants: [Nick Ward] [Nathan Rutland] [Zoe Rees]';
+  const r = attribute({ title: 'Catch-up' }, at('Meetings/2026/08/x.md'), REPORTS, body);
+  assert.equal(r.person, null);
+  assert.match(r.attribution, /not a 1-2-1/);
+});
+
+test('the excerpt is the meeting notes, not the Recording boilerplate', () => {
+  const body = [
+    '# Title', '## Recording', '- Plaud ID: `abc`', '- Duration: 46m',
+    '## Summary', '> Meeting Information', '> Participants: [Nick Ward] [Zoe Rees]',
+    '## Meeting Notes', '### Performance', '- Zoe handled 389 tickets last month.',
+  ].join('\n');
+  const out = summaryExcerptFrom(body);
+  assert.match(out, /389 tickets/);
+  assert.doesNotMatch(out, /Plaud ID/);
+  assert.doesNotMatch(out, /Meeting Information/, 'the quoted preamble is identical on every note');
+});
