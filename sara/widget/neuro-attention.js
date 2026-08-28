@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v13';
+const VERSION = 'v14';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -303,24 +303,30 @@ async function fetchWeather() {
  * The route is a Shortcut named by OPEN_SHORTCUT. `shortcuts://` DOES hand
  * control away from the widget, so whatever that Shortcut can reach, this can.
  *
- * ⚠ Known limits, both learned the hard way:
- *  1. Shortcuts' "Open App" action lists REAL APPS ONLY. An installed PWA is a
- *     web clip and does not appear in that picker, so an Open App action cannot
- *     target SARA Mobile. If the Shortcut ends up using "Open URLs" instead, it
- *     lands in Safari — the same place as the plain https route, one hop later.
- *  2. It costs the destination. "Open App" carries no URL, so per-card tab
- *     routing is lost and the app opens wherever it left off.
+ * ⚠ The Shortcut MUST be "Show Web Page" with its URL set to Shortcut Input.
+ * Two dead ends were tried first and are written down so they are not retried:
+ *  1. "Open App" lists REAL APPS ONLY. An installed PWA is a web clip and never
+ *     appears in that picker, so it cannot target SARA Mobile at all.
+ *  2. "Open URLs" hands off to Safari — the same place the plain https route
+ *     reaches, one hop later, so it buys nothing.
+ * "Show Web Page" renders full-screen inside Shortcuts, which is close enough
+ * to the app, AND takes a URL — so unlike Open App it keeps the destination.
  *
- * Set OPEN_SHORTCUT to '' to go back to the direct https route, which is worse
- * on which app opens and better on which tab.
+ * Set OPEN_SHORTCUT to '' to go back to the direct https route (Safari, correct
+ * tab). The Shortcut name must match EXACTLY, or every tap throws "the file
+ * doesn't exist".
  */
 const OPEN_SHORTCUT = 'Open SARA';
 
 function tabUrl(tab) {
-  if (OPEN_SHORTCUT) {
-    return `shortcuts://run-shortcut?name=${encodeURIComponent(OPEN_SHORTCUT)}`;
-  }
-  return `${APP_URL}/?tab=${encodeURIComponent(tab || 'surface')}`;
+  const web = `${APP_URL}/?tab=${encodeURIComponent(tab || 'surface')}`;
+  if (!OPEN_SHORTCUT) return web;
+  // The destination rides along as the Shortcut's INPUT, so a full-screen web
+  // view keeps per-card routing. This is the whole reason a "Show Web Page"
+  // shortcut beats an "Open App" one: Open App carries no URL, so every tap
+  // would land wherever the app happened to be last.
+  return `shortcuts://run-shortcut?name=${encodeURIComponent(OPEN_SHORTCUT)}`
+    + `&input=text&text=${encodeURIComponent(web)}`;
 }
 
 const INK = Color.dynamic(new Color('#111114'), new Color('#f5f5f7'));
