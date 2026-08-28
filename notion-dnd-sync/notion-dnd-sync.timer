@@ -3,7 +3,7 @@ Description=Run the D&D Notion export every two minutes
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=2min
+OnCalendar=*-*-* *:0/2:00
 Persistent=true
 
 [Install]
