@@ -38,7 +38,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v5';
+const VERSION = 'v6';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -159,6 +159,109 @@ async function fetchWins({ base, token }) {
   }
 }
 
+// ── Weather ─────────────────────────────────────────────────────────────────
+//
+// Scriptable has no Weather class (checked, rather than assumed), so this uses
+// Open-Meteo: free, no key, no signup, no account to expire quietly in six
+// months. WMO codes → an SF Symbol and a plain-English phrase.
+//
+// Location is resolved on a manual run and CACHED, because Location.current()
+// in a widget refresh is slow and often simply denied. A widget that waits on
+// the GPS is a widget that renders blank.
+
+const KEY_LAT = 'neuro_lat';
+const KEY_LON = 'neuro_lon';
+
+const WMO = {
+  0: ['sun.max', 'Clear'], 1: ['sun.min', 'Mostly clear'], 2: ['cloud.sun', 'Partly cloudy'],
+  3: ['cloud', 'Overcast'], 45: ['cloud.fog', 'Fog'], 48: ['cloud.fog', 'Freezing fog'],
+  51: ['cloud.drizzle', 'Light drizzle'], 53: ['cloud.drizzle', 'Drizzle'], 55: ['cloud.drizzle', 'Heavy drizzle'],
+  61: ['cloud.rain', 'Light rain'], 63: ['cloud.rain', 'Rain'], 65: ['cloud.heavyrain', 'Heavy rain'],
+  66: ['cloud.sleet', 'Freezing rain'], 67: ['cloud.sleet', 'Freezing rain'],
+  71: ['cloud.snow', 'Light snow'], 73: ['cloud.snow', 'Snow'], 75: ['cloud.snow', 'Heavy snow'],
+  80: ['cloud.rain', 'Showers'], 81: ['cloud.rain', 'Showers'], 82: ['cloud.heavyrain', 'Heavy showers'],
+  95: ['cloud.bolt', 'Thunderstorms'], 96: ['cloud.bolt.rain', 'Storms'], 99: ['cloud.bolt.rain', 'Storms'],
+};
+
+function wmo(code) {
+  return WMO[Number(code)] || ['cloud', 'Unsettled'];
+}
+
+async function resolveLocation() {
+  const cached = Keychain.contains(KEY_LAT) && Keychain.contains(KEY_LON)
+    ? { lat: Number(Keychain.get(KEY_LAT)), lon: Number(Keychain.get(KEY_LON)) }
+    : null;
+
+  // Only ever ask the GPS on a manual run; the widget uses whatever was cached.
+  if (config.runsInApp) {
+    try {
+      Location.setAccuracyToHundredMeters();
+      const loc = await Location.current();
+      if (loc && Number.isFinite(loc.latitude)) {
+        Keychain.set(KEY_LAT, String(loc.latitude));
+        Keychain.set(KEY_LON, String(loc.longitude));
+        return { lat: loc.latitude, lon: loc.longitude };
+      }
+    } catch (e) { /* fall back to the cache */ }
+  }
+  return cached;
+}
+
+/**
+ * Now, and the next thing that changes.
+ *
+ * "Next" is deliberately not "the temperature in three hours" — that is rarely
+ * the useful fact. It is the next hour in the working evening with a real
+ * chance of rain, and only if there is one; otherwise it falls back to the
+ * trend. Nothing is invented when the forecast cannot be read.
+ */
+async function fetchWeather() {
+  try {
+    const here = await resolveLocation();
+    if (!here) return null;
+
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${here.lat}&longitude=${here.lon}`
+      + '&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code,precipitation_probability'
+      + '&forecast_days=2&timezone=auto';
+    const req = new Request(url);
+    req.timeoutInterval = TIMEOUT_SECONDS;
+    const j = await req.loadJSON();
+    if (!j || !j.current || !j.hourly) return null;
+
+    const now = {
+      temp: Math.round(Number(j.current.temperature_2m)),
+      code: Number(j.current.weather_code),
+    };
+
+    const times = j.hourly.time || [];
+    const pops = j.hourly.precipitation_probability || [];
+    const temps = j.hourly.temperature_2m || [];
+    const codes = j.hourly.weather_code || [];
+
+    const nowMs = Date.now();
+    const idxs = times
+      .map((t, i) => ({ i, ms: new Date(t).getTime() }))
+      .filter((x) => x.ms > nowMs && x.ms <= nowMs + 8 * 3600 * 1000)
+      .map((x) => x.i);
+
+    let next = null;
+    const wet = idxs.find((i) => Number(pops[i]) >= 40);
+    if (wet !== undefined) {
+      const at = new Date(times[wet]);
+      next = `${wmo(codes[wet])[1]} ${String(at.getHours()).padStart(2, '0')}:00 · ${Math.round(Number(pops[wet]))}%`;
+    } else if (idxs.length) {
+      const later = idxs[Math.min(3, idxs.length - 1)];
+      const t = Math.round(Number(temps[later]));
+      const at = new Date(times[later]);
+      next = `${t}° at ${String(at.getHours()).padStart(2, '0')}:00`;
+    }
+
+    return { now, next, label: wmo(now.code)[1], symbol: wmo(now.code)[0] };
+  } catch (e) {
+    return null;
+  }
+}
+
 // ── Look ────────────────────────────────────────────────────────────────────
 //
 // Design rules, so this stays legible rather than merely decorated:
@@ -169,7 +272,28 @@ async function fetchWins({ base, token }) {
 //  • Everything degrades: an unknown type falls back to a dot, a missing SF
 //    Symbol falls back to a glyph, and both still render a readable row.
 
+/**
+ * Where a tap goes.
+ *
+ * ⚠ iOS gives no way to deep-link an installed PWA. An https:// URL opens
+ * Safari, NOT the SARA Mobile icon on the home screen — that is an iOS
+ * limitation, not something this script can route around.
+ *
+ * The workaround is a Shortcut containing a single "Open App" action pointing
+ * at SARA Mobile: `shortcuts://` DOES hand control to it. The cost is the tab —
+ * "Open App" cannot carry a destination, so the app opens where it left off,
+ * which is the Surface, which is showing this same feed anyway.
+ *
+ * Set OPEN_SHORTCUT to the Shortcut's exact name to use it. Left EMPTY by
+ * default because a shortcuts:// link to a Shortcut that does not exist just
+ * throws an error at you, which is worse than landing in Safari.
+ */
+const OPEN_SHORTCUT = '';
+
 function tabUrl(tab) {
+  if (OPEN_SHORTCUT) {
+    return `shortcuts://run-shortcut?name=${encodeURIComponent(OPEN_SHORTCUT)}`;
+  }
   return `${APP_URL}/?tab=${encodeURIComponent(tab || 'surface')}`;
 }
 
@@ -344,30 +468,82 @@ function rule(stack, pad) {
   stack.addSpacer(pad);
 }
 
-/** The header strip: who is talking, what state they think you are in, when. */
-function header(w, ctxLabel, stamp, alertPair) {
+/**
+ * The header block: time and date on the left, weather on the right.
+ *
+ * The clock is a WidgetDate rather than a rendered string, so it stays right
+ * between refreshes — a widget showing a stale time is worse than one showing
+ * none, and iOS refreshes this on its own schedule, not ours.
+ */
+function header(w, ctxLabel, weather, alertPair) {
   const row = w.addStack();
   row.centerAlignContent();
 
-  tile(row, 'context', alertPair || HEX.normal, 16);
-  row.addSpacer(6);
-  text(row, 'SARA', { size: 11, color: MUTED, weight: 'bold' });
+  // Left: the clock, with the date beneath it.
+  const left = row.addStack();
+  left.layoutVertically();
+  const clock = left.addDate(new Date());
+  clock.applyTimeStyle();
+  clock.font = font(26, 'heavy');
+  clock.textColor = INK;
+  left.addSpacer(1);
+  text(left, new Date().toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  }), { size: 11, color: MUTED });
 
+  row.addSpacer();
+
+  // Right: now, and the next thing that changes. Absent entirely rather than
+  // guessed when the forecast could not be read.
+  if (weather) {
+    const right = row.addStack();
+    right.layoutVertically();
+
+    const nowRow = right.addStack();
+    nowRow.centerAlignContent();
+    nowRow.addSpacer();
+    let sym = null;
+    try { sym = SFSymbol.named(weather.symbol); } catch (e) { sym = null; }
+    if (sym) {
+      const img = nowRow.addImage(sym.image);
+      img.imageSize = new Size(15, 15);
+      img.tintColor = MUTED;
+      img.resizable = true;
+      nowRow.addSpacer(5);
+    }
+    text(nowRow, `${weather.now.temp}°`, { size: 19, weight: 'bold' });
+
+    if (weather.next) {
+      right.addSpacer(1);
+      const nextRow = right.addStack();
+      nextRow.addSpacer();
+      text(nextRow, weather.next, { size: 10, color: MUTED });
+    }
+  }
+
+  w.addSpacer(11);
+
+  // A hairline under the block, then SARA's own line. Two registers: the strip
+  // above is the world, everything below is her.
+  const bar = w.addStack();
+  bar.centerAlignContent();
+  tile(bar, 'context', alertPair || HEX.normal, 15);
+  bar.addSpacer(6);
+  text(bar, 'SARA', { size: 11, color: MUTED, weight: 'bold' });
   if (ctxLabel) {
-    row.addSpacer(6);
+    bar.addSpacer(6);
     // The context reads as a pill so it is obviously a STATE, not another item.
-    const pill = row.addStack();
+    const pill = bar.addStack();
     pill.cornerRadius = 7;
     pill.backgroundColor = TILE_BG;
     pill.setPadding(2, 7, 2, 7);
     text(pill, ctxLabel, { size: 10, color: MUTED });
   }
-
-  row.addSpacer();
-  // Version beside the time: the cheapest possible answer to "is this actually
-  // the new one?", which cost a round trip to work out once already.
-  text(row, `${VERSION} · ${stamp}`, { size: 10, color: MUTED });
-  w.addSpacer(10);
+  bar.addSpacer();
+  // Version: the cheapest possible answer to "is this actually the new one?",
+  // which cost a round trip to work out once already.
+  text(bar, VERSION, { size: 9, color: MUTED });
+  w.addSpacer(9);
 }
 
 /**
@@ -637,7 +813,7 @@ function accessoryView(family, res, d, wins) {
   return w;
 }
 
-function build(res, family, wins) {
+function build(res, family, wins, weather) {
   const d0 = res.data || {};
   if (String(family).startsWith('accessory')) {
     return accessoryView(family, res, d0, wins);
@@ -652,7 +828,6 @@ function build(res, family, wins) {
 
   const d = res.data || {};
   const ctx = d.context || {};
-  const stamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   const bad = res.error ? HEX.critical : d.poolAvailable === false ? HEX.high : null;
 
   // When the context IS the answer — a context card, a silence, or a failure —
@@ -663,7 +838,7 @@ function build(res, family, wins) {
     || d.poolAvailable === false
     || !d.primary
     || d.primary.kind === 'context';
-  header(w, contextIsTheAnswer ? null : ctx.label, stamp, bad);
+  header(w, contextIsTheAnswer ? null : ctx.label, weather, bad);
 
   // Off duty: show what he did, not what he owes. ⚠ Except when something is
   // genuinely on fire — hiding a breaching escalation because it is Saturday is
@@ -677,7 +852,9 @@ function build(res, family, wins) {
     return w;
   }
 
-  if (silence(w, d, res.error)) return w;
+  // Trailing spacer on EVERY path, or a short render floats in the vertical
+  // middle of a large widget with dead space above and below it.
+  if (silence(w, d, res.error)) { w.addSpacer(); return w; }
 
   itemRow(w, d.primary, { primary: true });
 
@@ -705,14 +882,22 @@ let updateNote = null;
 if (config.runsInApp) updateNote = await selfUpdate();
 
 const cfg = await loadConfig();
-const res = await fetchAttention(cfg);
+const family = config.runsInWidget ? config.widgetFamily : 'large';
+const isAccessory = String(family).startsWith('accessory');
+
+// Attention and weather are independent, so they go out together rather than
+// one after the other — a widget refresh is on a budget.
+const [res, weather] = await Promise.all([
+  fetchAttention(cfg),
+  isAccessory ? Promise.resolve(null) : fetchWeather(),
+]);
 
 // Only spend a second request when the brain has actually said he is off duty.
 const duty = res.data && res.data.context && res.data.context.duty;
 const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
 const wins = offDuty ? await fetchWins(cfg) : null;
 
-const widget = build(res, config.runsInWidget ? config.widgetFamily : 'large', wins);
+const widget = build(res, family, wins, weather);
 
 if (config.runsInWidget) {
   Script.setWidget(widget);
