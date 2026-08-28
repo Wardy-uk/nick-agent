@@ -130,18 +130,93 @@ const HAIRLINE = Color.dynamic(new Color('#e6e6ea'), new Color('#3a3a3c'));
 const CARD = Color.dynamic(new Color('#ffffff'), new Color('#2c2c2e'));
 const TILE_BG = Color.dynamic(new Color('#f4f4f6'), new Color('#3a3a3c'));
 
-// Urgency → accent. `critical` is the only red in the widget, so red always
-// means the same thing wherever it appears.
-const ACCENTS = {
-  critical: Color.dynamic(new Color('#d92d20'), new Color('#ff6b5e')),
-  high: Color.dynamic(new Color('#b54708'), new Color('#ffa94d')),
-  normal: Color.dynamic(new Color('#0064d2'), new Color('#5ea9ff')),
-  low: Color.dynamic(new Color('#6a6a70'), new Color('#98989d')),
+// Urgency → accent, held as [light, dark] hex so the same pair can produce both
+// a solid ink and a low-alpha wash. `critical` is the only red in the widget, so
+// red always means the same thing wherever it appears.
+const HEX = {
+  critical: ['#d92d20', '#ff6b5e'],
+  high: ['#b54708', '#ffa94d'],
+  normal: ['#0064d2', '#5ea9ff'],
+  low: ['#6a6a70', '#98989d'],
+  positive: ['#1a7f4b', '#4ad07d'],
 };
-const POSITIVE = Color.dynamic(new Color('#1a7f4b'), new Color('#4ad07d'));
 
+function dyn(pair, alpha) {
+  const a = alpha === undefined ? 1 : alpha;
+  // Dark mode carries a slightly stronger wash: the same alpha over a dark
+  // ground reads as nearly nothing.
+  const da = alpha === undefined ? 1 : Math.min(1, alpha * 1.8);
+  return Color.dynamic(new Color(pair[0], a), new Color(pair[1], da));
+}
+
+const ACCENTS = {
+  critical: dyn(HEX.critical), high: dyn(HEX.high),
+  normal: dyn(HEX.normal), low: dyn(HEX.low),
+};
+const POSITIVE = dyn(HEX.positive);
+
+function pairFor(card) {
+  return HEX[String(card && card.urgency)] || HEX.normal;
+}
 function accentFor(card) {
   return ACCENTS[String(card && card.urgency)] || ACCENTS.normal;
+}
+
+/** Whichever half of a [light, dark] pair suits the current appearance. */
+function forTheme(pair) {
+  try { return Device.isUsingDarkAppearance() ? pair[1] : pair[0]; } catch (e) { return pair[0]; }
+}
+
+/**
+ * SF Rounded where it exists. It is what makes an iOS widget read as designed
+ * rather than typed — but the constructors are version-dependent, so every one
+ * falls back rather than taking the widget down over a font.
+ */
+function font(size, weight) {
+  const rounded = {
+    regular: 'regularRoundedSystemFont',
+    bold: 'semiboldRoundedSystemFont',
+    heavy: 'boldRoundedSystemFont',
+  }[weight] || 'regularRoundedSystemFont';
+  try {
+    if (typeof Font[rounded] === 'function') return Font[rounded](size);
+  } catch (e) { /* fall through */ }
+  return weight === 'heavy' ? Font.boldSystemFont(size)
+    : weight === 'bold' ? Font.semiboldSystemFont(size)
+      : Font.systemFont(size);
+}
+
+/**
+ * A tiny bar chart of the week. Drawn rather than described, because "40 this
+ * week" is a number and the SHAPE of the week is the thing worth seeing — the
+ * 32-commit Thursday next to two quiet days says something the total cannot.
+ *
+ * Baked into an image, so it cannot be theme-dynamic; the colour is resolved
+ * once against the current appearance.
+ */
+function sparkline(values, width, height, pair) {
+  try {
+    const dc = new DrawContext();
+    dc.size = new Size(width, height);
+    dc.opaque = false;
+    dc.respectScreenScale = true;
+
+    const nums = values.map((v) => Math.max(0, Number(v) || 0));
+    const max = Math.max(1, ...nums);
+    const slot = width / Math.max(1, nums.length);
+    const barW = Math.max(2, slot - 3);
+
+    for (let i = 0; i < nums.length; i++) {
+      // Every day gets a visible stub, so a zero day reads as "nothing that
+      // day" rather than as a gap in the chart.
+      const h = nums[i] === 0 ? 2 : Math.max(3, (nums[i] / max) * height);
+      dc.setFillColor(new Color(forTheme(pair), nums[i] === 0 ? 0.25 : 1));
+      dc.fillRect(new Rect(i * slot, height - h, barW, h));
+    }
+    return dc.getImage();
+  } catch (e) {
+    return null; // No chart is fine. A broken widget is not.
+  }
 }
 
 // Type → SF Symbol. The fallback glyph matters: SFSymbol.named returns null for
@@ -174,21 +249,25 @@ function bg(w) {
 
 function text(stack, value, { size = 12, color = INK, weight = 'regular', max = 1 } = {}) {
   const t = stack.addText(String(value));
-  t.font = weight === 'bold' ? Font.semiboldSystemFont(size)
-    : weight === 'heavy' ? Font.boldSystemFont(size)
-      : Font.systemFont(size);
+  t.font = font(size, weight);
   t.textColor = color;
   t.lineLimit = max;
   t.minimumScaleFactor = 0.9;
   return t;
 }
 
-/** A rounded tile carrying the type icon, tinted with the urgency accent. */
-function tile(stack, type, accent, box) {
+/**
+ * A rounded tile carrying the type icon, washed with the urgency accent.
+ *
+ * The wash is what makes colour legible at a glance: a coloured glyph on grey
+ * is a detail, a coloured tile is a signal you read before the words.
+ */
+function tile(stack, type, pair, box) {
+  const accent = dyn(pair);
   const t = stack.addStack();
   t.size = new Size(box, box);
   t.cornerRadius = box * 0.3;
-  t.backgroundColor = TILE_BG;
+  t.backgroundColor = dyn(pair, 0.12);
   t.centerAlignContent();
 
   const spec = ICONS[String(type)] || ['circle.fill', '•'];
@@ -217,11 +296,11 @@ function rule(stack, pad) {
 }
 
 /** The header strip: who is talking, what state they think you are in, when. */
-function header(w, ctxLabel, stamp, alert) {
+function header(w, ctxLabel, stamp, alertPair) {
   const row = w.addStack();
   row.centerAlignContent();
 
-  tile(row, 'context', alert || ACCENTS.normal, 16);
+  tile(row, 'context', alertPair || HEX.normal, 16);
   row.addSpacer(6);
   text(row, 'SARA', { size: 11, color: MUTED, weight: 'bold' });
 
@@ -246,7 +325,7 @@ function header(w, ctxLabel, stamp, alert) {
  * ONE thing and then some context for it.
  */
 function itemRow(container, card, { primary = false } = {}) {
-  const accent = accentFor(card);
+  const pair = pairFor(card);
   const row = container.addStack();
   row.url = tabUrl(card.tab);
   row.centerAlignContent();
@@ -255,9 +334,17 @@ function itemRow(container, card, { primary = false } = {}) {
     row.backgroundColor = CARD;
     row.cornerRadius = 14;
     row.setPadding(11, 11, 11, 11);
+    // A spine of the accent down the leading edge. It is what carries urgency
+    // when the card is glanced at rather than read — and on `critical` it is the
+    // only thing on screen that is fully saturated.
+    const spine = row.addStack();
+    spine.size = new Size(3, primary ? 34 : 20);
+    spine.cornerRadius = 1.5;
+    spine.backgroundColor = dyn(pair);
+    row.addSpacer(10);
   }
 
-  tile(row, card.type || card.kind, accent, primary ? 30 : 20);
+  tile(row, card.type || card.kind, pair, primary ? 30 : 20);
   row.addSpacer(primary ? 11 : 9);
 
   const col = row.addStack();
@@ -281,13 +368,13 @@ function itemRow(container, card, { primary = false } = {}) {
  * its own colour, so a glance tells them apart before the words are read.
  */
 function silence(w, d, error) {
-  const show = (symbol, accent, title, body) => {
+  const show = (symbol, pair, title, body) => {
     const row = w.addStack();
     row.backgroundColor = CARD;
     row.cornerRadius = 14;
     row.setPadding(12, 12, 12, 12);
     row.centerAlignContent();
-    tile(row, symbol, accent, 30);
+    tile(row, symbol, pair, 30);
     row.addSpacer(11);
     const col = row.addStack();
     col.layoutVertically();
@@ -299,21 +386,21 @@ function silence(w, d, error) {
   };
 
   if (error) {
-    show('escalation', ACCENTS.critical, "Can't reach NEURO", error);
+    show('escalation', HEX.critical, "Can't reach NEURO", error);
     return true;
   }
   if (d.poolAvailable === false) {
-    show('escalation', ACCENTS.high, "Can't see your work",
+    show('escalation', HEX.high, "Can't see your work",
       'This is not an all-clear — the queue could not be read.');
     return true;
   }
   if (!d.primary) {
     const ctx = d.context || {};
     if (d.quiet === true) {
-      show('context', ACCENTS.low, ctx.label || 'Quiet',
+      show('context', HEX.low, ctx.label || 'Quiet',
         ctx.summary || d.rationale || 'Nothing to raise right now.');
     } else {
-      show('todo', POSITIVE, 'All clear', 'Nothing needs you at the moment.');
+      show('todo', HEX.positive, 'All clear', 'Nothing needs you at the moment.');
     }
     return true;
   }
@@ -330,7 +417,7 @@ function footer(w, d) {
   const row = w.addStack();
   row.centerAlignContent();
   if (dropped) {
-    tile(row, 'waiting', ACCENTS.low, 13);
+    tile(row, 'waiting', HEX.low, 13);
     row.addSpacer(5);
     text(row, `${dropped} held back`, { size: 10, color: MUTED });
   }
@@ -340,7 +427,7 @@ function footer(w, d) {
   if (gaps) {
     // A gap is not a held item — it is something NEURO could not read at all,
     // and it is the one number on this widget that should look slightly wrong.
-    tile(row, 'escalation', ACCENTS.high, 13);
+    tile(row, 'escalation', HEX.high, 13);
     row.addSpacer(5);
     text(row, `${gaps} unreadable`, { size: 10, color: ACCENTS.high });
   }
@@ -371,7 +458,7 @@ function offDutyView(w, duty, wins) {
     : today ? wins.headline
       : 'Off duty';
 
-  tile(row, 'todo', week || today ? POSITIVE : ACCENTS.low, 30);
+  tile(row, 'todo', week || today ? HEX.positive : HEX.low, 30);
   row.addSpacer(11);
   const col = row.addStack();
   col.layoutVertically();
@@ -379,6 +466,28 @@ function offDutyView(w, duty, wins) {
   col.addSpacer(3);
   text(col, duty.reason || 'Not a working day.', { size: 12, color: MUTED, max: 2 });
   row.addSpacer();
+
+  // The week, drawn. "40 this week" is a number; the SHAPE is the thing worth
+  // seeing — a 32-commit Thursday beside two quiet days says something a total
+  // cannot. Falls back to nothing at all rather than to a fake chart.
+  const last7 = Array.isArray(wins && wins.last7) ? wins.last7 : [];
+  if (last7.length) {
+    w.addSpacer(9);
+    const chart = sparkline(last7.map((d) => d.done), 130, 24, HEX.positive);
+    if (chart) {
+      const strip = w.addStack();
+      strip.centerAlignContent();
+      const img = strip.addImage(chart);
+      img.imageSize = new Size(130, 24);
+      strip.addSpacer(9);
+      const col = strip.addStack();
+      col.layoutVertically();
+      text(col, 'last 7 days', { size: 9, color: MUTED });
+      const best = Math.max(0, ...last7.map((x) => Number(x.done) || 0));
+      if (best) text(col, `best ${best}`, { size: 9, color: MUTED });
+      strip.addSpacer();
+    }
+  }
 
   // The week's shape, by where the evidence came from. Only what the ledger
   // actually holds — no invented categories, and nothing at all if it is empty.
@@ -493,7 +602,7 @@ function build(res, family, wins) {
   const d = res.data || {};
   const ctx = d.context || {};
   const stamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  const bad = res.error ? ACCENTS.critical : d.poolAvailable === false ? ACCENTS.high : null;
+  const bad = res.error ? HEX.critical : d.poolAvailable === false ? HEX.high : null;
 
   // When the context IS the answer — a context card, a silence, or a failure —
   // the headline already says it, and repeating it in the pill puts the same
