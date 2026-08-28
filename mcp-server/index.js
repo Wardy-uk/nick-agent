@@ -34,7 +34,30 @@ import path from 'node:path';
 const NEURO_URL = process.env.NEURO_URL || 'http://localhost:3001';
 const NEURO_PIN = process.env.NEURO_PIN || '';
 const VAULT_API_KEY = process.env.NEURO_VAULT_KEY || '';
+const VAULT_API_BASE = process.env.NEURO_VAULT_API_BASE || '/api/vault';
 const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
+const VAULT_SCOPE = normalizeRelative(process.env.NEURO_VAULT_SCOPE || '');
+
+function normalizeRelative(input) {
+  return String(input || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+function withScope(relPath, mode = 'local') {
+  const normal = normalizeRelative(relPath);
+  if (!VAULT_SCOPE) return normal;
+  if (mode === 'api' && VAULT_API_BASE !== '/api/vault') return normal;
+  if (!normal) return VAULT_SCOPE;
+  if (normal === VAULT_SCOPE || normal.startsWith(`${VAULT_SCOPE}/`)) return normal;
+  return `${VAULT_SCOPE}/${normal}`;
+}
+
+function stripScope(relPath) {
+  const normal = normalizeRelative(relPath);
+  if (!VAULT_SCOPE) return normal;
+  if (normal === VAULT_SCOPE) return '';
+  if (normal.startsWith(`${VAULT_SCOPE}/`)) return normal.slice(VAULT_SCOPE.length + 1);
+  return normal;
+}
 
 // ── API helper ──
 async function neuroApi(path, options = {}) {
@@ -42,7 +65,7 @@ async function neuroApi(path, options = {}) {
   const headers = {
     'Content-Type': 'application/json',
     ...(NEURO_PIN ? { 'X-Neuro-Pin': NEURO_PIN } : {}),
-    ...(VAULT_API_KEY && path.startsWith('/api/vault') ? { 'X-Api-Key': VAULT_API_KEY } : {}),
+    ...(VAULT_API_KEY && path.startsWith(VAULT_API_BASE) ? { 'X-Api-Key': VAULT_API_KEY } : {}),
     ...options.headers,
   };
 
@@ -83,13 +106,13 @@ const VAULT_CONFIGURED = () => Boolean(VAULT_PATH) && fs.existsSync(VAULT_PATH);
 
 function safeVaultPath(rel) {
   if (rel == null) return null;
-  const resolved = path.resolve(VAULT_PATH, rel);
+  const resolved = path.resolve(VAULT_PATH, withScope(rel));
   if (!resolved.startsWith(path.resolve(VAULT_PATH))) return null; // path traversal guard
   return resolved;
 }
 
 function vaultRel(abs) {
-  return path.relative(VAULT_PATH, abs).replace(/\\/g, '/');
+  return stripScope(path.relative(VAULT_PATH, abs).replace(/\\/g, '/'));
 }
 
 function todayStr() {
@@ -101,14 +124,14 @@ const localVault = {
   read(rel) {
     const fp = safeVaultPath(rel);
     if (!fp || !fs.existsSync(fp)) throw new Error(`File not found: ${rel}`);
-    return { path: rel, content: fs.readFileSync(fp, 'utf-8') };
+    return { path: normalizeRelative(rel), content: fs.readFileSync(fp, 'utf-8') };
   },
   write(rel, content) {
     const fp = safeVaultPath(rel);
     if (!fp) throw new Error('Invalid path');
     fs.mkdirSync(path.dirname(fp), { recursive: true });
     fs.writeFileSync(fp, content, 'utf-8');
-    return { success: true, path: rel };
+    return { success: true, path: normalizeRelative(rel) };
   },
   append(rel, content) {
     const fp = safeVaultPath(rel);
@@ -116,14 +139,14 @@ const localVault = {
     fs.mkdirSync(path.dirname(fp), { recursive: true });
     const existing = fs.existsSync(fp) ? fs.readFileSync(fp, 'utf-8') : '';
     fs.writeFileSync(fp, existing + content, 'utf-8');
-    return { success: true, path: rel };
+    return { success: true, path: normalizeRelative(rel) };
   },
   list(dir) {
     const dp = safeVaultPath(dir || '');
     if (!dp || !fs.existsSync(dp)) throw new Error(`Directory not found: ${dir || '/'}`);
     const files = fs.readdirSync(dp, { withFileTypes: true })
       .map(e => ({ name: e.name, type: e.isDirectory() ? 'directory' : 'file' }));
-    return { dir: dir || '', files };
+    return { dir: normalizeRelative(dir || ''), files };
   },
   search(query, dir) {
     const root = safeVaultPath(dir || '');
@@ -176,7 +199,7 @@ const localVault = {
         }
         results.push({ path: vaultRel(fp), name: e.name.replace('.md', ''), modified: stat.mtime, excerpts });
       }
-    })(VAULT_PATH, 0);
+    })(path.resolve(VAULT_PATH, withScope('')), 0);
     results.sort((a, b) => new Date(b.modified) - new Date(a.modified));
     return { results: results.slice(0, limit), from: fromDate, to: toDate };
   },
@@ -301,7 +324,7 @@ server.tool('search_vault', 'Search the Obsidian vault for notes (keyword)', {
 }, async ({ query, maxResults }) => {
   const limit = maxResults || 5;
   const { data, source } = await vaultDispatch(
-    () => neuroApi(`/api/vault/search?query=${encodeURIComponent(query)}&limit=${limit}`, { timeout: 8000 }),
+    () => neuroApi(`${VAULT_API_BASE}/search?query=${encodeURIComponent(query)}&limit=${limit}`, { timeout: 8000 }),
     () => localVault.search(query),
   );
   const results = (data.results || []).slice(0, limit).map(r => {
@@ -316,7 +339,7 @@ server.tool('read_note', 'Read a specific vault note by path', {
   path: z.string().describe('Relative path in vault, e.g. "People/Stephen Mitchell.md"'),
 }, async ({ path: notePath }) => {
   const { data, source } = await vaultDispatch(
-    () => neuroApi(`/api/vault/read?path=${encodeURIComponent(notePath)}`, { timeout: 8000 }),
+    () => neuroApi(`${VAULT_API_BASE}/read?path=${encodeURIComponent(withScope(notePath, 'api'))}`, { timeout: 8000 }),
     () => localVault.read(notePath),
   );
   return { content: [{ type: 'text', text: offlineBanner(source) + (data.content?.substring(0, 6000) || 'Note not found.') }] };
@@ -330,7 +353,7 @@ server.tool('write_note',
   },
   async ({ path: notePath, content }) => {
     const { data, source } = await vaultDispatch(
-      () => neuroApi('/api/vault/write', { method: 'POST', body: JSON.stringify({ path: notePath, content }), timeout: 8000 }),
+      () => neuroApi(`${VAULT_API_BASE}/write`, { method: 'POST', body: JSON.stringify({ path: withScope(notePath, 'api'), content }), timeout: 8000 }),
       () => localVault.write(notePath, content),
     );
     return { content: [{ type: 'text', text: `${offlineBanner(source)}Wrote ${data.path || notePath}.` }] };
@@ -344,7 +367,7 @@ server.tool('append_note',
   },
   async ({ path: notePath, content }) => {
     const { data, source } = await vaultDispatch(
-      () => neuroApi('/api/vault/append', { method: 'POST', body: JSON.stringify({ path: notePath, content }), timeout: 8000 }),
+      () => neuroApi(`${VAULT_API_BASE}/append`, { method: 'POST', body: JSON.stringify({ path: withScope(notePath, 'api'), content }), timeout: 8000 }),
       () => localVault.append(notePath, content),
     );
     return { content: [{ type: 'text', text: `${offlineBanner(source)}Appended to ${data.path || notePath}.` }] };
@@ -354,7 +377,7 @@ server.tool('list_vault', 'List files and folders in a vault directory.', {
   dir: z.string().optional().describe('Relative directory (default: vault root)'),
 }, async ({ dir }) => {
   const { data, source } = await vaultDispatch(
-    () => neuroApi(`/api/vault/list?dir=${encodeURIComponent(dir || '')}`, { timeout: 8000 }),
+    () => neuroApi(`${VAULT_API_BASE}/list?dir=${encodeURIComponent(withScope(dir || '', 'api'))}`, { timeout: 8000 }),
     () => localVault.list(dir),
   );
   const lines = (data.files || []).map(f => `${f.type === 'directory' ? '📁' : '📄'} ${f.name}`).join('\n');
@@ -372,7 +395,7 @@ server.tool('search_vault_temporal', 'Search the vault within a date range (by f
   if (from) qs.set('from', from);
   if (to) qs.set('to', to);
   const { data, source } = await vaultDispatch(
-    () => neuroApi(`/api/vault/search/temporal?${qs.toString()}`, { timeout: 8000 }),
+    () => neuroApi(`${VAULT_API_BASE}/search/temporal?${qs.toString()}`, { timeout: 8000 }),
     () => localVault.searchTemporal(query, from, to, lim),
   );
   const out = (data.results || []).map(r => {
@@ -389,7 +412,7 @@ server.tool('vault_backlinks',
   },
   async ({ path: notePath }) => {
     const { data, source } = await vaultDispatch(
-      () => neuroApi(`/api/vault/backlinks?path=${encodeURIComponent(notePath)}`, { timeout: 8000 }),
+      () => neuroApi(`${VAULT_API_BASE}/backlinks?path=${encodeURIComponent(withScope(notePath, 'api'))}`, { timeout: 8000 }),
       () => localVault.backlinks(notePath),
     );
     const lines = (data.backlinks || []).map(b => `- [[${b.path?.replace(/\.md$/, '')}|${b.name}]] _(${b.type})_`).join('\n');
@@ -405,7 +428,7 @@ server.tool('related_notes',
   async ({ path: notePath, limit }) => {
     const lim = limit || 3;
     const { data, source } = await vaultDispatch(
-      () => neuroApi(`/api/vault/related?path=${encodeURIComponent(notePath)}&limit=${lim}`, { timeout: 8000 }),
+      () => neuroApi(`${VAULT_API_BASE}/related?path=${encodeURIComponent(withScope(notePath, 'api'))}&limit=${lim}`, { timeout: 8000 }),
       () => {
         // Degraded local mode: keyword search on the note's title.
         const q = path.basename(notePath, '.md');
@@ -424,8 +447,11 @@ server.tool('delete_note',
     path: z.string().describe('Relative path of the note to delete'),
   },
   async ({ path: notePath }) => {
+    if (VAULT_SCOPE && VAULT_API_BASE !== '/api/vault') {
+      throw new Error('Delete is intentionally disabled for scoped vault endpoints.');
+    }
     const data = await neuroRequired(
-      () => neuroApi(`/api/vault/delete?path=${encodeURIComponent(notePath)}`, { method: 'DELETE', timeout: 8000 }),
+      () => neuroApi(`${VAULT_API_BASE}/delete?path=${encodeURIComponent(withScope(notePath, 'api'))}`, { method: 'DELETE', timeout: 8000 }),
       'Delete needs NEURO online so the search index stays clean — the Pi is unreachable, so the file was NOT touched. Retry when NEURO is back.',
     );
     return { content: [{ type: 'text', text: data.ok ? `Deleted ${data.path || notePath}.` : `Failed: ${data.error || 'unknown'}` }] };
