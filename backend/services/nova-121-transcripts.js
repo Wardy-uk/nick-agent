@@ -38,6 +38,12 @@ const EXCLUDE_DIRS = new Set([
   'Vault Audit', '.lint-backups', '.git', '.stversions', '.stfolder',
 ]);
 
+/**
+ * Below this many words of real content, a "transcript" is a stub rather than a record.
+ * A 14-minute 1-2-1 runs to thousands of characters; 200 is a heading and a back-link.
+ */
+const MIN_TRANSCRIPT_CHARS = 400;
+
 /** How far back a sweep looks. Older recordings are history, not something to file now. */
 const DEFAULT_DAYS = 30;
 
@@ -134,7 +140,21 @@ function transcriptFor(fm) {
     const abs = path.join(VAULT_PATH(), String(rel).replace(/\.md$/, '') + '.md');
     const raw = fs.readFileSync(abs, 'utf-8').replace(/\r\n/g, '\n');
     // Frontmatter off — the extractor wants the words, not the metadata.
-    return raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim() || null;
+    const body = raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
+    if (!body) return null;
+
+    // plaud-sync writes a STUB when Plaud has no transcript for a recording — the note
+    // exists, has the right frontmatter and says "No transcript returned by Plaud".
+    // Sending that on is worse than sending nothing: NOVA would show "transcript 276
+    // chars", and the extractor would read a sentence of boilerplate as the meeting and
+    // conclude nothing was agreed. Absent has to look absent.
+    if (/^\s*No transcript returned by Plaud/mi.test(body)) return null;
+    // A note with only its title, the back-link and an empty Transcript heading is the
+    // same thing wearing different words.
+    const words = body.replace(/^#+.*$/gm, '').replace(/\[\[[^\]]*\]\]/g, '').trim();
+    if (words.length < MIN_TRANSCRIPT_CHARS) return null;
+
+    return body;
   } catch {
     return null;
   }
