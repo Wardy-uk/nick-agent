@@ -88,114 +88,282 @@ async function fetchAttention({ base, token }) {
   }
 }
 
-// ── Rendering ───────────────────────────────────────────────────────────────
-
-const INK = Color.dynamic(new Color('#1c1c1e'), new Color('#f2f2f7'));
-const MUTED = Color.dynamic(new Color('#6b6b70'), new Color('#9a9aa0'));
-const WARN = Color.dynamic(new Color('#a1442b'), new Color('#ff9f7a'));
-const BG = Color.dynamic(new Color('#ffffff'), new Color('#1c1c1e'));
+// ── Look ────────────────────────────────────────────────────────────────────
+//
+// Design rules, so this stays legible rather than merely decorated:
+//  • ONE accent per card, taken from the brain's own `urgency` — colour is
+//    information here, not styling. Nothing is coloured for the sake of it.
+//  • The icon says the TYPE, the accent says the URGENCY. Two channels, two
+//    facts; if they said the same thing one of them would be noise.
+//  • Everything degrades: an unknown type falls back to a dot, a missing SF
+//    Symbol falls back to a glyph, and both still render a readable row.
 
 function tabUrl(tab) {
   return `${APP_URL}/?tab=${encodeURIComponent(tab || 'surface')}`;
 }
 
-function line(stack, text, { size = 12, color = INK, bold = false, max = 2 } = {}) {
-  const t = stack.addText(String(text));
-  t.font = bold ? Font.semiboldSystemFont(size) : Font.systemFont(size);
+const INK = Color.dynamic(new Color('#111114'), new Color('#f5f5f7'));
+const MUTED = Color.dynamic(new Color('#8a8a8e'), new Color('#98989d'));
+const HAIRLINE = Color.dynamic(new Color('#e6e6ea'), new Color('#3a3a3c'));
+const CARD = Color.dynamic(new Color('#ffffff'), new Color('#2c2c2e'));
+const TILE_BG = Color.dynamic(new Color('#f4f4f6'), new Color('#3a3a3c'));
+
+// Urgency → accent. `critical` is the only red in the widget, so red always
+// means the same thing wherever it appears.
+const ACCENTS = {
+  critical: Color.dynamic(new Color('#d92d20'), new Color('#ff6b5e')),
+  high: Color.dynamic(new Color('#b54708'), new Color('#ffa94d')),
+  normal: Color.dynamic(new Color('#0064d2'), new Color('#5ea9ff')),
+  low: Color.dynamic(new Color('#6a6a70'), new Color('#98989d')),
+};
+const POSITIVE = Color.dynamic(new Color('#1a7f4b'), new Color('#4ad07d'));
+
+function accentFor(card) {
+  return ACCENTS[String(card && card.urgency)] || ACCENTS.normal;
+}
+
+// Type → SF Symbol. The fallback glyph matters: SFSymbol.named returns null for
+// an unknown name and reading .image off null throws, which would take the whole
+// widget down over an icon.
+const ICONS = {
+  meeting: ['calendar', '▣'],
+  todo: ['checkmark.circle', '✓'],
+  email: ['envelope', '✉'],
+  escalation: ['exclamationmark.triangle.fill', '!'],
+  'nova-flag': ['flag.fill', '⚑'],
+  novaFlag: ['flag.fill', '⚑'],
+  journal: ['book.closed', '❏'],
+  standup: ['sun.max', '☀'],
+  eod: ['moon.stars', '☾'],
+  capture: ['tray', '▽'],
+  waiting: ['hourglass', '⧗'],
+  context: ['circle.dashed', '○'],
+};
+
+function bg(w) {
+  const g = new LinearGradient();
+  g.colors = [
+    Color.dynamic(new Color('#ffffff'), new Color('#232325')),
+    Color.dynamic(new Color('#f1f1f5'), new Color('#151517')),
+  ];
+  g.locations = [0, 1];
+  w.backgroundGradient = g;
+}
+
+function text(stack, value, { size = 12, color = INK, weight = 'regular', max = 1 } = {}) {
+  const t = stack.addText(String(value));
+  t.font = weight === 'bold' ? Font.semiboldSystemFont(size)
+    : weight === 'heavy' ? Font.boldSystemFont(size)
+      : Font.systemFont(size);
   t.textColor = color;
   t.lineLimit = max;
+  t.minimumScaleFactor = 0.9;
   return t;
 }
 
-function header(w, label, stamp) {
-  const row = w.addStack();
-  row.centerAlignContent();
-  line(row, 'SARA', { size: 11, color: MUTED, bold: true, max: 1 });
-  row.addSpacer(6);
-  line(row, label || '', { size: 11, color: MUTED, max: 1 });
-  row.addSpacer();
-  line(row, stamp, { size: 10, color: MUTED, max: 1 });
-  w.addSpacer(8);
+/** A rounded tile carrying the type icon, tinted with the urgency accent. */
+function tile(stack, type, accent, box) {
+  const t = stack.addStack();
+  t.size = new Size(box, box);
+  t.cornerRadius = box * 0.3;
+  t.backgroundColor = TILE_BG;
+  t.centerAlignContent();
+
+  const spec = ICONS[String(type)] || ['circle.fill', '•'];
+  let sym = null;
+  try { sym = SFSymbol.named(spec[0]); } catch (e) { sym = null; }
+
+  if (sym) {
+    const img = t.addImage(sym.image);
+    img.imageSize = new Size(box * 0.55, box * 0.55);
+    img.tintColor = accent;
+    img.resizable = true;
+  } else {
+    text(t, spec[1], { size: box * 0.5, color: accent, weight: 'bold' });
+  }
+  return t;
 }
 
-/** One card: title, then the sentence SARA would say about it. */
-function card(w, c, { primary = false } = {}) {
-  const stack = w.addStack();
-  stack.layoutVertically();
-  stack.url = tabUrl(c.tab);
-  line(stack, c.title, { size: primary ? 16 : 13, bold: true, max: primary ? 2 : 1 });
-  const detail = c.say || c.reason;
-  if (detail) line(stack, detail, { size: primary ? 12 : 11, color: MUTED, max: primary ? 3 : 1 });
+/** A hairline, drawn as a 1px stack because Scriptable has no divider. */
+function rule(stack, pad) {
+  stack.addSpacer(pad);
+  const r = stack.addStack();
+  r.size = new Size(0, 1);
+  r.backgroundColor = HAIRLINE;
+  r.addSpacer();
+  stack.addSpacer(pad);
+}
+
+/** The header strip: who is talking, what state they think you are in, when. */
+function header(w, ctxLabel, stamp, alert) {
+  const row = w.addStack();
+  row.centerAlignContent();
+
+  tile(row, 'context', alert || ACCENTS.normal, 16);
+  row.addSpacer(6);
+  text(row, 'SARA', { size: 11, color: MUTED, weight: 'bold' });
+
+  if (ctxLabel) {
+    row.addSpacer(6);
+    // The context reads as a pill so it is obviously a STATE, not another item.
+    const pill = row.addStack();
+    pill.cornerRadius = 7;
+    pill.backgroundColor = TILE_BG;
+    pill.setPadding(2, 7, 2, 7);
+    text(pill, ctxLabel, { size: 10, color: MUTED });
+  }
+
+  row.addSpacer();
+  text(row, stamp, { size: 10, color: MUTED });
+  w.addSpacer(10);
 }
 
 /**
- * The four ways there is nothing to show, each said differently.
- * Returns true if it rendered one, meaning the caller must not draw cards.
+ * One item. `primary` gets its own card surface and room for the full sentence;
+ * the rest are compact rows, because the Surface's whole claim is that there is
+ * ONE thing and then some context for it.
  */
-function renderSilence(w, d, error) {
-  if (error) {
-    line(w, "Can't reach NEURO", { size: 15, bold: true, color: WARN });
-    line(w, error, { size: 11, color: MUTED, max: 3 });
+function itemRow(container, card, { primary = false } = {}) {
+  const accent = accentFor(card);
+  const row = container.addStack();
+  row.url = tabUrl(card.tab);
+  row.centerAlignContent();
+
+  if (primary) {
+    row.backgroundColor = CARD;
+    row.cornerRadius = 14;
+    row.setPadding(11, 11, 11, 11);
+  }
+
+  tile(row, card.type || card.kind, accent, primary ? 30 : 20);
+  row.addSpacer(primary ? 11 : 9);
+
+  const col = row.addStack();
+  col.layoutVertically();
+  text(col, card.title, {
+    size: primary ? 15 : 12,
+    weight: primary ? 'heavy' : 'bold',
+    max: primary ? 2 : 1,
+  });
+  const detail = card.say || card.reason;
+  if (detail) {
+    col.addSpacer(primary ? 3 : 1);
+    text(col, detail, { size: primary ? 12 : 10.5, color: MUTED, max: primary ? 2 : 1 });
+  }
+  row.addSpacer();
+  return row;
+}
+
+/**
+ * The four ways there is nothing to show, each said differently and each with
+ * its own colour, so a glance tells them apart before the words are read.
+ */
+function silence(w, d, error) {
+  const show = (symbol, accent, title, body) => {
+    const row = w.addStack();
+    row.backgroundColor = CARD;
+    row.cornerRadius = 14;
+    row.setPadding(12, 12, 12, 12);
+    row.centerAlignContent();
+    tile(row, symbol, accent, 30);
+    row.addSpacer(11);
+    const col = row.addStack();
+    col.layoutVertically();
+    text(col, title, { size: 15, weight: 'heavy', max: 1 });
+    col.addSpacer(3);
+    text(col, body, { size: 12, color: MUTED, max: 3 });
+    row.addSpacer();
     w.url = tabUrl('surface');
+  };
+
+  if (error) {
+    show('escalation', ACCENTS.critical, "Can't reach NEURO", error);
     return true;
   }
   if (d.poolAvailable === false) {
-    line(w, "I can't see your work", { size: 15, bold: true, color: WARN });
-    line(w, 'This is not an all-clear — the queue could not be read.', { size: 11, color: MUTED, max: 3 });
-    w.url = tabUrl('surface');
+    show('escalation', ACCENTS.high, "Can't see your work",
+      'This is not an all-clear — the queue could not be read.');
     return true;
   }
   if (!d.primary) {
-    // Quiet and empty are both legitimate, and they are not the same statement.
-    const quiet = d.quiet === true;
     const ctx = d.context || {};
-    line(w, quiet ? (ctx.label || 'Quiet') : 'Nothing pending', { size: 15, bold: true });
-    const why = quiet
-      ? (ctx.summary || d.rationale || 'Nothing to raise right now.')
-      : 'Nothing needs you at the moment.';
-    line(w, why, { size: 11, color: MUTED, max: 3 });
-    w.url = tabUrl('surface');
+    if (d.quiet === true) {
+      show('context', ACCENTS.low, ctx.label || 'Quiet',
+        ctx.summary || d.rationale || 'Nothing to raise right now.');
+    } else {
+      show('todo', POSITIVE, 'All clear', 'Nothing needs you at the moment.');
+    }
     return true;
   }
   return false;
 }
 
+/** Held-back and unreadable counts. Never a bare number, never swallowed. */
+function footer(w, d) {
+  const dropped = Array.isArray(d.dropped) ? d.dropped.length : 0;
+  const gaps = Array.isArray(d.gaps) ? d.gaps.length : 0;
+  if (!dropped && !gaps) return;
+
+  w.addSpacer(7);
+  const row = w.addStack();
+  row.centerAlignContent();
+  if (dropped) {
+    tile(row, 'waiting', ACCENTS.low, 13);
+    row.addSpacer(5);
+    text(row, `${dropped} held back`, { size: 10, color: MUTED });
+  }
+  if (dropped && gaps) {
+    row.addSpacer(8);
+  }
+  if (gaps) {
+    // A gap is not a held item — it is something NEURO could not read at all,
+    // and it is the one number on this widget that should look slightly wrong.
+    tile(row, 'escalation', ACCENTS.high, 13);
+    row.addSpacer(5);
+    text(row, `${gaps} unreadable`, { size: 10, color: ACCENTS.high });
+  }
+  row.addSpacer();
+}
+
 function build(res, family) {
   const w = new ListWidget();
-  w.backgroundColor = BG;
+  bg(w);
   w.setPadding(14, 14, 14, 14);
+  // Tell iOS when this is worth refreshing. It is a hint, not a promise — the
+  // system budgets widget refreshes and will ignore this when it wants to.
+  w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
 
   const d = res.data || {};
   const ctx = d.context || {};
   const stamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  header(w, res.error ? '' : ctx.label, stamp);
+  const bad = res.error ? ACCENTS.critical : d.poolAvailable === false ? ACCENTS.high : null;
 
-  if (renderSilence(w, d, res.error)) return w;
+  // When the context IS the answer — a context card, a silence, or a failure —
+  // the headline already says it, and repeating it in the pill puts the same
+  // words on screen twice ("In a meeting" above "In a meeting"). The pill only
+  // earns its place when it is framing something else.
+  const contextIsTheAnswer = !!res.error
+    || d.poolAvailable === false
+    || !d.primary
+    || d.primary.kind === 'context';
+  header(w, contextIsTheAnswer ? null : ctx.label, stamp, bad);
 
-  card(w, d.primary, { primary: true });
+  if (silence(w, d, res.error)) return w;
 
-  // Small has room for one thing, which is the point of the Surface anyway.
+  itemRow(w, d.primary, { primary: true });
+
   const room = family === 'large' ? 4 : family === 'medium' ? 2 : 0;
   const rest = (d.secondary || []).slice(0, room);
   if (rest.length) {
-    w.addSpacer(8);
-    for (const c of rest) {
-      card(w, c);
-      w.addSpacer(4);
+    rule(w, 9);
+    for (let i = 0; i < rest.length; i++) {
+      itemRow(w, rest[i]);
+      if (i < rest.length - 1) w.addSpacer(7);
     }
   }
 
-  // Held, not lost — say so rather than swallowing it, and never as a bare number.
-  const dropped = Array.isArray(d.dropped) ? d.dropped.length : 0;
-  const gaps = Array.isArray(d.gaps) ? d.gaps.length : 0;
-  if (dropped || gaps) {
-    w.addSpacer(4);
-    const notes = [];
-    if (dropped) notes.push(`${dropped} held back`);
-    if (gaps) notes.push(`${gaps} couldn't be read`);
-    line(w, notes.join(' · '), { size: 10, color: MUTED, max: 1 });
-  }
-
+  footer(w, d);
+  w.addSpacer();
   w.url = tabUrl(d.primary.tab);
   return w;
 }
