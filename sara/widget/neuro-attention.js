@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v11';
+const VERSION = 'v12';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -300,16 +300,20 @@ async function fetchWeather() {
  * Safari, NOT the SARA Mobile icon on the home screen — that is an iOS
  * limitation, not something this script can route around.
  *
- * The workaround is a Shortcut containing a single "Open App" action pointing
- * at SARA Mobile: `shortcuts://` DOES hand control to it. The cost is the tab —
- * "Open App" cannot carry a destination, so the app opens where it left off,
- * which is the Surface, which is showing this same feed anyway.
+ * ⚠ The Shortcuts workaround DOES NOT WORK either, and this is settled rather
+ * than assumed: an installed PWA is a WEB CLIP, not an app, and Shortcuts'
+ * "Open App" action only lists real apps — SARA Mobile does not appear in the
+ * picker, so there is no Shortcut to point at. Turning this on by default cost
+ * Nick a "file doesn't exist" dialog on every tap.
  *
- * OPEN_SHORTCUT is the Shortcut's exact name. It is ON because Nick wants the
- * app, not Safari — but it REQUIRES a Shortcut of that name containing a single
- * "Open App" action pointing at SARA Mobile. Set it to '' to go back to Safari.
+ * So a tap opens Safari, and that is the end of it on iOS. The widget is for
+ * GLANCING; the SARA Mobile icon next to it is for OPENING. Keeping the https
+ * route also keeps per-card tab routing, which the Shortcut would have lost.
+ *
+ * OPEN_SHORTCUT stays as a switch in case Apple ever changes this, but it is
+ * OFF and should not be turned on without checking the picker first.
  */
-const OPEN_SHORTCUT = 'Open SARA';
+const OPEN_SHORTCUT = '';
 
 function tabUrl(tab) {
   if (OPEN_SHORTCUT) {
