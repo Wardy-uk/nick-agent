@@ -125,6 +125,22 @@ router.post('/nova-transcripts', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/1to1/pending-transcripts — who has a Plaud recording waiting for approval in
+ * NOVA. Drives the badge on the People board. Answers `ok:false` rather than an empty
+ * list when NOVA cannot be reached, so "none pending" is never confused with "unknown".
+ */
+router.get('/pending-transcripts', async (req, res) => {
+  try {
+    const nova = require('../services/nova-client');
+    if (!nova.isConfigured()) return res.json({ ok: false, error: 'NOVA bridge not configured', agents: [] });
+    const data = await nova.get121PendingCandidates();
+    res.json({ ok: true, agents: data.agents || [] });
+  } catch (e) {
+    res.json({ ok: false, error: e.message, agents: [] });
+  }
+});
+
 // Propose a slot. Reads the calendar; creates nothing.
 router.post('/propose', async (req, res) => {
   try {

@@ -422,7 +422,9 @@ function start() {
   });
 
   // 10pm nightly — build daily activity summary + entity extraction + write observations
-  scheduleDaily('nightly-rollup', '0 22 * * *', 22, 0, () => {
+  // async because the meeting-action scan now asks NOVA which 1-2-1s it already owns
+  // before scanning. `_tracked` awaits the callback, so this is safe.
+  scheduleDaily('nightly-rollup', '0 22 * * *', 22, 0, async () => {
     console.log('[Scheduler] Running nightly activity rollup...');
     try {
       require('./activity').runNightlyRollup();
@@ -436,8 +438,11 @@ function start() {
     // Scoped to Meetings/ and review-only: nothing reaches Master Todo without
     // being approved from the suggestions queue.
     try {
-      const scan = require('./action-candidates').scanRecentNotes({ days: 7, dryRun: false, scope: 'meetings', limit: 500 });
-      console.log(`[Scheduler] Meeting actions: scanned ${scan.scanned}, created ${scan.created}, pending ${scan.pending}, superseded ${scan.superseded}`);
+      // Excludes 1-2-1s NOVA has already extracted — one LLM pass over a recording, not
+      // two. Their actions come back over the bridge in the nightly write-back instead.
+      const scan = await require('./action-candidates').scanRecentNotesExcludingNova({ days: 7, dryRun: false, scope: 'meetings', limit: 500 });
+      console.log(`[Scheduler] Meeting actions: scanned ${scan.scanned}, created ${scan.created}, pending ${scan.pending}, superseded ${scan.superseded}` +
+        (scan.novaOwned ? `, ${scan.novaOwned} left to NOVA` : ''));
       if (scan.pending > 0) {
         require('./webpush').sendToAll('SARA — Actions to review',
           `${scan.pending} new action${scan.pending === 1 ? '' : 's'} from your meetings need a yes/no.`,

@@ -75,6 +75,18 @@ function renderAction(action, personName) {
   return bits.join(' ');
 }
 
+/**
+ * Is this action Nick's rather than the team member's?
+ *
+ * The extractor records the owner in the words the conversation used, so this has to
+ * tolerate "Nick", "Nick Ward" and "nick ward". An UNOWNED action defaults to the team
+ * member — it is their 1-2-1 and their card, and mis-filing one of their commitments as
+ * Nick's would take it off the list they are held to.
+ */
+function isNick(owner) {
+  return /^nick(\s+ward)?$/i.test(String(owner || '').trim());
+}
+
 /** NOVA action ids already written into this note, in any form. */
 function existingIds(text) {
   const ids = new Set();
@@ -185,7 +197,15 @@ async function writeBack({ apply = false, since = null } = {}) {
 
     const already = existingIds(source);
     const fresh = (session.actions || []).filter((a) => !already.has(Number(a.id)));
-    const lines = fresh.map((a) => renderAction(a, name));
+
+    // Split by who took it on. Nick's own commitments from a 1-2-1 are HIS tasks and
+    // belong in the task store with everything else he owes — not as a checkbox on
+    // somebody else's People card, where he would never look for them. This is the half
+    // that `action-candidates` used to catch by scanning the note itself; now that the
+    // 1-2-1 is extracted once in NOVA, this is the only route his actions have.
+    const mine = fresh.filter((a) => isNick(a.owner));
+    const theirs = fresh.filter((a) => !isNick(a.owner));
+    const lines = theirs.map((a) => renderAction(a, name));
     const next = spliceActions(source, lines);
 
     const held = session.completedAt || session.scheduledDate;
@@ -193,7 +213,8 @@ async function writeBack({ apply = false, since = null } = {}) {
       person: name,
       sessionId: session.sessionId,
       lastHeld: held,
-      newActions: fresh.length,
+      newActions: theirs.length,
+      myActions: mine.length,
       alreadyPresent: (session.actions || []).length - fresh.length,
     };
 
@@ -210,6 +231,24 @@ async function writeBack({ apply = false, since = null } = {}) {
       // `1-2-1-booked` is cleared because the booking is now SPENT — leaving it would
       // keep the card claiming a meeting is in the diary that has already happened.
       require('./obsidian').updatePersonNote(name, { last121: held, booked121: '' });
+
+      // Nick's own actions become tasks. `task-store` dedupes on normalised text with a
+      // UNIQUE key, so a re-run — or the same commitment repeated in the next 1-2-1 —
+      // folds into the existing task rather than duplicating it.
+      for (const a of mine) {
+        try {
+          require('./task-store').createTask({
+            text: a.description,
+            due_date: a.dueDate || null,
+            // `origin_path` is the provenance field task-store actually reads — a task
+            // with no backlink is one Nick cannot place in three weeks' time. Points at
+            // the People note, which is where that 1-2-1's record lives.
+            origin_path: `People/${name}.md`,
+          });
+        } catch (e) {
+          results.failed.push({ person: name, error: `task "${a.description}": ${e.message}` });
+        }
+      }
       results.people.push(entry);
     } catch (e) {
       results.failed.push({ person: name, error: e.message });

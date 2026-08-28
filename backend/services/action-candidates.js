@@ -761,6 +761,43 @@ function extractMeetingActions(text, relativePath) {
 
 // Meeting notes go through the owner-classified extractor; everything else keeps
 // the original checkbox/prefix heuristics.
+/**
+ * Plaud ids NOVA has approved as 1-2-1s, so this scan can leave them alone.
+ *
+ * Read once per sweep and cached briefly: the sweep walks hundreds of notes and a
+ * per-note bridge call would be absurd. An UNREADABLE list returns empty, which means
+ * this scan does its normal job — extracting twice is wasteful, extracting zero times
+ * loses the actions entirely, so the failure has to fall that way.
+ */
+let _novaClaimCache = { at: 0, ids: new Set() };
+
+async function loadNovaClaimed() {
+  if (Date.now() - _novaClaimCache.at < 5 * 60 * 1000) return _novaClaimCache.ids;
+  let ids = new Set();
+  try {
+    const nova = require('./nova-client');
+    if (nova.isConfigured()) {
+      const r = await nova.get121KnownRecordings();
+      ids = new Set(r.approved || []);
+    }
+  } catch (e) {
+    console.warn('[action-candidates] Could not ask NOVA which 1-2-1s it owns:', e.message);
+  }
+  _novaClaimCache = { at: Date.now(), ids };
+  return ids;
+}
+
+/** Does this note carry a plaud_id NOVA has claimed? */
+function novaClaimedNote(absPath, claimed) {
+  try {
+    const head = fs.readFileSync(absPath, 'utf-8').slice(0, 2000).replace(/\r\n/g, '\n');
+    const m = head.match(/^plaud_id:\s*"?([A-Za-z0-9]+)"?\s*$/m);
+    return Boolean(m && claimed.has(m[1]));
+  } catch {
+    return false;
+  }
+}
+
 function isMeetingNote(relativePath) {
   return /^meetings\//i.test(String(relativePath || '').replace(/\\/g, '/'));
 }
@@ -790,10 +827,11 @@ function scanRecentNotes(options = {}) {
   // away from Master Todo. Widen to 'all' only with a dry run in hand.
   // maxCreate bounds what ONE run may add to the review queue. 911 candidates
   // landed in a single night on 14 Aug and nothing stopped it.
-  const { days = 7, dryRun = true, limit = 500, scope = 'meetings', maxCreate = 60 } = options;
+  const { days = 7, dryRun = true, limit = 500, scope = 'meetings', maxCreate = 60,
+          novaClaimed = new Set() } = options;
   const started = Date.now();
   const result = {
-    dryRun, days, scope, scanned: 0, skipped: 0, unchanged: 0,
+    dryRun, days, scope, scanned: 0, skipped: 0, unchanged: 0, novaOwned: 0,
     created: 0, autoPromoted: 0, pending: 0, superseded: 0,
     wouldCreate: 0, wouldAutoPromote: 0,
     capped: false, maxCreate, notScanned: 0,
@@ -819,6 +857,13 @@ function scanRecentNotes(options = {}) {
       }
       if (shouldSkipPath(rel)) { result.skipped += 1; continue; }
       if (scope === 'meetings' && !isMeetingNote(rel)) { result.skipped += 1; continue; }
+      // A 1-2-1 NOVA has already extracted. Its transcript is read there ONCE — that is
+      // the only side holding the agent's open action ids, so completion-matching cannot
+      // move — and the actions it finds come back over the bridge. Scanning it here as
+      // well would pay for a second LLM pass over the same words to produce the same
+      // list. Note this keys on APPROVED recordings only: a candidate Nick rejected is
+      // not a 1-2-1, so it falls through to the ordinary scan below, exactly as before.
+      if (novaClaimed.size && novaClaimedNote(full, novaClaimed)) { result.skipped += 1; result.novaOwned += 1; continue; }
       let stat;
       try { stat = fs.statSync(full); } catch { continue; }
       if (stat.mtimeMs < cutoff) { result.skipped += 1; continue; }
@@ -880,7 +925,19 @@ function scanRecentNotes(options = {}) {
   return result;
 }
 
+/**
+ * The nightly entry point: ask NOVA which 1-2-1s it owns, then scan everything else.
+ *
+ * Split from `scanRecentNotes` so that function stays synchronous and testable with no
+ * network in it — the claimed set is data, passed in, exactly like `days` or `scope`.
+ */
+async function scanRecentNotesExcludingNova(options = {}) {
+  return scanRecentNotes({ ...options, novaClaimed: await loadNovaClaimed() });
+}
+
 module.exports = {
+  scanRecentNotesExcludingNova,
+  _novaInternals: { loadNovaClaimed, novaClaimedNote },
   AUTO_PROMOTE_CONFIDENCE,
   scanRecentNotes,
   extractMeetingActions,

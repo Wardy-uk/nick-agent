@@ -317,6 +317,10 @@ function RecentOneToOnes({ meetings }) {
   const [latest, ...older] = meetings;
   const ago = daysAgo(latest.date);
 
+  // Date only. The note's title, its highlights and the older list used to render here
+  // and made the card a wall of text you had to read to find the one fact you came for.
+  // The content lives in the note, and in NOVA's session — this board answers WHEN, not
+  // what was said. Older meetings stay behind a click for the rare time they matter.
   return (
     <div className="person-121-recent">
       <div className="person-121-recent-head">
@@ -325,12 +329,6 @@ function RecentOneToOnes({ meetings }) {
           {formatDate(latest.date)}{ago !== null && ` · ${ago}d ago`}
         </span>
       </div>
-      <div className="person-121-recent-title">{latest.title}</div>
-      {latest.highlights?.length > 0 && (
-        <ul className="person-121-highlights">
-          {latest.highlights.map((h, i) => <li key={i}>{h}</li>)}
-        </ul>
-      )}
       {older.length > 0 && (
         <>
           <button className="person-121-more" onClick={() => setExpanded(!expanded)}>
@@ -1023,6 +1021,10 @@ export default function PeopleBoard() {
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [viewMode, setViewMode] = useState('reports'); // reports | other
   const [personSummaries, setPersonSummaries] = useState({});
+  // Recordings NOVA is holding for approval, keyed by person. Fetched separately and
+  // failing silently: it crosses the bridge to another machine, and the board must render
+  // exactly the same when NOVA is unreachable.
+  const [pendingTranscripts, setPendingTranscripts] = useState({});
 
   // Auto-expand removed — was opening overdue 1-2-1 forms on every page visit
 
@@ -1039,6 +1041,16 @@ export default function PeopleBoard() {
     });
 
     // Fetch per-person tasks + decisions
+    fetch(apiUrl('/api/1to1/pending-transcripts'))
+      .then(r => r.json())
+      .then(j => {
+        if (!j?.ok) return;
+        const byName = {};
+        for (const a of j.agents || []) if (a.agentName) byName[a.agentName] = a.count;
+        setPendingTranscripts(byName);
+      })
+      .catch(() => {});
+
     fetch(apiUrl('/api/person/summary/all'))
       .then(r => r.json())
       .then(d => setPersonSummaries(d.people || {}))
@@ -1283,13 +1295,23 @@ export default function PeopleBoard() {
                   {!vaultData?.exists && (
                     <span className="person-no-note">No vault note</span>
                   )}
+                  {/* A count, not the list. The actions themselves are on the People
+                      note and in NOVA's 1-2-1 — three copies of the same text was two
+                      too many, and it is the NUMBER that tells you whether to worry. */}
                   {personSummaries[person.name]?.tasks?.length > 0 && (
                     <div className="person-card-tasks">
-                      {personSummaries[person.name].tasks.map((t, i) => (
-                        <div key={i} className="person-card-task">
-                          <span className="person-card-task-text">☐ {t.text}</span>
-                        </div>
-                      ))}
+                      <span className="person-card-task-count">
+                        ☐ {personSummaries[person.name].tasks.length} action{personSummaries[person.name].tasks.length === 1 ? '' : 's'} owed
+                      </span>
+                    </div>
+                  )}
+                  {/* A Plaud recording NOVA is holding for this person, waiting to be
+                      approved. Surfaced here because this is the board Nick looks at to
+                      decide who needs attention, and an unapproved transcript means the
+                      1-2-1 has not been written up anywhere yet. */}
+                  {pendingTranscripts[person.name] > 0 && (
+                    <div className="person-121-transcript-pending">
+                      🎙 {pendingTranscripts[person.name]} recording{pendingTranscripts[person.name] === 1 ? '' : 's'} awaiting approval in NOVA
                     </div>
                   )}
                   {personSummaries[person.name]?.decisions?.length > 0 && (

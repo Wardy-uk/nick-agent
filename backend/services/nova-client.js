@@ -181,6 +181,11 @@ async function push121TranscriptCandidate(candidate) {
   });
 }
 
+/** Who has a transcript waiting on Nick's decision — drives the People-card badge. */
+async function get121PendingCandidates() {
+  return call('/api/neuro-bridge/121/pending-candidates');
+}
+
 /** Recordings NOVA has already resolved, so a rejected one is never re-offered. */
 async function get121KnownRecordings() {
   return call('/api/neuro-bridge/121/known-recordings');
@@ -189,5 +194,5 @@ async function get121KnownRecordings() {
 module.exports = {
   isConfigured, listUrgencyReasons, listEscalations, getTicket, escalate, call,
   push121Booking, cancel121, push121Cadence, get121State, get121Completed,
-  push121TranscriptCandidate, get121KnownRecordings,
+  push121TranscriptCandidate, get121KnownRecordings, get121PendingCandidates,
 };
