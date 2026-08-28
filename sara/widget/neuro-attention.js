@@ -409,7 +409,80 @@ function offDutyView(w, duty, wins) {
   w.url = tabUrl('today');
 }
 
+/**
+ * Lock screen. A different medium, not a smaller version of the same one.
+ *
+ * The system renders these MONOCHROME and tints them itself, so the whole
+ * accent scheme is meaningless here — urgency has to survive in the words. It
+ * also paints its own background, so anything we draw behind is wrong.
+ *
+ * The budget is roughly two short lines, which suits the Surface exactly: one
+ * thing, said in a sentence. Secondary items are dropped rather than crammed —
+ * an unreadable lock screen is worse than a blank one.
+ */
+function accessoryView(family, res, d, wins) {
+  const w = new ListWidget();
+  // Fully transparent — the system paints the lock screen's own material behind
+  // this, so any ground of ours would sit on top of it as a grey slab.
+  w.backgroundColor = new Color('#000000', 0);
+  w.setPadding(2, 2, 2, 2);
+
+  const ctx = d.context || {};
+  const duty = ctx.duty;
+  const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
+  const onFire = d.primary && d.primary.urgency === 'critical';
+
+  // What the lock screen has room to say, in one decision rather than three.
+  let head = 'SARA';
+  let body;
+  if (res.error) { head = 'SARA · offline'; body = "Couldn't reach NEURO."; }
+  else if (d.poolAvailable === false) { head = 'SARA · blind'; body = "Can't see your work."; }
+  else if (offDuty && !onFire) {
+    const week = wins && Number(wins.doneThisWeek);
+    head = 'SARA · off';
+    body = week ? `${week} finished this week.` : (duty.reason || 'Off duty.');
+  } else if (!d.primary) {
+    head = ctx.label ? `SARA · ${ctx.label}` : 'SARA';
+    body = d.quiet ? (ctx.summary || 'Nothing to raise.') : 'Nothing needs you.';
+  } else {
+    head = ctx.label ? `SARA · ${ctx.label}` : 'SARA';
+    // `say` is a full sentence written for a human; the title is a fragment.
+    // On two lines the sentence wins.
+    body = d.primary.say || d.primary.title;
+  }
+
+  if (family === 'accessoryInline') {
+    // One line, beside the clock. No room for a label.
+    text(w, body, { size: 12, max: 1 });
+    w.url = tabUrl(d.primary ? d.primary.tab : 'surface');
+    return w;
+  }
+
+  if (family === 'accessoryCircular') {
+    // A count is the only thing that survives this size. It is deliberately the
+    // number of things SARA would raise, not a total of anything else.
+    const n = (d.primary ? 1 : 0) + ((d.secondary || []).length);
+    const stack = w.addStack();
+    stack.layoutVertically();
+    stack.centerAlignContent();
+    text(stack, offDuty && !onFire ? '✓' : String(n), { size: 20, weight: 'heavy', max: 1 });
+    w.url = tabUrl('surface');
+    return w;
+  }
+
+  // accessoryRectangular
+  text(w, head, { size: 11, weight: 'bold', max: 1 });
+  text(w, body, { size: 13, max: 2 });
+  w.url = tabUrl(d.primary && !offDuty ? d.primary.tab : offDuty ? 'today' : 'surface');
+  return w;
+}
+
 function build(res, family, wins) {
+  const d0 = res.data || {};
+  if (String(family).startsWith('accessory')) {
+    return accessoryView(family, res, d0, wins);
+  }
+
   const w = new ListWidget();
   bg(w);
   w.setPadding(14, 14, 14, 14);
