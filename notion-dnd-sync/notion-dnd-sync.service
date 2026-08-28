@@ -1,0 +1,10 @@
+[Unit]
+Description=Export the D&D Notion workspace to the NEURO Obsidian vault
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/mnt/data/nuero/notion-dnd-sync/.env
+Environment=OBSIDIAN_VAULT_PATH=/mnt/data/nuero-vault
+ExecStart=/home/nickw/.nvm/versions/node/v22.23.2/bin/node /mnt/data/nuero/notion-dnd-sync/sync.js
