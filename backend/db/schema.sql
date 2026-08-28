@@ -97,6 +97,28 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Every notification NEURO decided to send, and what became of it.
+--
+-- Until this existed the only record was console.log, so "why didn't I get the
+-- 5pm nudge?" was unanswerable once the pm2 log rolled — and two paths in
+-- sendToAll returned SILENTLY (no subscriptions, VAPID not configured), which
+-- is indistinguishable from a quiet day. Same species as the frozen Jira cache:
+-- a system that has stopped delivering looks exactly like one with nothing to say.
+--
+-- `outcome` is one of: sent | suppressed | failed | undeliverable.
+-- `reason` carries the governor's verdict or the transport error.
+CREATE TABLE IF NOT EXISTS push_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  type TEXT,
+  title TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  reason TEXT,
+  sent_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_push_log_created ON push_log(created_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_nudges_active ON nudges(active, date_key);
 CREATE INDEX IF NOT EXISTS idx_todos_done ON todos(done);
 CREATE INDEX IF NOT EXISTS idx_todos_ms_id ON todos(ms_id);

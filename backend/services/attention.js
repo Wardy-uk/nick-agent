@@ -47,6 +47,7 @@
  */
 
 const { resolveContext, ACTIVITY } = require('./context-state');
+const { resolveSaraLiteTab } = require('../../shared/action-surfaces.cjs');
 
 const SECONDARY_MAX = 3;
 
@@ -62,7 +63,9 @@ function isObject(v) {
 }
 
 function contextCard(id, title, reason) {
-  return { kind: 'context', id, title, reason, say: reason || null, actions: [] };
+  // A context card is the frame, not a job — there is nowhere to route TO, so
+  // it stays on the Surface rather than being given a destination it cannot honour.
+  return { kind: 'context', id, title, reason, say: reason || null, tab: 'surface', actions: [] };
 }
 
 /**
@@ -183,6 +186,12 @@ function itemCard(item, now) {
     tier: item.tier ?? null,
     score: item.score ?? null,
     actionHint: item.actionHint || null,
+    // Where tapping this card goes. Resolved HERE, through the shared resolver,
+    // for the same reason `say` is composed here: a card and the notification
+    // for the same thing must not land on different tabs, and a client that
+    // works it out itself is a copy free to drift. The home-screen widget is
+    // the third renderer of this feed and gets the answer rather than a rule.
+    tab: resolveSaraLiteTab({ type: item.type }),
     meta: item.meta || null,
   };
 }

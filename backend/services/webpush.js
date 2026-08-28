@@ -36,11 +36,25 @@ const HOURLY_CAP = parseInt(process.env.PUSH_HOURLY_CAP, 10) || 6;
 
 // Things that must arrive whatever else is going on: something is on fire, or
 // about to start, or the system itself is broken. Everything else can wait.
+// ⚠ These are the strings production actually SENDS, not a tidy vocabulary.
+// `meeting_prep` was missing for as long as this set has existed: briefing.js
+// sends `meeting_alert` (listed) while meeting-prep.js sends `meeting_prep`
+// (not), so the "Meeting in 25 min" alert carrying the prep notes was
+// suppressible — and the live log shows the hourly cap swallowing seven real
+// 1-2-1 reminders. The suite was green throughout because webpush.test.js
+// asserted the bypass using `meeting_alert`, a type that path never sends.
+// `push-types.test.js` now pins every sent type against this set.
 const ALWAYS_DELIVER = new Set([
   'escalation_alert',
   'meeting_alert',
+  'meeting_prep',
   'system_alert',
   'capture_failed',
+  // Fires 07:30 on a Monday, once a week, and is a PIP deliverable owed to Chris
+  // by midday. The live log shows the hourly cap dropping it once. One
+  // notification a week cannot cause fatigue; a missed compliance report in
+  // front of the person assessing the PIP is the expensive direction.
+  'weekly_risk',
   'test',
 ]);
 
@@ -128,17 +142,49 @@ function _governor(title, body, data) {
   return { allowed: true };
 }
 
+/**
+ * Record what became of a notification. Never allowed to fail a send — the
+ * push has already gone (or already been refused), and a bookkeeping error
+ * must not turn into a delivery error. `sent-replies` rule, same reasoning.
+ */
+function _record(title, data, outcome, reason, sentCount = 0, failedCount = 0) {
+  try {
+    db.logPushOutcome({
+      type: data?.type || null,
+      title: String(title || '').slice(0, 200),
+      outcome,
+      reason,
+      sentCount,
+      failedCount,
+    });
+  } catch (e) {
+    console.warn('[WebPush] Could not record outcome:', e.message);
+  }
+}
+
 async function sendToAll(title, body, data = {}) {
-  if (!isConfigured()) return;
+  // Both of the returns below were SILENT. A notification NEURO decided to send
+  // and could not deliver is a fact worth keeping — without it, "SARA has gone
+  // quiet" and "SARA has nothing to say" are the same observation.
+  if (!isConfigured()) {
+    console.warn(`[WebPush] Not configured — dropped: "${title}"`);
+    _record(title, data, 'undeliverable', 'VAPID not configured');
+    return;
+  }
 
   const verdict = _governor(title, body, data);
   if (!verdict.allowed) {
     console.log(`[WebPush] Suppressed (${verdict.reason}): "${title}"`);
+    _record(title, data, 'suppressed', verdict.reason);
     return;
   }
 
   const subscriptions = db.getAllPushSubscriptions();
-  if (subscriptions.length === 0) return;
+  if (subscriptions.length === 0) {
+    console.warn(`[WebPush] No subscriptions — dropped: "${title}"`);
+    _record(title, data, 'undeliverable', 'no subscriptions');
+    return;
+  }
 
   const payload = JSON.stringify({
     title,
@@ -174,6 +220,19 @@ async function sendToAll(title, body, data = {}) {
   if (sent > 0 || failed > 0) {
     console.log(`[WebPush] Sent: ${sent}, Failed: ${failed}`);
   }
+
+  // Reaching NO endpoint is a different fact from reaching some of them: with
+  // several devices registered, a partial failure still got through to Nick.
+  const reasons = [...new Set(
+    results.filter(r => r.status === 'rejected')
+      .map(r => String(r.reason?.statusCode || r.reason?.code || 'unknown'))
+  )].join(', ');
+  _record(
+    title, data,
+    sent > 0 ? 'sent' : 'failed',
+    reasons || null,
+    sent, failed
+  );
 }
 
 module.exports = { isConfigured, init, sendToAll, _governor, _isQuietNow, ALWAYS_DELIVER, HOURLY_CAP };

@@ -39,6 +39,24 @@ router.post('/test', async (req, res) => {
   }
 });
 
+// GET /api/push/log — what NEURO tried to tell you, and what became of it.
+//
+// This answers "why didn't I get that?", which nothing could answer before:
+// the only record was console.log, and two paths dropped silently.
+// `?limit=` caps at 500; `?since=` (ISO) scopes the stats. Read-only.
+router.get('/log', (req, res) => {
+  try {
+    res.json({
+      subscriptions: db.getAllPushSubscriptions().length,
+      stats: db.getPushStats(req.query.since),
+      recent: db.getPushLog(req.query.limit),
+    });
+  } catch (e) {
+    console.error('[Push] Log error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // GET /api/push/subscriptions — diagnostic endpoint
 router.get('/subscriptions', (req, res) => {
   const subs = db.getAllPushSubscriptions();

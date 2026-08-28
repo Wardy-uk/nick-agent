@@ -480,6 +480,53 @@ function removePushSubscription(endpoint) {
   run('DELETE FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
 }
 
+// ── Push delivery log ────────────────────────────────────────────────────────
+// Bounded on write. Volume is ~5/day, so this is cheap, but an append-only
+// table with no retention is how the email triage blob quietly became a 668KB
+// pile — the same mistake one step later.
+const PUSH_LOG_RETAIN_DAYS = 90;
+
+function logPushOutcome({ type, title, outcome, reason, sentCount, failedCount }) {
+  run(
+    `INSERT INTO push_log (type, title, outcome, reason, sent_count, failed_count)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [type || null, title, outcome, reason || null, sentCount || 0, failedCount || 0]
+  );
+  run(
+    `DELETE FROM push_log WHERE created_at < datetime('now', ?)`,
+    [`-${PUSH_LOG_RETAIN_DAYS} days`]
+  );
+}
+
+function getPushLog(limit = 50) {
+  const n = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 500) : 50;
+  return all('SELECT * FROM push_log ORDER BY id DESC LIMIT ?', [n]);
+}
+
+/** Outcome counts since an ISO timestamp, plus the suppression reasons behind them. */
+function getPushStats(sinceIso) {
+  const since = sinceIso || new Date(Date.now() - 7 * 864e5).toISOString();
+  return {
+    since,
+    outcomes: all(
+      `SELECT outcome, COUNT(*) AS count FROM push_log
+        WHERE created_at >= ? GROUP BY outcome ORDER BY count DESC`,
+      [since]
+    ),
+    reasons: all(
+      `SELECT outcome, reason, COUNT(*) AS count FROM push_log
+        WHERE created_at >= ? AND reason IS NOT NULL
+        GROUP BY outcome, reason ORDER BY count DESC`,
+      [since]
+    ),
+    byType: all(
+      `SELECT type, outcome, COUNT(*) AS count FROM push_log
+        WHERE created_at >= ? GROUP BY type, outcome ORDER BY count DESC`,
+      [since]
+    ),
+  };
+}
+
 // Import classification helpers
 function saveImportClassification(relativePath, cls) {
   run(`
@@ -1346,6 +1393,9 @@ module.exports = {
   savePushSubscription,
   getAllPushSubscriptions,
   removePushSubscription,
+  logPushOutcome,
+  getPushLog,
+  getPushStats,
   saveImportClassification,
   getImportClassification,
   getAllImportClassifications,
