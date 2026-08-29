@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Add for Nick</title>
+<!--
+  The capture door — one box and a Send button.
+
+  ⚠ It shows NOTHING about Nick. No task list, no counts, no calendar. The link
+  it runs on is reachable from the open internet (Tailscale Funnel), so the only
+  thing holding it is a token in the URL, and a URL leaks in ways a password does
+  not — browser history, a shared phone, a screenshot. The blast radius of a
+  leaked link has to stay "a stranger can add a personal task".
+
+  Deliberately one hand-written file with no build step. It is the least likely
+  thing in this repo to be touched again, and a toolchain that has to be revived
+  before a one-line fix is how a small thing becomes unmaintainable.
+
+  ⚠ The token is read from the URL FRAGMENT (#...), not the query string. A
+  fragment is never sent to the server in a Referer header and is not written to
+  most server access logs, so the credential does not spread every time the page
+  loads an asset or someone follows a link away from it.
+-->
+<style>
+  :root {
+    --bg: #f6f6f8;
+    --card: #ffffff;
+    --ink: #14141a;
+    --muted: #6b6b76;
+    --line: #e2e2e8;
+    --accent: #0f766e;
+    --accent-ink: #ffffff;
+    --bad: #b42318;
+    --good: #0f766e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131316;
+      --card: #1e1e22;
+      --ink: #f2f2f5;
+      --muted: #9a9aa4;
+      --line: #34343c;
+      --accent: #2dd4bf;
+      --accent-ink: #06201d;
+      --bad: #ff8a7a;
+      --good: #5eead4;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: max(24px, env(safe-area-inset-top)) 16px 24px;
+  }
+  main { width: 100%; max-width: 460px; }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+  }
+  textarea {
+    width: 100%;
+    min-height: 96px;
+    resize: vertical;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    /* 16px minimum or iOS Safari zooms the whole page on focus. */
+    font-size: 16px;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+  button {
+    flex: 1;
+    border: 0;
+    border-radius: 10px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font: inherit;
+    font-weight: 600;
+    padding: 13px 16px;
+    cursor: pointer;
+    /* A 44px target: this gets used one-handed, in a hurry, usually standing up. */
+    min-height: 46px;
+  }
+  button[disabled] { opacity: 0.5; cursor: default; }
+  .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .msg { margin-top: 14px; font-size: 14px; min-height: 20px; }
+  .msg.bad { color: var(--bad); }
+  .msg.good { color: var(--good); }
+  .recent { margin: 18px 0 0; padding: 0; list-style: none; }
+  .recent li {
+    font-size: 13px;
+    color: var(--muted);
+    padding: 7px 0;
+    border-top: 1px solid var(--line);
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .recent .tick { color: var(--good); }
+  .recent .pending { color: var(--muted); }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Add something for Nick</h1>
+  <p class="sub" id="sub">Loading…</p>
+
+  <div class="card" id="card" hidden>
+    <textarea id="text" placeholder="e.g. Book the dentist" enterkeyhint="send" autocapitalize="sentences"></textarea>
+    <div class="row">
+      <button id="send" type="button">Add it</button>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="msg" id="msg" role="status" aria-live="polite"></div>
+  </div>
+
+  <ul class="recent" id="recent"></ul>
+  <p class="foot" id="foot"></p>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var MAX = 500;
+  var QUEUE_KEY = 'neuro_capture_queue';
+
+  var els = {
+    title: document.getElementById('title'),
+    sub: document.getElementById('sub'),
+    card: document.getElementById('card'),
+    text: document.getElementById('text'),
+    send: document.getElementById('send'),
+    count: document.getElementById('count'),
+    msg: document.getElementById('msg'),
+    recent: document.getElementById('recent'),
+    foot: document.getElementById('foot')
+  };
+
+  // The token rides in the fragment so it stays out of Referer headers and
+  // server logs. The API base is configured at deploy time; same-origin by
+  // default, which is what happens when this is served by NEURO itself.
+  var token = (location.hash || '').replace(/^#/, '').trim();
+  var API = (window.NEURO_API_BASE || '').replace(/\/+$/, '');
+
+  function say(text, kind) {
+    els.msg.textContent = text || '';
+    els.msg.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+
+  function updateCount() {
+    var n = els.text.value.length;
+    // Only shown when it starts to matter — a character counter sitting there
+    // from the first keystroke reads as a limit being imposed on you.
+    els.count.textContent = n > MAX - 100 ? (MAX - n) + ' left' : '';
+  }
+
+  // ── The offline queue ──────────────────────────────────────────────────────
+  // She may well be standing in a shop with one bar. A message that silently
+  // fails to send is worse than no page at all, so anything that cannot be
+  // delivered is kept and retried, and the list below says which is which.
+
+  function loadQueue() {
+    try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch (e) { return []; }
+  }
+  function saveQueue(q) {
+    try { localStorage.setItem(QUEUE_KEY, JSON.stringify(q.slice(-20))); } catch (e) { /* private mode */ }
+  }
+
+  function render() {
+    var q = loadQueue();
+    els.recent.innerHTML = '';
+    q.slice().reverse().forEach(function (item) {
+      var li = document.createElement('li');
+      var mark = document.createElement('span');
+      mark.className = item.sent ? 'tick' : 'pending';
+      mark.textContent = item.sent ? '✓' : '⋯';
+      var span = document.createElement('span');
+      // textContent, never innerHTML — this is user input being put back on the
+      // page, and it is the one place an injection could land.
+      span.textContent = item.text;
+      li.appendChild(mark);
+      li.appendChild(span);
+      els.recent.appendChild(li);
+    });
+    var pending = q.filter(function (i) { return !i.sent; }).length;
+    els.foot.textContent = pending
+      ? pending + ' waiting to send — they will go when you are back online.'
+      : '';
+  }
+
+  function post(text) {
+    return fetch(API + '/api/c/' + encodeURIComponent(token), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        return { status: r.status, body: body };
+      });
+    });
+  }
+
+  function flush() {
+    var q = loadQueue();
+    var next = q.filter(function (i) { return !i.sent; })[0];
+    if (!next) return Promise.resolve();
+    return post(next.text).then(function (res) {
+      if (res.status === 200) {
+        next.sent = true;
+        saveQueue(q);
+        render();
+        return flush();
+      }
+      // A 4xx will never succeed on a retry, so it is dropped from the queue
+      // rather than retried for ever — but it is reported, not swallowed.
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        saveQueue(q.filter(function (i) { return i !== next; }));
+        render();
+        say((res.body && res.body.error) || 'That could not be added.', 'bad');
+      }
+    }).catch(function () { /* still offline; leave it queued */ });
+  }
+
+  function submit() {
+    var text = els.text.value.trim();
+    if (!text) return;
+
+    var q = loadQueue();
+    q.push({ text: text.slice(0, MAX), sent: false });
+    saveQueue(q);
+    els.text.value = '';
+    updateCount();
+    render();
+    say('');
+
+    els.send.disabled = true;
+    flush().then(function () {
+      els.send.disabled = false;
+      var still = loadQueue().filter(function (i) { return !i.sent; }).length;
+      if (!still) say('Added. Nick will see it.', 'good');
+      else say('Saved — it will send when you are back online.', null);
+      els.text.focus();
+    });
+  }
+
+  // ── Start ──────────────────────────────────────────────────────────────────
+
+  if (!token) {
+    els.sub.textContent = 'This link is missing its code. Ask Nick to send it again.';
+    render();
+    return;
+  }
+
+  fetch(API + '/api/c/' + encodeURIComponent(token))
+    .then(function (r) { return r.json().catch(function () { return {}; }).then(function (b) { return { ok: r.ok, b: b }; }); })
+    .then(function (res) {
+      if (!res.ok || !res.b.ok) {
+        // Deliberately the same words whether the link was revoked or never
+        // existed — the server answers both identically and the page must not
+        // reintroduce the distinction it went to the trouble of removing.
+        els.sub.textContent = 'This link is not valid. Ask Nick for a new one.';
+        return;
+      }
+      els.title.textContent = 'Add something for Nick';
+      els.sub.textContent = 'Signed in as ' + res.b.label + '. It goes straight onto his list.';
+      els.card.hidden = false;
+      els.text.focus();
+      flush();
+    })
+    .catch(function () {
+      // Offline on load is not a dead link. The box still opens, because the
+      // whole point is that capture keeps working when the network does not.
+      els.sub.textContent = "Can't reach Nick's system right now — you can still type, and it will send later.";
+      els.card.hidden = false;
+    });
+
+  els.send.addEventListener('click', submit);
+  els.text.addEventListener('input', updateCount);
+  els.text.addEventListener('keydown', function (e) {
+    // Enter sends; Shift+Enter is a newline. On a phone the keyboard's own
+    // send key fires this too.
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+  });
+  window.addEventListener('online', flush);
+
+  render();
+}());
+</script>
+</body>
+</html>
