@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v27';
+const VERSION = 'v28';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -1070,26 +1070,61 @@ function suitability(score, outdoor) {
 }
 
 /**
- * The same reading, on a working day, framed as strain rather than recovery.
+ * Strain on a working day: the SAME reading, counted the other way up.
  *
- * ⚠ THE NUMBER IS NOT INVERTED, and that is deliberate. `stress-score` returns
- * a scale where HIGHER IS BETTER (98 = fully recovered), so printing 58 under
- * the word "stress" would read as "quite stressed" while meaning the opposite —
- * a gauge that lies. The dial keeps its one direction everywhere it appears and
- * the WORDS carry the framing instead, which is also why the same number can
- * sit on the lock screen without contradicting this one.
+ * `stress-score` returns a recovery scale where higher is better (98 = fully
+ * recovered). Stress is its complement, so this inverts it — Nick's call, made
+ * after I argued for keeping one direction and he reaffirmed it. Higher now
+ * means worse, which is what everybody expects of the word.
+ *
+ * ⚠ Inverting the NUMBER alone would have been the actual lie. A dial that
+ * fills as things improve, under a figure that rises as they worsen, reads
+ * backwards at exactly the glance-speed a widget is for. So all three invert
+ * together:
+ *
+ *   value    100 - score, rising with strain
+ *   fill     the dial fills UP as stress rises
+ *   colour   green when there is room, red when there is not
+ *
+ * The HRV bars underneath keep their own direction and stay labelled "HRV",
+ * because a named metric means what it has always meant; only the gauge is
+ * re-framed.
+ *
+ * The lock-screen ring is the weekly TARGET, never this, so there is no surface
+ * where the two directions appear together.
  */
 function stressGauge(health) {
-  const g = readinessGauge(health);
-  if (!g) return null;
-  const score = Number(g.value);
+  const s = health && health.stress;
+  if (!s || s.status !== 'ok' || !Number.isFinite(Number(s.score))) return null;
+
+  const score = Math.round(Number(s.score));
+  const stress = Math.max(0, Math.min(100, 100 - score));
+
+  // Inverted against readinessGauge: red is now the HIGH end.
+  const pair = stress >= 60 ? HEX.critical
+    : stress >= 45 ? HEX.high
+      : HEX.positive;
+
+  const hrv = Number.isFinite(Number(s.hrv)) ? Number(s.hrv).toFixed(1) : null;
+  const base = Number.isFinite(Number(s.baselineMs)) ? Math.round(Number(s.baselineMs)) : null;
+
+  const series = (health.history || [])
+    .map((h) => Number(h.hrvMedian))
+    .filter((v) => Number.isFinite(v))
+    .reverse();
+
   return {
-    ...g,
-    unit: 'calm',
-    label: score >= 70 ? 'Room to push'
-      : score >= 55 ? 'Holding up'
-        : score >= 40 ? 'Running warm'
-          : 'Under strain',
+    value: String(stress),
+    unit: 'stress',
+    fraction: stress / 100,
+    label: stress >= 60 ? 'Under strain'
+      : stress >= 45 ? 'Running warm'
+        : stress >= 30 ? 'Holding up'
+          : 'Room to push',
+    detail: hrv && base ? `HRV ${hrv}ms vs ${base} baseline` : 'HRV against your baseline',
+    pair,
+    series: series.length > 2 ? series : null,
+    seriesLabel: 'HRV, last 7 days',
   };
 }
 
