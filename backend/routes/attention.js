@@ -19,8 +19,12 @@ router.get('/', async (req, res) => {
     // ?view=work|personal pins the AGENDA for a widget locked to one side of
     // the split. Anything else is ignored rather than rejected: an unknown
     // value must fall back to the brain's own read, never to an empty diary.
+    // work | personal pin a side; flip asks for the opposite of the brain's own
+    // read, for the second card in a stack. Anything else is ignored rather
+    // than rejected: an unknown value must fall back to the brain, never to an
+    // empty diary.
     const asked = String(req.query.view || '').toLowerCase();
-    const view = asked === 'work' || asked === 'personal' ? asked : null;
+    const view = ['work', 'personal', 'flip'].indexOf(asked) !== -1 ? asked : null;
     res.json(await attention.build({ view }));
   } catch (e) {
     console.error('[Attention] build failed:', e.message);

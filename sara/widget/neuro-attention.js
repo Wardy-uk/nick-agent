@@ -23,10 +23,11 @@
 //    and stores both in the iOS Keychain.
 // 3. Long-press the home screen → add a Scriptable widget → pick "NEURO".
 //    Medium or large. Small shows the primary card only.
-// 4. To SWIPE between work and personal: add a second NEURO widget, drag it on
-//    top of the first to make a stack, then Edit Widget on each and set
-//    Parameter to `work` on one and `personal` on the other. iOS provides the
-//    swipe; leave a third unset to follow the brain.
+// 4. To SWIPE between work and personal: add a SECOND NEURO widget, drag it on
+//    top of the first to make a stack, and set the second one's Parameter to
+//    `flip` (long-press, Edit Widget, Parameter). Leave the first blank.
+//    The top card then follows the context and one swipe shows the other side.
+//    iOS provides the swipe — a widget cannot detect a gesture itself.
 //
 // ⚠ THIS FILE MUST CONTAIN NO BACKSLASHES — none, anywhere, including inside
 // regex literals and string escapes. It reaches the phone by being COPIED and
@@ -53,8 +54,13 @@
  * Scriptable tells them apart by the per-instance widget parameter.
  *
  *   (empty)   follow the brain — work in hours, personal outside them
+ *   flip      always the OTHER side of whatever the brain just decided
  *   work      always the working view
  *   personal  always his own
+ *
+ * `flip` is what makes a stack behave the way Nick asked for: the top card
+ * follows the context, the one beneath is always the other half. iOS provides
+ * the swipe — a widget cannot detect a gesture itself, in any app.
  *
  * Set it by long-pressing the widget, Edit Widget, Parameter.
  *
@@ -64,7 +70,7 @@
 function widgetView() {
   try {
     const raw = String(args.widgetParameter || '').trim().toLowerCase();
-    return raw === 'work' || raw === 'personal' ? raw : 'auto';
+    return ['work', 'personal', 'flip'].indexOf(raw) !== -1 ? raw : 'auto';
   } catch (e) {
     return 'auto';
   }
@@ -79,7 +85,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v29';
+const VERSION = 'v30';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -931,18 +937,25 @@ function saraSays(w, d, res, target, weather, family, personal, health, view) {
   // unpinned one follows the brain. `pinned` is kept separate from the result
   // so the header can say which card this is — in a stack of two, "personal"
   // and "the weekend" look identical without it.
+  // ⚠ The SERVER resolves which side this card is, including for `flip` — the
+  // duty read is the brain's, and a client inverting its own guess would be a
+  // second opinion about what kind of day it is. The widget only renders the
+  // answer, so its agenda and its gauge cannot disagree.
   const duty = ctx.duty;
-  const pinned = view === 'work' || view === 'personal';
-  const offDuty = pinned
-    ? view === 'personal'
+  const resolved = d.viewResolved || null;
+  const pinned = view !== 'auto';
+  const offDuty = resolved
+    ? resolved === 'personal'
     : (!res.error && duty && duty.known && duty.onDuty === false);
 
   const head = w.addStack();
   head.centerAlignContent();
   text(head, 'SARA', { size: 11, weight: 'bold', color: MUTED });
   if (pinned) {
+    // The side it LANDED on, never the word "flip" — that means nothing to
+    // someone glancing at a stack.
     head.addSpacer(5);
-    text(head, view, { size: 10, color: MUTED });
+    text(head, resolved || view, { size: 10, color: MUTED });
   }
   head.addSpacer();
   const clock = head.addDate(new Date());
@@ -1436,12 +1449,14 @@ const [res, weather] = await Promise.all([
 ]);
 
 // Only spend a second request when the brain has actually said he is off duty.
-const duty = res.data && res.data.context && res.data.context.duty;
 // The pin decides what to FETCH as well as what to draw — a personal card must
 // not go without its personal tasks just because it happens to be a Tuesday.
-const offDuty = view === 'personal' ? true
-  : view === 'work' ? false
-    : (!res.error && duty && duty.known && duty.onDuty === false);
+// `viewResolved` comes back from the brain and already accounts for `flip`.
+const duty = res.data && res.data.context && res.data.context.duty;
+const resolvedView = res.data ? res.data.viewResolved : null;
+const offDuty = resolvedView
+  ? resolvedView === 'personal'
+  : (!res.error && duty && duty.known && duty.onDuty === false);
 // Off duty the wins ARE the view; on large they fill the strip at the bottom.
 // Anywhere else it would be a request bought for nothing.
 const needWins = !res.error && (offDuty || family === 'large');

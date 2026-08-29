@@ -755,13 +755,29 @@ async function build({ now = new Date(), view = null } = {}) {
     // never the duty read itself, which stays the brain's and is still reported
     // on `context` for anything that needs to know what kind of day it is.
     agenda: agendaFor(inputs.calendar, now, 4, _tomorrowEvents(), {
+      // `flip` is the OPPOSITE of whatever the brain just decided, and it exists
+      // for the second card in a Smart Stack: the top one follows the context,
+      // the one beneath it is always the other side. It is resolved HERE rather
+      // than in the widget because the duty read is the brain's — a client
+      // inverting its own guess would be a second opinion about what kind of
+      // day it is.
       personal: view === 'personal' ? true
         : view === 'work' ? false
-          : (context.duty ? context.duty.onDuty === false : false),
+          : view === 'flip' ? !(context.duty ? context.duty.onDuty === false : false)
+            : (context.duty ? context.duty.onDuty === false : false),
     }),
     // What was asked for, echoed back, so a client can tell a pinned view from
-    // the brain's own choice rather than inferring it.
+    // the brain's own choice rather than inferring it — and, for `flip`, which
+    // side that actually landed on, so the card can label itself honestly
+    // instead of showing the word "flip" to a reader it means nothing to.
     view: view || 'auto',
+    viewResolved: (() => {
+      const brainOff = context.duty ? context.duty.onDuty === false : false;
+      if (view === 'personal') return 'personal';
+      if (view === 'work') return 'work';
+      if (view === 'flip') return brainOff ? 'work' : 'personal';
+      return brainOff ? 'personal' : 'work';
+    })(),
     // A failed pool is a GAP, never an empty feed presented as a calm day.
     poolAvailable: poolError === null,
     poolSize: items.length,

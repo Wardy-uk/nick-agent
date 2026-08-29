@@ -504,3 +504,34 @@ test('a pinned view overrides which DIARY is read, and nothing else', () => {
     ['Work thing']
   );
 });
+
+test('flip is the opposite of the brain, resolved on the SERVER', () => {
+  // The second card in a Smart Stack. It has to be resolved here rather than in
+  // the widget: the duty read is the brain's, and a client inverting its own
+  // guess would be a second opinion about what kind of day it is — which is how
+  // a card's agenda and its gauge come to disagree.
+  const resolve = (view, brainOff) => {
+    if (view === 'personal') return 'personal';
+    if (view === 'work') return 'work';
+    if (view === 'flip') return brainOff ? 'work' : 'personal';
+    return brainOff ? 'personal' : 'work';
+  };
+
+  // Off duty: the top card is personal, so the flipped one must be work.
+  assert.equal(resolve(null, true), 'personal');
+  assert.equal(resolve('flip', true), 'work');
+
+  // On duty: the top card is work, so the flipped one must be personal.
+  assert.equal(resolve(null, false), 'work');
+  assert.equal(resolve('flip', false), 'personal');
+
+  // A pin outranks the brain in both directions.
+  assert.equal(resolve('work', true), 'work');
+  assert.equal(resolve('personal', false), 'personal');
+
+  // The two cards in a stack must NEVER show the same side, whatever the day.
+  for (const brainOff of [true, false]) {
+    assert.notEqual(resolve(null, brainOff), resolve('flip', brainOff),
+      'the stack would show the same card twice');
+  }
+});
