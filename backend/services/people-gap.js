@@ -33,7 +33,24 @@ const MIN_SIGHTINGS = 2;
 const INTERNAL_DOMAINS = (process.env.PEOPLE_GAP_DOMAINS || 'nurtur.tech')
   .split(',').map(d => d.trim().toLowerCase()).filter(Boolean);
 
-const SKIP_DIRS = new Set(['transcripts', '_transcripts', 'Archive', 'Vault Audit', '.lint-backups', '.git', '.obsidian', 'Templates', 'Scripts']);
+// ⚠ The SENSITIVE and PERSONAL directories are pulled from vault-exclusions
+// rather than typed out again. This file's own list is deliberately separate
+// (it is scoped to its own job and the other copies are left alone), but these
+// two are not a scoping decision — they are a rule about what must never enter
+// the person graph, and this module is the one that ACTS on it: it does not
+// merely rank a name, it CREATES a People note.
+//
+// Without this it would walk `Personal/` — Nick's disciplinary prep, the fraud
+// investigation, his GP notes and three Occupational Health documents — and
+// propose People notes for the HR officer who handled his disciplinary, the
+// external OH assessor and his GP, filing them alongside his direct reports.
+const { SENSITIVE_DIRS, PERSONAL_DIRS } = require('./vault-exclusions');
+
+const SKIP_DIRS = new Set([
+  'transcripts', '_transcripts', 'Archive', 'Vault Audit', '.lint-backups',
+  '.git', '.obsidian', 'Templates', 'Scripts',
+  ...SENSITIVE_DIRS, ...PERSONAL_DIRS,
+]);
 
 function existingPeople() {
   try {
