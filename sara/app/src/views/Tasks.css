@@ -125,6 +125,24 @@
   padding-left: 0.4rem;
 }
 
+/* Personal. Only ever rendered on the exception — see domainBadge — so it can
+   afford to be distinct without becoming noise. Deliberately NOT red or amber:
+   those already mean overdue and must-do on this row, and a third colour saying
+   "this is a different part of your life" must not read as a third urgency. */
+.tasks__domain {
+  color: #0f766e;
+  background: rgba(20, 184, 166, 0.14);
+  border-radius: 4px;
+  padding: 0 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tasks__domain { color: #5eead4; background: rgba(20, 184, 166, 0.18); }
+}
+
 .tasks__hidden {
   text-align: center;
   color: var(--muted);

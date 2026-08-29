@@ -3,6 +3,7 @@ import { apiFetch } from '../api';
 import { completeTask } from '../completeTask';
 import DueControl from '../components/DueControl';
 import { msPlanBadge } from '../../../../shared/ms-task.cjs';
+import { domainBadge } from '../../../../shared/task-domain.cjs';
 import './Tasks.css';
 
 // Tasks = the list you can actually work from on the phone.
@@ -169,6 +170,12 @@ export default function Tasks() {
               {/* Dating a task is the cheapest way to stop it rotting undated,
                   so it lives inline on the row rather than behind an edit view. */}
               <DueControl task={item} onChanged={load} />
+              {/* Only PERSONAL is marked. Nearly every task is work, so a "Work"
+                  chip on all of them is a label every row shares — it sorts
+                  nothing and reads as noise. domainBadge owns that rule, so this
+                  view, the desktop panel and the capture screen cannot disagree
+                  about when to show it. */}
+              {domainBadge(item) && <span className="tasks__domain">{domainBadge(item)}</span>}
               {item.source && <span className="tasks__source">{item.source}</span>}
               {/* Which Planner board / To Do list. Absent when NEURO could not
                   read it, rather than naming a board the task may not be on. */}

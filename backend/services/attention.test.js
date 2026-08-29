@@ -131,6 +131,45 @@ test('a non-working day keeps only what the engine marked unsuppressable', () =>
   assert.equal(g.speech, null, 'a day off is not spoken into');
 });
 
+test('a day off surfaces PERSONAL work and still holds the work back', () => {
+  // The whole point of a day off having a feed at all. Before the domain split
+  // there was nothing a Saturday could honestly surface — every task in the
+  // store was work — so silence was the only correct behaviour. Now the pool
+  // can hold things that are exactly as due on a Saturday as on a Tuesday.
+  const g = gate(ctx(ACTIVITY.OFF), [
+    item({ id: 'work-a', title: 'Write the risk report' }),
+    item({ id: 'home-a', title: 'Collect the parcel', meta: { domain: 'personal' } }),
+  ]);
+  assert.equal(g.primary.id, 'home-a');
+  // Work is DROPPED, not quietly withheld — held is not lost.
+  assert.deepEqual(g.dropped.map((d) => d.id), ['work-a']);
+});
+
+test('an item with no domain is treated as WORK on a day off', () => {
+  // The asymmetry: a personal item treated as work merely stays hidden on a
+  // Saturday, while a work item treated as personal SURFACES on one — which is
+  // the thing a day off exists to prevent. So anything not positively personal
+  // is work.
+  const g = gate(ctx(ACTIVITY.OFF), [
+    item({ id: 'no-meta', meta: {} }),
+    item({ id: 'null-domain', meta: { domain: null } }),
+    item({ id: 'nonsense', meta: { domain: 'Personal Life' } }),
+  ]);
+  assert.equal(g.primary.kind, 'context', 'nothing personal, so the context is the answer');
+  assert.deepEqual(g.dropped.map((d) => d.id).sort(), ['no-meta', 'nonsense', 'null-domain']);
+});
+
+test('a low-confidence day off still hides nothing', () => {
+  // Dropping requires a confident read. A bad guess that Nick is off must not
+  // hide real work — the rule that separates QUIET from DROPPING.
+  const g = gate(
+    ctx(ACTIVITY.OFF, { confidence: { score: 0.3, level: 'low', basis: [], rationale: '' } }),
+    [item({ id: 'work-a' })],
+  );
+  assert.deepEqual(g.dropped, []);
+  assert.equal(g.primary.id, 'work-a');
+});
+
 test('away changes nothing — not the ranking, and not the speech', () => {
   // Caught live: the rationale claimed "nothing is spoken" in the same payload
   // as a populated `speech` and `quiet:false`. Presence means "not at home",

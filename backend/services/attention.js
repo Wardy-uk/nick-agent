@@ -62,6 +62,20 @@ function isObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
+/**
+ * Is this pool item personal rather than work?
+ *
+ * ⚠ Reads the item's own `meta.domain`, which decision-engine carries through
+ * from the task — NOT the task store, because `gate()` is PURE and must stay
+ * that way. Anything it cannot positively identify as personal is work, the
+ * same asymmetry `shared/task-domain.cjs` argues: a personal item treated as
+ * work merely stays hidden on a Saturday, while a work item treated as personal
+ * would surface on one, which is the thing a day off exists to prevent.
+ */
+function _isPersonal(item) {
+  return isObject(item) && isObject(item.meta) && item.meta.domain === 'personal';
+}
+
 function contextCard(id, title, reason) {
   // A context card is the frame, not a job — there is nowhere to route TO, so
   // it stays on the Surface rather than being given a destination it cannot honour.
@@ -275,11 +289,24 @@ function gate(context, items, now = new Date()) {
       break;
 
     case ACTIVITY.OFF:
-      // Not a working day. Only what the engine itself marked unsuppressable —
-      // an escalation on a Saturday is still worth knowing about.
-      drop((i) => i._unsuppressable === true, 'not a working day');
+      // Not a working day. THREE things get through, and the middle one is new:
+      //
+      //  • whatever the engine marked unsuppressable — an escalation on a
+      //    Saturday is still worth knowing about;
+      //  • PERSONAL work, which is the entire reason a day off has a feed at
+      //    all. NEURO was built around work, so before the domain split there
+      //    was nothing a Saturday could honestly surface and the only correct
+      //    behaviour was silence. Now the pool can contain things that are
+      //    exactly as due on a Saturday as on a Tuesday.
+      //
+      // This is a POOL SWITCH, not a relaxation of the gate: work is still
+      // dropped, and named in `dropped` rather than quietly withheld. The rule
+      // that context re-ranks and gates but never ADDS still holds — nothing
+      // here invents a candidate, it only changes which of decision-engine's
+      // own items survive.
+      drop((i) => i._unsuppressable === true || _isPersonal(i), 'not a working day');
       primary = kept.length ? itemCard(kept.shift(), now) : contextCard('context-off', ctx.label, ctx.summary);
-      rationale = 'Not a working day, so only what cannot be suppressed gets through.';
+      rationale = 'Not a working day, so work is held back and only personal or unsuppressable items get through.';
       break;
 
     case ACTIVITY.AWAY:
