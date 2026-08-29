@@ -350,24 +350,58 @@ function suggest(anchor = new Date()) {
  * The last `n` COMPLETE weeks before the one containing `anchor`, newest first.
  * Null when the ledger could not be read at all.
  */
+/**
+ * The first day the ledger has ANY task completion for.
+ *
+ * ⚠ Weeks before this are not weeks in which Nick closed nothing — they are
+ * weeks the ledger did not cover. Counting them as zero is the "absence of
+ * evidence read as evidence of absence" trap this codebase keeps tripping over,
+ * and here it is not cosmetic: `suggest()` takes a MEDIAN, so eight empty weeks
+ * drag the proposal to 0, which is not a target anybody can be set.
+ *
+ * Measured on the live ledger: task_done rows begin 2026-08-14, while the wins
+ * table itself goes back to 2026-06-01 — so the gap is real and would have
+ * proposed a target of zero off [12,3,0,0,0,0,0,0].
+ *
+ * Returns null when the ledger cannot be read, which callers treat as "cannot
+ * tell", not "no history".
+ */
+function _ledgerStartsAt() {
+  try {
+    const row = db.get("SELECT MIN(date_key) AS first FROM wins WHERE kind = 'task_done'");
+    return row && row.first ? String(row.first) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function recentWeeks(anchor = new Date(), n = 8) {
   const thisMonday = weekStart(anchor);
   const oldest = addDays(thisMonday, -7 * n);
   const byDay = _tasksByDay(dateKey(oldest), dateKey(addDays(thisMonday, -1)));
   if (byDay === null) return null;
 
+  const ledgerStart = _ledgerStartsAt();
+
   const out = [];
   for (let i = 1; i <= n; i++) {
     const start = addDays(thisMonday, -7 * i);
+    const end = addDays(start, 6);
     let done = 0;
     for (let d = 0; d < 7; d++) done += byDay.get(dateKey(addDays(start, d))) || 0;
     const stored = readTarget(start);
+
+    // A week that ended before the ledger began is UNKNOWN, not empty. `suggest`
+    // already filters on `known`, so this alone keeps the proposal honest.
+    const covered = !ledgerStart || dateKey(end) >= ledgerStart;
+
     out.push({
       weekStart: dateKey(start),
-      done,
+      done: covered ? done : null,
       target: stored ? stored.target : null,
-      met: stored ? done >= stored.target : null,
-      known: true,
+      met: stored && covered ? done >= stored.target : null,
+      known: covered,
+      ...(covered ? {} : { why: 'before the wins ledger started' }),
     });
   }
   return out;

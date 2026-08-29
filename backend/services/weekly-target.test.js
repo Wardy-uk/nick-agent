@@ -141,3 +141,57 @@ test('a sane ceiling exists on the target', () => {
   // than having none at all.
   assert.ok(Number.isInteger(MAX_TARGET) && MAX_TARGET > 0 && MAX_TARGET <= 500);
 });
+
+// ── History coverage ────────────────────────────────────────────────────────
+
+test('a week before the ledger began is UNKNOWN, not a week of zero', () => {
+  // Measured on the live DB: task_done rows begin 2026-08-14 while the wins
+  // table goes back to 2026-06-01, so eight lookback weeks included six the
+  // ledger never covered. suggest() takes a MEDIAN, so those zeros dragged the
+  // proposal to 0 — which setTarget then refuses, because 0 is not a target.
+  //
+  // Exercised through the real function against a scratch DB, because the bug
+  // lives in the SQL boundary, not in arithmetic a fixture could stand in for.
+  const path = require('path');
+  const os = require('os');
+  const fs = require('fs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neuro-wt-'));
+  const prev = process.env.NEURO_DB_PATH;
+  process.env.NEURO_DB_PATH = path.join(dir, 'scratch.db');
+
+  // Fresh module registry so database.js picks up the scratch path.
+  for (const k of Object.keys(require.cache)) delete require.cache[k];
+  const db = require('./../db/database');
+  const wt = require('./weekly-target');
+
+  return db.init().then(() => {
+    const anchor = new Date('2026-08-31T10:00:00'); // a Monday
+    // One task closed in the week of 24 Aug, and nothing before it ever.
+    db.run(
+      `INSERT INTO wins (date_key, occurred_at, source, kind, text, evidence, count, dedupe_key, created_at)
+       VALUES ('2026-08-26', '2026-08-26T10:00:00Z', 'activity', 'task_done', 'a task', 'x', 1, 'k1', '2026-08-26T10:00:00Z')`
+    );
+
+    const weeks = wt.recentWeeks(anchor, 8);
+    const covered = weeks.filter((w) => w.known);
+    const uncovered = weeks.filter((w) => !w.known);
+
+    assert.equal(covered.length, 1, 'only the week containing the one row is known');
+    assert.equal(covered[0].done, 1);
+    assert.ok(uncovered.length >= 6, 'the rest predate the ledger');
+    assert.equal(uncovered[0].done, null, 'unknown weeks carry null, never 0');
+    assert.match(uncovered[0].why, /before the wins ledger/);
+
+    // And the proposal must not be dragged to zero by them.
+    const s = wt.suggest(anchor);
+    assert.ok(s.value === null || s.value > 0, `a proposal of ${s.value} is not a target`);
+
+    process.env.NEURO_DB_PATH = prev;
+    for (const k of Object.keys(require.cache)) delete require.cache[k];
+    // better-sqlite3 still holds the file open, and Windows refuses to unlink a
+    // held file — so cleanup is best-effort. A temp directory left behind is
+    // not worth failing a passing test over (and moving a live DB file is the
+    // mistake that destroyed the local agent.db once already).
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* held open */ }
+  });
+});
