@@ -34,24 +34,11 @@ async function main() {
   const totalDays = arg('days', 800);
   const chunk = arg('chunk', 30);
 
-  let written = 0;
-  const allGaps = [];
-
-  // Backwards from today, one chunk at a time. `now` is moved rather than the
-  // window widened, so every chunk reads a bounded number of rows.
-  //
-  // `today` is passed separately and always the REAL today: completeness is a
-  // fact about the clock, and without this every chunk boundary would stamp a
-  // long-finished day as still in progress.
-  const realToday = new Date();
-  for (let offset = 0; offset < totalDays; offset += chunk) {
-    const now = new Date(Date.now() - offset * 86400000);
-    const res = healthDaily.sync({ days: chunk, now, today: realToday });
-    written += res.written;
-    allGaps.push(...res.gaps);
-    process.stdout.write(`\r  ${offset + chunk}/${totalDays} days — ${written} rows written`);
-  }
-  process.stdout.write('\n');
+  // The chunked walk lives in health-daily.syncRange, shared with the nightly
+  // wide re-roll — the alternative is chunking logic in this script that the
+  // scheduler cannot reuse, which is how the two come to disagree about a rule
+  // (bounded windows) that only matters when it is applied consistently.
+  const { written, gaps: allGaps } = healthDaily.syncRange({ days: totalDays, chunk });
 
   const rows = db.getHealthDays(5000);
   const withSleep = rows.filter(r => r.asleep_hours != null).length;

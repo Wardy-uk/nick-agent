@@ -279,3 +279,28 @@ test('a crossed threshold does NOT silence a large near-threshold contributor', 
   assert.match(s, /resting heart rate/);
   assert.match(s, /HRV also on the low side/, 'the near-threshold contributor must be named too');
 });
+
+// ── syncRange bounds every chunk ─────────────────────────────────────────────
+//
+// The wide re-roll exists because the phone backfills: no sample in the last
+// week arrived more than 10 days late, but the worst lag in the last month is
+// 730 days. A sample landing today stamped last March is invisible to the hourly
+// 10-day job for ever.
+
+test('the wide re-roll walks in bounded chunks, never one wide read', () => {
+  // The SHAPE of the reads is what matters: one wide call hits the 20,000-row
+  // cap and silently rolls up a partial history — the bug this module already
+  // shipped once (744 days written, 328 with any HRV).
+  const plan = hd.chunkPlan(120, 30);
+  assert.equal(plan.length, 4, '120 days in 30-day chunks is four reads');
+  assert.ok(plan.every(s => s.days <= 30), 'and no single read is wider than the chunk');
+});
+
+test('the last chunk is trimmed, so the range read is the range asked for', () => {
+  assert.deepEqual(hd.chunkPlan(100, 30).map(s => s.days), [30, 30, 30, 10]);
+  assert.deepEqual(hd.chunkPlan(100, 30).map(s => s.offset), [0, 30, 60, 90]);
+});
+
+test('a chunk size of zero cannot spin for ever', () => {
+  assert.equal(hd.chunkPlan(10, 0).length, 10);
+});

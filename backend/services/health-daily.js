@@ -466,6 +466,55 @@ function sync({ days = SYNC_WINDOW_DAYS, now = new Date(), today = now } = {}) {
   return { ok: gaps.length === 0, written, days: rows.length, gaps, since: toDayKey(sinceDate) };
 }
 
+/**
+ * Re-roll a WIDE window by walking back in bounded chunks.
+ *
+ * WHY THIS EXISTS. The hourly `sync()` re-reads 10 trailing days, which is right
+ * for steady state — measured on the live table, no sample in the last week
+ * arrived stamped more than 10 days earlier. But the worst arrival lag over the
+ * last month is **730 days**, because the phone app backfills history forward
+ * chronologically and has delivered two years of it in one go. A sample that
+ * lands today stamped last March is invisible to the hourly rollup for ever:
+ * `health_daily` would keep the row it computed when that day was empty.
+ *
+ * ⚠ Chunked, and NOT optional. `sync()` pulls HRV and resting heart rate as raw
+ * rows so the daily figure can be a median, capped at 20,000 — so a single wide
+ * call silently keeps the newest rows and rolls up a partial history. That is
+ * the bug this module already shipped once (744 days written, 328 with any HRV),
+ * and the chunking is the reason the backfill script does not hit it.
+ *
+ * Lives here rather than in the script so the scheduler and the script share one
+ * implementation — the alternative is chunking logic in a script the nightly job
+ * cannot reuse, which is how the two come to disagree.
+ */
+function syncRange({ days = 120, chunk = 30, now = new Date(), today = now } = {}) {
+  let written = 0;
+  const gaps = [];
+  for (const step of chunkPlan(days, chunk)) {
+    const end = new Date(now.getTime() - step.offset * 86400000);
+    const res = sync({ days: step.days, now: end, today });
+    written += res.written;
+    gaps.push(...res.gaps);
+  }
+  return { ok: gaps.length === 0, written, gaps, days };
+}
+
+/**
+ * The walk itself: which bounded windows a wide re-roll is made of. PURE, and
+ * separated for exactly that reason — the SHAPE of the reads is the thing worth
+ * pinning, because one wide read hits the row cap and silently rolls up a
+ * partial history. The last chunk is TRIMMED rather than overshooting, so the
+ * range asked for is the range read.
+ */
+function chunkPlan(days, chunk) {
+  const size = Math.max(1, chunk);
+  const steps = [];
+  for (let offset = 0; offset < days; offset += size) {
+    steps.push({ offset, days: Math.min(size, days - offset) });
+  }
+  return steps;
+}
+
 /** The stored days, newest first, with keys the rest of NEURO uses. */
 function recentDays(days = 30, { completeOnly = false } = {}) {
   return db.getHealthDays(days, { completeOnly }).map(fromRow);
@@ -523,6 +572,8 @@ module.exports = {
   readinessSentence,
   // impure
   sync,
+  syncRange,
+  chunkPlan,
   recentDays,
   today,
   fromRow,

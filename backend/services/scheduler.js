@@ -444,6 +444,30 @@ function start() {
     }
   });
 
+  // 03:10 nightly — re-roll a WIDE window of health days.
+  //
+  // The hourly job re-reads 10 trailing days, which is right for steady state:
+  // measured live, no sample in the last week arrived stamped more than 10 days
+  // earlier. But the worst arrival lag in the last month is 730 DAYS, because
+  // the phone app backfills history forward chronologically and has delivered
+  // two years in one go. A sample landing today stamped last March would never
+  // reach health_daily otherwise — the row computed when that day was empty
+  // would stand for ever.
+  //
+  // Bounded at 120 days: anything older is a full re-backfill and belongs to
+  // scripts/health-backfill.js, run by hand. Chunked inside syncRange, because a
+  // single wide read hits the 20,000-row cap and silently rolls up a partial
+  // history. Idempotent, so like the hourly job it is deliberately not tracked.
+  cron.schedule('10 3 * * *', () => {
+    try {
+      const { written, gaps } = require('./health-daily').syncRange({ days: 120 });
+      for (const g of gaps) console.warn(`[Scheduler] Health wide rollup gap — ${g.input}: ${g.why}`);
+      console.log(`[Scheduler] Health wide rollup: ${written} day(s) re-rolled`);
+    } catch (e) {
+      console.error('[Scheduler] Health wide rollup failed:', e.message);
+    }
+  });
+
   // 10pm nightly — build daily activity summary + entity extraction + write observations
   // async because the meeting-action scan now asks NOVA which 1-2-1s it already owns
   // before scanning. `_tracked` awaits the callback, so this is safe.
