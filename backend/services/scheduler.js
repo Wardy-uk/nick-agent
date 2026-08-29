@@ -421,6 +421,29 @@ function start() {
     }
   });
 
+  // Every hour — roll the raw Apple Health samples into one row per day.
+  //
+  // Hourly rather than nightly because the phone syncs when iOS feels like it
+  // (BGProcessingTask is a request, not a schedule), so "last night's sleep" can
+  // land at 11:00. The planner reads this at 07:15, so a stale rollup means a
+  // day planned against the day before yesterday.
+  //
+  // Deliberately NOT a scheduleDaily/TRACKED_JOBS job, for the same reason as
+  // wins: sync() is idempotent over a trailing 10-day window, so a missed hour
+  // is corrected by the next one and there is nothing to replay.
+  cron.schedule('25 * * * *', () => {
+    try {
+      const { written, gaps } = require('./health-daily').sync();
+      // Gaps are logged loudly. A rollup that quietly writes nothing because the
+      // table was unreachable looks exactly like a quiet day — which is the
+      // failure this whole area was just dug out of.
+      for (const g of gaps) console.warn(`[Scheduler] Health rollup gap — ${g.input}: ${g.why}`);
+      if (written) console.log(`[Scheduler] Health rollup: ${written} day(s)`);
+    } catch (e) {
+      console.error('[Scheduler] Health rollup failed:', e.message);
+    }
+  });
+
   // 10pm nightly — build daily activity summary + entity extraction + write observations
   // async because the meeting-action scan now asks NOVA which 1-2-1s it already owns
   // before scanning. `_tracked` awaits the callback, so this is safe.

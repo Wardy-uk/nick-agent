@@ -93,7 +93,10 @@ async function sync({ days = 14, checkArrivals = true } = {}) {
   const newEventIds = [];
   try {
     db.batchSaves(() => {
-      db.clearCalendarCache();
+      // Graph rows ONLY. This is replace-by-window across the whole table, and
+      // scoping it is what stops a Graph sync — which runs every few minutes —
+      // from deleting every Apple event a few minutes after the phone pushed it.
+      db.clearCalendarCache('graph');
       for (const event of events) {
         if (!event?.id || !event.start) continue;
         db.upsertCalendarEvent(event);

@@ -248,3 +248,74 @@ test('a block is never shorter than the minimum worth blocking', () => {
     assert.ok(b.minutes >= planner.MIN_BLOCK_MINUTES);
   }
 });
+
+// ── Capacity: what the body has to give ──────────────────────────────────────
+//
+// The rules that matter here are the refusals. A planner that plans less on a
+// bad day is useful; one that plans less because a phone did not sync, or that
+// silently plans less without saying so, is a planner Nick concludes has broken.
+
+test('no health read plans exactly as before', () => {
+  const full = planner.capacityFor(null);
+  assert.equal(full.maxBlocks, planner.MAX_BLOCKS_PER_HALF);
+  assert.equal(full.maxBlockMinutes, planner.MAX_BLOCK_MINUTES);
+  assert.equal(full.maxTasks, planner.MAX_TASKS_PER_BLOCK);
+  assert.equal(full.reduced, false);
+});
+
+test('an UNKNOWN readiness plans as normal, never as low', () => {
+  // The failure direction that matters: a watch left on charge must not buy a
+  // lighter day, and a bridge hiccup must not stop the planner working.
+  const unknown = planner.capacityFor({ known: false, state: 'unknown', reason: 'still calibrating' }, { enabled: true });
+  assert.deepEqual(unknown, planner.FULL_CAPACITY);
+});
+
+test('a low-recovery day plans less', () => {
+  const low = planner.capacityFor({ known: true, state: 'low', score: 31 }, { enabled: true });
+  assert.equal(low.maxBlocks, 1);
+  assert.ok(low.maxBlockMinutes < planner.MAX_BLOCK_MINUTES);
+  assert.equal(low.reduced, true);
+  assert.ok(low.note, 'and says why, or it looks like a planner that found nothing');
+});
+
+test('a well-recovered day does NOT plan more', () => {
+  // Deliberate asymmetry: a good night must not become a demand.
+  assert.deepEqual(planner.capacityFor({ known: true, state: 'high', score: 78 }, { enabled: true }), planner.FULL_CAPACITY);
+  assert.deepEqual(planner.capacityFor({ known: true, state: 'normal', score: 52 }, { enabled: true }), planner.FULL_CAPACITY);
+});
+
+test('a low day fits fewer blocks into the same empty morning', () => {
+  const normal = planner.planWindow(openMorning());
+  const low = planner.planWindow(openMorning({
+    capacity: planner.capacityFor({ known: true, state: 'low', score: 30 }, { enabled: true }),
+  }));
+  assert.ok(low.blocks.length < normal.blocks.length || low.blocks[0].minutes < normal.blocks[0].minutes,
+    'a low day must actually be lighter');
+  assert.equal(low.capacity.reduced, true);
+});
+
+test('a lighter day still reports what it did not schedule', () => {
+  const low = planner.planWindow(openMorning({
+    capacity: planner.capacityFor({ known: true, state: 'low', score: 30 }, { enabled: true }),
+  }));
+  assert.ok(low.overflowed > 0, 'work held back is reported, never silently dropped');
+});
+
+test('a low day does not re-order the work', () => {
+  const low = planner.planWindow(openMorning({
+    capacity: planner.capacityFor({ known: true, state: 'low', score: 30 }, { enabled: true }),
+  }));
+  assert.equal(low.blocks[0].tasks[0].text, 'Guild RCA',
+    'rank order survives — less work, in the same order, never the quick wins first');
+});
+
+test('the health capacity rule is OFF unless explicitly enabled', () => {
+  // Measured before shipping: over the 89 days where the wins ledger overlaps
+  // the health rollup, low-readiness days produced 8.08 against 7.92 for the
+  // rest, permutation p = 0.97. There is no effect to build on, so the rule
+  // ships as a preference Nick can switch on — never as a default acting on a
+  // correlation NEURO went looking for and did not find.
+  const low = { known: true, state: 'low', score: 28 };
+  assert.deepEqual(planner.capacityFor(low), planner.FULL_CAPACITY, 'off by default');
+  assert.equal(planner.capacityFor(low, { enabled: true }).reduced, true, 'and available when asked for');
+});

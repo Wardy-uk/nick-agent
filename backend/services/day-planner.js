@@ -122,6 +122,78 @@ function estimateMultiplier(samples = []) {
   };
 }
 
+// ── Capacity: what the body has to give today ────────────────────────────────
+//
+// NEURO has held two years of sleep, HRV and resting heart rate and never once
+// let it change what it asked of Nick. This is the one place it should: not
+// another card telling him he slept badly — he knows — but a lighter morning
+// actually appearing in his diary on the day after a bad night.
+//
+// THREE RULES, and the asymmetry is deliberate.
+//
+//  1. IT ONLY EVER REDUCES. A well-recovered day plans exactly as before. Making
+//     a good night buy a busier morning turns a health reading into a demand,
+//     and the caps above were set against how his days actually go, not against
+//     how rested he is.
+//  2. UNKNOWN PLANS AS NORMAL. No watch, no baseline, a failed read — all plan
+//     the full default. The planner refusing to work because a phone did not
+//     sync is a worse failure than planning one block too many, and "fail open
+//     on unknown" is the rule the leave check and the availability feed already
+//     follow.
+//  3. IT DOES NOT REORDER THE WORK. Tempting to put the easy job first on a bad
+//     day; that is `rankTasks` overruled by a heart-rate reading, and it turns
+//     the plan into the quick-wins list this file already refuses to become.
+//     Less work, in the same order.
+const FULL_CAPACITY = {
+  maxBlocks: MAX_BLOCKS_PER_HALF,
+  maxBlockMinutes: MAX_BLOCK_MINUTES,
+  maxTasks: MAX_TASKS_PER_BLOCK,
+  reduced: false,
+  note: null,
+};
+
+// ⚠ DEFAULT OFF, and the reason is a measurement rather than caution.
+//
+// The obvious justification for this rule is "Nick gets less done on low
+// recovery days, so plan less". That was tested before shipping it
+// (backend/scripts/measure-health-work.js) against 743 rolled-up days and the
+// 89 where the wins ledger overlaps them, bucketing each day by a readiness
+// score built ONLY from the days before it. The answer was no:
+//
+//   low readiness    25 days   mean output 8.08
+//   normal or high   64 days   mean output 7.92
+//   permutation p = 0.97
+//
+// There is no effect there to build on. (Only 5 short nights fell in the
+// overlap, so the sleep arm could not be tested at all — that is reported as
+// untested, not as a null result.) The measurement is weak rather than
+// decisive: n=89 and the wins count is a noisy proxy, skewed by commit-heavy
+// days. So this is not evidence the rule is wrong; it is the absence of the
+// evidence that would make it right.
+//
+// Which leaves it as a PREFERENCE, not a prediction — "plan me a lighter
+// morning when my recovery is down" is a perfectly reasonable thing to want,
+// and a completely different claim from "you will get less done". Nick turns it
+// on if he wants it. Shipping it on by default would be NEURO quietly acting on
+// a correlation it went and looked for and did not find.
+const HEALTH_CAPACITY_ENABLED = process.env.DAY_PLANNER_HEALTH_CAPACITY === 'true';
+
+/** PURE. Takes a `health-daily.readiness()` result (or nothing at all). */
+function capacityFor(readiness, { enabled = HEALTH_CAPACITY_ENABLED } = {}) {
+  if (!enabled) return { ...FULL_CAPACITY };
+  if (!readiness || !readiness.known || readiness.state !== 'low') return { ...FULL_CAPACITY };
+  return {
+    maxBlocks: 1,
+    maxBlockMinutes: 60,
+    maxTasks: 2,
+    reduced: true,
+    // Carried through to the notification. A quietly lighter morning is
+    // indistinguishable from a planner that could not find gaps, and Nick would
+    // reasonably conclude the thing had stopped working.
+    note: 'lighter than usual — your recovery is down on your own baseline',
+  };
+}
+
 // ── The pure planner ─────────────────────────────────────────────────────────
 
 /**
@@ -141,6 +213,9 @@ function planWindow({
   nowMin = 0,
   isToday = true,
   multiplier = DEFAULT_MULTIPLIER,
+  // Omitted means the full default — an absent health read must plan exactly as
+  // this did before health was wired in at all.
+  capacity: limits = FULL_CAPACITY,
 } = {}) {
   const gaps = freeGaps({ window, busy, nowMin, isToday });
   const blocks = [];
@@ -148,15 +223,15 @@ function planWindow({
   let overflowed = 0;
 
   for (const gap of gaps) {
-    if (blocks.length >= MAX_BLOCKS_PER_HALF) break;
+    if (blocks.length >= limits.maxBlocks) break;
     if (!queue.length) break;
 
-    const capacity = Math.min(gap.endMin - gap.startMin, MAX_BLOCK_MINUTES);
+    const capacity = Math.min(gap.endMin - gap.startMin, limits.maxBlockMinutes);
     if (capacity < MIN_BLOCK_MINUTES) continue;
 
     const picked = [];
     let used = 0;
-    while (queue.length && picked.length < MAX_TASKS_PER_BLOCK) {
+    while (queue.length && picked.length < limits.maxTasks) {
       const task = queue[0];
       const need = sizeOf(task, multiplier);
       // The first task goes in even if it does not fit, and the block is capped
@@ -195,6 +270,9 @@ function planWindow({
     // is how work quietly stops being scheduled.
     overflowed,
     gapsFound: gaps.length,
+    // Reported so a lighter plan can SAY it is lighter, rather than looking like
+    // a planner that found nothing.
+    capacity: limits,
     reason: blocks.length ? null : noRoomReason({ gaps, tasks }),
   };
 }
@@ -478,6 +556,18 @@ async function run(windowKey, { now = new Date(), apply = false, force = false }
     return { ok: false, error: 'calendar could not be read — refusing to plan blind', gaps: input.gaps };
   }
 
+  // How much Nick has to give today. Read here rather than inside planWindow so
+  // the pure half stays pure, and NEVER allowed to fail the plan: an unreadable
+  // health feed plans the full default, exactly as this did before.
+  let readiness = null;
+  try {
+    readiness = require('./health-daily').today(now).readiness;
+    if (!readiness.known) input.gaps.push(`readiness unknown: ${readiness.reason}`);
+  } catch (e) {
+    input.gaps.push(`health unreadable: ${e.message}`);
+  }
+  const capacity = capacityFor(readiness);
+
   const draft = planWindow({
     window,
     tasks: input.tasks,
@@ -485,6 +575,7 @@ async function run(windowKey, { now = new Date(), apply = false, force = false }
     nowMin,
     isToday: true,
     multiplier: mult.multiplier,
+    capacity,
   });
 
   const result = {
@@ -493,6 +584,7 @@ async function run(windowKey, { now = new Date(), apply = false, force = false }
     window: windowKey,
     label: window.label,
     multiplier: mult,
+    readiness,
     gaps: input.gaps,
     applied: false,
     ...draft,
@@ -543,7 +635,7 @@ async function run(windowKey, { now = new Date(), apply = false, force = false }
     releaseLock();
   }
 
-  if (created.length) await announce(window, created, mult);
+  if (created.length) await announce(window, created, mult, capacity);
 
   return { ...result, applied: true, created, failed };
 }
@@ -564,7 +656,7 @@ function nonWorkingSet() {
  * Tell him. This is the half `task-blocks` never had, and the reason it was
  * never used: a block nobody is told about is a calendar entry, not a driver.
  */
-async function announce(window, created, mult) {
+async function announce(window, created, mult, capacity) {
   try {
     const webpush = require('./webpush');
     const lines = created.map(c => {
@@ -572,9 +664,12 @@ async function announce(window, created, mult) {
       return `${c.startTime} — ${names}`;
     });
     const caveat = mult.learned ? '' : ` (durations are a ${mult.multiplier}x guess for now)`;
+    // A lighter plan says it is lighter. Silently planning less is
+    // indistinguishable from a planner that has stopped finding gaps.
+    const lighter = capacity && capacity.reduced ? `\nKept it ${capacity.note}.` : '';
     await webpush.sendToAll(
       `Planned ${window.label}`,
-      `${lines.join('\n')}${caveat}`,
+      `${lines.join('\n')}${caveat}${lighter}`,
       { type: 'day_plan', tab: 'todos' }
     );
   } catch (e) {
@@ -604,6 +699,8 @@ module.exports = {
   // pure, and the half worth pinning
   planWindow,
   estimateMultiplier,
+  capacityFor,
+  FULL_CAPACITY,
   freeGaps,
   sizeOf,
   // state

@@ -77,6 +77,19 @@ app.use('/api', (req, res, next) => {
   // Allow Strava OAuth flow (browser redirects can't send PIN header)
   if (req.path === '/strava/auth' || req.path === '/strava/callback') return next();
 
+  // The capture door. ⚠ Tailscale Funnel is ON, so this exemption publishes the
+  // route to the PUBLIC INTERNET, not merely to the tailnet — which is the
+  // intent: Nick's wife has no PIN and no tailnet, and giving her the PIN would
+  // hand over the whole brain. The link token in the path is the entire
+  // credential, so routes/capture-link.js is write-only and returns nothing
+  // about Nick's day; a leaked link can add a personal task and nothing else.
+  //
+  // ⚠ ONLY /api/c is exempt. Creating and revoking links lives on
+  // /api/capture-links, which stays behind the PIN — one letter apart on
+  // purpose, and `startsWith('/c/')` rather than `startsWith('/c')` so the
+  // admin mount cannot be reached through this branch by prefix.
+  if (req.path.startsWith('/c/')) return next();
+
   // Allow the FreeReps iOS app's wire API (#40). Same reason as the exemptions
   // above — the client cannot send a header. This one is not a limitation of the
   // browser but of the app: its config model has no credential field at all, so
@@ -144,6 +157,12 @@ app.use('/api/qa', qaRoutes);
 app.use('/api/push', pushRoutes);
 app.use('/api/imports', importsRoutes);
 app.use('/api/capture', captureRoutes);
+// The public write-only capture door (exempt above) and its admin half (not).
+app.use('/api/c', require('./routes/capture-link'));
+app.use('/api/capture-links', require('./routes/capture-links'));
+// Apple Calendar + Reminders, pushed from Scriptable. NOT auth-exempt — see the
+// note in routes/apple.js.
+app.use('/api/apple', require('./routes/apple'));
 app.use('/api/features', featureRoutes);
 app.use('/api/journal', journalRoutes);
 app.use('/api/strava', stravaRoutes);
@@ -256,10 +275,15 @@ app.get('/api/status', async (req, res) => {
           return require('./services/health').getTodayData() !== null;
         } catch { return false; }
       })(),
+      // Read from the SERIES, not the retired `health_latest` KV blob. That blob
+      // stopped being written when the phone moved to the FreeReps app, so this
+      // reported `null` — indistinguishable from a phone that had never synced —
+      // while 1.1M samples sat in health_samples.
       latestDate: (() => {
         try {
-          const raw = require('./db/database').getState('health_latest');
-          return raw ? JSON.parse(raw).date : null;
+          const rows = require('./db/database').getHealthMetricSummary(null);
+          const newest = rows.reduce((m, r) => (!m || r.last_at > m ? r.last_at : m), null);
+          return newest ? String(newest).slice(0, 10) : null;
         } catch { return null; }
       })()
     },

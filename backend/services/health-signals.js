@@ -1,0 +1,300 @@
+'use strict';
+
+/**
+ * What has CHANGED about the body, ranked — not a dashboard of numbers.
+ *
+ * WHY THIS SHAPE. `HealthCard` already renders today's figures, and a figure is
+ * only meaningful against two years of the same figure. The things worth an
+ * interruption are all trends: resting heart rate climbing for three days,
+ * sleeping wrist temperature up, a fortnight of accumulating sleep debt. None of
+ * them is visible in a single day's reading, and all of them are visible in this
+ * data — there are two years of it.
+ *
+ * Split like `pi-health` and `state-of-play`: `assess()` is PURE and holds the
+ * judgement; `snapshot()` does the reads. The ORDERING is the product — a
+ * findings list nobody can act on top-down is a dashboard again.
+ *
+ * ── The three refusals ──────────────────────────────────────────────────────
+ *
+ * IT NEVER DIAGNOSES. "Resting heart rate is 5bpm above your normal and has been
+ * for three days" is a fact. "You are coming down with something" is a guess
+ * dressed as one, and Apple Health cannot separate exercise, illness, alcohol
+ * and a stressful week — `stress-score` already carries that caveat and this
+ * inherits it rather than quietly dropping it.
+ *
+ * A SOURCE THAT STOPPED IS A FINDING, NOT AN ABSENCE. Blood pressure stopped on
+ * 1 Apr 2026 and blood glucose in Sep 2025, and nothing anywhere noticed for
+ * months, because a metric with no recent rows returns an empty result rather
+ * than an error. That is the same species as the dead KV writer this work
+ * started from, and it is why `sensorsQuiet` exists.
+ *
+ * NOTHING HERE PUSHES. Pull-only, deliberately. Nudge volume is the one signal
+ * allowed to argue against building more, and a health feed that interrupts is
+ * how the notifications that already matter stop being read. If any of this
+ * earns an interruption it will be one Nick asks for, not one this decided.
+ */
+
+const db = require('../db/database');
+const healthDaily = require('./health-daily');
+
+// ── Thresholds, and where they came from ────────────────────────────────────
+//
+// Measured over Nick's last 90 days rather than picked from a wellness article:
+// resting heart rate runs 70.0–83.3 (mean 77.1), HRV 13.2–27.0 (mean 18.4),
+// sleep 5.1–9.7h (mean 7.7) with only 6 nights under six hours. A rule that
+// fires on a tenth of a normal quarter is one he will learn to ignore, and an
+// ignored health alert is worse than none because it also trains him past the
+// real one.
+
+// Resting heart rate, in bpm above his own median, held for this many days.
+const RHR_ELEVATED_BPM = 4;
+const RHR_ELEVATED_DAYS = 3;
+
+// Sleeping wrist temperature, in °C above his own median. Apple's own Cycle
+// Tracking treats about 1°C as notable; this is deliberately close to that.
+const WRIST_TEMP_DELTA = 0.6;
+const WRIST_TEMP_DAYS = 2;
+
+// HRV below the normal range for this many days running.
+const HRV_LOW_Z = -1.0;
+const HRV_LOW_DAYS = 3;
+
+// Cumulative shortfall against his own median, over a week.
+const SLEEP_DEBT_HOURS = 5;
+
+// A metric counts as QUIET when the gap since its last reading is this many
+// times its own typical gap. Ratio rather than a fixed number of days, because
+// body weight arriving every four days and heart rate arriving every two minutes
+// cannot share a threshold. The floor stops a chatty metric being called quiet
+// after an afternoon.
+const QUIET_RATIO = 8;
+const QUIET_FLOOR_DAYS = 14;
+
+// Below this, a metric has not established a cadence to be quiet against — a
+// one-off reading from an experiment is not a sensor that stopped.
+const QUIET_MIN_SAMPLES = 30;
+const QUIET_MIN_SPAN_DAYS = 30;
+
+// Metrics whose whole nature is sporadic. Not silenced — reported at `info` and
+// ranked below everything else, because "you have not weighed yourself since
+// August" is true, mildly useful, and not the same kind of fact as a monitor
+// that has stopped reporting.
+const SPORADIC = new Set([
+  'weight_body_mass', 'body_mass_index', 'body_fat_percentage', 'lean_body_mass',
+  'waist_circumference', 'vo2_max', 'six_minute_walk_test_distance',
+  'apple_walking_steadiness', 'distance_swimming', 'swimming_stroke_count',
+  'underwater_depth', 'water_temperature', 'heart_rate_recovery_one_minute',
+  'workout_effort_score', 'estimated_workout_effort_score', 'atrial_fibrillation_burden',
+]);
+
+function median(nums) {
+  const s = nums.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!s.length) return null;
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function round(n, dp = 1) {
+  if (!Number.isFinite(n)) return null;
+  const f = 10 ** dp;
+  return Math.round(n * f) / f;
+}
+
+/**
+ * Rank what has changed. PURE — takes days, per-metric summary and `now`.
+ *
+ * `days`    health-daily rows, newest first (complete and incomplete)
+ * `metrics` db.getHealthMetricSummary() rows: {metric, samples, first_at, last_at}
+ *
+ * Returns `{findings, unknowns, baselineDays}`. `unknowns` is not decoration:
+ * "resting heart rate could not be checked" and "resting heart rate is fine" are
+ * different facts, and only one of them is an all-clear.
+ */
+function assess({ days = [], metrics = [], now = new Date() } = {}) {
+  const findings = [];
+  const unknowns = [];
+
+  // Judged on FINISHED days only. Today is half a day; a partial day's step
+  // count and sleep are not comparable with a full one.
+  const complete = days.filter(d => d && d.complete);
+  const baseline = healthDaily.buildBaseline(complete.slice(1, healthDaily.BASELINE_DAYS + 1));
+  const recent = complete.slice(0, Math.max(RHR_ELEVATED_DAYS, HRV_LOW_DAYS, 7));
+
+  if (!baseline.ready) {
+    unknowns.push({ input: 'baseline', why: baseline.reason });
+    // Sensor quietness needs no baseline of days, so the pass continues.
+  } else {
+    // ── Resting heart rate, held up ──
+    if (baseline.rhr) {
+      const run = recent.slice(0, RHR_ELEVATED_DAYS).filter(d => Number.isFinite(d.rhrMedian));
+      if (run.length < RHR_ELEVATED_DAYS) {
+        unknowns.push({ input: 'rhr', why: `only ${run.length} of the last ${RHR_ELEVATED_DAYS} days carry a resting heart rate` });
+      } else if (run.every(d => d.rhrMedian - baseline.rhr.median >= RHR_ELEVATED_BPM)) {
+        const worst = Math.max(...run.map(d => d.rhrMedian));
+        findings.push({
+          id: 'rhr-elevated',
+          level: 'warn',
+          title: `Resting heart rate up for ${RHR_ELEVATED_DAYS} days`,
+          detail: `${round(worst)}bpm against your usual ${round(baseline.rhr.median)}bpm.`,
+          // ⚠ Says what it CANNOT tell apart. This is the one place a health
+          // reading is most likely to be over-read.
+          caveat: 'Could be a bug coming on, a heavy week, alcohol or hard exercise — this cannot tell those apart.',
+          evidence: run.map(d => ({ day: d.day, rhr: d.rhrMedian })),
+        });
+      }
+    } else {
+      unknowns.push({ input: 'rhr', why: 'no resting-heart-rate baseline yet' });
+    }
+
+    // ── Sleeping wrist temperature ──
+    const tempDays = complete.filter(d => Number.isFinite(d.wristTemp));
+    const tempBase = median(tempDays.slice(WRIST_TEMP_DAYS).map(d => d.wristTemp));
+    const tempRun = recent.slice(0, WRIST_TEMP_DAYS).filter(d => Number.isFinite(d.wristTemp));
+    if (tempBase == null || tempRun.length < WRIST_TEMP_DAYS) {
+      unknowns.push({ input: 'wristTemp', why: 'not enough sleeping wrist temperature to compare' });
+    } else if (tempRun.every(d => d.wristTemp - tempBase >= WRIST_TEMP_DELTA)) {
+      findings.push({
+        id: 'wrist-temp-up',
+        level: 'warn',
+        title: 'Sleeping wrist temperature raised',
+        detail: `${round(tempRun[0].wristTemp, 2)}°C against your usual ${round(tempBase, 2)}°C, ${WRIST_TEMP_DAYS} nights running.`,
+        caveat: 'A raised overnight temperature has many causes — a warm room is one of them.',
+        evidence: tempRun.map(d => ({ day: d.day, wristTemp: d.wristTemp })),
+      });
+    }
+
+    // ── HRV suppressed ──
+    if (baseline.hrv) {
+      const run = recent.slice(0, HRV_LOW_DAYS).filter(d => Number.isFinite(d.hrvMedian) && d.hrvMedian > 0);
+      if (run.length < HRV_LOW_DAYS) {
+        unknowns.push({ input: 'hrv', why: `only ${run.length} of the last ${HRV_LOW_DAYS} days carry an HRV reading` });
+      } else {
+        const zs = run.map(d => (Math.log(d.hrvMedian) - baseline.hrv.logMedian) / baseline.hrv.logSigma);
+        if (zs.every(z => z <= HRV_LOW_Z)) {
+          findings.push({
+            id: 'hrv-suppressed',
+            level: 'warn',
+            title: `HRV below your normal range for ${HRV_LOW_DAYS} days`,
+            detail: `Around ${round(run[0].hrvMedian)}ms against your usual ${round(baseline.hrv.median)}ms.`,
+            caveat: 'Recovery is down on your own baseline. It does not say why.',
+            evidence: run.map((d, i) => ({ day: d.day, hrv: d.hrvMedian, z: round(zs[i], 2) })),
+          });
+        }
+      }
+    }
+
+    // ── Sleep debt ──
+    if (baseline.sleep) {
+      const week = complete.slice(0, 7).filter(d => Number.isFinite(d.asleepHours));
+      if (week.length < 5) {
+        unknowns.push({ input: 'sleep', why: `only ${week.length} of the last 7 nights were recorded` });
+      } else {
+        const debt = week.reduce((sum, d) => sum + Math.min(0, d.asleepHours - baseline.sleep.median), 0);
+        if (debt <= -SLEEP_DEBT_HOURS) {
+          findings.push({
+            id: 'sleep-debt',
+            level: 'warn',
+            title: `${round(Math.abs(debt))}h of sleep debt this week`,
+            detail: `Against your usual ${round(baseline.sleep.median, 1)}h a night, over ${week.length} recorded nights.`,
+            evidence: week.map(d => ({ day: d.day, hours: d.asleepHours })),
+          });
+        }
+      }
+    }
+  }
+
+  // ── Sources that have gone quiet ──
+  for (const q of sensorsQuiet(metrics, now)) findings.push(q);
+
+  const order = { warn: 0, info: 1 };
+  findings.sort((a, b) => (order[a.level] ?? 9) - (order[b.level] ?? 9));
+
+  return {
+    findings,
+    unknowns,
+    baselineDays: baseline.ready ? baseline.days : 0,
+    // An empty findings list means "nothing stood out in what could be read" —
+    // which is only an all-clear when `unknowns` is empty too.
+    allClear: findings.length === 0 && unknowns.length === 0,
+  };
+}
+
+/**
+ * Metrics that were arriving regularly and have stopped. PURE.
+ *
+ * Ratio-based against each metric's OWN cadence, because heart rate arrives
+ * every couple of minutes and body weight every few days, and a shared
+ * threshold would either shout about the weight or never notice the heart.
+ */
+function sensorsQuiet(metrics = [], now = new Date()) {
+  const out = [];
+  for (const row of metrics) {
+    if (!row || !row.metric || !row.last_at || !row.first_at) continue;
+    if (!(row.samples >= QUIET_MIN_SAMPLES)) continue;
+
+    const firstMs = Date.parse(`${String(row.first_at).replace(' ', 'T')}Z`);
+    const lastMs = Date.parse(`${String(row.last_at).replace(' ', 'T')}Z`);
+    if (!Number.isFinite(firstMs) || !Number.isFinite(lastMs)) continue;
+
+    const spanDays = (lastMs - firstMs) / 86400000;
+    if (spanDays < QUIET_MIN_SPAN_DAYS) continue;
+
+    const typicalGapDays = spanDays / row.samples;
+    const silentDays = (now.getTime() - lastMs) / 86400000;
+    if (silentDays < Math.max(QUIET_FLOOR_DAYS, typicalGapDays * QUIET_RATIO)) continue;
+
+    const sporadic = SPORADIC.has(row.metric);
+    out.push({
+      id: `quiet:${row.metric}`,
+      // Sporadic-by-nature metrics are informational; a monitor that used to
+      // report several times a day and has not for months is not.
+      level: sporadic ? 'info' : 'warn',
+      title: `${row.metric} stopped arriving`,
+      detail: `Last reading ${String(row.last_at).slice(0, 10)}, ${Math.round(silentDays)} days ago. It had been arriving roughly every ${formatGap(typicalGapDays)} across ${row.samples.toLocaleString()} readings.`,
+      caveat: sporadic ? 'This one is naturally occasional.' : 'A source that stops looks exactly like a source with nothing to report.',
+      evidence: [{ metric: row.metric, lastAt: row.last_at, samples: row.samples }],
+    });
+  }
+  // Longest silence first — the ones most likely to have been forgotten.
+  return out.sort((a, b) => (a.detail < b.detail ? 1 : -1));
+}
+
+function formatGap(days) {
+  if (days >= 1) return `${round(days)} days`;
+  const hours = days * 24;
+  if (hours >= 1) return `${round(hours)} hours`;
+  return `${Math.round(hours * 60)} minutes`;
+}
+
+/** The I/O half. Every read is guarded — a failure is an unknown, never a zero. */
+function snapshot({ now = new Date(), days = 45 } = {}) {
+  let rows = [];
+  let metrics = [];
+  const gaps = [];
+  try { rows = healthDaily.recentDays(days); }
+  catch (e) { gaps.push({ input: 'health_daily', why: e.message }); }
+  try { metrics = db.getHealthMetricSummary(null); }
+  catch (e) { gaps.push({ input: 'metric summary', why: e.message }); }
+
+  const result = assess({ days: rows, metrics, now });
+  return {
+    ...result,
+    unknowns: [...gaps, ...result.unknowns],
+    allClear: result.allClear && gaps.length === 0,
+    daysRead: rows.length,
+  };
+}
+
+module.exports = {
+  assess,
+  sensorsQuiet,
+  snapshot,
+  RHR_ELEVATED_BPM,
+  RHR_ELEVATED_DAYS,
+  WRIST_TEMP_DELTA,
+  HRV_LOW_Z,
+  HRV_LOW_DAYS,
+  SLEEP_DEBT_HOURS,
+  QUIET_RATIO,
+  QUIET_FLOOR_DAYS,
+};

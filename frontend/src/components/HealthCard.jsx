@@ -31,10 +31,14 @@ function ageLabel(hours) {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+const READY_CLASS = { low: 'hc-band--high', normal: 'hc-band--mod', high: 'hc-band--low' };
+
 export default function HealthCard() {
   const [stress, setStress] = useState(null);
   const [series, setSeries] = useState(null);
   const [sleep, setSleep] = useState(null);
+  const [ready, setReady] = useState(null);
+  const [signals, setSignals] = useState(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -42,14 +46,18 @@ export default function HealthCard() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, m, sl] = await Promise.all([
+      const [s, m, sl, rd, sg] = await Promise.all([
         fetch(apiUrl('/api/health/stress')).then(r => r.json()),
         fetch(apiUrl('/api/health/metrics?days=30')).then(r => r.json()),
         fetch(apiUrl('/api/health/sleep?days=7')).then(r => r.json()),
+        fetch(apiUrl('/api/health/readiness')).then(r => r.json()),
+        fetch(apiUrl('/api/health/signals')).then(r => r.json()),
       ]);
       setStress(s);
       setSeries(m);
       setSleep(sl);
+      setReady(rd);
+      setSignals(sg);
       setFailed(false);
     } catch {
       // "Couldn't ask" must stay distinguishable from "there's nothing there" —
@@ -74,6 +82,70 @@ export default function HealthCard() {
         <h3 className="hc-title">Health</h3>
         <button className="hc-refresh" onClick={fetchAll}>Refresh</button>
       </div>
+
+      {/* ── Readiness ──────────────────────────────────────────────
+          Leads the card because it is the only line here that needed two years
+          of Nick to produce. "HRV 14ms" is a number; "below your normal range"
+          is the thing worth reading, and the server composed that sentence so
+          the planner, chat and this cannot phrase it three ways.
+
+          The three states must stay distinct: a score, "still calibrating", and
+          "nothing readable today". Collapsing the last two into a blank space is
+          how a broken feed comes to look like a healthy morning. */}
+      <div className="hc-ready">
+        {ready?.known ? (
+          <>
+            <div className={`hc-ready-score ${READY_CLASS[ready.state] || ''}`}>{ready.score}</div>
+            <div className="hc-ready-side">
+              <div className="hc-ready-label">
+                {ready.state === 'low' ? 'Running low' : ready.state === 'high' ? 'Well recovered' : 'About normal'}
+                {ready.partial && (
+                  <span className="hc-ready-partial" title={`Only ${ready.inputsRead} of 3 inputs could be read`}>
+                    · partial
+                  </span>
+                )}
+              </div>
+              <div className="hc-ready-sub">{ready.sentence}</div>
+              <div className="hc-ready-parts">
+                {(ready.contributors || []).map(c => (
+                  <span key={c.input} className="hc-ready-part" title={c.note}>
+                    {c.input === 'hrv' ? `HRV ${c.value}ms` : c.input === 'rhr' ? `RHR ${c.value}bpm` : `${c.value}h sleep`}
+                    <em>{c.baseline != null ? ` vs ${c.baseline}` : ''}</em>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </>
+        ) : (
+          // The service's own reason, never a paraphrase — it is the difference
+          // between "not enough history yet" and "the watch told us nothing".
+          <div className="hc-quiet">Readiness: {ready?.reason || 'not available'}.</div>
+        )}
+      </div>
+
+      {/* ── What has changed ───────────────────────────────────────
+          Trends, not today's numbers. Pull-only by design — nothing here
+          notifies, because nudge volume is the budget that argues against
+          everything else. */}
+      {(signals?.findings?.length > 0 || signals?.unknowns?.length > 0) && (
+        <div className="hc-signals">
+          <div className="hc-sub">What’s changed</div>
+          {(signals.findings || []).map(f => (
+            <div className={`hc-signal hc-signal--${f.level}`} key={f.id}>
+              <div className="hc-signal-title">{f.title}</div>
+              <div className="hc-signal-detail">{f.detail}</div>
+              {/* Never hidden. This is the one place a reading is most likely to
+                  be over-read into a diagnosis nobody made. */}
+              {f.caveat && <div className="hc-signal-caveat">{f.caveat}</div>}
+            </div>
+          ))}
+          {(signals.unknowns || []).length > 0 && (
+            <div className="hc-signal-unknown">
+              Couldn’t check: {signals.unknowns.map(u => u.input).join(', ')} — so this isn’t an all-clear.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Stress ─────────────────────────────────────────────── */}
       <div className="hc-stress">

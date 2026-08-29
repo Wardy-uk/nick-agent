@@ -86,8 +86,22 @@ CREATE TABLE IF NOT EXISTS calendar_cache (
   -- no attendee list, and with no signed-in address Nick's own entry cannot be
   -- told from anyone else's. See calendar-sync + plaud-admin-blocks.attendeesOther.
   attendees_other INTEGER,
+  -- Which calendar this row came from: 'graph' (work, via MSAL or the NOVA
+  -- bridge), 'apple' (pushed from the phone by Scriptable), 'ics'.
+  --
+  -- ⚠ Load-bearing for DELETES, not just for display. calendar-sync is
+  -- replace-by-window and runs every few minutes; before this column it emptied
+  -- the WHOLE table, so a second calendar's events would be silently wiped
+  -- within minutes of arriving. clearCalendarCache now requires a source.
+  source TEXT NOT NULL DEFAULT 'graph',
   fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+-- ⚠ The index on `source` is NOT here. This whole file is executed by an
+-- unguarded db.exec() BEFORE any migration runs, and `CREATE TABLE IF NOT
+-- EXISTS` is a no-op against the live table — so on an existing database the
+-- column does not exist yet at this point, and an index naming it throws and
+-- takes db.init() down with it. The backend then does not start at all.
+-- It is created in the migration block instead, after the ALTER. See database.js.
 
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -393,9 +407,15 @@ CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
 
 -- Apple Health time series. One row per (metric, sample time), because a stress
 -- score is only meaningful against a rolling PERSONAL baseline — an absolute HRV
--- of 45ms is good for one person and poor for another. The daily KV rows in
--- agent_state (health_data_<date>) are left alone and still back /today and
--- /history; this table is additive.
+-- of 45ms is good for one person and poor for another.
+--
+-- ⚠ This is now the ONLY store. It used to sit beside a daily KV blob in
+-- agent_state (health_data_<date>) written by POST /api/health/ingest, and that
+-- pairing failed in the way this codebase keeps finding: the phone moved to the
+-- FreeReps app, which posts to /api/v1/ingest/ and writes samples ONLY, so the
+-- blob stopped being written and every reader of it (chat context, journal
+-- context, /today, /history, /status) silently returned null for months. A null
+-- reads as "no data yet", not as "the writer is gone". One writer now.
 -- UNIQUE(metric, recorded_at) makes ingest idempotent: a 30-minute poll that
 -- re-sends the same watch sample folds instead of duplicating and skewing the
 -- baseline.
@@ -412,6 +432,55 @@ CREATE TABLE IF NOT EXISTS health_samples (
 );
 
 CREATE INDEX IF NOT EXISTS idx_health_samples_metric_time ON health_samples(metric, recorded_at DESC);
+
+-- One row per day, derived from health_samples.
+--
+-- health_samples holds ~1.1M rows across 66 metrics and two years, which is the
+-- right shape for a rolling HRV baseline and the wrong shape for every other
+-- question: "how does a normal Tuesday look", "was last night short", "has
+-- resting heart rate been climbing" all mean scanning hundreds of thousands of
+-- rows per read. Nothing outside the desktop HealthCard ever asked, and this is
+-- why.
+--
+-- MATERIALISED rather than derived on read, following `wins`: several consumers
+-- want to JOIN against a day (blocks, wins, focus sessions), and a join against
+-- a subquery over a million rows is not a thing to put on the planner's path at
+-- 07:15.
+--
+-- ⚠ `complete` is the load-bearing column. A day is recomputed for as long as it
+-- is still in the trailing window, because today's row is a PARTIAL day — half
+-- its steps have not happened yet. A consumer averaging today's row in with
+-- finished days silently drags every average down; `complete = 0` is how it
+-- knows not to.
+CREATE TABLE IF NOT EXISTS health_daily (
+  day TEXT PRIMARY KEY,              -- YYYY-MM-DD, local-ish (see health-daily.js)
+  -- Sleep, keyed on the night you WOKE on — apple-health.rollupSleepNights owns
+  -- that rule and this table stores its answer rather than re-deriving it.
+  asleep_hours REAL,
+  sleep_source TEXT,                 -- staged | unspecified | none
+  deep_hours REAL,
+  rem_hours REAL,
+  core_hours REAL,
+  awake_hours REAL,
+  sleep_efficiency REAL,
+  -- Medians, not means: HRV is noisy and log-normal, and one 12ms reading during
+  -- a difficult call should not move the day. Same call stress-score makes.
+  hrv_median REAL,
+  hrv_samples INTEGER,
+  rhr_median REAL,
+  -- Sums for the counters, averages for the rates.
+  steps REAL,
+  active_energy REAL,
+  exercise_minutes REAL,
+  stand_minutes REAL,
+  daylight_minutes REAL,
+  respiratory_rate REAL,
+  wrist_temp REAL,
+  spo2 REAL,
+  weight_kg REAL,
+  complete INTEGER NOT NULL DEFAULT 0,
+  computed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 -- Host/infrastructure metrics: Pi 5, Pi 4, router, broadband.
 --

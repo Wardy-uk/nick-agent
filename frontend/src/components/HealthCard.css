@@ -134,3 +134,50 @@
   text-decoration: underline;
 }
 .hc-more:hover { color: var(--text); }
+
+/* ── Readiness ───────────────────────────────────────────────────────────────
+   Leads the card. Reuses the same --band variable as the stress score so the
+   two never disagree about what amber means; the mapping is inverted (a LOW
+   readiness is the concerning end, a low stress score is the good one), which
+   is done in the component rather than by inventing a second palette here. */
+.hc-ready {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
+.hc-ready-score {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--band, var(--text));
+  flex: 0 0 auto;
+  min-width: 44px;
+}
+.hc-ready-side { flex: 1 1 auto; min-width: 0; }
+.hc-ready-label { font-size: 13px; }
+/* One input and three inputs produce the same score shape and are not the same
+   claim, so the card says which it is looking at. */
+.hc-ready-partial { color: var(--text-muted); font-size: 11px; }
+.hc-ready-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.hc-ready-parts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 5px; }
+.hc-ready-part { font-size: 11px; color: var(--text-muted); }
+.hc-ready-part em { font-style: normal; opacity: 0.6; }
+
+/* ── Trends ──────────────────────────────────────────────────────────────── */
+.hc-signals { margin-top: 12px; }
+.hc-signal {
+  border-left: 2px solid var(--band, var(--text-muted));
+  padding: 4px 0 4px 8px;
+  margin-bottom: 6px;
+}
+.hc-signal--warn { --band: var(--warning, #d8a33c); }
+.hc-signal--info { --band: var(--text-muted); }
+.hc-signal-title { font-size: 12px; }
+.hc-signal-detail { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+/* The caveat is never hidden behind a hover or a fold: this is the one place a
+   reading is most likely to be over-read into a diagnosis nobody made. */
+.hc-signal-caveat { font-size: 11px; color: var(--text-muted); opacity: 0.8; margin-top: 2px; font-style: italic; }
+.hc-signal-unknown { font-size: 11px; color: var(--text-muted); margin-top: 4px; }

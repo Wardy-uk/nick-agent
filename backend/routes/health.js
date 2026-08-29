@@ -5,12 +5,35 @@ const router = express.Router();
 const db = require('../db/database');
 const stressScore = require('../services/stress-score');
 const appleHealth = require('../services/apple-health');
+const healthDaily = require('../services/health-daily');
 
-// Metrics kept as a time series in health_samples. Everything else still only
-// lands in the daily KV blob — a stress baseline needs history, a body weight
-// does not.
-const SERIES_METRICS = [
-  'hrv', 'rhr', 'heartRate', 'steps', 'activeEnergy', 'respiratoryRate'
+// What the legacy flat-key ingest can store, and under which canonical metric
+// name. This route predates the FreeReps app and survives as the iOS Shortcut
+// fallback; the app itself posts to /api/v1/ingest/ (routes/apple-health.js).
+//
+// ⚠ It used to write a daily KV blob in agent_state ALONGSIDE these samples, and
+// that blob was what /today, /history, /status, chat context and the journal
+// prompt all read. When the phone moved to the app, the blob stopped being
+// written and all five went quiet — for months, silently, because a missing blob
+// reads as "no data yet". The blob is gone: everything derives from
+// health_samples now, so a second writer cannot fall behind the first.
+const FLAT_KEY_METRICS = {
+  hrv: 'hrv',
+  rhr: 'rhr',
+  heartRate: 'heartRate',
+  steps: 'steps',
+  activeEnergy: 'activeEnergy',
+  respiratoryRate: 'respiratoryRate',
+  vo2max: 'vo2_max',
+  bodyWeight: 'weight_body_mass',
+};
+
+// Accepted by the old payload but NOT storable as a scalar sample: sleep lives
+// in health_samples as per-SEGMENT rows and is rolled into nights at read time,
+// so a single "sleepDuration: 7.4" cannot be written without inventing segments
+// that were never recorded. Reported back rather than silently dropped.
+const FLAT_KEYS_UNSTORABLE = [
+  'sleepDuration', 'sleepDeep', 'sleepRem', 'sleepAwake', 'sleepEfficiency',
 ];
 
 // Store UTC as 'YYYY-MM-DD HH:MM:SS' so string comparison in the baseline
@@ -26,26 +49,36 @@ function toSqlUtc(input) {
 //      timestamps, which is what a proper baseline wants
 //   2. the existing flat keys, stamped with one timestamp for the whole post
 // Both funnel into the same INSERT OR IGNORE, so overlapping posts fold.
+//
+// Returns what it stored AND what it could not, because a payload that shrinks
+// with no explanation is the thing this codebase keeps having to debug.
 function recordSamples(payload) {
-  let written = 0;
+  const result = { written: 0, unstored: {} };
 
   if (Array.isArray(payload.samples)) {
     for (const s of payload.samples) {
-      if (!s || !SERIES_METRICS.includes(s.metric)) continue;
+      if (!s || !s.metric) continue;
+      const metric = FLAT_KEY_METRICS[s.metric] || appleHealth.metricName(s.metric);
       const v = Number(s.value);
-      if (!isFinite(v)) continue;
-      if (db.insertHealthSample(s.metric, v, toSqlUtc(s.recordedAt), 'ingest')) written++;
+      if (!metric || !isFinite(v)) {
+        result.unstored[s.metric || 'unnamed'] = (result.unstored[s.metric || 'unnamed'] || 0) + 1;
+        continue;
+      }
+      if (db.insertHealthSample(metric, v, toSqlUtc(s.recordedAt), 'ingest')) result.written++;
     }
-    return written;
+    return result;
   }
 
   const stamp = toSqlUtc(payload.timestamp);
-  for (const metric of SERIES_METRICS) {
-    const v = Number(payload[metric]);
-    if (!isFinite(v) || payload[metric] === null || payload[metric] === undefined) continue;
-    if (db.insertHealthSample(metric, v, stamp, 'ingest')) written++;
+  for (const [key, metric] of Object.entries(FLAT_KEY_METRICS)) {
+    const v = Number(payload[key]);
+    if (!isFinite(v) || payload[key] === null || payload[key] === undefined) continue;
+    if (db.insertHealthSample(metric, v, stamp, 'ingest')) result.written++;
   }
-  return written;
+  for (const key of FLAT_KEYS_UNSTORABLE) {
+    if (payload[key] !== null && payload[key] !== undefined) result.unstored[key] = 1;
+  }
+  return result;
 }
 
 // POST /api/health/ingest — receive Apple Health data from iOS Shortcut
@@ -66,63 +99,23 @@ router.post('/ingest', (req, res) => {
     }
 
     const todayKey = new Date().toISOString().split('T')[0];
+    const date = payload.date || todayKey;
 
-    // Store each metric separately so individual fields can be queried
-    // Also store the full payload for reference
-    const entry = {
-      date: payload.date || todayKey,
-      hrv: payload.hrv || null,                          // ms — HRV SDNN
-      rhr: payload.rhr || null,                          // bpm — resting heart rate
-      sleepDuration: payload.sleepDuration || null,      // hours
-      sleepDeep: payload.sleepDeep || null,              // hours
-      sleepRem: payload.sleepRem || null,                // hours
-      sleepAwake: payload.sleepAwake || null,            // hours
-      sleepEfficiency: payload.sleepEfficiency || null,  // 0-100%
-      steps: payload.steps || null,                      // count
-      activeEnergy: payload.activeEnergy || null,        // kcal
-      vo2max: payload.vo2max || null,                    // mL/kg/min
-      respiratoryRate: payload.respiratoryRate || null,  // breaths/min
-      heartRate: payload.heartRate || null,              // bpm — current, not resting
-      bodyWeight: payload.bodyWeight || null,            // kg
-      timestamp: new Date().toISOString()
-    };
+    // ONE store. Samples go into health_samples and every reader derives from
+    // there — see the note on FLAT_KEY_METRICS for what the second store cost.
+    const stored = recordSamples(payload);
 
-    // Store keyed by date so today's data overwrites stale data.
-    // MERGE rather than replace: at a 30-minute polling cadence most posts carry
-    // only some metrics (the watch samples HRV a handful of times a day), and a
-    // straight overwrite would null out this morning's HRV every half hour.
-    const stateKey = `health_data_${entry.date}`;
-    let merged = entry;
-    try {
-      const prevRaw = db.getState(stateKey);
-      if (prevRaw) {
-        const prev = JSON.parse(prevRaw);
-        if (prev && prev.date === entry.date) {
-          merged = { ...prev };
-          for (const [k, v] of Object.entries(entry)) {
-            if (v !== null && v !== undefined) merged[k] = v;
-          }
-        }
-      }
-    } catch { /* corrupt previous blob — fall back to this post alone */ }
-
-    db.setState(stateKey, JSON.stringify(merged));
-
-    // Also store as 'health_latest' for quick access without knowing the date
-    db.setState('health_latest', JSON.stringify(merged));
-
-    // Append to the time series that backs the stress baseline
-    const seriesWritten = recordSamples(payload);
-
-    console.log(`[Health] Ingested data for ${entry.date}:`,
-      `HRV=${entry.hrv}ms RHR=${entry.rhr}bpm sleep=${entry.sleepDuration}h steps=${entry.steps}`
-    );
+    const unstored = Object.keys(stored.unstored);
+    console.log(`[Health] Ingest for ${date}: ${stored.written} sample(s) stored` +
+      (unstored.length ? `, ${unstored.length} field(s) not storable: ${unstored.join(', ')}` : ''));
 
     res.json({
       success: true,
-      date: entry.date,
-      received: Object.keys(entry).filter(k => entry[k] !== null).length + ' fields',
-      samplesStored: seriesWritten
+      date,
+      samplesStored: stored.written,
+      // Named, never silently dropped. Sleep is the one that matters here: it is
+      // stored per segment and cannot be reconstructed from a nightly total.
+      unstored: stored.unstored,
     });
   } catch (e) {
     console.error('[Health] Ingest error:', e.message);
@@ -130,36 +123,66 @@ router.post('/ingest', (req, res) => {
   }
 });
 
-// GET /api/health/today — retrieve today's health data
+// GET /api/health/today — today's rolled-up day, plus the readiness read.
+//
+// Never serves yesterday as today: a stale figure presented as current is the
+// failure this whole area has just been dug out of.
 router.get('/today', (req, res) => {
   try {
-    const todayKey = new Date().toISOString().split('T')[0];
-    const raw = db.getState(`health_data_${todayKey}`) || db.getState('health_latest');
-    if (!raw) return res.json({ data: null, date: todayKey });
-    const data = JSON.parse(raw);
-    // Only return today's data — don't surface stale yesterday data as "today"
-    if (data.date !== todayKey) return res.json({ data: null, date: todayKey, note: 'No data yet today' });
-    res.json({ data, date: todayKey });
+    const snapshot = healthDaily.today();
+    res.json({
+      date: snapshot.day,
+      data: snapshot.data,
+      readiness: snapshot.readiness,
+      sentence: snapshot.sentence,
+      // "Nothing has arrived yet today" and "the rollup has not run" are
+      // different problems and must not share an empty response.
+      note: snapshot.data ? null : 'No health data recorded yet today',
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// GET /api/health/history?days=7 — last N days of health data
+// GET /api/health/history?days=7 — the last N days, newest first.
 router.get('/history', (req, res) => {
   try {
-    const days = parseInt(req.query.days || '7', 10);
-    const results = [];
-    for (let i = 0; i < days; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateKey = d.toISOString().split('T')[0];
-      const raw = db.getState(`health_data_${dateKey}`);
-      if (raw) {
-        try { results.push(JSON.parse(raw)); } catch {}
-      }
-    }
-    res.json({ history: results, days });
+    const days = Math.min(Math.max(parseInt(req.query.days || '7', 10), 1), 365);
+    const history = healthDaily.recentDays(days);
+    res.json({ history, days, hasData: history.length > 0 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/health/readiness — how much this body has to give today, and why.
+router.get('/readiness', (req, res) => {
+  try {
+    const snapshot = healthDaily.today();
+    res.json({ date: snapshot.day, ...snapshot.readiness, sentence: snapshot.sentence });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/health/signals — what has CHANGED, ranked. Trends, not today's
+// numbers: a resting heart rate held 4bpm high for three days is not visible in
+// any single reading. Pull-only — nothing here notifies.
+router.get('/signals', (req, res) => {
+  try {
+    res.json(require('../services/health-signals').snapshot());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/health/rollup — recompute the daily rollup now. Idempotent (every
+// row is an UPSERT keyed on the day), so this is safe to hit repeatedly; the
+// scheduler runs it hourly anyway.
+router.post('/rollup', (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.body?.days, 10) || healthDaily.SYNC_WINDOW_DAYS, 1), 3650);
+    res.json(healthDaily.sync({ days }));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -176,16 +199,23 @@ router.get('/stress', (req, res) => {
 });
 
 // GET /api/health/status — is health data available and fresh?
+//
+// Freshness comes from the newest SAMPLE, not from whether a rollup row exists:
+// the rollup writes a row for every day in its window whether the phone synced
+// or not, so "a row exists" is not "data arrived".
 router.get('/status', (req, res) => {
   try {
-    const todayKey = new Date().toISOString().split('T')[0];
-    const raw = db.getState(`health_data_${todayKey}`);
-    const latestRaw = db.getState('health_latest');
-    const latest = latestRaw ? JSON.parse(latestRaw) : null;
+    const all = db.getHealthMetricSummary(null);
+    const newest = all.reduce((m, r) => (!m || r.last_at > m ? r.last_at : m), null);
+    const ageHours = newest
+      ? Math.round(((Date.now() - Date.parse(`${String(newest).replace(' ', 'T')}Z`)) / 3600000) * 10) / 10
+      : null;
     res.json({
-      hasToday: !!raw,
-      latestDate: latest?.date || null,
-      latestTimestamp: latest?.timestamp || null
+      hasToday: require('../services/health').getTodayData() !== null,
+      latestSampleAt: newest,
+      ageHours,
+      metricCount: all.length,
+      totalSamples: all.reduce((n, r) => n + r.samples, 0),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

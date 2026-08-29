@@ -142,6 +142,33 @@ async function init() {
       db.exec('ALTER TABLE calendar_cache ADD COLUMN attendees_other INTEGER');
       console.log('[DB] calendar_cache.attendees_other added');
     }
+    // Migration: calendar_cache.source — which calendar a row came from.
+    //
+    // ⚠ Every existing row IS a Graph row (Graph was the only writer), so the
+    // default stamps them correctly in one statement. That matters more than
+    // usual here: the column decides what a sync may DELETE, and a row with no
+    // source would be deleted by nothing and live for ever.
+    if (calColumns.length && !calColumns.includes('source')) {
+      db.exec("ALTER TABLE calendar_cache ADD COLUMN source TEXT NOT NULL DEFAULT 'graph'");
+      console.log('[DB] calendar_cache.source added — existing rows stamped graph');
+    }
+    // ⚠ OUTSIDE the guard above, and NOT in schema.sql. Two reasons, and both
+    // have teeth:
+    //
+    //  1. schema.sql is executed by an unguarded db.exec() BEFORE this block,
+    //     and `CREATE TABLE IF NOT EXISTS` is a no-op against a table that
+    //     already exists — so on the live database the `source` column does not
+    //     exist at that point. An index naming it there throws, db.init() throws
+    //     with it, and the backend does not start. The first version of this had
+    //     exactly that bug; it passed every test because tests build a FRESH
+    //     database, where the column arrives with CREATE TABLE and the migration
+    //     path is never exercised at all.
+    //  2. It has to be unconditional, because on a fresh database the branch
+    //     above does not fire — the column is already there — and an index
+    //     created only inside it would never exist on a new install.
+    //
+    // CREATE INDEX IF NOT EXISTS is idempotent, so running it every boot is free.
+    db.exec('CREATE INDEX IF NOT EXISTS idx_calendar_source ON calendar_cache(source, start_time)');
   } catch (e) {
     console.error('[DB] calendar_cache migration check failed:', e.message);
   }
@@ -460,17 +487,43 @@ function upsertCalendarEvent(event) {
     : null;
   run(`
     INSERT OR REPLACE INTO calendar_cache
-      (event_id, subject, start_time, end_time, is_all_day, location, organizer, show_as, attendees_other, fetched_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      (event_id, subject, start_time, end_time, is_all_day, location, organizer, show_as, attendees_other, source, fetched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `, [
     event.id, event.subject, event.start, event.end,
     event.isAllDay ? 1 : 0, event.location, event.organizer, event.showAs,
-    attendeesOther
+    attendeesOther,
+    // Which calendar this came from. Defaulted rather than left to the caller,
+    // because the value decides what a sync is allowed to DELETE — see below.
+    event.source || 'graph'
   ]);
 }
 
-function clearCalendarCache() {
-  run('DELETE FROM calendar_cache');
+/**
+ * Empty the cache for ONE source.
+ *
+ * ⚠ `source` is required, and the argument is not optional by accident. This
+ * used to be `DELETE FROM calendar_cache` — the whole table — which was correct
+ * while Graph was the only writer, and becomes silent data loss the moment a
+ * second calendar exists: calendar-sync runs every few minutes, so every Apple
+ * event would be deleted within minutes of arriving, and the diary would simply
+ * look like the work one again with nothing reporting a problem.
+ *
+ * Throwing on a missing source is deliberate. A default of 'graph' would make
+ * the dangerous call the easy one to write.
+ */
+function clearCalendarCache(source) {
+  if (!source) throw new Error('clearCalendarCache requires a source — see the comment above');
+  run('DELETE FROM calendar_cache WHERE source = ?', [source]);
+}
+
+/** Clear one source inside a window, for a push-based sync that sends a range. */
+function clearCalendarWindow(source, fromIso, toIso) {
+  if (!source) throw new Error('clearCalendarWindow requires a source');
+  run(
+    'DELETE FROM calendar_cache WHERE source = ? AND start_time >= ? AND start_time <= ?',
+    [source, fromIso, toIso]
+  );
 }
 
 function getCalendarEvents(startDate, endDate) {
@@ -944,6 +997,112 @@ function getHealthMetricSummary(sinceIso) {
   );
 }
 
+// ── Health daily rollup ──
+
+// Per-day aggregates for the scalar metrics, computed in SQL because the
+// alternative is pulling ~1.1M rows into JS to add them up.
+//
+// AVG and SUM are both returned for every metric and the CALLER picks, rather
+// than this deciding: steps want a sum and respiratory rate wants an average,
+// and which is which is a fact about the metric, not about SQL. `n` comes back
+// too, so a day with one reading is distinguishable from a day with sixty.
+// ⚠ Every one of these takes BOTH ends of the window, and that is not tidiness.
+// The first cut bounded only the start, which is harmless for the hourly rollup
+// (its window ends at now anyway) and silently wrong for a backfill walking
+// backwards: each chunk read from its start all the way to the present, and the
+// row cap then kept the NEWEST rows, so the oldest chunk's HRV read was
+// truncated to the last few months and it overwrote two years of days with
+// nulls. Measured when it happened — 744 days written, only 328 with any HRV in
+// them. A cap that silently changes the answer instead of refusing is the same
+// species as the calendar's $top=50 and the 1,958-key JQL.
+function getDailyMetricAggregates(metrics, sinceIso, untilIso) {
+  if (!Array.isArray(metrics) || !metrics.length) return [];
+  const placeholders = metrics.map(() => '?').join(',');
+  return all(
+    `SELECT date(recorded_at) AS day,
+            metric,
+            COUNT(*)   AS n,
+            AVG(value) AS avg,
+            SUM(value) AS sum,
+            MIN(value) AS min,
+            MAX(value) AS max
+       FROM health_samples
+      WHERE metric IN (${placeholders})
+        AND recorded_at >= ?
+        AND (? IS NULL OR recorded_at <= ?)
+      GROUP BY day, metric`,
+    [...metrics, sinceIso, untilIso || null, untilIso || null]
+  );
+}
+
+// Raw samples for one metric across a bounded window. Separate from
+// getHealthSamples (which stress-score uses with an open end) rather than
+// changing that signature underneath it.
+function getHealthSamplesBetween(metric, sinceIso, untilIso, limit) {
+  return all(
+    `SELECT value, recorded_at FROM health_samples
+      WHERE metric = ? AND recorded_at >= ? AND (? IS NULL OR recorded_at <= ?)
+      ORDER BY recorded_at DESC LIMIT ?`,
+    [metric, sinceIso, untilIso || null, untilIso || null, limit || 20000]
+  );
+}
+
+function getSleepSamplesBetween(sinceIso, untilIso, limit) {
+  return all(
+    `SELECT metric, value, recorded_at FROM health_samples
+      WHERE metric LIKE 'sleep\\_%' ESCAPE '\\'
+        AND recorded_at >= ? AND (? IS NULL OR recorded_at <= ?)
+      ORDER BY recorded_at DESC LIMIT ?`,
+    [sinceIso, untilIso || null, untilIso || null, limit || 20000]
+  );
+}
+
+function upsertHealthDay(row) {
+  run(
+    `INSERT INTO health_daily (
+       day, asleep_hours, sleep_source, deep_hours, rem_hours, core_hours,
+       awake_hours, sleep_efficiency, hrv_median, hrv_samples, rhr_median,
+       steps, active_energy, exercise_minutes, stand_minutes, daylight_minutes,
+       respiratory_rate, wrist_temp, spo2, weight_kg, complete, computed_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+     ON CONFLICT(day) DO UPDATE SET
+       asleep_hours=excluded.asleep_hours, sleep_source=excluded.sleep_source,
+       deep_hours=excluded.deep_hours, rem_hours=excluded.rem_hours,
+       core_hours=excluded.core_hours, awake_hours=excluded.awake_hours,
+       sleep_efficiency=excluded.sleep_efficiency, hrv_median=excluded.hrv_median,
+       hrv_samples=excluded.hrv_samples, rhr_median=excluded.rhr_median,
+       steps=excluded.steps, active_energy=excluded.active_energy,
+       exercise_minutes=excluded.exercise_minutes, stand_minutes=excluded.stand_minutes,
+       daylight_minutes=excluded.daylight_minutes, respiratory_rate=excluded.respiratory_rate,
+       wrist_temp=excluded.wrist_temp, spo2=excluded.spo2, weight_kg=excluded.weight_kg,
+       complete=excluded.complete, computed_at=CURRENT_TIMESTAMP`,
+    [
+      row.day, row.asleepHours ?? null, row.sleepSource ?? null, row.deepHours ?? null,
+      row.remHours ?? null, row.coreHours ?? null, row.awakeHours ?? null,
+      row.sleepEfficiency ?? null, row.hrvMedian ?? null, row.hrvSamples ?? null,
+      row.rhrMedian ?? null, row.steps ?? null, row.activeEnergy ?? null,
+      row.exerciseMinutes ?? null, row.standMinutes ?? null, row.daylightMinutes ?? null,
+      row.respiratoryRate ?? null, row.wristTemp ?? null, row.spo2 ?? null,
+      row.weightKg ?? null, row.complete ? 1 : 0,
+    ]
+  );
+}
+
+// Newest first. `completeOnly` exists because a baseline built over today's
+// half-finished row is a baseline that shifts all morning.
+function getHealthDays(days, { completeOnly = false } = {}) {
+  return all(
+    `SELECT * FROM health_daily
+      ${completeOnly ? 'WHERE complete = 1' : ''}
+      ORDER BY day DESC LIMIT ?`,
+    [days || 30]
+  );
+}
+
+function getHealthDay(day) {
+  return get('SELECT * FROM health_daily WHERE day = ?', [day]);
+}
+
 // ── Location Visits ──
 
 function saveLocationVisit(dateKey, placeName, lat, lng, arrival, departure, durationMinutes, source, placeId) {
@@ -1413,6 +1572,7 @@ module.exports = {
   deleteTodo,
   upsertCalendarEvent,
   clearCalendarCache,
+  clearCalendarWindow,
   getCalendarEvents,
   savePushSubscription,
   getAllPushSubscriptions,
@@ -1464,6 +1624,12 @@ module.exports = {
   insertHealthSample,
   insertHealthSampleWithUuid,
   getHealthMetricSummary,
+  getDailyMetricAggregates,
+  getHealthSamplesBetween,
+  getSleepSamplesBetween,
+  upsertHealthDay,
+  getHealthDays,
+  getHealthDay,
   getHealthSamples,
   getSleepSamples,
   getLatestHealthSample,
