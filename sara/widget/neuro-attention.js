@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v16';
+const VERSION = 'v17';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -918,20 +918,27 @@ function accessoryView(family, res, d, wins) {
   const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
   const onFire = d.primary && d.primary.urgency === 'critical';
 
-  // What the lock screen has room to say, in one decision rather than three.
+  // ⚠ The head line names the SITUATION, never "SARA · <state>".
+  // It read "SARA · off" on a Saturday and Nick had to ask what it meant — the
+  // label described HIM but was attached to HER name, so the natural reading is
+  // "SARA is switched off", i.e. broken. On a lock screen there is no room to
+  // recover from a misread, so the state says itself.
   let head = 'SARA';
   let body;
-  if (res.error) { head = 'SARA · offline'; body = "Couldn't reach NEURO."; }
-  else if (d.poolAvailable === false) { head = 'SARA · blind'; body = "Can't see your work."; }
+  if (res.error) { head = "CAN'T REACH NEURO"; body = res.error; }
+  else if (d.poolAvailable === false) { head = "CAN'T SEE YOUR WORK"; body = 'This is not an all-clear.'; }
   else if (offDuty && !onFire) {
     const week = wins && Number(wins.doneThisWeek);
-    head = 'SARA · off';
-    body = week ? `${week} finished this week.` : (duty.reason || 'Off duty.');
+    // The reason IS the headline on a day off: "weekend" and "annual leave"
+    // license the same behaviour but are not the same fact, and both are more
+    // use than the word "off".
+    head = String(duty.reason || 'off duty').replace('.', '').toUpperCase();
+    body = week ? `${week} finished this week.` : 'Nothing needs you.';
   } else if (!d.primary) {
-    head = ctx.label ? `SARA · ${ctx.label}` : 'SARA';
+    head = ctx.label ? String(ctx.label).toUpperCase() : 'NOTHING PENDING';
     body = d.quiet ? (ctx.summary || 'Nothing to raise.') : 'Nothing needs you.';
   } else {
-    head = ctx.label ? `SARA · ${ctx.label}` : 'SARA';
+    head = ctx.label ? String(ctx.label).toUpperCase() : 'SARA';
     // `say` is a full sentence written for a human; the title is a fragment.
     // On two lines the sentence wins.
     body = d.primary.say || d.primary.title;
