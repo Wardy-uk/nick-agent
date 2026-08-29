@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v24';
+const VERSION = 'v25';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -670,8 +670,14 @@ function saraSays(w, d, res, target, weather, family, personal) {
       const start = new Date(next.start);
       const hhmm = Number.isNaN(start.getTime()) ? ''
         : `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
-      const when = !ag.scope || ag.scope === 'today' ? `at ${hhmm}`
-        : `${String(ag.scope).charAt(0).toUpperCase()}${String(ag.scope).slice(1)} ${hhmm}`;
+      const day = !ag.scope || ag.scope === 'today'
+        ? 'today'
+        : `${String(ag.scope).charAt(0).toUpperCase()}${String(ag.scope).slice(1)}`;
+      // An all-day event is named by its DAY, never by a clock reading it does
+      // not have — "hiking at 00:00" is a placeholder presented as a fact.
+      const when = next.allDay
+        ? (day === 'today' ? 'all day' : `${day}, all day`)
+        : (day === 'today' ? `at ${hhmm}` : `${day} ${hhmm}`);
       w.addSpacer(10);
       text(w, `Next: ${next.subject || 'something'} — ${when}.`, { size: 13, color: MUTED, max: 2 });
     }

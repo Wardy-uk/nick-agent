@@ -446,6 +446,10 @@ function agendaFor(calendar, now, limit = 4, tomorrow = null, opts = {}) {
       // different fact from "soon" and the renderer needs to tell them apart.
       minutesAway: Math.round((e.startMs - nowMs) / 60000),
       running: e.startMs <= nowMs,
+      // ⚠ An all-day event has NO time. Rendering its 00:00 start as a clock
+      // reading produced "hiking - at 00:00", which is the same species as the
+      // null countdown printing "0m": a placeholder shown as a fact.
+      allDay: e.isAllDay === true,
       attendeesOther: e.attendeesOther,
     }));
 
@@ -481,6 +485,7 @@ function agendaFor(calendar, now, limit = 4, tomorrow = null, opts = {}) {
       // and reads as though it were happening soon.
       minutesAway: null,
       running: false,
+      allDay: e.isAllDay === true,
       attendeesOther: e.attendeesOther,
     }));
 
