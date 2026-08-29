@@ -120,6 +120,72 @@ test('an all-day event is free, not a wall across the day', () => {
 
 // ── Reminders ────────────────────────────────────────────────────────────────
 
+test('⚠ only whitelisted lists are ingested, and the rest are REPORTED', () => {
+  // The first run pulled in every list — a shopping list of 15 items, none of
+  // them a task. The deeper problem was that they could never leave: NEURO
+  // cannot write to iCloud, so a shopping item is ticked off in a shop and
+  // NEURO's copy stays open for ever. An append-only store with nothing closing
+  // it, growing every sync — the inbox_items failure exactly.
+  const res = apple.ingestReminders({
+    reminders: [
+      { title: 'Call the school', list: 'Reminders' },
+      { title: 'peanut butter', list: 'Shopping' },
+      { title: 'Mugs', list: 'Shopping' },
+      { title: 'orphan with no list' },
+    ],
+  });
+
+  assert.equal(res.created, 1, 'only the built-in list is ingested by default');
+  // Reported, not silently dropped: an ingest that discards most of its input
+  // looks identical to one that received nothing, so "why has my reminder not
+  // appeared" has to be answerable without guessing.
+  assert.deepEqual(res.skippedLists, { Shopping: 2, '(no list)': 1 });
+  assert.deepEqual(res.seenLists, { Reminders: 1, Shopping: 2, '(no list)': 1 });
+
+  const taskStore = require('./task-store');
+  const texts = taskStore.listTasks({ status: 'open' }).map((t) => t.text);
+  assert.ok(texts.includes('Call the school'));
+  assert.equal(texts.includes('peanut butter'), false);
+});
+
+test('a reminder with no list is never ingested', () => {
+  // Scriptable does not always expose `calendar`. Treating unknown as the
+  // default list would quietly reopen the door the whitelist exists to close.
+  const res = apple.ingestReminders({ reminders: [{ title: 'unattributed' }] });
+  assert.equal(res.created, 0);
+});
+
+test('⚠ the same meeting from both calendars is stored ONCE, and Graph wins', () => {
+  // Today nothing duplicates, because Nick's work account is not in the iOS
+  // Calendar app — but that is a setting, not a guarantee. The day it changes,
+  // every work meeting arrives a second time under an apple: id, nothing throws,
+  // and the diary is silently twice as full for time-fit and the day planner.
+  db.upsertCalendarEvent({
+    id: 'graph-dupe', subject: 'Weekly Ops Review', start: '2026-10-01T10:00:00',
+    end: '2026-10-01T11:00:00', showAs: 'busy', source: 'graph',
+  });
+
+  const res = apple.ingestCalendar({
+    from: '2026-10-01T00:00:00', to: '2026-10-02T00:00:00',
+    events: [
+      // The phone's copy of the same Exchange meeting — a different id, because
+      // the two systems share no identifier and never will.
+      { id: 'apple-copy', title: 'Weekly Ops Review', start: '2026-10-01T10:00:00', end: '2026-10-01T11:00:00' },
+      { id: 'apple-only', title: 'Swimming lesson', start: '2026-10-01T17:00:00', end: '2026-10-01T18:00:00' },
+    ],
+  });
+
+  assert.equal(res.stored, 1);
+  assert.equal(res.duplicates, 1, 'named rather than quietly dropped');
+
+  const day = db.getCalendarEvents('2026-10-01T00:00:00', '2026-10-02T00:00:00');
+  assert.equal(day.filter((e) => e.subject === 'Weekly Ops Review').length, 1);
+  // Graph's copy is the survivor: it carries response status and a real attendee
+  // list, where the Apple copy usually cannot say if anyone else is even in it.
+  assert.equal(day.find((e) => e.subject === 'Weekly Ops Review').source, 'graph');
+  assert.ok(day.some((e) => e.subject === 'Swimming lesson'), 'a genuinely personal event still lands');
+});
+
 test('the LIST decides the domain, and personal is the default', () => {
   delete process.env.APPLE_WORK_LISTS;
   assert.equal(apple.domainForList('Shopping'), 'personal');
@@ -134,7 +200,7 @@ test('the LIST decides the domain, and personal is the default', () => {
 
 test('a reminder becomes a personal task with its due date', () => {
   const res = apple.ingestReminders({
-    reminders: [{ title: 'Renew the car tax', dueDate: '2026-09-05', list: 'Home' }],
+    reminders: [{ title: 'Renew the car tax', dueDate: '2026-09-05', list: 'Reminders' }],
   });
   assert.equal(res.created, 1);
 
@@ -153,12 +219,12 @@ test('⚠ a completed task is NOT resurrected by the next push', () => {
   // folds into the existing row WHATEVER its status, and the fold never touches
   // status. Verified here rather than assumed.
   const taskStore = require('./task-store');
-  apple.ingestReminders({ reminders: [{ title: 'Post the parcel', list: 'Home' }] });
+  apple.ingestReminders({ reminders: [{ title: 'Post the parcel', list: 'Reminders' }] });
 
   const created = taskStore.listTasks({ status: 'open' }).find(t => t.text === 'Post the parcel');
   taskStore.updateTask(created.id, { status: 'done' });
 
-  const again = apple.ingestReminders({ reminders: [{ title: 'Post the parcel', list: 'Home' }] });
+  const again = apple.ingestReminders({ reminders: [{ title: 'Post the parcel', list: 'Reminders' }] });
   assert.equal(again.created, 0, 'it must fold, not create a second task');
   assert.equal(again.folded, 1);
 
@@ -170,7 +236,7 @@ test('a completed reminder is skipped, never created-then-closed', () => {
   // Creating a task to immediately close it would put work in the wins ledger
   // that nobody did today — "a win is DETECTED, not declared".
   const res = apple.ingestReminders({
-    reminders: [{ title: 'Something already done', isCompleted: true, list: 'Home' }],
+    reminders: [{ title: 'Something already done', isCompleted: true, list: 'Reminders' }],
   });
   assert.equal(res.created, 0);
   assert.equal(res.skippedCompleted, 1);
@@ -183,7 +249,11 @@ test('a completed reminder is skipped, never created-then-closed', () => {
 });
 
 test('a titleless reminder is rejected and reported', () => {
-  const res = apple.ingestReminders({ reminders: [{ notes: 'no title' }, { title: '   ' }] });
+  // On an ingested list, or the whitelist would skip them before the title check
+  // and the test would pass for the wrong reason.
+  const res = apple.ingestReminders({
+    reminders: [{ notes: 'no title', list: 'Reminders' }, { title: '   ', list: 'Reminders' }],
+  });
   assert.equal(res.created, 0);
   assert.equal(res.rejected.length, 2);
 });

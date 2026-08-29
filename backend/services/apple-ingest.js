@@ -71,6 +71,44 @@ function domainForList(listName) {
 }
 
 /**
+ * Which Reminders lists become NEURO tasks. A WHITELIST, empty by default.
+ *
+ * ⚠ This was the opposite way round on the first run and it was wrong. Ingesting
+ * every list pulled in Nick's shopping list — peanut butter, mugs, dog treats,
+ * coathangers — plus dictation debris like "1 Image" and "Flipping thing": 15
+ * items, none of them a task, sitting alongside 152 real ones.
+ *
+ * The deeper problem was not the noise, it was that they could never LEAVE.
+ * NEURO cannot write to iCloud, so a shopping item is ticked off in Apple while
+ * standing in a shop, and NEURO's copy stays open for ever — an append-only
+ * store with nothing closing it, growing every sync. That is the `inbox_items`
+ * failure exactly, and it is why the default has to be "ingest nothing".
+ *
+ * A list named here is one Nick has decided he will actually manage from NEURO.
+ * Anything else stays in Reminders, where he will actually use it.
+ */
+// Defaults to the built-in list only — Nick's call: "only ingest anything in the
+// reminders folder itself". Everything else (Shopping, Groceries, whatever else
+// accumulates) stays on the phone where it is actually used.
+function ingestListNames() {
+  return String(process.env.APPLE_REMINDER_LISTS || 'Reminders')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function listIsIngested(listName) {
+  const allowed = ingestListNames();
+  if (!allowed.length) return false;
+  // ⚠ A reminder with NO list is never ingested. Scriptable does not always
+  // expose `calendar`, and treating unknown as the default list would quietly
+  // reopen the whole door this whitelist exists to close.
+  const name = String(listName || '').trim().toLowerCase();
+  if (!name) return false;
+  return allowed.includes(name);
+}
+
+/**
  * Normalise one pushed calendar event. PURE.
  *
  * Returns null for anything unusable rather than writing a half-row — a cached
@@ -123,8 +161,44 @@ function ingestCalendar({ from, to, events } = {}) {
   if (!from || !to) return { ok: false, error: 'a from/to window is required' };
   if (!Array.isArray(events)) return { ok: false, error: 'events must be an array' };
 
-  const rows = events.map(normaliseEvent).filter(Boolean);
-  const rejected = events.length - rows.length;
+  const normalised = events.map(normaliseEvent).filter(Boolean);
+  const rejected = events.length - normalised.length;
+
+  // ── The same meeting, twice ────────────────────────────────────────────────
+  //
+  // Measured before building this: today NOTHING duplicates, because Nick's work
+  // account is not added to the iOS Calendar app — 104 Graph events, and none of
+  // them came back from the phone. But that is a setting, not a guarantee, and
+  // the day it changes every work meeting arrives a second time under an
+  // `apple:` id. Nothing would throw; the diary would simply be twice as full,
+  // and `time-fit`, `findSlot` and the day planner would all quietly believe it.
+  //
+  // Graph WINS. It is authoritative for work: it carries the response status and
+  // a real attendee list, where the Apple copy usually cannot even say whether
+  // anyone else is in the meeting.
+  //
+  // Matched on start-minute plus subject rather than on an id, because the two
+  // systems share no identifier at all — the Apple copy of an Exchange event has
+  // its own local identifier and always will.
+  let graphKeys = new Set();
+  try {
+    graphKeys = new Set(
+      db.all(
+        `SELECT substr(start_time, 1, 16) AS s, lower(subject) AS t
+           FROM calendar_cache WHERE source = 'graph' AND start_time BETWEEN ? AND ?`,
+        [String(from), String(to)]
+      ).map((r) => `${r.s}|${r.t}`)
+    );
+  } catch (e) {
+    // A failed lookup must not fail the push. Worst case is the duplication this
+    // guard exists to prevent, which is visible; losing the whole sync is not.
+    console.warn('[Apple] Could not read Graph events to de-duplicate:', e.message);
+  }
+
+  const rows = normalised.filter(
+    (r) => !graphKeys.has(`${String(r.start).slice(0, 16)}|${String(r.subject).toLowerCase()}`)
+  );
+  const duplicates = normalised.length - rows.length;
 
   db.batchSaves(() => {
     db.clearCalendarWindow(SOURCE, String(from), String(to));
@@ -138,6 +212,9 @@ function ingestCalendar({ from, to, events } = {}) {
     // Never silent. A push where half the events were unusable is a broken
     // client, and a bare success count reads as a quiet day.
     rejected,
+    // Named rather than quietly dropped: if this starts climbing, the work
+    // account has been added to the phone and that is worth knowing.
+    duplicates,
   };
 }
 
@@ -156,8 +233,22 @@ function ingestReminders({ reminders } = {}) {
   let folded = 0;
   let skipped = 0;
   const rejected = [];
+  // Every list the phone offered, and how many came from each. Reported whether
+  // ingested or not, so "why has my reminder not appeared" is answerable without
+  // guessing — an ingest that silently drops most of its input looks identical
+  // to one that received nothing.
+  const seenLists = {};
+  const skippedLists = {};
 
   for (const r of reminders) {
+    const list = r && r.list ? String(r.list) : '(no list)';
+    seenLists[list] = (seenLists[list] || 0) + 1;
+
+    if (!listIsIngested(r && r.list)) {
+      skippedLists[list] = (skippedLists[list] || 0) + 1;
+      continue;
+    }
+
     const text = r && r.title ? String(r.title).trim() : '';
     if (!text) { rejected.push('a reminder with no title'); continue; }
     if (r.isCompleted === true) { skipped++; continue; }
@@ -180,7 +271,16 @@ function ingestReminders({ reminders } = {}) {
     }
   }
 
-  return { ok: true, created, folded, skippedCompleted: skipped, rejected };
+  return {
+    ok: true,
+    created,
+    folded,
+    skippedCompleted: skipped,
+    rejected,
+    seenLists,
+    skippedLists,
+    ingestingFrom: ingestListNames(),
+  };
 }
 
 /**
