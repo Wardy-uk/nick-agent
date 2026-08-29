@@ -1,0 +1,201 @@
+'use strict';
+
+/**
+ * Apple Calendar and Reminders ingest.
+ *
+ * The test that matters most is the delete scoping. calendar-sync is
+ * replace-by-window and runs every few minutes; before `source` existed it
+ * emptied the WHOLE table, so every Apple event would have been wiped minutes
+ * after the phone pushed it — silently, leaving a diary that looked exactly like
+ * the work-only one it had always been.
+ */
+
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+// ⚠ NEVER the live agent.db (mistakes.md, 13 Aug).
+process.env.NEURO_DB_PATH = path.join(
+  fs.mkdtempSync(path.join(os.tmpdir(), 'neuro-apple-')), 'scratch.db',
+);
+
+const db = require('../db/database');
+const apple = require('./apple-ingest');
+
+test.before(async () => { await db.init(); });
+
+// ── The delete scoping ───────────────────────────────────────────────────────
+
+test('a Graph sync does not delete Apple events', () => {
+  db.upsertCalendarEvent({
+    id: 'graph-1', subject: 'Team standup', start: '2026-09-01T09:00:00',
+    end: '2026-09-01T09:15:00', showAs: 'busy', source: 'graph',
+  });
+  apple.ingestCalendar({
+    from: '2026-09-01T00:00:00', to: '2026-09-02T00:00:00',
+    events: [{ id: 'a1', title: 'Parents evening', start: '2026-09-01T18:00:00', end: '2026-09-01T19:00:00' }],
+  });
+
+  // This is exactly what calendar-sync does on every run, every few minutes.
+  db.clearCalendarCache('graph');
+
+  const left = db.getCalendarEvents('2026-09-01T00:00:00', '2026-09-02T00:00:00');
+  assert.equal(left.length, 1, 'the Apple event must survive a Graph sync');
+  assert.equal(left[0].subject, 'Parents evening');
+  assert.equal(left[0].source, 'apple');
+});
+
+test('clearCalendarCache refuses to run without a source', () => {
+  // A default of 'graph' would make the dangerous call the easy one to write,
+  // and the dangerous call is the one that silently empties the table.
+  assert.throws(() => db.clearCalendarCache(), /requires a source/);
+});
+
+test('an Apple push replaces only its own window', () => {
+  db.upsertCalendarEvent({
+    id: 'apple:old', subject: 'Last month', start: '2026-08-01T10:00:00',
+    end: '2026-08-01T11:00:00', showAs: 'busy', source: 'apple',
+  });
+  apple.ingestCalendar({
+    from: '2026-09-10T00:00:00', to: '2026-09-11T00:00:00',
+    events: [{ id: 'a2', title: 'Dentist', start: '2026-09-10T14:00:00', end: '2026-09-10T14:30:00' }],
+  });
+
+  // Outside the pushed window, so it is not the push's business to delete it.
+  const august = db.getCalendarEvents('2026-08-01T00:00:00', '2026-08-02T00:00:00');
+  assert.equal(august.length, 1, 'a narrower push must not delete a wider one');
+});
+
+test('an empty push with a window clears it; without one it is refused', () => {
+  apple.ingestCalendar({
+    from: '2026-09-20T00:00:00', to: '2026-09-21T00:00:00',
+    events: [{ id: 'a3', title: 'Gone', start: '2026-09-20T09:00:00', end: '2026-09-20T10:00:00' }],
+  });
+  // An empty diary is a real answer and must clear the window.
+  apple.ingestCalendar({ from: '2026-09-20T00:00:00', to: '2026-09-21T00:00:00', events: [] });
+  assert.equal(db.getCalendarEvents('2026-09-20T00:00:00', '2026-09-21T00:00:00').length, 0);
+
+  // No window is the shape a broken client sends, and honouring it would empty
+  // the personal calendar on a malformed request.
+  assert.equal(apple.ingestCalendar({ events: [] }).ok, false);
+  assert.equal(apple.ingestCalendar({ from: 'x', to: 'y' }).ok, false);
+});
+
+// ── Normalising ──────────────────────────────────────────────────────────────
+
+test('attendeesOther stays THREE-valued through normalisation', () => {
+  // Scriptable does not always populate attendees. Coercing that unknown to
+  // false would tell context-state "solo block" about a real meeting.
+  assert.equal(apple.normaliseEvent({ id: 'x', start: 's', attendeesOther: true }).attendeesOther, true);
+  assert.equal(apple.normaliseEvent({ id: 'x', start: 's', attendeesOther: false }).attendeesOther, false);
+  assert.equal(apple.normaliseEvent({ id: 'x', start: 's' }).attendeesOther, undefined);
+});
+
+test('an unusable event is dropped rather than half-written', () => {
+  // Every consumer reads the cache as the truth about the diary, so a row with
+  // no start is worse than a missing one.
+  assert.equal(apple.normaliseEvent({ title: 'no id or start' }), null);
+  assert.equal(apple.normaliseEvent({ id: 'x' }), null);
+
+  const res = apple.ingestCalendar({
+    from: '2026-09-25T00:00:00', to: '2026-09-26T00:00:00',
+    events: [{ id: 'ok', title: 'Fine', start: '2026-09-25T09:00:00' }, { title: 'broken' }],
+  });
+  assert.equal(res.stored, 1);
+  // Never silent — a push where half the events were unusable is a broken client.
+  assert.equal(res.rejected, 1);
+});
+
+test('an Apple id can never collide with a Graph one', () => {
+  const row = apple.normaliseEvent({ id: 'abc', start: '2026-09-01T09:00:00' });
+  assert.equal(row.id, 'apple:abc');
+});
+
+test('an all-day event is free, not a wall across the day', () => {
+  const row = apple.normaliseEvent({ id: 'b', start: '2026-09-01', isAllDay: true });
+  assert.equal(row.showAs, 'free', 'a birthday must not block the afternoon');
+});
+
+// ── Reminders ────────────────────────────────────────────────────────────────
+
+test('the LIST decides the domain, and personal is the default', () => {
+  delete process.env.APPLE_WORK_LISTS;
+  assert.equal(apple.domainForList('Shopping'), 'personal');
+  assert.equal(apple.domainForList(null), 'personal');
+
+  process.env.APPLE_WORK_LISTS = 'Nurtur, Work Stuff';
+  assert.equal(apple.domainForList('Nurtur'), 'work');
+  assert.equal(apple.domainForList('  nurtur  '), 'work', 'matching is case and space insensitive');
+  assert.equal(apple.domainForList('Shopping'), 'personal');
+  delete process.env.APPLE_WORK_LISTS;
+});
+
+test('a reminder becomes a personal task with its due date', () => {
+  const res = apple.ingestReminders({
+    reminders: [{ title: 'Renew the car tax', dueDate: '2026-09-05', list: 'Home' }],
+  });
+  assert.equal(res.created, 1);
+
+  const taskStore = require('./task-store');
+  const task = taskStore.listTasks({ status: 'open' }).find(t => t.text === 'Renew the car tax');
+  assert.ok(task);
+  assert.equal(task.domain, 'personal');
+  assert.equal(task.source, 'apple-reminders');
+  assert.equal(task.due_date, '2026-09-05');
+});
+
+test('⚠ a completed task is NOT resurrected by the next push', () => {
+  // This is the loop that would otherwise make the whole feature unusable.
+  // NEURO cannot write to iCloud, so a reminder Nick ticked off in NEURO stays
+  // open in Apple and keeps being pushed. It is safe only because createTask
+  // folds into the existing row WHATEVER its status, and the fold never touches
+  // status. Verified here rather than assumed.
+  const taskStore = require('./task-store');
+  apple.ingestReminders({ reminders: [{ title: 'Post the parcel', list: 'Home' }] });
+
+  const created = taskStore.listTasks({ status: 'open' }).find(t => t.text === 'Post the parcel');
+  taskStore.updateTask(created.id, { status: 'done' });
+
+  const again = apple.ingestReminders({ reminders: [{ title: 'Post the parcel', list: 'Home' }] });
+  assert.equal(again.created, 0, 'it must fold, not create a second task');
+  assert.equal(again.folded, 1);
+
+  const after = taskStore.getTask(created.id);
+  assert.equal(after.status, 'done', 'the completed task must stay completed');
+});
+
+test('a completed reminder is skipped, never created-then-closed', () => {
+  // Creating a task to immediately close it would put work in the wins ledger
+  // that nobody did today — "a win is DETECTED, not declared".
+  const res = apple.ingestReminders({
+    reminders: [{ title: 'Something already done', isCompleted: true, list: 'Home' }],
+  });
+  assert.equal(res.created, 0);
+  assert.equal(res.skippedCompleted, 1);
+
+  const taskStore = require('./task-store');
+  assert.equal(
+    taskStore.listTasks({ status: 'all', includeDone: true }).some(t => t.text === 'Something already done'),
+    false,
+  );
+});
+
+test('a titleless reminder is rejected and reported', () => {
+  const res = apple.ingestReminders({ reminders: [{ notes: 'no title' }, { title: '   ' }] });
+  assert.equal(res.created, 0);
+  assert.equal(res.rejected.length, 2);
+});
+
+// ── Staleness ────────────────────────────────────────────────────────────────
+
+test('a phone that stopped pushing is visibly stale', () => {
+  // A push-based feed fails SILENTLY by definition — the phone simply stops
+  // calling, and a frozen calendar answers every question exactly as a live one
+  // does. Same species as the Jira cache that read as current for seven weeks.
+  const s = apple.status();
+  assert.equal(s.known, true);
+  assert.ok('stale' in s);
+  assert.ok('ageHours' in s);
+});

@@ -24,10 +24,27 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const WIDGET = path.join(__dirname, '..', '..', 'sara', 'widget', 'neuro-attention.js');
+const WIDGET_DIR = path.join(__dirname, '..', '..', 'sara', 'widget');
+const WIDGET = path.join(WIDGET_DIR, 'neuro-attention.js');
 
 function source() {
   return fs.readFileSync(WIDGET, 'utf8');
+}
+
+/**
+ * EVERY Scriptable file, not just the widget.
+ *
+ * The first version of this test named one file, so when a second script landed
+ * in the same directory — reaching the phone by the same copy-and-paste route,
+ * with exactly the same backslash hazard — it was unguarded, and only the phone
+ * would have discovered a syntax error in it. A rule that protects the file it
+ * was written for and nothing else is one that gets out of date on the first
+ * addition.
+ */
+function scriptableFiles() {
+  return fs.readdirSync(WIDGET_DIR)
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => ({ name: f, path: path.join(WIDGET_DIR, f) }));
 }
 
 test('the widget file exists where the tests expect it', () => {
@@ -37,12 +54,23 @@ test('the widget file exists where the tests expect it', () => {
   assert.ok(source().length > 5000, 'widget source looks truncated');
 });
 
-test('the widget contains NO backslashes anywhere', () => {
-  const lines = source().split('\n');
+test('there is more than one Scriptable file, and the scan sees them all', () => {
+  // Positive control for the two tests below. Without it, a broken readdir or a
+  // moved directory would make them pass by iterating nothing at all — the same
+  // way an invented metric name returns zero rows and proves nothing.
+  const files = scriptableFiles();
+  assert.ok(files.length >= 2, `expected at least two Scriptable files, found ${files.length}`);
+  assert.ok(files.some((f) => f.name === 'neuro-attention.js'));
+});
+
+test('NO Scriptable file contains a backslash anywhere', () => {
   const offenders = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].indexOf(String.fromCharCode(92)) !== -1) {
-      offenders.push(`  line ${i + 1}: ${lines[i].trim()}`);
+  for (const file of scriptableFiles()) {
+    const lines = fs.readFileSync(file.path, 'utf8').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].indexOf(String.fromCharCode(92)) !== -1) {
+        offenders.push(`  ${file.name} line ${i + 1}: ${lines[i].trim()}`);
+      }
     }
   }
   assert.deepEqual(
@@ -54,14 +82,17 @@ test('the widget contains NO backslashes anywhere', () => {
   );
 });
 
-test('the widget parses as JavaScript', () => {
-  // It is never require()d by anything, so nothing else would ever catch a
-  // syntax error in it before the phone did. Wrapped in an async body because
-  // the script uses top-level await, exactly as Scriptable runs it.
-  assert.doesNotThrow(
-    () => new Function(`return (async () => { ${source()} })`),
-    'widget source does not parse'
-  );
+test('every Scriptable file parses as JavaScript', () => {
+  // Nothing require()s these, so without this test only the phone would ever
+  // discover a syntax error. Wrapped in an async body because they use
+  // top-level await, exactly as Scriptable runs them.
+  for (const file of scriptableFiles()) {
+    const src = fs.readFileSync(file.path, 'utf8');
+    assert.doesNotThrow(
+      () => new Function(`return (async () => { ${src} })`),
+      `${file.name} does not parse`
+    );
+  }
 });
 
 test('the version marker is present and bumped shape', () => {
