@@ -16,6 +16,38 @@
 const express = require('express');
 const router = express.Router();
 const wins = require('../services/wins');
+const weeklyTarget = require('../services/weekly-target');
+
+/**
+ * GET /api/wins/target — the week's target and progress against it.
+ * POST /api/wins/target { target } — set it, or null to clear.
+ *
+ * ⚠ Registered BEFORE any parameterised sibling. Express matches in
+ * registration order, and "target" being read as an id is exactly how
+ * /triage/feedback broke.
+ */
+router.get('/target', (req, res) => {
+  try {
+    res.json(weeklyTarget.progress());
+  } catch (e) {
+    console.error('[Wins] target read failed:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/target', (req, res) => {
+  try {
+    const week = req.body?.week || weeklyTarget.weekKey();
+    const result = weeklyTarget.setTarget(week, req.body?.target ?? null);
+    // Return the whole picture, not just what was stored — the caller almost
+    // always wants to render the ring immediately afterwards.
+    res.json({ ok: true, ...result, progress: weeklyTarget.progress() });
+  } catch (e) {
+    if (e.code === 'INVALID_TARGET') return res.status(400).json({ ok: false, error: e.message });
+    console.error('[Wins] target write failed:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 router.get('/', (req, res) => {
   try {

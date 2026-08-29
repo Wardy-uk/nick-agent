@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v17';
+const VERSION = 'v18';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -283,6 +283,20 @@ async function fetchWeather() {
   }
 }
 
+/** The week's task target and progress against it. */
+async function fetchTarget({ base, token }) {
+  try {
+    const req = new Request(`${base}/api/wins/target`);
+    req.headers = { 'X-NEURO-API-TOKEN': token };
+    req.timeoutInterval = TIMEOUT_SECONDS;
+    const json = await req.loadJSON();
+    if (!json || typeof json !== 'object' || json.ok === false) return null;
+    return json;
+  } catch (e) {
+    return null;
+  }
+}
+
 // ── Look ────────────────────────────────────────────────────────────────────
 //
 // Design rules, so this stays legible rather than merely decorated:
@@ -400,6 +414,121 @@ function font(size, weight) {
  * Baked into an image, so it cannot be theme-dynamic; the colour is resolved
  * once against the current appearance.
  */
+/**
+ * A progress ring, drawn as segments around a circle.
+ *
+ * ⚠ It must read in MONOCHROME. iOS renders lock-screen accessory widgets with
+ * a vibrancy tint, so hue is stripped — a green-vs-red ring would be one flat
+ * colour there and say nothing. So the signal is FILL: a done segment is solid,
+ * an outstanding one is faint. Colour is applied on top for the home screen,
+ * where it survives, but nothing depends on it.
+ *
+ * Segments rather than an arc path deliberately: filled ellipses are the most
+ * boring, best-supported thing DrawContext does, and a countable ring reads
+ * better at 58pt than a smooth sweep anyway.
+ *
+ * `over` draws an INNER ring of the surplus — a second lap, which is the
+ * honest picture of exceeding a target and needs no colour to be understood.
+ */
+function progressRing(size, done, target, pair) {
+  try {
+    const dc = new DrawContext();
+    dc.size = new Size(size, size);
+    dc.opaque = false;
+    dc.respectScreenScale = true;
+
+    const SEGMENTS = 24;
+    const cx = size / 2;
+    const cy = size / 2;
+    const r = size / 2 - size * 0.09;
+    const dot = Math.max(2.5, size * 0.075);
+    const ink = forTheme(pair);
+
+    const capped = Math.max(0, Math.min(done, target));
+    const filled = target > 0 ? Math.round((capped / target) * SEGMENTS) : 0;
+
+    for (let i = 0; i < SEGMENTS; i++) {
+      // Start at twelve o'clock and go clockwise, because that is how every
+      // other progress ring on the phone behaves.
+      const a = (i / SEGMENTS) * Math.PI * 2 - Math.PI / 2;
+      const x = cx + Math.cos(a) * r - dot / 2;
+      const y = cy + Math.sin(a) * r - dot / 2;
+      const isDone = i < filled;
+      dc.setFillColor(new Color(ink, isDone ? 1 : 0.22));
+      dc.fillEllipse(new Rect(x, y, dot, dot));
+    }
+
+    // The surplus, as a second lap on a tighter radius. Only ever drawn when
+    // the target is genuinely beaten, so its presence IS the celebration.
+    const over = Math.max(0, done - target);
+    if (over > 0 && target > 0) {
+      const overSegs = Math.min(SEGMENTS, Math.max(1, Math.round((over / target) * SEGMENTS)));
+      const r2 = r - dot * 1.25;
+      const dot2 = dot * 0.6;
+      for (let i = 0; i < overSegs; i++) {
+        const a = (i / SEGMENTS) * Math.PI * 2 - Math.PI / 2;
+        const x = cx + Math.cos(a) * r2 - dot2 / 2;
+        const y = cy + Math.sin(a) * r2 - dot2 / 2;
+        dc.setFillColor(new Color(ink, 1));
+        dc.fillEllipse(new Rect(x, y, dot2, dot2));
+      }
+    }
+    return dc.getImage();
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * The same idea, laid flat: a segmented bar for the wide lock-screen widget,
+ * where a ring would waste the width. Identical semantics — solid means done,
+ * faint means outstanding, and a second row underneath means over target.
+ */
+function progressBar(width, height, done, target, pair) {
+  try {
+    const dc = new DrawContext();
+    dc.size = new Size(width, height);
+    dc.opaque = false;
+    dc.respectScreenScale = true;
+
+    const SEGMENTS = 20;
+    const ink = forTheme(pair);
+    const over = Math.max(0, done - target);
+    const barH = over > 0 ? Math.max(2, height * 0.45) : height;
+    const gap = 2;
+    const segW = (width - gap * (SEGMENTS - 1)) / SEGMENTS;
+
+    const capped = Math.max(0, Math.min(done, target));
+    const filled = target > 0 ? Math.round((capped / target) * SEGMENTS) : 0;
+
+    for (let i = 0; i < SEGMENTS; i++) {
+      dc.setFillColor(new Color(ink, i < filled ? 1 : 0.22));
+      dc.fillRect(new Rect(i * (segW + gap), 0, segW, barH));
+    }
+
+    if (over > 0 && target > 0) {
+      const overSegs = Math.min(SEGMENTS, Math.max(1, Math.round((over / target) * SEGMENTS)));
+      const y2 = barH + gap;
+      for (let i = 0; i < overSegs; i++) {
+        dc.setFillColor(new Color(ink, 1));
+        dc.fillRect(new Rect(i * (segW + gap), y2, segW, Math.max(2, height - y2)));
+      }
+    }
+    return dc.getImage();
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Which accent a target state earns. Fill carries the meaning; this is a bonus. */
+function targetPair(t) {
+  if (!t || !t.known) return HEX.low;
+  if (t.state === 'exceeded') return HEX.positive;
+  if (t.state === 'met') return HEX.positive;
+  if (t.state === 'behind') return HEX.high;
+  return HEX.normal;
+}
+
 function sparkline(values, width, height, pair) {
   try {
     const dc = new DrawContext();
@@ -906,7 +1035,7 @@ function offDutyView(w, duty, wins) {
  * thing, said in a sentence. Secondary items are dropped rather than crammed —
  * an unreadable lock screen is worse than a blank one.
  */
-function accessoryView(family, res, d, wins) {
+function accessoryView(family, res, d, wins, target) {
   const w = new ListWidget();
   // Fully transparent — the system paints the lock screen's own material behind
   // this, so any ground of ours would sit on top of it as a grey slab.
@@ -952,20 +1081,32 @@ function accessoryView(family, res, d, wins) {
   }
 
   if (family === 'accessoryCircular') {
-    // A NUMBER and what it counts. The first cut rendered a bare tick when off
-    // duty, which is the least informative thing a circle can hold — it said
-    // "fine" on a surface Nick sees fifty times a day and told him nothing.
-    const week = offDuty && wins ? Number(wins.doneThisWeek) : null;
-    const n = Number.isFinite(week) && week > 0
-      ? week
-      : (d.primary ? 1 : 0) + ((d.secondary || []).length);
-    const label = Number.isFinite(week) && week > 0 ? 'week' : 'now';
+    // The week's task target as a ring, with the count inside it. A bare number
+    // has no denominator — 28 is only good or bad against something.
+    const t = target;
+    if (t && t.known && t.target) {
+      const img = progressRing(58, t.done, t.target, targetPair(t));
+      if (img) w.backgroundImage = img;
+      const stack = w.addStack();
+      stack.layoutVertically();
+      stack.centerAlignContent();
+      text(stack, String(t.done), { size: 17, weight: 'heavy', max: 1 });
+      text(stack, `of ${t.target}`, { size: 8, max: 1 });
+      w.url = tabUrl('tasks');
+      return w;
+    }
 
+    // No target set, or the ledger could not be read. Both render the honest
+    // thing rather than an empty ring, which would read as "you have done none".
+    const n = t && t.known && Number.isFinite(t.done)
+      ? t.done
+      : (d.primary ? 1 : 0) + ((d.secondary || []).length);
+    const label = t && t.known && Number.isFinite(t.done) ? 'done' : 'now';
     const stack = w.addStack();
     stack.layoutVertically();
     stack.centerAlignContent();
-    text(stack, String(n), { size: 19, weight: 'heavy', max: 1 });
-    text(stack, label, { size: 9, max: 1 });
+    text(stack, t && !t.known ? '?' : String(n), { size: 19, weight: 'heavy', max: 1 });
+    text(stack, t && !t.known ? 'no data' : label, { size: 8, max: 1 });
     w.url = tabUrl(offDuty ? 'today' : 'surface');
     return w;
   }
@@ -975,6 +1116,28 @@ function accessoryView(family, res, d, wins) {
   // the home-screen widget already says is a wasted row.
   text(w, head, { size: 11, weight: 'bold', max: 1 });
   text(w, body, { size: 13, max: 1 });
+
+  const t = target;
+  if (t && t.known && t.target) {
+    const bar = progressBar(120, 9, t.done, t.target, targetPair(t));
+    const row = w.addStack();
+    row.centerAlignContent();
+    if (bar) {
+      const img = row.addImage(bar);
+      img.imageSize = new Size(120, 9);
+      row.addSpacer(7);
+    }
+    // The words carry the state, because the bar cannot: a lock screen strips
+    // colour, so "behind" and "on track" look identical without them.
+    const tail = t.state === 'exceeded' ? `${t.done}/${t.target} +${t.over}`
+      : t.state === 'met' ? `${t.done}/${t.target} done`
+      : t.state === 'behind' ? `${t.done}/${t.target} behind`
+      : `${t.done}/${t.target}`;
+    text(row, tail, { size: 10, weight: 'bold', max: 1 });
+    row.addSpacer();
+    w.url = tabUrl('tasks');
+    return w;
+  }
 
   const ag = d.agenda;
   if (ag && ag.known && Array.isArray(ag.events) && ag.events.length) {
@@ -993,10 +1156,10 @@ function accessoryView(family, res, d, wins) {
   return w;
 }
 
-function build(res, family, wins, weather) {
+function build(res, family, wins, weather, target) {
   const d0 = res.data || {};
   if (String(family).startsWith('accessory')) {
-    return accessoryView(family, res, d0, wins);
+    return accessoryView(family, res, d0, wins, target);
   }
 
   const w = new ListWidget();
@@ -1089,9 +1252,15 @@ const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
 // Off duty the wins ARE the view; on large they fill the strip at the bottom.
 // Anywhere else it would be a request bought for nothing.
 const needWins = !res.error && (offDuty || family === 'large');
-const wins = needWins ? await fetchWins(cfg) : null;
+// The ring belongs to the lock screen and the large tile. Anywhere else it
+// would be a request bought for nothing.
+const needTarget = !res.error && (isAccessory || family === 'large');
+const [wins, target] = await Promise.all([
+  needWins ? fetchWins(cfg) : Promise.resolve(null),
+  needTarget ? fetchTarget(cfg) : Promise.resolve(null),
+]);
 
-const widget = build(res, family, wins, weather);
+const widget = build(res, family, wins, weather, target);
 
 if (config.runsInWidget) {
   Script.setWidget(widget);
