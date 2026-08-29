@@ -260,3 +260,22 @@ test('a high day names the good news, not the adverse list', () => {
   assert.match(s, /Well recovered/);
   assert.ok(!/on the low side/.test(s));
 });
+
+test('a crossed threshold does NOT silence a large near-threshold contributor', () => {
+  // The live reading this whole rule exists for: RHR 82 vs 78 (crossed, effect
+  // -0.67) and HRV 14.82 vs 16.3 (z = -0.93, INSIDE the band, effect -0.46).
+  // The first fix named the heart rate alone and still under-reported the score.
+  // A threshold decides how to PHRASE a reading, not whether it counted.
+  const baseline = hd.buildBaseline(normalDays(10));
+  const r = hd.readiness({ day: '2026-08-29', hrvMedian: 16.75, rhrMedian: 81, asleepHours: 7.7 }, baseline);
+  assert.equal(r.state, 'low');
+  const rhr = r.contributors.find(c => c.input === 'rhr');
+  const hrv = r.contributors.find(c => c.input === 'hrv');
+  assert.equal(rhr.flag, 'adverse', 'fixture: the heart rate crosses');
+  assert.equal(hrv.flag, 'normal', 'fixture: HRV does not cross');
+  assert.ok(Math.abs(hrv.effect) >= 0.2, 'fixture: but HRV still moved the score');
+
+  const s = hd.readinessSentence(r);
+  assert.match(s, /resting heart rate/);
+  assert.match(s, /HRV also on the low side/, 'the near-threshold contributor must be named too');
+});

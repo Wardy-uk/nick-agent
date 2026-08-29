@@ -341,24 +341,31 @@ const NOTABLE_EFFECT = 0.2;
 function readinessSentence(r) {
   if (!r || !r.known) return null;
 
-  const adverse = r.contributors.filter(p => p.flag === 'adverse');
-  const favourable = r.contributors.filter(p => p.flag === 'favourable');
-  const named = r.state === 'high' ? favourable : adverse;
+  const wantFlag = r.state === 'high' ? 'favourable' : 'adverse';
+  const wantSign = r.state === 'high' ? 1 : -1;
 
+  // Crossed a named threshold — these get their full note.
+  const crossed = r.contributors.filter(p => p.flag === wantFlag);
+  // Did NOT cross, but pushed the score by a measurable amount in the same
+  // direction. ⚠ These must be named too. The first fix only reported the
+  // crossed ones and still under-reported the live case it was written for:
+  // HRV at z = -0.93 contributed -0.46 — two thirds of the resting heart
+  // rate's -0.67 — and went unmentioned because -0.93 is inside the ±1.0 band.
+  // A threshold decides how to PHRASE a reading, not whether it counted.
+  const leaning = r.contributors.filter(p =>
+    p.flag !== wantFlag && Math.sign(p.effect) === wantSign && Math.abs(p.effect) >= NOTABLE_EFFECT
+  ).sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect));
+
+  const side = r.state === 'high' ? 'good' : 'low';
   let detail;
-  if (named.length) {
-    detail = named.map(p => p.note).join(', ');
-  } else if (r.state === 'low' || r.state === 'high') {
-    // Nothing crossed a line, yet the day is not neutral. Name what leaned, by
-    // measured effect rather than by having tripped a threshold.
-    const wanted = r.state === 'low' ? -1 : 1;
-    const leaning = r.contributors
-      .filter(p => Math.sign(p.effect) === wanted && Math.abs(p.effect) >= NOTABLE_EFFECT)
-      .sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect))
-      .map(p => p.input === 'rhr' ? 'resting heart rate' : p.input === 'hrv' ? 'HRV' : 'sleep');
-    detail = leaning.length
-      ? `nothing on its own, but ${listOf(leaning)} ${leaning.length > 1 ? 'are' : 'is'} on the ${r.state === 'low' ? 'low' : 'good'} side`
-      : 'everything in your normal range';
+  if (crossed.length && leaning.length) {
+    detail = `${crossed.map(p => p.note).join(', ')}, with ${listOf(leaning.map(label))} also on the ${side} side`;
+  } else if (crossed.length) {
+    detail = crossed.map(p => p.note).join(', ');
+  } else if (leaning.length) {
+    // Nothing crossed a line, yet the day is not neutral — which is a different
+    // statement from either "your heart rate is up" or "all normal".
+    detail = `nothing on its own, but ${listOf(leaning.map(label))} ${leaning.length > 1 ? 'are' : 'is'} on the ${side} side`;
   } else {
     detail = 'everything in your normal range';
   }
@@ -366,6 +373,10 @@ function readinessSentence(r) {
   if (r.state === 'low') return `Running low today — ${detail}.`;
   if (r.state === 'high') return `Well recovered today — ${detail}.`;
   return `About normal today — ${detail}.`;
+}
+
+function label(part) {
+  return part.input === 'rhr' ? 'resting heart rate' : part.input === 'hrv' ? 'HRV' : 'sleep';
 }
 
 function listOf(items) {
