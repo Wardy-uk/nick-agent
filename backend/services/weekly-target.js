@@ -158,7 +158,12 @@ function clearTarget({ weekOf = new Date() } = {}) {
 function _tasksByDay(from, to) {
   try {
     const rows = db.all(
-      `SELECT date_key, COUNT(*) n FROM wins
+      // SUM(count), not COUNT(*). They are equal for `task_done` today — one row
+      // per closed task, `count` defaulting to 1 — but `count` exists precisely
+      // because rows can FOLD (git commits already do), and a folded task_done
+      // row would be silently undercounted by COUNT(*). Zero behaviour change
+      // now, and it cannot quietly go wrong later.
+      `SELECT date_key, SUM(count) n FROM wins
         WHERE kind = 'task_done' AND date_key BETWEEN ? AND ?
         GROUP BY date_key`,
       [from, to]
