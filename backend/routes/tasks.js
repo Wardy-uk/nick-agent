@@ -23,6 +23,9 @@ router.get('/', (req, res) => {
       status: req.query.status || 'open',
       moscow: req.query.moscow || null,
       source: req.query.source || null,
+      // Absent means BOTH domains — never a default of 'work', which would hide
+      // personal tasks from every existing caller of this route without saying so.
+      domain: req.query.domain || null,
       includeDone: req.query.status === 'all',
     });
     const q = (req.query.q || '').toLowerCase().trim();
@@ -48,10 +51,15 @@ router.get('/untriaged', (req, res) => {
 // POST /api/tasks — create (route 2: NEURO direct)
 router.post('/', (req, res) => {
   try {
-    const { text, moscow, priority, due_date, source, notes, origin_path, origin_line, estimateMinutes, estimateExact } = req.body;
+    const { text, moscow, priority, due_date, source, notes, origin_path, origin_line, estimateMinutes, estimateExact, domain } = req.body;
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'text is required' });
     const result = taskStore.createTask({
       text, moscow, priority, due_date, notes, origin_path, origin_line,
+      // ⚠ Whitelisted deliberately, and the reason is two lines below: a field
+      // createTask accepts but the route omits is dropped IN SILENCE. That cost
+      // every new task its estimate once already; a dropped domain would file
+      // every personal task as work and look like it had worked.
+      domain,
       // createTask has always accepted this; the route's whitelist did not pass
       // it, so an estimate given at creation was dropped in silence and only a
       // later PATCH could set one. It decides how long a calendar block is, so

@@ -208,9 +208,28 @@ function msPercentComplete(task) {
   return pct >= 0 && pct <= 100 ? pct : null;
 }
 
-function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5) {
+/**
+ * @param {object} [opts]
+ * @param {'work'|'personal'|null} [opts.domain]  restrict the lane to one part
+ *   of Nick's life. Absent means BOTH, which is the right default and the
+ *   existing behaviour.
+ *
+ * ⚠ The default is deliberately NOT 'work', and this is a correction to what
+ * looked obvious at first. The instinct was "personal tasks must not pollute
+ * Must Move Today" — but this lane feeds Nick's OWN task panel, and a personal
+ * task that is genuinely due today genuinely must move today. Hiding it from
+ * the one screen he uses to find what he owes is the invisible failure the
+ * whole domain split exists to prevent, committed by the fix for it.
+ *
+ * What actually needed scoping was narrower: the things that INTERRUPT him
+ * during working hours (the todo nudge) and the things that LEAVE THE BUILDING
+ * (the briefing). Both now pass a domain explicitly. The panel does not.
+ */
+function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5, opts = {}) {
+  const domain = opts.domain || null;
   return (tasks || [])
     .map((task) => decorateTask(task, todayStr))
+    .filter((task) => !domain || (task.domain || 'work') === domain)
     .filter((task) => task.needsToday || task.mustdo || task.priority === 'high')
     .sort((a, b) => {
       const am = a.moscow === 'must' ? 0 : a.moscow === 'should' ? 1 : 2;

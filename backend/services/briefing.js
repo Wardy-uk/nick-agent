@@ -14,6 +14,8 @@ const webpush = require('./webpush');
 const emailSender = require('./email-sender');
 const teams = require('./teams');
 const { VOICE_COMPACT } = require('./sara-voice');
+// The briefing is delivered through Nurtur's tenant — see _collectFocusItems.
+const { mayLeaveTheBuilding } = require('../../shared/task-domain.cjs');
 
 const BRIEF_KEY = 'last_brief';
 const ALERT_SEEN_KEY = 'alert_seen_ids';
@@ -26,7 +28,31 @@ async function _collectFocusItems() {
   try {
     const engine = require('./decision-engine');
     const result = await engine.evaluate();
-    return result.items || [];
+    const items = result.items || [];
+
+    // ⚠ THE BRIEFING LEAVES THE BUILDING. It is delivered by Graph Mail and
+    // Teams — both Nurtur's tenant, both on Nurtur's retention policy — so a
+    // personal task in it puts Nick's private life in his employer's mail
+    // system, permanently, where he cannot take it back.
+    //
+    // A todo item's TITLE is the task's own text, so this is not hypothetical
+    // once personal tasks exist. Filtered HERE, at the outbound boundary,
+    // rather than in decision-engine: the Surface, Focus and the phone should
+    // all show personal work, and only the paths that send ask this question.
+    // Same rule that makes action-presenter the single arbiter of what counts
+    // as outbound.
+    //
+    // ⚠ Known limit, stated rather than papered over: this drops the ITEM, and
+    // the counts inside a summary item ("· 3 other overdue") are still computed
+    // over every domain. A number is a much smaller disclosure than a task's
+    // wording, but it is not zero, and scoping the counts needs a domain-aware
+    // `evaluate()` — deliberately not done here, because that call is shared
+    // with the two surfaces that must keep seeing everything.
+    const held = items.filter((i) => !mayLeaveTheBuilding({ domain: i.meta?.domain }));
+    if (held.length) {
+      console.log(`[Briefing] ${held.length} personal item(s) held back from an outbound brief`);
+    }
+    return items.filter((i) => mayLeaveTheBuilding({ domain: i.meta?.domain }));
   } catch (e) {
     console.warn('[Briefing] Could not collect focus items:', e.message);
     return [];

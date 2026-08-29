@@ -110,6 +110,22 @@ async function init() {
       db.exec('ALTER TABLE tasks ADD COLUMN ms_plan TEXT');
       console.log('[DB] tasks.ms_plan added');
     }
+    // Migration: tasks.domain — 'work' or 'personal'. NEURO was built entirely
+    // around work, so every row that exists when this runs IS work; that is
+    // Nick's own statement, which makes the DEFAULT a fact rather than a guess
+    // and means no separate backfill pass is needed — ADD COLUMN with a default
+    // stamps every existing row in one statement.
+    //
+    // ⚠ No CHECK constraint here, unlike schema.sql. SQLite cannot add one via
+    // ALTER TABLE, and the alternative is a table rebuild — a destructive
+    // migration on a live 447MB DB, to buy a guard that shared/task-domain.cjs
+    // already applies on the way in. A fresh DB gets the constraint from the
+    // schema; an existing one gets the same protection one layer up.
+    if (taskColumns.length && !taskColumns.includes('domain')) {
+      db.exec("ALTER TABLE tasks ADD COLUMN domain TEXT NOT NULL DEFAULT 'work'");
+      const n = get('SELECT COUNT(*) AS n FROM tasks')?.n || 0;
+      console.log(`[DB] tasks.domain added — ${n} existing task(s) stamped 'work'`);
+    }
   } catch (e) {
     console.error('[DB] tasks migration check failed:', e.message);
   }
@@ -1042,20 +1058,24 @@ function deleteTaskMoscow(filePath, lineNumber, text) {
 
 const TASK_FIELDS = [
   'text', 'status', 'moscow', 'moscow_proposed', 'priority', 'due_date', 'source',
-  'origin_path', 'origin_line', 'context', 'notes', 'ms_id', 'ms_source', 'ms_plan',
+  'origin_path', 'origin_line', 'context', 'domain', 'notes', 'ms_id', 'ms_source', 'ms_plan',
   'estimate_minutes',
 ];
 
 function createTaskRow(task) {
   const info = run(
     `INSERT INTO tasks (text, status, moscow, moscow_proposed, priority, due_date, source,
-                        origin_path, origin_line, context, notes, ms_id, estimate_minutes, dedupe_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        origin_path, origin_line, context, domain, notes, ms_id, estimate_minutes, dedupe_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       task.text, task.status || 'open', task.moscow || null,
       task.moscow_proposed ? 1 : 0, task.priority || null,
       task.due_date || null, task.source || 'manual', task.origin_path || null,
       task.origin_line == null ? null : task.origin_line, task.context || null,
+      // Never a bare `|| 'work'` here — task-store resolves the domain through
+      // shared/task-domain.cjs before it arrives, so an unrecognised value is
+      // already a decision rather than a typo reaching the column.
+      task.domain || 'work',
       task.notes || null, task.ms_id || null,
       task.estimate_minutes == null ? null : task.estimate_minutes,
       task.dedupe_key,
@@ -1084,6 +1104,10 @@ function listTaskRows(filters = {}) {
   }
   if (filters.moscow) { where.push('moscow = ?'); params.push(filters.moscow); }
   if (filters.source) { where.push('source = ?'); params.push(filters.source); }
+  // Absent means EVERY domain, not 'work'. A default here would silently hide
+  // personal tasks from every existing caller — including the exports and the
+  // counts — which is the invisible half of the asymmetry task-domain describes.
+  if (filters.domain) { where.push('domain = ?'); params.push(filters.domain); }
   const sql = `SELECT * FROM tasks${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
      ORDER BY CASE moscow WHEN 'must' THEN 0 WHEN 'should' THEN 1 WHEN 'could' THEN 2
                           WHEN 'wont' THEN 3 ELSE 4 END,

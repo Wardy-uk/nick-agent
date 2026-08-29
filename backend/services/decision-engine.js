@@ -346,7 +346,12 @@ function collectOverdueTodos(ctx) {
       urgency: topOverdue.isPlanTask ? 'high' : 'medium',
       source: topOverdue.source || 'vault',
       actionHint: overdueCount === 1 ? 'Complete or reschedule' : 'Start here, then review the rest',
-      meta: { dueDate: topOverdue.dueStr, overdueCount },
+      // Carried so an OUTBOUND surface can tell whether this may leave the
+      // building. The title IS the task's own text, so a personal task reaching
+      // the briefing puts Nick's private life into Nurtur's mail system. It is
+      // not filtered HERE on purpose — the Surface and Focus should show
+      // personal work; only the outbound paths ask.
+      meta: { dueDate: topOverdue.dueStr, overdueCount, domain: topOverdue.domain || null },
     });
   }
 
@@ -362,7 +367,7 @@ function collectOverdueTodos(ctx) {
       urgency: topDueToday.isPlanTask ? 'medium' : 'low',
       source: topDueToday.source || 'vault',
       actionHint: dueTodayCount === 1 ? 'Do today' : 'Start here, then review the rest',
-      meta: { dueDate: topDueToday.dueStr, dueTodayCount },
+      meta: { dueDate: topDueToday.dueStr, dueTodayCount, domain: topDueToday.domain || null },
     });
   }
 
@@ -382,7 +387,7 @@ function collectOverdueTodos(ctx) {
       urgency: 'medium',
       source: topUndatedHigh.source || 'vault',
       actionHint: 'Give these a date or drop them',
-      meta: { undatedHighCount },
+      meta: { undatedHighCount, domain: topUndatedHigh.domain || null },
     });
   }
 

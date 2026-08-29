@@ -31,6 +31,8 @@
 const db = require('../db/database');
 const taskBlocks = require('./task-blocks');
 const timeFit = require('./time-fit');
+// Personal tasks are never blocked into the work diary — see toPlannerTask.
+const { isPersonal } = require('../../shared/task-domain.cjs');
 
 // ── Windows ──────────────────────────────────────────────────────────────────
 
@@ -315,6 +317,7 @@ function gather(now = new Date()) {
   const gaps = [];
 
   let tasks = [];
+  let personalHeld = 0;
   try {
     const taskStore = require('./task-store');
     const { rankTasks } = require('./task-scoring');
@@ -325,9 +328,13 @@ function gather(now = new Date()) {
     // exactly like a quiet day rather than a bug. A file-backed line (Microsoft,
     // a daily note) has a null task_id and genuinely cannot be blocked, so the
     // filter itself is right; it was reading the wrong key.
-    tasks = rankTasks(taskStore.activeTodos(), dateKey)
-      .map(toPlannerTask)
-      .filter(Boolean);
+    const ranked = rankTasks(taskStore.activeTodos(), dateKey);
+    // Held back because they are personal, counted BEFORE the map so the number
+    // is reportable. A planner that quietly plans less than it was asked to is
+    // indistinguishable from one with nothing to do — `overflowed`'s rule, and
+    // the same reason `dropped` names every item in the attention feed.
+    personalHeld = ranked.filter(isPersonal).length;
+    tasks = ranked.map(toPlannerTask).filter(Boolean);
   } catch (e) {
     gaps.push(`tasks unreadable: ${e.message}`);
   }
@@ -364,7 +371,7 @@ function gather(now = new Date()) {
     gaps.push(`existing blocks unreadable: ${e.message}`);
   }
 
-  return { dateKey, tasks, busy, calendarKnown, gaps, samples: durationSamples() };
+  return { dateKey, tasks, busy, calendarKnown, gaps, personalHeld, samples: durationSamples() };
 }
 
 /**
@@ -385,6 +392,16 @@ function gather(now = new Date()) {
  */
 function toPlannerTask(todo) {
   if (!todo || !Number.isInteger(todo.task_id)) return null;
+  // ⚠ A personal task is never blocked into the WORK calendar. This planner
+  // auto-creates real events on a timer in Nick's Nurtur diary, which his
+  // colleagues can see the busy time of — so "collect the kids" becoming a
+  // booked work block is both wrong and visible to other people.
+  //
+  // The guard lives in this pure funnel rather than only in `gather`, because
+  // every path into the planner passes through here and a filter one level up
+  // is one a future caller can walk around. `gather` counts them separately so
+  // the refusal is REPORTED rather than being a silent drop.
+  if (isPersonal(todo)) return null;
   return {
     id: todo.task_id,
     text: todo.text,

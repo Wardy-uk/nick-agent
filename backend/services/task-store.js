@@ -15,6 +15,7 @@
 
 const db = require('../db/database');
 const todoIntelligence = require('./todo-intelligence');
+const { domainOrDefault, normaliseDomain } = require('../../shared/task-domain.cjs');
 
 const VALID_MOSCOW = ['must', 'should', 'could', 'wont'];
 const VALID_STATUS = ['open', 'in-progress', 'done', 'dropped'];
@@ -93,6 +94,11 @@ function toTodoShape(row) {
     moscowProposed: Boolean(row.moscow_proposed),
     estimateMinutes: row.estimate_minutes == null ? null : row.estimate_minutes,
     context: row.context || null,
+    // Work or personal. Defaulted rather than passed through raw, so a row
+    // written before the column existed reads as 'work' everywhere instead of
+    // arriving as undefined and being treated as "no domain" by one consumer
+    // and as personal by another.
+    domain: domainOrDefault(row.domain),
     notes: row.notes || null,
     filePath: null,
     lineNumber: null,
@@ -174,10 +180,34 @@ function createTask(input = {}) {
   const text = String(input.text || '').trim();
   if (!text) throw new Error('text is required');
 
-  const key = dedupeKey(text);
-  if (!key) throw new Error('text has no matchable content');
+  const baseKey = dedupeKey(text);
+  if (!baseKey) throw new Error('text has no matchable content');
 
-  const existing = db.getTaskByDedupeKey(key);
+  const domain = domainOrDefault(input.domain);
+
+  // ── The cross-domain collision ─────────────────────────────────────────────
+  //
+  // `dedupe_key` is normalised text and UNIQUE across the WHOLE table, so
+  // without this a personal task whose first 80 characters match a work one
+  // folds into it — and folding is silent by design, so the task simply never
+  // appears. "Book the dentist" arriving from the capture page and landing
+  // inside a work row is exactly the invisible failure this feature is supposed
+  // to remove, reintroduced by an index that predates the question.
+  //
+  // The key is left ALONE in the ordinary case and suffixed only on an actual
+  // clash, rather than prefixing every key with its domain. That matters: six
+  // callers outside this module compute `dedupeKey(text)` and look a task up by
+  // it (obsidian's mirror suppression, task-import, focus-session), and none of
+  // them knows a domain. Prefixing would have broken all of them; suffixing on
+  // collision leaves every one of those lookups finding exactly what it found
+  // before, and costs nothing on the ~100% of creates that do not clash.
+  let key = baseKey;
+  let existing = db.getTaskByDedupeKey(key);
+  if (existing && existing.domain && existing.domain !== domain) {
+    key = `${baseKey} #${domain}`.slice(0, 100);
+    existing = db.getTaskByDedupeKey(key);
+  }
+
   if (existing) {
     // A second sighting of the same action is a chance to fill in blanks, never to
     // overwrite a decision Nick has already made.
@@ -213,6 +243,7 @@ function createTask(input = {}) {
     origin_path: input.origin_path || null,
     origin_line: input.origin_line == null ? null : input.origin_line,
     context,
+    domain,
     notes: input.notes || null,
     ms_id: input.ms_id || null,
     estimate_minutes: normEstimate(
@@ -295,8 +326,17 @@ function updateTask(id, fields = {}) {
     const text = String(fields.text || '').trim();
     if (!text) throw new Error('text cannot be empty');
     patch.text = text;
-    const key = dedupeKey(text);
-    const clash = db.getTaskByDedupeKey(key);
+    // The same domain-suffix rule as createTask, or renaming a personal task
+    // onto a work task's wording would be refused outright — which reads to
+    // Nick as "NEURO won't let me write that", with no clue that the clash is
+    // with a task in a different part of his life that he cannot even see here.
+    const domain = normaliseDomain(fields.domain) || domainOrDefault(row.domain);
+    let key = dedupeKey(text);
+    let clash = db.getTaskByDedupeKey(key);
+    if (clash && clash.id !== id && clash.domain && clash.domain !== domain) {
+      key = `${key} #${domain}`.slice(0, 100);
+      clash = db.getTaskByDedupeKey(key);
+    }
     if (clash && clash.id !== id) throw new Error(`Another task already has that text (#${clash.id})`);
     patch.dedupe_key = key;
   }
@@ -306,6 +346,15 @@ function updateTask(id, fields = {}) {
     patch.moscow_proposed = 0;
   }
   if ('priority' in fields) patch.priority = normPriority(fields.priority);
+  if ('domain' in fields) {
+    // Reclassifying is a DECISION, so an unrecognised value is refused rather
+    // than quietly defaulting to 'work' — a silent default here would mean a
+    // typo in a client moved a personal task into the work lane and said it
+    // had worked. domainOrDefault is for arrival, not for reassignment.
+    const next = normaliseDomain(fields.domain);
+    if (!next) throw new Error(`domain must be 'work' or 'personal'`);
+    patch.domain = next;
+  }
   if ('estimateMinutes' in fields || 'estimate_minutes' in fields) {
     // `estimateExact` says the number was typed, not picked off a preset — see
     // normEstimate. A preset still snaps.

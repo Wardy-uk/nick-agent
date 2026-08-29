@@ -378,7 +378,13 @@ function isStandupDone() {
 function hasPendingTodos() {
   try {
     const { active } = obsidian.parseVaultTodos();
-    const todayLane = todoIntelligence.buildTodayLane(active);
+    // Work only. This drives a push notification during working hours, and a
+    // personal errand is not a reason to interrupt Nick at his desk — nudge
+    // volume is the one signal allowed to argue against building more, so the
+    // bar for spending one has to stay high. (A personal nudge at the weekend
+    // is a real idea, but it is a different feature with a different trigger;
+    // off-duty suppression already silences this path entirely.)
+    const todayLane = todoIntelligence.buildTodayLane(active, undefined, 5, { domain: 'work' });
     return todayLane.length > 0;
   } catch (e) {
     return false;

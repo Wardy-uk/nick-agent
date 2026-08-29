@@ -362,6 +362,15 @@ CREATE TABLE IF NOT EXISTS tasks (
   origin_path TEXT,
   origin_line INTEGER,
   context TEXT,
+  -- Which part of Nick's life this belongs to: 'work' or 'personal'.
+  -- NOT the same axis as `context` above, which is derived by todo-intelligence
+  -- and holds a KIND OF WORK (queue, customer, admin). A task can be personal
+  -- admin; the two are orthogonal and conflating them would make the domain
+  -- unreadable the moment the classifier changed its mind.
+  -- Defaults to 'work' because that is true of every row that existed when the
+  -- column was added, and because the two mistakes are asymmetric — see
+  -- shared/task-domain.cjs for why unknown fails towards the visible one.
+  domain TEXT NOT NULL DEFAULT 'work' CHECK(domain IN ('work', 'personal')),
   notes TEXT,
   ms_id TEXT,
   -- Roughly how long this takes, in minutes. NULL means NOT ESTIMATED, and is
