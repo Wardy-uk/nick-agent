@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v15';
+const VERSION = 'v16';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -534,6 +534,11 @@ function header(w, ctxLabel, weather, alertPair) {
     pill.setPadding(2, 7, 2, 7);
     text(pill, ctxLabel, { size: 10, color: alertPair ? dyn(alertPair) : MUTED });
   }
+  // ⚠ Restored after being dropped with the old SARA row. Without it, "is my
+  // edit actually running?" is unanswerable — which cost a diagnostic round
+  // trip once already, and cost another the day the row was removed.
+  dateRow.addSpacer(7);
+  text(dateRow, VERSION, { size: 9, color: MUTED });
 
   row.addSpacer();
 
@@ -940,20 +945,43 @@ function accessoryView(family, res, d, wins) {
   }
 
   if (family === 'accessoryCircular') {
-    // A count is the only thing that survives this size. It is deliberately the
-    // number of things SARA would raise, not a total of anything else.
-    const n = (d.primary ? 1 : 0) + ((d.secondary || []).length);
+    // A NUMBER and what it counts. The first cut rendered a bare tick when off
+    // duty, which is the least informative thing a circle can hold — it said
+    // "fine" on a surface Nick sees fifty times a day and told him nothing.
+    const week = offDuty && wins ? Number(wins.doneThisWeek) : null;
+    const n = Number.isFinite(week) && week > 0
+      ? week
+      : (d.primary ? 1 : 0) + ((d.secondary || []).length);
+    const label = Number.isFinite(week) && week > 0 ? 'week' : 'now';
+
     const stack = w.addStack();
     stack.layoutVertically();
     stack.centerAlignContent();
-    text(stack, offDuty && !onFire ? '✓' : String(n), { size: 20, weight: 'heavy', max: 1 });
-    w.url = tabUrl('surface');
+    text(stack, String(n), { size: 19, weight: 'heavy', max: 1 });
+    text(stack, label, { size: 9, max: 1 });
+    w.url = tabUrl(offDuty ? 'today' : 'surface');
     return w;
   }
 
-  // accessoryRectangular
+  // accessoryRectangular — three short lines, and the third is what makes it
+  // worth a lock-screen slot: what is actually COMING. A line repeating what
+  // the home-screen widget already says is a wasted row.
   text(w, head, { size: 11, weight: 'bold', max: 1 });
-  text(w, body, { size: 13, max: 2 });
+  text(w, body, { size: 13, max: 1 });
+
+  const ag = d.agenda;
+  if (ag && ag.known && Array.isArray(ag.events) && ag.events.length) {
+    const e = ag.events[0];
+    const start = new Date(e.start);
+    const hhmm = Number.isNaN(start.getTime()) ? ''
+      : `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
+    // Name the day unless it is today, or a Monday meeting reads as imminent.
+    const when = !ag.scope || ag.scope === 'today'
+      ? hhmm
+      : `${String(ag.scope).slice(0, 3)} ${hhmm}`;
+    text(w, `${when} ${e.subject || ''}`.trim(), { size: 11, max: 1 });
+  }
+
   w.url = tabUrl(d.primary && !offDuty ? d.primary.tab : offDuty ? 'today' : 'surface');
   return w;
 }
