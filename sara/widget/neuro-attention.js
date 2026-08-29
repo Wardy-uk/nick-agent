@@ -23,6 +23,10 @@
 //    and stores both in the iOS Keychain.
 // 3. Long-press the home screen → add a Scriptable widget → pick "NEURO".
 //    Medium or large. Small shows the primary card only.
+// 4. To SWIPE between work and personal: add a second NEURO widget, drag it on
+//    top of the first to make a stack, then Edit Widget on each and set
+//    Parameter to `work` on one and `personal` on the other. iOS provides the
+//    swipe; leave a third unset to follow the brain.
 //
 // ⚠ THIS FILE MUST CONTAIN NO BACKSLASHES — none, anywhere, including inside
 // regex literals and string escapes. It reaches the phone by being COPIED and
@@ -39,6 +43,33 @@
 // To change it later: run the script in-app and hold the Cancel-free prompt,
 // or delete the keys via Scriptable's own console.
 
+/**
+ * Which view this instance shows.
+ *
+ * ⚠ iOS widgets cannot be swiped internally — WidgetKit renders a still, and
+ * there is no gesture inside it. What CAN be swiped is a SMART STACK: several
+ * widgets in one slot, swiped between by the system. So "swipeable" is two
+ * instances of this script in a stack, each pinned to a side of the split, and
+ * Scriptable tells them apart by the per-instance widget parameter.
+ *
+ *   (empty)   follow the brain — work in hours, personal outside them
+ *   work      always the working view
+ *   personal  always his own
+ *
+ * Set it by long-pressing the widget, Edit Widget, Parameter.
+ *
+ * Anything unrecognised falls back to `auto` rather than erroring: a typo in a
+ * text field should cost the pin, not the widget.
+ */
+function widgetView() {
+  try {
+    const raw = String(args.widgetParameter || '').trim().toLowerCase();
+    return raw === 'work' || raw === 'personal' ? raw : 'auto';
+  } catch (e) {
+    return 'auto';
+  }
+}
+
 const KEY_URL = 'neuro_base_url';
 const KEY_TOKEN = 'neuro_api_token';
 const DEFAULT_URL = 'https://pi5.tailecb90f.ts.net';
@@ -48,7 +79,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v28';
+const VERSION = 'v29';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -141,10 +172,14 @@ async function loadConfig() {
 
 // ── Data ────────────────────────────────────────────────────────────────────
 
-async function fetchAttention({ base, token }) {
+async function fetchAttention({ base, token }, view) {
   if (!token) return { error: 'Not set up yet — open the NEURO script once.' };
   try {
-    const req = new Request(`${base}/api/attention`);
+    // The view is sent so the SERVER picks the matching diary. Without it a
+    // pinned personal card would show work meetings under a personal heading,
+    // which is the thing the domain split exists to prevent.
+    const q = view && view !== 'auto' ? `?view=${encodeURIComponent(view)}` : '';
+    const req = new Request(`${base}/api/attention${q}`);
     req.headers = { 'X-NEURO-API-TOKEN': token };
     req.timeoutInterval = TIMEOUT_SECONDS;
     const json = await req.loadJSON();
@@ -883,7 +918,7 @@ function tile(stack, type, pair, box) {
  * Neither is drawn when its source could not be read: an empty dial is a
  * picture of a bad week, and pictures are believed faster than numbers.
  */
-function saraSays(w, d, res, target, weather, family, personal, health) {
+function saraSays(w, d, res, target, weather, family, personal, health, view) {
   const ctx = d.context || {};
   const big = family === 'large';
 
@@ -892,12 +927,23 @@ function saraSays(w, d, res, target, weather, family, personal, health) {
   const fieldImg = field(big ? 330 : 340, big ? 350 : 160, fieldDrive(d, res));
   if (fieldImg) w.backgroundImage = fieldImg;
 
+  // A pinned instance shows its own side whatever kind of day it is; an
+  // unpinned one follows the brain. `pinned` is kept separate from the result
+  // so the header can say which card this is — in a stack of two, "personal"
+  // and "the weekend" look identical without it.
   const duty = ctx.duty;
-  const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
+  const pinned = view === 'work' || view === 'personal';
+  const offDuty = pinned
+    ? view === 'personal'
+    : (!res.error && duty && duty.known && duty.onDuty === false);
 
   const head = w.addStack();
   head.centerAlignContent();
   text(head, 'SARA', { size: 11, weight: 'bold', color: MUTED });
+  if (pinned) {
+    head.addSpacer(5);
+    text(head, view, { size: 10, color: MUTED });
+  }
   head.addSpacer();
   const clock = head.addDate(new Date());
   clock.applyTimeStyle();
@@ -1349,7 +1395,7 @@ function accessoryView(family, res, d, wins, target) {
   return w;
 }
 
-function build(res, family, wins, weather, target, personal, health) {
+function build(res, family, wins, weather, target, personal, health, view) {
   const d0 = res.data || {};
   if (String(family).startsWith('accessory')) {
     return accessoryView(family, res, d0, wins, target);
@@ -1365,7 +1411,7 @@ function build(res, family, wins, weather, target, personal, health) {
   // One thing, in her voice. saraSays draws its own header and footer; there is
   // no second layout to fall through to, because a dashboard IS the thing this
   // replaced.
-  saraSays(w, d0, res, target, weather, family, personal, health);
+  saraSays(w, d0, res, target, weather, family, personal, health, view);
   return w;
 }
 
@@ -1382,14 +1428,20 @@ const isAccessory = String(family).startsWith('accessory');
 
 // Attention and weather are independent, so they go out together rather than
 // one after the other — a widget refresh is on a budget.
+const view = widgetView();
+
 const [res, weather] = await Promise.all([
-  fetchAttention(cfg),
+  fetchAttention(cfg, view),
   isAccessory ? Promise.resolve(null) : fetchWeather(),
 ]);
 
 // Only spend a second request when the brain has actually said he is off duty.
 const duty = res.data && res.data.context && res.data.context.duty;
-const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
+// The pin decides what to FETCH as well as what to draw — a personal card must
+// not go without its personal tasks just because it happens to be a Tuesday.
+const offDuty = view === 'personal' ? true
+  : view === 'work' ? false
+    : (!res.error && duty && duty.known && duty.onDuty === false);
 // Off duty the wins ARE the view; on large they fill the strip at the bottom.
 // Anywhere else it would be a request bought for nothing.
 const needWins = !res.error && (offDuty || family === 'large');
@@ -1407,7 +1459,7 @@ const [wins, personal, health] = await Promise.all([
 // opinion about the same week.
 const target = res.data ? res.data.weeklyTarget : null;
 
-const widget = build(res, family, wins, weather, target, personal, health);
+const widget = build(res, family, wins, weather, target, personal, health, view);
 
 if (config.runsInWidget) {
   Script.setWidget(widget);

@@ -484,3 +484,23 @@ test('a personal agenda never shows work, even when work is all there is', () =>
     { personal: true });
   assert.deepEqual(a.events, []);
 });
+
+test('a pinned view overrides which DIARY is read, and nothing else', () => {
+  // A widget in a Smart Stack can be locked to one side of the split. A pinned
+  // personal card showing work meetings under a personal heading is exactly
+  // what the domain split exists to prevent.
+  const sat = new Date('2026-08-29T10:00:00');
+  const cal = { known: true, events: [
+    { start: '2026-08-29T00:00:00', end: '2026-08-30T00:00:00', subject: 'Hiking', showAs: 'free', isAllDay: true, source: 'apple' },
+    { start: '2026-08-29T14:00:00', end: '2026-08-29T15:00:00', subject: 'Work thing', showAs: 'busy', source: 'graph' },
+  ] };
+
+  assert.deepEqual(
+    agendaFor(cal, sat, 4, [], { personal: true }).events.map((e) => e.subject),
+    ['Hiking']
+  );
+  assert.deepEqual(
+    agendaFor(cal, sat, 4, [], { personal: false }).events.map((e) => e.subject),
+    ['Work thing']
+  );
+});

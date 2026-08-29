@@ -695,7 +695,7 @@ async function gather(now = new Date()) {
 /**
  * Build the attention feed. This is what both SARA surfaces render.
  */
-async function build({ now = new Date() } = {}) {
+async function build({ now = new Date(), view = null } = {}) {
   const { inputs, gaps } = await gather(now);
   const context = resolveContext(inputs, now);
 
@@ -747,9 +747,21 @@ async function build({ now = new Date() } = {}) {
     // Off duty he gets his OWN diary, not the work one. The duty read is the
     // brain's, already resolved above, so the agenda cannot disagree with the
     // rest of the payload about which kind of day this is.
+    //
+    // ⚠ `view` OVERRIDES that, and exists for exactly one reason: a widget in a
+    // Smart Stack can be pinned to a view, and a pinned personal card showing
+    // work meetings under a personal heading would be the thing the whole
+    // domain split exists to prevent. It changes only which DIARY is read —
+    // never the duty read itself, which stays the brain's and is still reported
+    // on `context` for anything that needs to know what kind of day it is.
     agenda: agendaFor(inputs.calendar, now, 4, _tomorrowEvents(), {
-      personal: context.duty ? context.duty.onDuty === false : false,
+      personal: view === 'personal' ? true
+        : view === 'work' ? false
+          : (context.duty ? context.duty.onDuty === false : false),
     }),
+    // What was asked for, echoed back, so a client can tell a pinned view from
+    // the brain's own choice rather than inferring it.
+    view: view || 'auto',
     // A failed pool is a GAP, never an empty feed presented as a calm day.
     poolAvailable: poolError === null,
     poolSize: items.length,

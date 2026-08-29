@@ -16,7 +16,12 @@ const attention = require('../services/attention');
  */
 router.get('/', async (req, res) => {
   try {
-    res.json(await attention.build());
+    // ?view=work|personal pins the AGENDA for a widget locked to one side of
+    // the split. Anything else is ignored rather than rejected: an unknown
+    // value must fall back to the brain's own read, never to an empty diary.
+    const asked = String(req.query.view || '').toLowerCase();
+    const view = asked === 'work' || asked === 'personal' ? asked : null;
+    res.json(await attention.build({ view }));
   } catch (e) {
     console.error('[Attention] build failed:', e.message);
     // An error is NOT an empty feed. Returning `{primary:null}` here would be
