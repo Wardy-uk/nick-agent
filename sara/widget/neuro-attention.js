@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v19';
+const VERSION = 'v20';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -873,7 +873,7 @@ function agenda(w, block, limit) {
  * seen. Zero is rendered honestly; there is no encouraging version of an empty
  * day, and inventing one is the register sara-voice rejects.
  */
-function winsStrip(w, wins) {
+function winsStrip(w, wins, target) {
   if (!wins) return;
   const done = Number(wins.doneToday);
   if (!Number.isFinite(done)) return;
@@ -887,10 +887,19 @@ function winsStrip(w, wins) {
     : done === 1 ? '1 done today' : `${done} done today`,
     { size: 11, color: done > 0 ? dyn(HEX.positive) : MUTED, weight: 'bold' });
 
-  const week = Number(wins.doneThisWeek);
+  // ⚠ The week figure comes from the TARGET, not from `wins.doneThisWeek`.
+  // They answer different questions over the same days — the target counts
+  // task_done (28), wins counts every row including folded commits, standups,
+  // meetings and replies (41) — and rendering both on one screen as "finished
+  // this week" put two numbers a dozen apart under the same word. The widget
+  // now speaks only in TASKS, which is what the ring is a picture of.
+  const week = target && target.state !== 'unknown' ? Number(target.done) : null;
   if (Number.isFinite(week) && week > done) {
     row.addSpacer(7);
-    text(row, `${week} this week`, { size: 10, color: MUTED });
+    const label = target.target
+      ? `${week} of ${target.target} this week`
+      : `${week} tasks this week`;
+    text(row, label, { size: 10, color: MUTED });
   }
   row.addSpacer();
 
@@ -933,7 +942,7 @@ function footer(w, d) {
  * and the wins ledger was built precisely because the reward surface was
  * starved while the nagging surfaces were not.
  */
-function offDutyView(w, duty, wins) {
+function offDutyView(w, duty, wins, target) {
   const row = w.addStack();
   row.backgroundColor = CARD;
   row.cornerRadius = 14;
@@ -943,12 +952,16 @@ function offDutyView(w, duty, wins) {
   // Prefer the week on a day off: `headline` describes TODAY and correctly
   // returns null on zero, which a Saturday usually is. A week's total is the
   // honest number to lead with, and there is no cheerful version of an empty one.
-  const week = wins && Number.isFinite(Number(wins.doneThisWeek)) ? Number(wins.doneThisWeek) : null;
+  // Tasks, not all-wins — see winsStrip. "40 finished this week" next to a ring
+  // reading "28 of 50" is two answers to one question.
+  const week = target && target.state !== 'unknown' && Number.isFinite(Number(target.done))
+    ? Number(target.done) : null;
   const today = wins && Number.isFinite(Number(wins.doneToday)) ? Number(wins.doneToday) : null;
 
-  const title = week ? `${week} finished this week`
-    : today ? wins.headline
-      : 'Off duty';
+  const title = week !== null && target.target ? `${week} of ${target.target} tasks`
+    : week ? `${week} tasks this week`
+      : today ? wins.headline
+        : 'Off duty';
 
   tile(row, 'todo', week || today ? HEX.positive : HEX.low, 30);
   row.addSpacer(11);
@@ -1177,7 +1190,7 @@ function build(res, family, wins, weather, target) {
   const duty = ctx.duty;
   const onFire = d.primary && d.primary.urgency === 'critical';
   if (!res.error && duty && duty.known && duty.onDuty === false && !onFire) {
-    offDutyView(w, duty, wins);
+    offDutyView(w, duty, wins, target);
     // The next working day still belongs here. On a Friday evening or a weekend
     // "what is coming" is the most useful thing on the screen, and without it
     // the off-duty view is one line and a chart in a large black rectangle.
@@ -1206,7 +1219,7 @@ function build(res, family, wins, weather, target) {
   // three attention rows already fill it, and a cramped agenda is worse than none.
   if (family === 'large') {
     agenda(w, d.agenda, 4);
-    winsStrip(w, wins);
+    winsStrip(w, wins, target);
   }
 
   footer(w, d);
