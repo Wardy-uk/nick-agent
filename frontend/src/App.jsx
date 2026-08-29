@@ -30,6 +30,7 @@ import AdhdPanel from './components/AdhdPanel';
 import BriefingPanel from './components/BriefingPanel';
 import StateOfPlay from './components/StateOfPlay';
 import PiHealthPanel from './components/PiHealthPanel';
+import HealthPanel from './components/HealthPanel';
 import MeetingPrep from './components/MeetingPrep';
 import InstallBanner from './components/InstallBanner';
 import usePushNotifications from './usePushNotifications';
@@ -295,6 +296,7 @@ function AuthenticatedApp() {
       case 'journal': return <JournalPanel />;
       case 'standups': return <StandupsPanel />;
       case 'insights': return <InsightsPanel onNavigate={handleNavigate} />;
+      case 'health': return <HealthPanel />;
       case 'pi-health': return <PiHealthPanel />;
       case 'admin': return <AdminPanel pushState={pushState} />;
       default: return <BriefingPanel onNavigate={handleNavigate} />;

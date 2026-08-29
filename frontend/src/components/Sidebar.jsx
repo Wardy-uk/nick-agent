@@ -54,6 +54,9 @@ const SECONDARY_ITEMS = [
   { id: 'imports',    label: 'Imports',   icon: '>' },
   { id: 'recent',     label: 'Recent',    icon: '>' },
   { id: 'insights',   label: 'Insights',  icon: '◈' },
+  // Sits next to Pi Health deliberately: one is the machine's vitals, the other
+  // is Nick's, and both are "how is this thing running" rather than work.
+  { id: 'health',     label: 'My Health', icon: '♥' },
   { id: 'pi-health',  label: 'Pi Health', icon: '▚' },
   { id: 'admin',      label: 'Settings',  icon: '>' },
 ];

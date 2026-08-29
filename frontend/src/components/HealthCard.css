@@ -97,9 +97,16 @@
 .hc-night-date { color: var(--text-muted); width: 40px; flex: 0 0 auto; }
 .hc-night-bar { display: flex; flex: 1 1 auto; height: 7px; border-radius: 3px; overflow: hidden; background: var(--border, #232a34); }
 .hc-seg { display: block; min-width: 2px; }
-.hc-seg--deep { background: #4a6fd8; }
-.hc-seg--rem  { background: #7d5ad8; }
-.hc-seg--core { background: #3f7fa8; }
+/* Sequential ramp, deepest -> lightest, matching the order of sleep depth.
+   These stages are ORDERED and are one measure (hours asleep) split by depth, so
+   a single hue getting lighter is the honest encoding — and it is the only one
+   that survives colour-blindness here. The palette this replaced was blue /
+   purple / blue-grey, measured at deltaE 0.1 between deep and REM under
+   deuteranopia (indistinguishable) and 8.0 for normal vision. Kept identical to
+   SLEEP_RAMP in HealthPanel.jsx so the card and the page cannot drift. */
+.hc-seg--deep { background: #3a6fc4; }
+.hc-seg--core { background: #5a95e0; }
+.hc-seg--rem  { background: #8fbdf2; }
 /* Deliberately flat and desaturated: this night has a total but no breakdown,
    and it should not read as a stage. */
 .hc-seg--unstaged { background: var(--text-muted); opacity: 0.35; }

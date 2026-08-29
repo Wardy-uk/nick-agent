@@ -226,7 +226,10 @@ export default function HealthCard() {
                   shape. #42's rule: never look more certain than the service. */}
               <span className="hc-night-bar">
                 {n.asleepSource === 'staged'
-                  ? ['deep', 'rem', 'core'].map((st) => (
+                  // Ordered deep → core → REM to match the sequential ramp: the
+                  // segments get lighter as the sleep gets shallower, so the bar
+                  // reads as one gradient rather than three arbitrary blocks.
+                  ? ['deep', 'core', 'rem'].map((st) => (
                     n.stages?.[st] ? (
                       <span
                         key={st}

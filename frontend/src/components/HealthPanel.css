@@ -1,0 +1,227 @@
+/* My Health — the deep view.
+   Uses the shared theme tokens (--bg-card, --text-muted, --accent…) so the page
+   moves with the theme rather than carrying its own colours. The only literal
+   colours are the sleep ramp, which lives in the component because it was
+   validated as a ramp against this surface. */
+
+.hp {
+  padding: 18px 22px 40px;
+  max-width: 1180px;
+}
+
+.hp-quiet { color: var(--text-muted); font-size: 13px; padding: 10px 0; }
+.hp-quiet--err { color: var(--danger); }
+.hp-muted { color: var(--text-muted); font-weight: 400; }
+
+.hp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.hp-h2 { font-size: 20px; margin: 0; }
+
+/* Filters in one row above the charts. */
+.hp-controls { display: flex; gap: 6px; align-items: center; }
+.hp-range, .hp-refresh {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.hp-range--on { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+.hp-range:hover, .hp-refresh:hover { color: var(--text-primary); }
+
+.hp-section { margin-top: 26px; }
+.hp-h3 {
+  font-size: 14px;
+  margin: 0 0 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.hp-h3-note { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+
+/* ── Today ─────────────────────────────────────────────────────────────────
+   A hero figure rather than a chart: one number about right now has no axis to
+   sit on, and a sparkline of a single value is decoration. */
+.hp-today {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  flex-wrap: wrap;
+}
+.hp-hero { min-width: 128px; }
+.hp-hero-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.hp-hero-num { font-size: 52px; font-weight: 600; line-height: 1.05; color: var(--band, var(--text-primary)); }
+.hp-hero-state { font-size: 13px; }
+
+/* The state colours are the STATUS palette, reserved and never reused for a
+   series: low reads as the concerning end here, which is the opposite mapping
+   to the stress score — hence the explicit window labels on both. */
+.hp-state--low    { --band: var(--danger); }
+.hp-state--normal { --band: var(--text-primary); }
+.hp-state--high   { --band: var(--success); }
+
+.hp-today-body { flex: 1 1 340px; min-width: 0; }
+.hp-sentence { font-size: 14px; margin: 0 0 12px; }
+
+.hp-tiles { display: flex; gap: 10px; flex-wrap: wrap; }
+.hp-tile {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--tile, var(--border));
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  min-width: 104px;
+}
+/* Flag, not prose: the tile is coloured from the structured verdict the service
+   returned, so a reworded note cannot change what the screen emphasises. */
+.hp-tile--adverse    { --tile: var(--warning); }
+.hp-tile--favourable { --tile: var(--success); }
+.hp-tile--normal     { --tile: var(--border); }
+.hp-tile--aside      { --tile: var(--border); opacity: 0.85; }
+.hp-tile-label { font-size: 11px; color: var(--text-muted); }
+.hp-tile-value { font-size: 19px; font-weight: 600; margin: 2px 0; }
+.hp-tile-base  { font-size: 11px; color: var(--text-muted); }
+
+.hp-caveat { font-size: 11px; color: var(--text-muted); margin-top: 8px; font-style: italic; }
+
+/* ── Findings ─────────────────────────────────────────────────────────────── */
+.hp-finding {
+  border-left: 2px solid var(--band, var(--text-muted));
+  padding: 6px 0 6px 10px;
+  margin-bottom: 8px;
+}
+.hp-finding--warn { --band: var(--warning); }
+.hp-finding--info { --band: var(--text-muted); }
+.hp-finding-title { font-size: 13px; }
+.hp-finding-detail { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.hp-finding-caveat { font-size: 11px; color: var(--text-muted); font-style: italic; margin-top: 2px; }
+
+/* ── Trends ────────────────────────────────────────────────────────────────
+   Small multiples. One measure per chart, one axis each. */
+.hp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 14px;
+}
+.hp-chart {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px 10px;
+}
+.hp-chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.hp-chart-title { font-size: 13px; }
+/* Text wears text tokens, never the series colour. */
+.hp-chart-meta { font-size: 11px; color: var(--text-muted); }
+.hp-cov { color: var(--warning); }
+
+.hp-chart-plot { position: relative; margin-top: 6px; }
+/* Sized in JS from the measured container, so x and y share a scale and the
+   hover marker stays a circle. */
+.hp-chart-plot svg { display: block; overflow: visible; }
+
+/* Thin marks, recessive reference lines. */
+.hp-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.hp-median {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  opacity: 0.5;
+  vector-effect: non-scaling-stroke;
+}
+.hp-crosshair { stroke: var(--text-muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
+/* A 2px surface ring keeps the marker readable over the line it sits on. */
+.hp-dot { fill: var(--accent); stroke: var(--bg-card); stroke-width: 2; vector-effect: non-scaling-stroke; }
+
+.hp-tip {
+  position: absolute;
+  top: -4px;
+  transform: translateX(-50%);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  z-index: 2;
+}
+.hp-tip span { color: var(--text-muted); }
+.hp-chart-hint { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+
+/* ── Sleep ─────────────────────────────────────────────────────────────────
+   Sequential ramp (deep → core → REM), not categorical hues: the stages are
+   ordered and this is one measure split by depth. The 2px gap between segments
+   is what keeps the boundaries readable where the tones are close — it is
+   load-bearing, not decoration. */
+.hp-legend { display: flex; gap: 12px; font-size: 11px; color: var(--text-muted); font-weight: 400; }
+.hp-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.hp-legend-item i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.hp-swatch-unstaged { background: var(--text-muted); opacity: 0.35; }
+
+.hp-night { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 3px 0; }
+.hp-night-date { width: 42px; color: var(--text-muted); flex: 0 0 auto; }
+.hp-night-bar { flex: 1 1 auto; display: flex; gap: 2px; height: 14px; }
+.hp-seg { border-radius: 3px; min-width: 2px; }
+.hp-seg--unstaged { background: var(--text-muted); opacity: 0.35; }
+.hp-night-total { width: 48px; text-align: right; flex: 0 0 auto; }
+.hp-night-eff { width: 46px; text-align: right; color: var(--text-muted); flex: 0 0 auto; }
+
+/* ── Table ─────────────────────────────────────────────────────────────────
+   The table view is also the accessibility fallback for everything above. */
+.hp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.hp-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 4px 8px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hp-table td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); }
+.hp-num { text-align: right; font-variant-numeric: tabular-nums; }
+/* A stale feed is the expected failure, so it is coloured rather than left to be
+   spotted by reading dates. */
+.hp-stale { color: var(--warning); }
+
+.hp-more {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 8px 0 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.hp-more:hover { color: var(--text-primary); }
+
+@media (max-width: 700px) {
+  .hp { padding: 14px 14px 32px; }
+  .hp-grid { grid-template-columns: 1fr; }
+  .hp-hero-num { font-size: 42px; }
+}
