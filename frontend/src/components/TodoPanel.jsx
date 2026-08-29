@@ -3,6 +3,7 @@ import { apiUrl } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import { duePresets } from '../../../shared/due-dates.cjs';
 import { msPlanBadge } from '../../../shared/ms-task.cjs';
+import { domainBadge } from '../../../shared/task-domain.cjs';
 import TimeFitCard from './TimeFitCard';
 import TaskDedupe from './TaskDedupe';
 import TaskBlocks, { BlockTimeControl } from './TaskBlocks';
@@ -63,6 +64,15 @@ const MOSCOW_OPTIONS = [
   { key: 'should', label: 'Should', color: '#f59e0b', desc: 'Important but not critical' },
   { key: 'could', label: 'Could', color: '#3b82f6', desc: 'Nice to have' },
   { key: 'wont', label: "Won't", color: '#6b7280', desc: 'Not now' },
+];
+
+// Which part of Nick's life a task belongs to. The vocabulary itself lives in
+// shared/task-domain.cjs so the backend, this panel, sara/app and the capture
+// page cannot disagree about what the values are; only the wording of the
+// buttons is local.
+const DOMAIN_OPTIONS = [
+  { key: 'work', label: 'Work', desc: 'Can be blocked into the work diary and can appear in a briefing' },
+  { key: 'personal', label: 'Personal', desc: 'Never blocked into the work diary, never sent to a work system' },
 ];
 
 function MoscowReview({ onClose }) {
@@ -211,6 +221,31 @@ function TaskControls({ todo, onPatch, busy }) {
             disabled={busy}
             title={opt.desc}
             onClick={() => onPatch({ moscow: todo.moscow === opt.key ? null : opt.key })}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Work or personal. NEURO was built entirely around work, so this is the
+          only place a task can be told otherwise — and it has to be one tap,
+          because reclassifying is the kind of tidying that never happens if it
+          costs more than that.
+
+          Deliberately a TOGGLE PAIR rather than a single "Personal" checkbox:
+          a checkbox makes work the unmarked absence of a choice, and the whole
+          point is that the domain is a decision with consequences — it decides
+          whether the day planner may book Nurtur calendar time for this and
+          whether it may appear in a briefing that leaves the building. */}
+      <div className="todo-edit-group">
+        <span className="todo-edit-label">Domain</span>
+        {DOMAIN_OPTIONS.map(opt => (
+          <button
+            key={opt.key}
+            className={`todo-edit-btn ${(todo.domain || 'work') === opt.key ? 'active' : ''}`}
+            disabled={busy}
+            title={opt.desc}
+            onClick={() => onPatch({ domain: opt.key })}
           >
             {opt.label}
           </button>
@@ -491,6 +526,18 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
             <span className={`todo-moscow-badge ${todo.moscow}`} title={todo.moscowProposed ? 'Proposed by the 12 Aug triage, not yet confirmed' : undefined}>
               {todo.moscow}{todo.moscowProposed ? '?' : ''}
             </span>
+          )}
+          {/* Only PERSONAL is marked. Nearly every task is work, so a "Work"
+              chip on all of them is a label every row shares — it sorts nothing
+              and reads as noise, the same finding that made
+              nearly-every-task-a-MUST useless for ranking. domainBadge owns
+              that rule so the panel, the phone and the capture page cannot
+              disagree about when to show it. */}
+          {domainBadge(todo) && (
+            <span
+              className="todo-domain-badge"
+              title="Personal — never blocked into the work diary, never sent to a work system"
+            >{domainBadge(todo)}</span>
           )}
           {todo.taskPriority && <span className="todo-priority-num">P{todo.taskPriority}</span>}
           {dueLabel && <span className={`todo-due ${overdue ? 'due-overdue' : ''}`}>{dueLabel}</span>}

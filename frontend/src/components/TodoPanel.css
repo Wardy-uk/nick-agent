@@ -985,6 +985,29 @@
   background: rgba(92, 100, 120, 0.15);
 }
 
+/* Personal. Only ever rendered on the exception — see domainBadge — so it can
+   afford to be distinct without becoming noise. Deliberately NOT red or amber:
+   those already mean overdue and must-do on this row, and a third colour saying
+   "this is a different part of your life" must not read as a third kind of
+   urgency. Teal is unused elsewhere in the lane. */
+.todo-domain-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: #0f766e;
+  background: rgba(20, 184, 166, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  .todo-domain-badge {
+    color: #5eead4;
+    background: rgba(20, 184, 166, 0.18);
+  }
+}
+
 /* Shown when the vault line toggled but Microsoft refused the push */
 .todo-ms-warning {
   margin-bottom: 12px;
