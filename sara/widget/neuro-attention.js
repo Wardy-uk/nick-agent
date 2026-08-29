@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v26';
+const VERSION = 'v27';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -204,6 +204,45 @@ const WMO = {
   95: ['cloud.bolt', 'Thunderstorms'], 96: ['cloud.bolt.rain', 'Storms'], 99: ['cloud.bolt.rain', 'Storms'],
 };
 
+/**
+ * Is today one to be outside for?
+ *
+ * Deterministic, and deliberately modest about what it claims: it reads the
+ * next eight hours of the forecast and nothing else. It does not know whether
+ * Nick has a coat, and it never tells him what to do — it says what the sky is
+ * doing and leaves the decision where it belongs.
+ *
+ * The wet-hour threshold matches `fetchWeather`'s own "next" rule (40%), so the
+ * strip and the sentence above it cannot disagree about whether it is going to
+ * rain.
+ */
+function judgeDay(now, hours) {
+  if (!hours || !hours.length) return null;
+
+  const wet = hours.filter((h) => h.pop >= 40);
+  const temps = hours.map((h) => h.temp).filter((t) => Number.isFinite(t));
+  const high = temps.length ? Math.max(...temps) : now.temp;
+  const cold = high <= 8;
+  const firstWet = wet.length ? wet[0] : null;
+
+  // `outdoor` is the verdict; `why` is the evidence for it, said plainly.
+  if (!wet.length && !cold) {
+    return { outdoor: true, verdict: 'A day to be out', why: `dry, up to ${high}°` };
+  }
+  if (!wet.length && cold) {
+    return { outdoor: true, verdict: 'Dry but cold', why: `${high}° at best` };
+  }
+  if (wet.length >= Math.ceil(hours.length * 0.6)) {
+    return { outdoor: false, verdict: 'An indoor day', why: `rain most of it, ${high}°` };
+  }
+  const hh = `${String(firstWet.at.getHours()).padStart(2, '0')}:00`;
+  return {
+    outdoor: true,
+    verdict: 'Get out before the rain',
+    why: `dry until about ${hh}, ${high}°`,
+  };
+}
+
 function wmo(code) {
   return WMO[Number(code)] || ['cloud', 'Unsettled'];
 }
@@ -277,7 +316,23 @@ async function fetchWeather() {
       next = `${t}° at ${String(at.getHours()).padStart(2, '0')}:00`;
     }
 
-    return { now, next, label: wmo(now.code)[1], symbol: wmo(now.code)[0] };
+    // The hours themselves, for the day strip. Kept from the same response
+    // rather than fetched twice.
+    const hours = idxs.slice(0, 8).map((i) => ({
+      at: new Date(times[i]),
+      temp: Math.round(Number(temps[i])),
+      pop: Math.round(Number(pops[i])) || 0,
+      code: Number(codes[i]),
+    }));
+
+    return {
+      now,
+      next,
+      hours,
+      day: judgeDay(now, hours),
+      label: wmo(now.code)[1],
+      symbol: wmo(now.code)[0],
+    };
   } catch (e) {
     return null;
   }
@@ -886,7 +941,13 @@ function saraSays(w, d, res, target, weather, family, personal, health) {
   w.addSpacer();
 
   if (big) {
-    const gauge = offDuty ? readinessGauge(health) : targetGauge(target);
+    // Off duty the day comes first — it decides what the readiness is FOR.
+    if (offDuty) { if (dayStrip(w, weather)) w.addSpacer(11); }
+
+    const outdoor = weather && weather.day ? weather.day.outdoor : null;
+    // Same instrument both sides now: recovery off duty, strain on it. The
+    // week's target keeps its home on the lock screen ring.
+    const gauge = offDuty ? readinessGauge(health, outdoor) : stressGauge(health);
     if (gauge) {
       const row = w.addStack();
       row.centerAlignContent();
@@ -961,7 +1022,7 @@ function saraSays(w, d, res, target, weather, family, personal, health) {
  * or `stale` rather than inventing a number. Both render as NO GAUGE, which is
  * the honest picture; it has been computed since August and shown by nothing.
  */
-function readinessGauge(health) {
+function readinessGauge(health, outdoor) {
   const s = health && health.stress;
   if (!s || s.status !== 'ok' || !Number.isFinite(Number(s.score))) return null;
 
@@ -981,12 +1042,97 @@ function readinessGauge(health) {
     value: String(score),
     unit: 'ready',
     fraction: score / 100,
-    label: s.label || 'Readiness',
-    detail: hrv && base ? `HRV ${hrv}ms · baseline ${base}` : 'HRV against your baseline',
+    // "Ready for WHAT" — the score alone is a number without a question.
+    label: suitability(score, outdoor),
+    detail: hrv && base ? `${s.label || 'Balanced'} · HRV ${hrv}ms vs ${base}` : (s.label || 'Balanced'),
     pair,
     series: series.length > 2 ? series : null,
     seriesLabel: 'HRV, last 7 days',
   };
+}
+
+/**
+ * What the score is readiness FOR.
+ *
+ * ⚠ Deterministic bands, never a model call, and deliberately about CAPACITY
+ * rather than instruction — "there is plenty there" not "go for a run". A
+ * widget that prescribes exercise off three numbers is `stress-score`'s own
+ * caveat ignored: Apple Health cannot tell exercise from illness from a hard
+ * week, and this is the same data.
+ *
+ * The weather only ever changes the SUGGESTION, never the score.
+ */
+function suitability(score, outdoor) {
+  if (score >= 70) return outdoor === true ? 'Good for a long one' : 'Plenty in the tank';
+  if (score >= 55) return outdoor === true ? 'Fine for a walk' : 'A steady day';
+  if (score >= 40) return 'Enough for an easy one';
+  return 'Take it gently today';
+}
+
+/**
+ * The same reading, on a working day, framed as strain rather than recovery.
+ *
+ * ⚠ THE NUMBER IS NOT INVERTED, and that is deliberate. `stress-score` returns
+ * a scale where HIGHER IS BETTER (98 = fully recovered), so printing 58 under
+ * the word "stress" would read as "quite stressed" while meaning the opposite —
+ * a gauge that lies. The dial keeps its one direction everywhere it appears and
+ * the WORDS carry the framing instead, which is also why the same number can
+ * sit on the lock screen without contradicting this one.
+ */
+function stressGauge(health) {
+  const g = readinessGauge(health);
+  if (!g) return null;
+  const score = Number(g.value);
+  return {
+    ...g,
+    unit: 'calm',
+    label: score >= 70 ? 'Room to push'
+      : score >= 55 ? 'Holding up'
+        : score >= 40 ? 'Running warm'
+          : 'Under strain',
+  };
+}
+
+/**
+ * The shape of the day, hour by hour.
+ *
+ * Bars are RAIN CHANCE and the numbers are temperature — two facts on one
+ * strip, which works because they are read for different reasons: the bars
+ * answer "will I get wet", the digits answer "what do I wear". A zero-rain hour
+ * keeps a faint stub so a dry hour reads as measured rather than missing.
+ */
+function dayStrip(w, weather) {
+  const day = weather && weather.day;
+  const hours = weather && Array.isArray(weather.hours) ? weather.hours.slice(0, 6) : [];
+  if (!day || hours.length < 3) return false;
+
+  const pair = day.outdoor ? HEX.positive : HEX.normal;
+
+  const head = w.addStack();
+  head.centerAlignContent();
+  text(head, day.verdict, { size: 13, weight: 'bold', color: dyn(pair) });
+  head.addSpacer(6);
+  text(head, day.why, { size: 11, color: MUTED, max: 1 });
+  head.addSpacer();
+
+  w.addSpacer(6);
+  const row = w.addStack();
+  for (let i = 0; i < hours.length; i++) {
+    if (i) row.addSpacer(6);
+    const col = row.addStack();
+    col.layoutVertically();
+    col.centerAlignContent();
+    text(col, `${hours[i].temp}°`, { size: 10.5, weight: 'bold' });
+    const bar = spark([hours[i].pop], 16, 14, hours[i].pop >= 40 ? HEX.normal : HEX.low);
+    if (bar) {
+      const bs = col.addStack();
+      const img = bs.addImage(bar);
+      img.imageSize = new Size(16, 14);
+    }
+    text(col, `${String(hours[i].at.getHours()).padStart(2, '0')}`, { size: 9, color: MUTED });
+  }
+  row.addSpacer();
+  return true;
 }
 
 /** The week's task target, on duty. The same instrument, measuring the commitment. */
@@ -1216,8 +1362,9 @@ const [wins, personal, health] = await Promise.all([
   needWins ? fetchWins(cfg) : Promise.resolve(null),
   // Personal tasks matter only off duty, and only where there is room to show them.
   (offDuty && !isAccessory) ? fetchPersonal(cfg) : Promise.resolve(null),
-  // Readiness is the off-duty instrument, and only the large tile has room.
-  (offDuty && family === 'large') ? fetchHealth(cfg) : Promise.resolve(null),
+  // The gauge is on the large tile in BOTH contexts now — recovery off duty,
+  // strain on it — so health is fetched whenever there is room for it.
+  (family === 'large') ? fetchHealth(cfg) : Promise.resolve(null),
 ]);
 
 // The target rides on the attention payload already — composed server-side with
