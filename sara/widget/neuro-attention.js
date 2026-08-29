@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v18';
+const VERSION = 'v19';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -283,20 +283,6 @@ async function fetchWeather() {
   }
 }
 
-/** The week's task target and progress against it. */
-async function fetchTarget({ base, token }) {
-  try {
-    const req = new Request(`${base}/api/wins/target`);
-    req.headers = { 'X-NEURO-API-TOKEN': token };
-    req.timeoutInterval = TIMEOUT_SECONDS;
-    const json = await req.loadJSON();
-    if (!json || typeof json !== 'object' || json.ok === false) return null;
-    return json;
-  } catch (e) {
-    return null;
-  }
-}
-
 // ── Look ────────────────────────────────────────────────────────────────────
 //
 // Design rules, so this stays legible rather than merely decorated:
@@ -522,7 +508,7 @@ function progressBar(width, height, done, target, pair) {
 
 /** Which accent a target state earns. Fill carries the meaning; this is a bonus. */
 function targetPair(t) {
-  if (!t || !t.known) return HEX.low;
+  if (!t || t.state === 'unknown' || t.state === 'unset') return HEX.low;
   if (t.state === 'exceeded') return HEX.positive;
   if (t.state === 'met') return HEX.positive;
   if (t.state === 'behind') return HEX.high;
@@ -1084,7 +1070,7 @@ function accessoryView(family, res, d, wins, target) {
     // The week's task target as a ring, with the count inside it. A bare number
     // has no denominator — 28 is only good or bad against something.
     const t = target;
-    if (t && t.known && t.target) {
+    if (t && t.state !== 'unknown' && t.target) {
       const img = progressRing(58, t.done, t.target, targetPair(t));
       if (img) w.backgroundImage = img;
       const stack = w.addStack();
@@ -1098,15 +1084,16 @@ function accessoryView(family, res, d, wins, target) {
 
     // No target set, or the ledger could not be read. Both render the honest
     // thing rather than an empty ring, which would read as "you have done none".
-    const n = t && t.known && Number.isFinite(t.done)
+    const blind = t && t.state === 'unknown';
+    const n = !blind && t && Number.isFinite(t.done)
       ? t.done
       : (d.primary ? 1 : 0) + ((d.secondary || []).length);
-    const label = t && t.known && Number.isFinite(t.done) ? 'done' : 'now';
+    const label = !blind && t && Number.isFinite(t.done) ? 'done' : 'now';
     const stack = w.addStack();
     stack.layoutVertically();
     stack.centerAlignContent();
-    text(stack, t && !t.known ? '?' : String(n), { size: 19, weight: 'heavy', max: 1 });
-    text(stack, t && !t.known ? 'no data' : label, { size: 8, max: 1 });
+    text(stack, blind ? '?' : String(n), { size: 19, weight: 'heavy', max: 1 });
+    text(stack, blind ? 'no data' : label, { size: 8, max: 1 });
     w.url = tabUrl(offDuty ? 'today' : 'surface');
     return w;
   }
@@ -1118,7 +1105,7 @@ function accessoryView(family, res, d, wins, target) {
   text(w, body, { size: 13, max: 1 });
 
   const t = target;
-  if (t && t.known && t.target) {
+  if (t && t.state !== 'unknown' && t.target) {
     const bar = progressBar(120, 9, t.done, t.target, targetPair(t));
     const row = w.addStack();
     row.centerAlignContent();
@@ -1252,13 +1239,12 @@ const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
 // Off duty the wins ARE the view; on large they fill the strip at the bottom.
 // Anywhere else it would be a request bought for nothing.
 const needWins = !res.error && (offDuty || family === 'large');
-// The ring belongs to the lock screen and the large tile. Anywhere else it
-// would be a request bought for nothing.
-const needTarget = !res.error && (isAccessory || family === 'large');
-const [wins, target] = await Promise.all([
-  needWins ? fetchWins(cfg) : Promise.resolve(null),
-  needTarget ? fetchTarget(cfg) : Promise.resolve(null),
-]);
+const wins = needWins ? await fetchWins(cfg) : null;
+
+// The target rides on the attention payload already — composed server-side with
+// its own words, like `say` and `speech`. A second request would be a second
+// opinion about the same week.
+const target = res.data ? res.data.weeklyTarget : null;
 
 const widget = build(res, family, wins, weather, target);
 

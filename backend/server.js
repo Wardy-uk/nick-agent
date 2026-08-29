@@ -200,6 +200,7 @@ app.use('/api/day-plan', require('./routes/day-planner'));
 app.use('/api/calendar', require('./routes/calendar'));
 app.use('/api/adhd', require('./routes/adhd'));
 app.use('/api/wins', require('./routes/wins'));
+app.use('/api/weekly-target', require('./routes/weekly-target'));
 app.use('/api/standup-session', require('./routes/standup-session'));
 app.use('/api/outcomes', require('./routes/outcomes'));
 app.use('/api/waiting-on', require('./routes/waiting-on'));

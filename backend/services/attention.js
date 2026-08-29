@@ -657,9 +657,32 @@ async function build({ now = new Date() } = {}) {
 
   const gated = gate(context, items, now);
 
+  // The week's task target, composed server-side with its own words, like `say`
+  // and `speech`. It rides here rather than being fetched separately so the
+  // ring, the Surface and any later notification cannot phrase one fact three
+  // ways — and so a lock-screen widget costs one request, not two.
+  //
+  // ⚠ Its failures are carried ON THE BLOCK (`state:'unknown'`) and deliberately
+  // NOT pushed into `gaps`: that array counts inputs to the DECISION POOL, and
+  // the widget renders its length as "N unreadable". A weekly-target hiccup is
+  // not a hole in what needs Nick's attention, and inflating that count is how a
+  // number stops meaning anything.
+  let weeklyTarget;
+  try {
+    weeklyTarget = require('./weekly-target').snapshot(now);
+  } catch (e) {
+    weeklyTarget = {
+      known: false,
+      state: 'unknown',
+      why: e.message,
+      say: "Couldn't count this week's tasks.",
+    };
+  }
+
   return {
     generatedAt: now.toISOString(),
     context,
+    weeklyTarget,
     ...gated,
     // The rest of the day, for surfaces with room. Not part of the pool: an
     // agenda is the shape of the day, not a list of things to decide about.
