@@ -196,3 +196,63 @@ test('every session context leads with the day, not just the date', () => {
   const rendered = session._renderContext(fixture().context);
   assert.match(rendered.split('\n')[0], /^TODAY: (Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day \d{4}-\d{2}-\d{2}/);
 });
+
+// ── Weekly target in the standup ────────────────────────────────────────────
+// The ask has to happen exactly once a week: on the first morning the target is
+// unset. Asking again after he has answered turns a ritual into a form, and
+// asking at EOD asks for a commitment at the moment he is closing the day.
+
+const { _renderContext, toolDefinitions } = require('./standup-session');
+
+test('an UNSET target is asked for, once, and the model is told not to propose', () => {
+  const out = _renderContext({
+    kind: 'standup',
+    dateKey: '2026-08-31',
+    weeklyTarget: { state: 'unset', weekStart: '2026-08-31', done: 0, say: 'No target set for this week.' },
+  });
+  assert.match(out, /WEEKLY TARGET: NOT SET/);
+  assert.match(out, /ASK Nick/);
+  assert.match(out, /a number he picks/i, 'must not propose one — a target NEURO chose is one he feels nothing about');
+  assert.match(out, /do not raise it again this session/i);
+});
+
+test('a target already SET is stated, never re-asked', () => {
+  const out = _renderContext({
+    kind: 'standup',
+    dateKey: '2026-09-02',
+    weeklyTarget: { state: 'on-track', weekStart: '2026-08-31', done: 12, target: 50, say: '12 of 50 — 38 to go, 13 a day over 3 days.' },
+  });
+  assert.match(out, /12 of 50/);
+  assert.match(out, /already set/i);
+  assert.ok(!/ASK Nick/.test(out), 'a number already given must not be asked for again');
+});
+
+test('a target that could not be COUNTED is not asked about at all', () => {
+  // "We could not look" is not "you have not set one", and inviting him to set
+  // a target that already exists is worse than staying quiet.
+  const out = _renderContext({
+    kind: 'standup',
+    dateKey: '2026-09-02',
+    weeklyTarget: { state: 'unknown', say: "Couldn't count this week's tasks." },
+  });
+  assert.match(out, /could not be counted/i);
+  assert.ok(!/ASK Nick/.test(out));
+});
+
+test('EOD never gathers the target, so it can never ask for one', () => {
+  // Enforced at the source: buildContext omits it for eod, so the render has
+  // nothing to say regardless of what the model decides to do.
+  const out = _renderContext({ kind: 'eod', dateKey: '2026-08-31' });
+  assert.ok(!/WEEKLY TARGET/.test(out));
+});
+
+test('the set_weekly_target tool takes a whole number and nothing else', () => {
+  // toolDefinitions is a function of kind, and deliberately does NOT filter —
+  // set_focus is offered at EOD too. So what stops an EOD asking for a target
+  // is the CONTEXT omitting it, which the test above pins.
+  const tool = toolDefinitions('standup').find(t => t.name === 'set_weekly_target');
+  assert.ok(tool, 'set_weekly_target must be declared or the model cannot record an answer');
+  assert.equal(tool.input_schema.properties.target.type, 'integer');
+  assert.deepEqual(tool.input_schema.required, ['target']);
+  assert.match(tool.description, /Never invent one/i);
+});

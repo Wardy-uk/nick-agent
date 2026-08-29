@@ -160,6 +160,19 @@ async function buildContext(kind) {
     console.warn('[StandupSession] Working memory failed:', e.message);
   }
 
+  // The week's task target. Only the MORNING standup asks for it — an EOD is
+  // for closing the day, and being asked to commit to a number at 5pm is the
+  // wrong moment. Failures leave it null, which renders as nothing rather than
+  // as "no target set": we could not look, which is a different fact.
+  if (kind !== 'eod') {
+    try {
+      ctx.weeklyTarget = require('./weekly-target').snapshot();
+    } catch (e) {
+      console.warn('[StandupSession] Weekly target failed:', e.message);
+      ctx.weeklyTarget = null;
+    }
+  }
+
   try {
     const taskStore = require('./task-store');
     const today = ctx.dateKey;
@@ -187,6 +200,28 @@ function _renderContext(ctx) {
     parts.push(`YESTERDAY (${acc.yesterday.date}): committed to ${(acc.yesterday.focus || []).length} things, ${(acc.yesterday.focus || []).filter(f => f.done).length} done.`);
     for (const f of (acc.yesterday.focus || []).slice(0, 6)) {
       parts.push(`  [${f.done ? 'x' : ' '}] ${f.text}`);
+    }
+  }
+
+  // The week's target, and whether it still needs setting. Deliberately placed
+  // BEFORE the carried commitments: on a Monday the number frames everything
+  // below it, and after the list it reads as an afterthought.
+  const wt = ctx.weeklyTarget;
+  if (wt) {
+    if (wt.state === 'unset') {
+      parts.push(
+        `\nWEEKLY TARGET: NOT SET for the week starting ${wt.weekStart}. `
+        + `${wt.done} task${wt.done === 1 ? '' : 's'} closed so far this week. `
+        + 'ASK Nick what he is aiming for, ONCE, near the end — a number he picks, '
+        + 'not one you propose. If he gives one, call set_weekly_target. If he '
+        + 'deflects or says not now, drop it and do not raise it again this session.'
+      );
+    } else if (wt.state === 'unknown') {
+      parts.push('\nWEEKLY TARGET: could not be counted, so do not ask about it or refer to it.');
+    } else {
+      // Already set: state it as context, never re-ask. Being asked again for a
+      // number already given is how a ritual starts feeling like a form.
+      parts.push(`\nWEEKLY TARGET: ${wt.say} (do not ask to change it — it is already set.)`);
     }
   }
 
@@ -326,6 +361,20 @@ const SESSION_TOOLS = [
     },
   },
   {
+    name: 'set_weekly_target',
+    description: 'Record how many tasks Nick is aiming to finish this week. Only call this if the context says the target is NOT SET and he has given you a number. Never invent one, and never call it to change a target already set.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'integer',
+          description: 'The number of tasks he committed to, as a whole number. His number, not a suggestion of yours.',
+        },
+      },
+      required: ['target'],
+    },
+  },
+  {
     name: 'create_task',
     description: 'Capture a real action that came out of the conversation. Use when he commits to something that is not already on the list.',
     input_schema: {
@@ -407,6 +456,22 @@ async function executeTool(session, name, input = {}) {
         } catch {}
       }
       return { ok: true, note: 'Reflection recorded. Tell Nick he is done.' };
+    }
+
+    case 'set_weekly_target': {
+      // setTarget REPORTS rather than throws, so a daft number comes back as a
+      // sentence the model can put to Nick instead of a dead turn.
+      const result = require('./weekly-target').setTarget(input.target, { source: 'standup' });
+      if (!result.ok) return result;
+      const snap = require('./weekly-target').snapshot();
+      return {
+        ok: true,
+        target: result.target,
+        weekStart: result.weekStart,
+        // Hand back the composed line so the model repeats NEURO's phrasing
+        // rather than inventing a second way to say the same number.
+        note: `Target set. ${snap.say}`,
+      };
     }
 
     case 'create_task':
