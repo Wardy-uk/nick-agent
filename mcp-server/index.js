@@ -1031,17 +1031,38 @@ server.tool('manage_kb_article',
 // ═══════════════════════════════════════════════════════
 
 server.tool('get_health',
-  'Apple Health from the watch: stress score against a rolling 14-day HRV baseline, plus what data has actually arrived and how fresh it is.',
+  'Apple Health from the watch: today\'s readiness against Nick\'s own rolling baseline, what has changed (trends and sources that have gone quiet), the stress score, and what data has actually arrived and how fresh it is.',
   {
     days: z.number().optional().describe('Freshness window for the metric summary, in days (default 30)'),
   },
   async ({ days }) => {
-    const [stress, series] = await Promise.all([
+    const [stress, series, readiness, signals] = await Promise.all([
       neuroApi('/api/health/stress'),
       neuroApi(`/api/health/metrics?days=${days || 30}`),
+      neuroApi('/api/health/readiness'),
+      neuroApi('/api/health/signals'),
     ]);
 
     const lines = ['# Health', ''];
+
+    // Readiness leads, because it is the only line here that needed two years of
+    // Nick to produce — the raw figures below mean nothing to a reader without a
+    // baseline to compare them against, and the server has already done that
+    // comparison. The pre-composed sentence travels verbatim so this, the card
+    // and the brief cannot phrase one morning three ways.
+    if (readiness?.known) {
+      lines.push(`**Readiness ${readiness.score}/100 — ${readiness.state}.** ${readiness.sentence}`);
+      for (const c of readiness.contributors || []) {
+        const against = c.baseline != null ? ` (usual ${c.baseline})` : '';
+        lines.push(`- ${c.input}: ${c.value}${against} — ${c.note}`);
+      }
+      // Three inputs and one input produce the same score and are not the same
+      // claim; saying so is the difference between a reading and a guess.
+      if (readiness.partial) lines.push(`- ⚠ Only ${readiness.inputsRead} of 3 inputs could be read.`);
+    } else {
+      lines.push(`**Readiness: not available** — ${readiness?.reason || 'unknown'}.`);
+    }
+    lines.push('');
 
     // The score is deliberately allowed to say "I don't know yet". Below 7 days
     // or 20 samples stress-score returns `calibrating` with a null score rather
@@ -1057,6 +1078,21 @@ server.tool('get_health',
       lines.push('**Stress: unavailable**');
     }
     for (const c of stress?.caveats || []) lines.push(`- ⚠ ${c}`);
+
+    // What has CHANGED — trends, and sources that stopped. A finding here is
+    // never a diagnosis: every one carries the caveat the service attached, and
+    // dropping it is how a heart-rate reading becomes a claim about illness.
+    if (signals?.findings?.length) {
+      lines.push('', '## What has changed', '');
+      for (const f of signals.findings.slice(0, 8)) {
+        lines.push(`- **${f.title}** — ${f.detail}${f.caveat ? ` _${f.caveat}_` : ''}`);
+      }
+      if (signals.findings.length > 8) lines.push(`- …and ${signals.findings.length - 8} more`);
+    }
+    // An empty findings list is only an all-clear when nothing failed to read.
+    if (signals?.unknowns?.length) {
+      lines.push('', `⚠ Could not check: ${signals.unknowns.map(u => u.input).join(', ')} — this is not an all-clear.`);
+    }
 
     lines.push('', `## Data arriving (${series.metricCount} metrics, ${series.totalSamples} samples / ${series.windowDays}d)`, '');
     if (!series.metrics?.length) {

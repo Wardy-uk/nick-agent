@@ -213,3 +213,50 @@ test('completeness is judged against the real today, not the window end', () => 
   });
   assert.equal(days[0].complete, true);
 });
+
+// ── The sentence must name what actually moved the score ─────────────────────
+//
+// Caught on the FIRST live reading, not by a test: score 31 ("low"), driven by
+// HRV at z = -0.93 and resting heart rate 4bpm up — but -0.93 sits inside the
+// ±1.0 band, so its note read "HRV in your normal range" and the sentence blamed
+// the heart rate alone. Half the reason for the number went unsaid.
+
+test('a contributor carries a structured flag, not just prose', () => {
+  const baseline = hd.buildBaseline(normalDays(10));
+  const r = hd.readiness({ day: '2026-08-29', hrvMedian: 12, rhrMedian: 84, asleepHours: 5.2 }, baseline);
+  assert.ok(r.contributors.every(c => ['adverse', 'favourable', 'normal'].includes(c.flag)));
+  // The sentence selects on this, so a reworded note cannot silently change
+  // which facts get reported.
+  assert.equal(r.contributors.find(c => c.input === 'rhr').flag, 'adverse');
+});
+
+test('a low day where NOTHING crossed a threshold says exactly that', () => {
+  // Today's real shape: every reading inside its band, all three leaning down.
+  const baseline = hd.buildBaseline(normalDays(10));
+  const r = hd.readiness({ day: '2026-08-29', hrvMedian: 16.75, rhrMedian: 79, asleepHours: 7.4 }, baseline);
+  assert.equal(r.state, 'low', 'fixture must actually read low, or this pins nothing');
+  assert.ok(r.contributors.every(c => c.flag === 'normal'), 'and nothing may have crossed a threshold');
+  const s = hd.readinessSentence(r);
+  assert.match(s, /nothing on its own/, 'must not blame one reading for a combined score');
+  assert.ok(!/everything in your normal range/.test(s), 'and must not claim all-normal while reading low');
+});
+
+test('when a reading DOES cross a threshold, that is what gets named', () => {
+  const baseline = hd.buildBaseline(normalDays(10));
+  const r = hd.readiness({ day: '2026-08-29', hrvMedian: 18, rhrMedian: 84, asleepHours: 7.7 }, baseline);
+  assert.match(hd.readinessSentence(r), /resting heart rate/);
+});
+
+test('a genuinely unremarkable day still reads as unremarkable', () => {
+  const baseline = hd.buildBaseline(normalDays(10));
+  const r = hd.readiness({ day: '2026-08-29', hrvMedian: 18, rhrMedian: 77, asleepHours: 7.7 }, baseline);
+  assert.match(hd.readinessSentence(r), /About normal today — everything in your normal range/);
+});
+
+test('a high day names the good news, not the adverse list', () => {
+  const baseline = hd.buildBaseline(normalDays(10));
+  const r = hd.readiness({ day: '2026-08-29', hrvMedian: 26, rhrMedian: 72, asleepHours: 8.8 }, baseline);
+  const s = hd.readinessSentence(r);
+  assert.match(s, /Well recovered/);
+  assert.ok(!/on the low side/.test(s));
+});

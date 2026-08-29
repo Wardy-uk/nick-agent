@@ -252,6 +252,11 @@ function readiness(day, baseline) {
       z: round(z),
       // Clamped so one extreme reading cannot dominate the other two inputs.
       effect: Math.max(-1, Math.min(1, z / 2)),
+      // ⚠ STRUCTURED, not inferred from the prose. The sentence used to pick out
+      // the bad news with a regex over `note`, which is brittle in the ordinary
+      // way (a reworded note silently stops matching) and wrong in a subtler
+      // one — see readinessSentence.
+      flag: z <= HRV_LOW_Z ? 'adverse' : z >= HRV_HIGH_Z ? 'favourable' : 'normal',
       note: z <= HRV_LOW_Z ? 'HRV below your normal range'
         : z >= HRV_HIGH_Z ? 'HRV above your normal range'
           : 'HRV in your normal range',
@@ -266,6 +271,7 @@ function readiness(day, baseline) {
       baseline: baseline.rhr.median,
       delta: round(delta, 1),
       effect: Math.max(-1, Math.min(1, -delta / 6)),
+      flag: delta >= RHR_HIGH_DELTA ? 'adverse' : delta <= -RHR_HIGH_DELTA ? 'favourable' : 'normal',
       note: delta >= RHR_HIGH_DELTA ? `resting heart rate ${round(delta, 1)}bpm above normal` : 'resting heart rate normal',
     });
   }
@@ -278,6 +284,7 @@ function readiness(day, baseline) {
       baseline: baseline.sleep.median,
       delta: round(delta, 2),
       effect: Math.max(-1, Math.min(1, delta / 2)),
+      flag: delta <= SLEEP_SHORT_DELTA ? 'adverse' : delta >= -SLEEP_SHORT_DELTA ? 'favourable' : 'normal',
       note: delta <= SLEEP_SHORT_DELTA ? `${round(Math.abs(delta), 1)}h less sleep than usual` : 'slept about as usual',
     });
   }
@@ -306,14 +313,64 @@ function readiness(day, baseline) {
   };
 }
 
-/** One line of plain English. Composed here so no surface phrases it twice. */
+// What counts as "this input is what moved the score" when no single reading
+// crossed its own threshold. Below this the day really is unremarkable and the
+// sentence should say so rather than reaching for something to blame.
+const NOTABLE_EFFECT = 0.2;
+
+/**
+ * One line of plain English. Composed here so no surface phrases it twice.
+ *
+ * ⚠ THE SCORE AND THE SENTENCE MUST NAME THE SAME THING. The first version
+ * listed only contributors whose note crossed a named threshold, and caught
+ * itself on the first live reading: score 31 ("low"), driven by HRV at z = -0.93
+ * AND resting heart rate 4bpm up — but -0.93 is inside the ±1.0 band, so its
+ * note read *"HRV in your normal range"* and the sentence blamed the heart rate
+ * alone. Nearly half the reason for the number went unmentioned, and a reader
+ * would reasonably conclude one figure had produced a 31.
+ *
+ * So there are two cases, and they are different claims:
+ *   - something crossed a threshold → name those things
+ *   - nothing did, but the score still moved → say exactly that. "Nothing on
+ *     its own, but X and Y are both on the low side" is the honest description
+ *     of a day where three readings all lean the same way.
+ *
+ * Selection is on the structured `flag` and `effect`, never a regex over the
+ * prose: a reworded note must not silently change which facts get reported.
+ */
 function readinessSentence(r) {
   if (!r || !r.known) return null;
-  const low = r.contributors.filter(p => /below|less|above normal/.test(p.note));
-  const detail = low.length ? low.map(p => p.note).join(', ') : 'everything in your normal range';
+
+  const adverse = r.contributors.filter(p => p.flag === 'adverse');
+  const favourable = r.contributors.filter(p => p.flag === 'favourable');
+  const named = r.state === 'high' ? favourable : adverse;
+
+  let detail;
+  if (named.length) {
+    detail = named.map(p => p.note).join(', ');
+  } else if (r.state === 'low' || r.state === 'high') {
+    // Nothing crossed a line, yet the day is not neutral. Name what leaned, by
+    // measured effect rather than by having tripped a threshold.
+    const wanted = r.state === 'low' ? -1 : 1;
+    const leaning = r.contributors
+      .filter(p => Math.sign(p.effect) === wanted && Math.abs(p.effect) >= NOTABLE_EFFECT)
+      .sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect))
+      .map(p => p.input === 'rhr' ? 'resting heart rate' : p.input === 'hrv' ? 'HRV' : 'sleep');
+    detail = leaning.length
+      ? `nothing on its own, but ${listOf(leaning)} ${leaning.length > 1 ? 'are' : 'is'} on the ${r.state === 'low' ? 'low' : 'good'} side`
+      : 'everything in your normal range';
+  } else {
+    detail = 'everything in your normal range';
+  }
+
   if (r.state === 'low') return `Running low today — ${detail}.`;
   if (r.state === 'high') return `Well recovered today — ${detail}.`;
   return `About normal today — ${detail}.`;
+}
+
+function listOf(items) {
+  if (items.length <= 1) return items[0] || '';
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
 // ── Sync (impure) ───────────────────────────────────────────────────────────

@@ -99,6 +99,36 @@ function _bucketItems(items) {
 }
 
 /**
+ * How much Nick has to give today, for the MORNING brief only.
+ *
+ * This is the one place health earns a place in something that arrives rather
+ * than waiting to be found: the brief already goes out, so a line on it costs no
+ * new interruption. Nudge volume is the budget that argues against everything
+ * else, and a separate health push would spend it.
+ *
+ * ⚠ Deliberately NOT fed to the model. `_aiSynthesis` writes the spoken line,
+ * and a model handed "HRV is down" will produce advice — "take it easy today" —
+ * which is a recommendation drawn from three numbers by something that cannot
+ * tell exercise from illness. The sentence is composed once in `health-daily`
+ * and travels verbatim, the same rule that keeps the Surface, the widget and the
+ * notification from phrasing one fact three ways.
+ *
+ * Never throws and never blocks: a brief that fails because a watch did not sync
+ * is a worse outcome than a brief with no health line on it.
+ */
+async function _collectReadiness(label) {
+  if (label !== 'morning') return null;
+  try {
+    const { readiness, sentence } = require('./health-daily').today();
+    if (!readiness.known) return null;
+    return { state: readiness.state, score: readiness.score, sentence, partial: readiness.partial };
+  } catch (e) {
+    console.warn('[Briefing] Readiness unavailable:', e.message);
+    return null;
+  }
+}
+
+/**
  * Build a deterministic brief text (fallback when OpenRouter unavailable).
  */
 function _deterministicSynthesis(buckets, emailSummary, teamsData) {
@@ -165,10 +195,11 @@ async function buildAndDeliver(opts = {}) {
   console.log(`[Briefing] Building ${label}...`);
   const t0 = Date.now();
 
-  const [focusItems, emailSummary, teamsData] = await Promise.all([
+  const [focusItems, emailSummary, teamsData, readiness] = await Promise.all([
     _collectFocusItems(),
     _collectEmailSummary(),
     _collectTeams(),
+    _collectReadiness(label),
   ]);
 
   const buckets = _bucketItems(focusItems);
@@ -186,6 +217,9 @@ async function buildAndDeliver(opts = {}) {
     fyi: buckets.fyi,
     email: emailSummary,
     teams: teamsData?.unavailable ? null : { mentions: teamsData?.mentions?.length || 0, unreadDMs: teamsData?.unreadDMs?.length || 0 },
+    // Carried on the brief whatever it says, so the Focus view can render it for
+    // free. Whether it INTERRUPTS is a separate decision, taken below.
+    readiness,
   };
 
   // Store for Focus view
@@ -196,8 +230,16 @@ async function buildAndDeliver(opts = {}) {
   const pushTitle = brief.doNow.length
     ? `${brief.doNow.length} thing${brief.doNow.length > 1 ? 's' : ''} need you`
     : 'SARA Brief';
+  // ⚠ Only when it is NEWS. "About normal today" is true, cheap to compute and
+  // worth having on the screen — and appended to a push every single morning it
+  // is padding, which is how the line above it stops being read. So the brief
+  // always carries it and the notification only mentions a day that is actually
+  // off his own baseline.
+  const pushBody = readiness && readiness.state !== 'normal'
+    ? `${synthesis}\n${readiness.sentence}`
+    : synthesis;
   try {
-    await webpush.sendToAll(pushTitle, synthesis, { type: 'brief', ts: brief.ts });
+    await webpush.sendToAll(pushTitle, pushBody, { type: 'brief', ts: brief.ts });
     console.log('[Briefing] Push sent');
   } catch (e) {
     console.error('[Briefing] Push failed:', e.message);
