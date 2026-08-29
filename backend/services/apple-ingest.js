@@ -65,6 +65,51 @@ function workListNames() {
     .filter(Boolean);
 }
 
+/**
+ * Calendars whose events are never stored.
+ *
+ * Measured from the live device, not guessed: 23 calendars are visible, and the
+ * defaults here are the ones that are artefacts rather than commitments.
+ *
+ *  • TWO subscribed UK holiday feeds are both on, which is why every bank
+ *    holiday arrived twice. Both are excluded rather than one: `working-days`
+ *    already knows the bank holidays from gov.uk and is what the day planner and
+ *    1-2-1 booking actually consult, so these rows were duplicated noise in the
+ *    one table that answers "is Nick free".
+ *  • Zendone, Nozbe and Garmin write calendars from inside their own apps. They
+ *    are dormant today; the risk is one waking up and quietly filling the diary
+ *    with things that are not commitments.
+ *
+ * `Birthdays` is deliberately NOT excluded — a birthday is real personal context
+ * and exactly the sort of thing a second brain should know about.
+ *
+ * ⚠ An event whose calendar is UNKNOWN is KEPT, which is the opposite of the
+ * Reminders whitelist, on purpose. The failure directions are opposite: for
+ * reminders the risk is a shopping list flooding the task store, so unknown is
+ * skipped; for the calendar the risk is a MISSING event making a busy day look
+ * free — the exact bug that took two rounds to find — so unknown is kept.
+ */
+const DEFAULT_SKIP_CALENDARS = [
+  'UK Holidays',
+  'Holidays in United Kingdom',
+  'Garmin Workouts',
+  'Nozbe',
+  'zd-work', 'zd-home', 'zd-completed',
+  'zendone-work', 'zendone-home', 'zendone-completed',
+];
+
+function skipCalendarNames() {
+  const configured = process.env.APPLE_SKIP_CALENDARS;
+  const source = configured === undefined ? DEFAULT_SKIP_CALENDARS.join(',') : configured;
+  return source.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
+function calendarIsSkipped(name) {
+  // Unknown is kept — see the warning above.
+  if (!name) return false;
+  return skipCalendarNames().includes(String(name).trim().toLowerCase());
+}
+
 function domainForList(listName) {
   const name = String(listName || '').trim().toLowerCase();
   return workListNames().includes(name) ? 'work' : 'personal';
@@ -191,8 +236,22 @@ function ingestCalendar({ from, to, events, calendars } = {}) {
   }
   console.log(`[Apple] ${events.length} event(s) in window ${from} → ${to}: ${JSON.stringify(byCalendar)}`);
 
-  const normalised = events.map(normaliseEvent).filter(Boolean);
-  const rejected = events.length - normalised.length;
+  // Artefact calendars — holiday feed duplicates, app-written calendars. Counted
+  // per calendar rather than totalled, so a newly-noisy calendar is identifiable
+  // rather than just a number going up.
+  const skippedCalendars = {};
+  const wanted = events.filter((e) => {
+    const name = e && e.calendar ? String(e.calendar) : null;
+    if (!calendarIsSkipped(name)) return true;
+    skippedCalendars[name] = (skippedCalendars[name] || 0) + 1;
+    return false;
+  });
+  if (Object.keys(skippedCalendars).length) {
+    console.log(`[Apple] skipped calendars: ${JSON.stringify(skippedCalendars)}`);
+  }
+
+  const normalised = wanted.map(normaliseEvent).filter(Boolean);
+  const rejected = wanted.length - normalised.length;
 
   // ── The same meeting, twice ────────────────────────────────────────────────
   //
@@ -250,6 +309,7 @@ function ingestCalendar({ from, to, events, calendars } = {}) {
     // would mean the phone can see no calendars at all.
     visibleCalendars: visible,
     byCalendar,
+    skippedCalendars,
   };
 }
 

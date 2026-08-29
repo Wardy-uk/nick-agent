@@ -135,6 +135,67 @@ test('⚠ every occurrence of a RECURRING event survives', () => {
   assert.equal(held.filter((e) => e.subject === 'Parkrun').length, 3);
 });
 
+test('artefact calendars are skipped, and reported per calendar', () => {
+  // Measured from the live device: two subscribed UK holiday feeds are both on,
+  // which is why every bank holiday arrived twice. working-days already knows
+  // the bank holidays from gov.uk and is what the day planner actually consults,
+  // so these rows were duplicated noise in the table that answers "is Nick free".
+  const res = apple.ingestCalendar({
+    from: '2027-01-01T00:00:00', to: '2027-01-05T00:00:00',
+    events: [
+      { id: 'h1', title: 'New Year', start: '2027-01-01T00:00:00', isAllDay: true, calendar: 'UK Holidays' },
+      { id: 'h2', title: 'New Year', start: '2027-01-01T00:00:00', isAllDay: true, calendar: 'Holidays in United Kingdom' },
+      { id: 'g1', title: 'Run 5k', start: '2027-01-02T09:00:00', calendar: 'Garmin Workouts' },
+      { id: 'real', title: 'Lunch with Liz', start: '2027-01-03T12:00:00', calendar: 'ward.nickj@gmail.com' },
+    ],
+  });
+
+  assert.equal(res.stored, 1, 'only the real commitment survives');
+  assert.deepEqual(res.skippedCalendars, {
+    'UK Holidays': 1, 'Holidays in United Kingdom': 1, 'Garmin Workouts': 1,
+  });
+
+  const held = db.getCalendarEvents('2027-01-01T00:00:00', '2027-01-05T00:00:00');
+  assert.deepEqual(held.map((e) => e.subject), ['Lunch with Liz']);
+});
+
+test('⚠ an event whose calendar is UNKNOWN is KEPT', () => {
+  // The opposite of the Reminders whitelist, deliberately. The failure
+  // directions are opposite: a shopping list flooding the task store is the risk
+  // there, so unknown is skipped; a MISSING event making a busy day look free is
+  // the risk here — the exact bug that took two rounds to find — so unknown is
+  // kept.
+  const res = apple.ingestCalendar({
+    from: '2027-02-01T00:00:00', to: '2027-02-02T00:00:00',
+    events: [{ id: 'u1', title: 'Unattributed but real', start: '2027-02-01T10:00:00' }],
+  });
+  assert.equal(res.stored, 1);
+  assert.deepEqual(res.skippedCalendars, {});
+});
+
+test('a birthday is NOT an artefact', () => {
+  // Real personal context, and exactly what a second brain should know about.
+  const res = apple.ingestCalendar({
+    from: '2027-03-01T00:00:00', to: '2027-03-02T00:00:00',
+    events: [{ id: 'b1', title: "Mum's birthday", start: '2027-03-01T00:00:00', isAllDay: true, calendar: 'Birthdays' }],
+  });
+  assert.equal(res.stored, 1);
+});
+
+test('the skip list is configurable, and can be emptied', () => {
+  const saved = process.env.APPLE_SKIP_CALENDARS;
+  // An explicit empty string means "skip nothing" — distinct from unset, which
+  // takes the measured defaults.
+  process.env.APPLE_SKIP_CALENDARS = '';
+  const res = apple.ingestCalendar({
+    from: '2027-04-01T00:00:00', to: '2027-04-02T00:00:00',
+    events: [{ id: 'k1', title: 'Kept', start: '2027-04-01T09:00:00', calendar: 'Nozbe' }],
+  });
+  assert.equal(res.stored, 1);
+  if (saved === undefined) delete process.env.APPLE_SKIP_CALENDARS;
+  else process.env.APPLE_SKIP_CALENDARS = saved;
+});
+
 test('the calendars the phone could see are reported, and absent is not empty', () => {
   // "My Saturday event is missing" was unanswerable: an empty diary and a
   // calendar iOS will not let Scriptable read produced an identical result.
