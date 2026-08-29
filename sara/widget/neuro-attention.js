@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v21';
+const VERSION = 'v22';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -381,10 +381,6 @@ const POSITIVE = dyn(HEX.positive);
 function pairFor(card) {
   return HEX[String(card && card.urgency)] || HEX.normal;
 }
-function accentFor(card) {
-  return ACCENTS[String(card && card.urgency)] || ACCENTS.normal;
-}
-
 /** Whichever half of a [light, dark] pair suits the current appearance. */
 function forTheme(pair) {
   try { return Device.isUsingDarkAppearance() ? pair[1] : pair[0]; } catch (e) { return pair[0]; }
@@ -532,31 +528,6 @@ function targetPair(t) {
   return HEX.normal;
 }
 
-function sparkline(values, width, height, pair) {
-  try {
-    const dc = new DrawContext();
-    dc.size = new Size(width, height);
-    dc.opaque = false;
-    dc.respectScreenScale = true;
-
-    const nums = values.map((v) => Math.max(0, Number(v) || 0));
-    const max = Math.max(1, ...nums);
-    const slot = width / Math.max(1, nums.length);
-    const barW = Math.max(2, slot - 3);
-
-    for (let i = 0; i < nums.length; i++) {
-      // Every day gets a visible stub, so a zero day reads as "nothing that
-      // day" rather than as a gap in the chart.
-      const h = nums[i] === 0 ? 2 : Math.max(3, (nums[i] / max) * height);
-      dc.setFillColor(new Color(forTheme(pair), nums[i] === 0 ? 0.25 : 1));
-      dc.fillRect(new Rect(i * slot, height - h, barW, h));
-    }
-    return dc.getImage();
-  } catch (e) {
-    return null; // No chart is fine. A broken widget is not.
-  }
-}
-
 // Type → SF Symbol. The fallback glyph matters: SFSymbol.named returns null for
 // an unknown name and reading .image off null throws, which would take the whole
 // widget down over an icon.
@@ -623,400 +594,120 @@ function tile(stack, type, pair, box) {
   return t;
 }
 
-/** A hairline, drawn as a 1px stack because Scriptable has no divider. */
-function rule(stack, pad) {
-  stack.addSpacer(pad);
-  const r = stack.addStack();
-  r.size = new Size(0, 1);
-  r.backgroundColor = HAIRLINE;
-  r.addSpacer();
-  stack.addSpacer(pad);
-}
-
 /**
- * The header block: time and date on the left, weather on the right.
+ * SARA, saying one thing.
  *
- * The clock is a WidgetDate rather than a rendered string, so it stays right
- * between refreshes — a widget showing a stale time is worse than one showing
- * none, and iOS refreshes this on its own schedule, not ours.
+ * ── Why this replaced a dashboard ────────────────────────────────────────────
+ * The widget had become a board: rings, bars, counts, rows of icons. All of it
+ * true, none of it HER. Nick's correction was one line — "the main widget
+ * should BE SARA" — and it is the same thing CLAUDE.md already says: she is the
+ * J.A.R.V.I.S. layer, voice and eyes, and should NOT be a menu.
+ *
+ * So the tile is a sentence. `speech` is composed on the SERVER and is
+ * literally what she would say aloud; rendering it is how the widget, the
+ * notification and the spoken briefing stay one voice instead of three.
+ *
+ * ⚠ It NEVER writes her lines. When `speech` is null — she is quiet, which is
+ * a correct answer and most of a calm day — it falls back to the context
+ * summary she already composed, and failing that says nothing at all rather
+ * than inventing something for her to say. A widget that puts words in SARA's
+ * mouth is worse than a blank one.
+ *
+ * Everything the old layout shouted is demoted to ONE quiet footer line: it is
+ * ambient, and she is not.
  */
-function header(w, ctxLabel, weather, alertPair) {
-  const row = w.addStack();
-  row.centerAlignContent();
+function saraSays(w, d, res, target, weather, family, personal) {
+  const ctx = d.context || {};
+  const big = family === 'large';
 
-  // Left: the clock, with the date beneath it.
-  const left = row.addStack();
-  left.layoutVertically();
-  const clock = left.addDate(new Date());
+  // Who is talking, and when. Small, because the sentence is the point.
+  const head = w.addStack();
+  head.centerAlignContent();
+  const dotPair = res.error ? HEX.critical
+    : d.poolAvailable === false ? HEX.high
+      : d.primary && d.primary.urgency === 'critical' ? HEX.critical
+        : HEX.normal;
+  tile(head, 'context', dotPair, 15);
+  head.addSpacer(7);
+  text(head, 'SARA', { size: 11, weight: 'bold', color: MUTED });
+  head.addSpacer();
+  const clock = head.addDate(new Date());
   clock.applyTimeStyle();
-  clock.font = font(26, 'heavy');
-  clock.textColor = INK;
-  left.addSpacer(1);
-  const dateRow = left.addStack();
-  dateRow.centerAlignContent();
-  text(dateRow, new Date().toLocaleDateString('en-GB', {
-    weekday: 'long', day: 'numeric', month: 'long',
-  }), { size: 11, color: MUTED });
-  if (ctxLabel) {
-    dateRow.addSpacer(7);
-    // The context reads as a pill so it is obviously a STATE, not another item.
-    const pill = dateRow.addStack();
-    pill.cornerRadius = 7;
-    pill.backgroundColor = alertPair ? dyn(alertPair, 0.16) : TILE_BG;
-    pill.setPadding(2, 7, 2, 7);
-    text(pill, ctxLabel, { size: 10, color: alertPair ? dyn(alertPair) : MUTED });
-  }
-  // ⚠ Restored after being dropped with the old SARA row. Without it, "is my
-  // edit actually running?" is unanswerable — which cost a diagnostic round
-  // trip once already, and cost another the day the row was removed.
-  dateRow.addSpacer(7);
-  text(dateRow, VERSION, { size: 9, color: MUTED });
+  clock.font = font(12, 'bold');
+  clock.textColor = MUTED;
+  head.addSpacer(6);
+  text(head, VERSION, { size: 9, color: MUTED });
 
-  row.addSpacer();
+  w.addSpacer(big ? 16 : 10);
 
-  // Right: now, and the next thing that changes. Absent entirely rather than
-  // guessed when the forecast could not be read.
-  if (weather) {
-    const right = row.addStack();
-    right.layoutVertically();
+  // What she says. Her words, never ours.
+  let line = null;
+  if (res.error) line = "I can't reach the brain right now.";
+  else if (d.poolAvailable === false) line = "I can't see your work at the moment — don't take that as an all-clear.";
+  else line = d.speech || ctx.summary || (d.primary ? (d.primary.say || d.primary.title) : null);
 
-    const nowRow = right.addStack();
-    nowRow.centerAlignContent();
-    nowRow.addSpacer();
-    let sym = null;
-    try { sym = SFSymbol.named(weather.symbol); } catch (e) { sym = null; }
-    if (sym) {
-      const img = nowRow.addImage(sym.image);
-      img.imageSize = new Size(15, 15);
-      img.tintColor = MUTED;
-      img.resizable = true;
-      nowRow.addSpacer(5);
-    }
-    text(nowRow, `${weather.now.temp}°`, { size: 19, weight: 'bold' });
-
-    if (weather.next) {
-      right.addSpacer(1);
-      const nextRow = right.addStack();
-      nextRow.addSpacer();
-      text(nextRow, weather.next, { size: 10, color: MUTED });
-    }
+  if (line) {
+    text(w, line, { size: big ? 20 : 15, weight: 'bold', max: big ? 6 : 4 });
   } else {
-    // Absent weather is indistinguishable from a design hole, and the cause is
-    // almost always a denied Location permission — which is fixable, but only
-    // if the widget says so.
-    const right = row.addStack();
-    right.layoutVertically();
-    const r1 = right.addStack();
-    r1.addSpacer();
-    text(r1, 'No forecast', { size: 11, color: MUTED });
-    const r2 = right.addStack();
-    r2.addSpacer();
-    text(r2, 'run the script, allow Location', { size: 9, color: MUTED });
+    // Genuinely nothing, and she says so plainly rather than going blank.
+    text(w, 'Nothing needs you.', { size: big ? 20 : 15, weight: 'bold', color: MUTED, max: 2 });
   }
 
-  w.addSpacer(12);
-}
-
-/**
- * One item. `primary` gets its own card surface and room for the full sentence;
- * the rest are compact rows, because the Surface's whole claim is that there is
- * ONE thing and then some context for it.
- */
-function itemRow(container, card, { primary = false } = {}) {
-  const pair = pairFor(card);
-  const row = container.addStack();
-  row.url = tabUrl(card.tab);
-  row.centerAlignContent();
-
-  if (primary) {
-    row.backgroundColor = CARD;
-    row.cornerRadius = 14;
-    row.setPadding(11, 11, 11, 11);
-    // A spine of the accent down the leading edge. It is what carries urgency
-    // when the card is glanced at rather than read — and on `critical` it is the
-    // only thing on screen that is fully saturated.
-    const spine = row.addStack();
-    spine.size = new Size(3, primary ? 34 : 20);
-    spine.cornerRadius = 1.5;
-    spine.backgroundColor = dyn(pair);
-    row.addSpacer(10);
-  }
-
-  tile(row, card.type || card.kind, pair, primary ? 30 : 20);
-  row.addSpacer(primary ? 11 : 9);
-
-  const col = row.addStack();
-  col.layoutVertically();
-  text(col, card.title, {
-    size: primary ? 15 : 12,
-    weight: primary ? 'heavy' : 'bold',
-    max: primary ? 2 : 1,
-  });
-  const detail = card.say || card.reason;
-  if (detail) {
-    col.addSpacer(primary ? 3 : 1);
-    text(col, detail, { size: primary ? 12 : 10.5, color: MUTED, max: primary ? 2 : 1 });
-  }
-  row.addSpacer();
-  return row;
-}
-
-/**
- * The four ways there is nothing to show, each said differently and each with
- * its own colour, so a glance tells them apart before the words are read.
- */
-function silence(w, d, error) {
-  const show = (symbol, pair, title, body) => {
-    const row = w.addStack();
-    row.backgroundColor = CARD;
-    row.cornerRadius = 14;
-    row.setPadding(12, 12, 12, 12);
-    row.centerAlignContent();
-    tile(row, symbol, pair, 30);
-    row.addSpacer(11);
-    const col = row.addStack();
-    col.layoutVertically();
-    text(col, title, { size: 15, weight: 'heavy', max: 1 });
-    col.addSpacer(3);
-    text(col, body, { size: 12, color: MUTED, max: 3 });
-    row.addSpacer();
-    w.url = tabUrl('surface');
-  };
-
-  if (error) {
-    show('escalation', HEX.critical, "Can't reach NEURO", error);
-    return true;
-  }
-  if (d.poolAvailable === false) {
-    show('escalation', HEX.high, "Can't see your work",
-      'This is not an all-clear — the queue could not be read.');
-    return true;
-  }
-  if (!d.primary) {
-    const ctx = d.context || {};
-    if (d.quiet === true) {
-      show('context', HEX.low, ctx.label || 'Quiet',
-        ctx.summary || d.rationale || 'Nothing to raise right now.');
-    } else {
-      show('todo', HEX.positive, 'All clear', 'Nothing needs you at the moment.');
+  // The next thing, one line, only when there IS one and only on the big tile.
+  // Not a list — a list is the menu she is not supposed to be.
+  if (big) {
+    const ag = d.agenda;
+    const next = ag && ag.known && Array.isArray(ag.events) && ag.events.length ? ag.events[0] : null;
+    if (next) {
+      const start = new Date(next.start);
+      const hhmm = Number.isNaN(start.getTime()) ? ''
+        : `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
+      const when = !ag.scope || ag.scope === 'today' ? `at ${hhmm}`
+        : `${String(ag.scope).charAt(0).toUpperCase()}${String(ag.scope).slice(1)} ${hhmm}`;
+      w.addSpacer(10);
+      text(w, `Next: ${next.subject || 'something'} — ${when}.`, { size: 13, color: MUTED, max: 2 });
     }
-    return true;
-  }
-  return false;
-}
-
-/**
- * The rest of the day.
- *
- * This is the half the attention feed deliberately does not carry: the pool is
- * things needing a DECISION, and a meeting you have already accepted is not one
- * of those. But "what is left today" is the single most glanceable fact a home
- * screen can hold, and without it the widget was three admin tasks and a lot of
- * black.
- *
- * ⚠ `known:false` is not an empty day — an unreadable diary says so rather than
- * rendering as a clear afternoon.
- */
-function agenda(w, block, limit) {
-  if (!block) return;
-
-  if (block.known === false) {
-    w.addSpacer(9);
-    text(w, "Couldn't read the diary", { size: 10, color: dyn(HEX.high) });
-    return;
   }
 
-  const events = (block.events || []).slice(0, limit);
-  if (!events.length) return;
+  w.addSpacer();
 
-  rule(w, 9);
-  // The scope is named by the server, so the heading is never a second opinion
-  // about which day these belong to.
-  const heading = !block.scope || block.scope === 'today'
-    ? 'REST OF TODAY'
-    : String(block.scope).toUpperCase();
-  text(w, heading, { size: 9, color: MUTED, weight: 'bold' });
-  w.addSpacer(6);
+  // ── The quiet footer ──────────────────────────────────────────────────────
+  // Everything the dashboard version shouted, said once and small. Ambient
+  // context belongs under her, not around her.
+  const foot = w.addStack();
+  foot.centerAlignContent();
 
-  for (let i = 0; i < events.length; i++) {
-    const e = events[i];
-    const row = w.addStack();
-    row.centerAlignContent();
-
-    const start = new Date(e.start);
-    const hhmm = Number.isNaN(start.getTime()) ? '--:--'
-      : `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
-
-    // A meeting in progress is a different fact from one coming up, and it is
-    // the one worth colouring — it is happening to Nick right now.
-    const live = e.running === true;
-    text(row, hhmm, { size: 11, color: live ? dyn(HEX.high) : MUTED, weight: live ? 'bold' : 'regular' });
-    row.addSpacer(9);
-    text(row, e.subject || 'Untitled', { size: 12, weight: live ? 'bold' : 'regular', max: 1 });
-    row.addSpacer();
-
-    // The countdown, right-aligned. Recomputed from the start time by the
-    // server on every build, so it cannot go stale the way a stored relative
-    // time does.
-    // ⚠ Test for null BEFORE coercing. Number(null) is 0 and Number.isFinite(0)
-    // is true, so coercing first turns "no countdown, this is another day" into
-    // a confident "0m" — which is precisely the wrong thing to say about a
-    // meeting on Monday.
-    const raw = e.minutesAway;
-    const mins = raw === null || raw === undefined ? null : Number(raw);
-    let chip = null;
-    if (live) chip = 'now';
-    else if (mins !== null && Number.isFinite(mins)) {
-      chip = mins < 60 ? `${mins}m` : `${Math.round(mins / 60)}h`;
-    }
-    if (chip) {
-      const pill = row.addStack();
-      pill.cornerRadius = 6;
-      pill.backgroundColor = live ? dyn(HEX.high, 0.16) : TILE_BG;
-      pill.setPadding(1, 6, 1, 6);
-      text(pill, chip, { size: 10, color: live ? dyn(HEX.high) : MUTED, weight: 'bold' });
-    }
-    if (i < events.length - 1) w.addSpacer(6);
+  // ⚠ The footer follows the CONTEXT, which is Nick's ask: work data while he is
+  // working, personal while he is not. Off duty his week's work target is not
+  // what he wants read back at him.
+  const duty = ctx.duty;
+  const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
+  const bits = [];
+  if (offDuty) {
+    const open = personal && Array.isArray(personal.tasks) ? personal.tasks.length : null;
+    // Only when there ARE some — every task in the store is still `work`, so a
+    // permanent "0 personal" would be an empty box wearing a number.
+    if (open) bits.push(open === 1 ? '1 personal task' : `${open} personal tasks`);
+  } else if (target && target.state !== 'unknown' && target.target) {
+    bits.push(`${target.done} of ${target.target} this week`);
+  } else if (target && target.state === 'unset' && Number.isFinite(target.done)) {
+    bits.push(`${target.done} done this week`);
   }
-}
+  if (weather) bits.push(`${weather.now.temp}°`);
+  if (bits.length) text(foot, bits.join('  ·  '), { size: 11, color: MUTED, max: 1 });
+  foot.addSpacer();
 
-/**
- * What got done today. The bottom of a large widget was empty by early evening
- * — the agenda runs out, the pool is small — and this is the one fact that is
- * always available and always worth seeing.
- *
- * Deliberately the wins LEDGER rather than a count of ticked boxes: it was
- * built because self-report starves, and a home screen is where it finally gets
- * seen. Zero is rendered honestly; there is no encouraging version of an empty
- * day, and inventing one is the register sara-voice rejects.
- */
-function winsStrip(w, wins, target, weekShownAbove) {
-  if (!wins) return;
-  const done = Number(wins.doneToday);
-  if (!Number.isFinite(done)) return;
-
-  w.addSpacer(9);
-  const row = w.addStack();
-  row.centerAlignContent();
-  tile(row, 'todo', done > 0 ? HEX.positive : HEX.low, 15);
-  row.addSpacer(6);
-  text(row, done === 0 ? 'Nothing logged today'
-    : done === 1 ? '1 done today' : `${done} done today`,
-    { size: 11, color: done > 0 ? dyn(HEX.positive) : MUTED, weight: 'bold' });
-
-  // ⚠ The week figure comes from the TARGET, not from `wins.doneThisWeek`.
-  // They answer different questions over the same days — the target counts
-  // task_done (28), wins counts every row including folded commits, standups,
-  // meetings and replies (41) — and rendering both on one screen as "finished
-  // this week" put two numbers a dozen apart under the same word. The widget
-  // now speaks only in TASKS, which is what the ring is a picture of.
-  // Suppressed when the hero has already said it — the same number twice on one
-  // tile is the fault Nick caught between the ring and the wins strip, one
-  // layout later.
-  const week = !weekShownAbove && target && target.state !== 'unknown' ? Number(target.done) : null;
-  if (Number.isFinite(week) && week > done) {
-    row.addSpacer(7);
-    const label = target.target
-      ? `${week} of ${target.target} this week`
-      : `${week} tasks this week`;
-    text(row, label, { size: 10, color: MUTED });
+  // Held and unreadable still get said — quietly, but never swallowed.
+  const dropped = Array.isArray(d.dropped) ? d.dropped.length : 0;
+  const gaps = Array.isArray(d.gaps) ? d.gaps.length : 0;
+  if (dropped || gaps) {
+    const notes = [];
+    if (dropped) notes.push(`${dropped} held`);
+    if (gaps) notes.push(`${gaps} unread`);
+    text(foot, notes.join(' · '), { size: 10, color: gaps ? dyn(HEX.high) : MUTED, max: 1 });
   }
-  row.addSpacer();
 
-  // A ledger that could not be read is NOT a day with nothing in it.
-  const gaps = Array.isArray(wins.gaps) ? wins.gaps.length : 0;
-  if (gaps) text(row, `${gaps} unread`, { size: 9, color: dyn(HEX.high) });
-}
-
-/**
- * The hero: the week's progress, big enough to read across a room.
- *
- * This is the number Nick committed to on Monday, so it gets the top of the
- * tile and the only large type on it. Everything below is what is competing for
- * the rest of the week.
- *
- * ⚠ Renders NOTHING when there is no target or the ledger could not be read.
- * A hero-sized empty bar is a picture of a failed week, and pictures are
- * believed faster than numbers — the same reason `fraction` is null rather
- * than 0 in the service.
- */
-function heroProgress(w, t, { label = 'this week', width = 290 } = {}) {
-  if (!t || t.state === 'unknown' || !t.target) return false;
-
-  const pair = targetPair(t);
-  const row = w.addStack();
-  row.centerAlignContent();
-
-  const big = row.addStack();
-  big.centerAlignContent();
-  text(big, String(t.done), { size: 34, weight: 'heavy', color: dyn(pair) });
-  text(big, ` / ${t.target}`, { size: 17, weight: 'bold', color: MUTED });
-
-  row.addSpacer();
-
-  const right = row.addStack();
-  right.layoutVertically();
-  const r1 = right.addStack();
-  r1.addSpacer();
-  text(r1, label, { size: 10, color: MUTED });
-  const r2 = right.addStack();
-  r2.addSpacer();
-  // The state in words as well as colour — the whole reason the lock screen
-  // needed them, and it costs nothing to be consistent here.
-  const tail = t.state === 'exceeded' ? `${t.over} past target`
-    : t.state === 'met' ? 'target met'
-      : t.state === 'behind' ? `${t.remaining} to go · behind`
-        : `${t.remaining} to go`;
-  text(r2, tail, { size: 11, weight: 'bold', color: dyn(pair) });
-
-  w.addSpacer(7);
-  const bar = progressBar(width, 10, t.done, t.target, pair);
-  if (bar) {
-    const strip = w.addStack();
-    const img = strip.addImage(bar);
-    img.imageSize = new Size(width, 10);
-    strip.addSpacer();
-  }
-  return true;
-}
-
-/**
- * The off-duty hero: what is waiting in the OTHER half of Nick's life.
- *
- * ⚠ Measured before building: every one of the 195 tasks in the store is
- * `work` (the domain backfill's deliberate default), so a personal hero would
- * render an empty box every weekend — the failure this codebase keeps naming.
- * It therefore reports whether it had anything to say, and the caller falls
- * back to momentum when it did not. It lights up the day Nick files his first
- * personal task, and shows nothing misleading before then.
- */
-function personalHero(w, personal) {
-  if (!personal || !Array.isArray(personal.tasks) || !personal.tasks.length) return false;
-
-  const row = w.addStack();
-  row.centerAlignContent();
-  const big = row.addStack();
-  big.centerAlignContent();
-  text(big, String(personal.tasks.length), { size: 34, weight: 'heavy', color: dyn(HEX.positive) });
-  row.addSpacer(9);
-  const col = row.addStack();
-  col.layoutVertically();
-  text(col, personal.tasks.length === 1 ? 'personal task' : 'personal tasks', { size: 11, color: MUTED });
-  text(col, 'off the clock', { size: 10, color: MUTED });
-  row.addSpacer();
-
-  w.addSpacer(9);
-  for (const t of personal.tasks.slice(0, 4)) {
-    const r = w.addStack();
-    r.centerAlignContent();
-    tile(r, 'todo', HEX.positive, 18);
-    r.addSpacer(8);
-    text(r, t.text || 'Untitled', { size: 12, max: 1 });
-    r.addSpacer();
-    w.addSpacer(6);
-  }
-  w.url = tabUrl('tasks');
-  return true;
+  w.url = tabUrl(d.primary ? d.primary.tab : 'surface');
 }
 
 /** Held-back and unreadable counts. Never a bare number, never swallowed. */
@@ -1044,94 +735,6 @@ function footer(w, d) {
     text(row, `${gaps} unreadable`, { size: 10, color: ACCENTS.high });
   }
   row.addSpacer();
-}
-
-/**
- * The off-duty view: what you DID, not what you owe.
- *
- * A task list on a Saturday is the thing this whole feature exists to avoid —
- * and the wins ledger was built precisely because the reward surface was
- * starved while the nagging surfaces were not.
- */
-function offDutyView(w, duty, wins, target) {
-  const row = w.addStack();
-  row.backgroundColor = CARD;
-  row.cornerRadius = 14;
-  row.setPadding(12, 12, 12, 12);
-  row.centerAlignContent();
-
-  // Prefer the week on a day off: `headline` describes TODAY and correctly
-  // returns null on zero, which a Saturday usually is. A week's total is the
-  // honest number to lead with, and there is no cheerful version of an empty one.
-  // Tasks, not all-wins — see winsStrip. "40 finished this week" next to a ring
-  // reading "28 of 50" is two answers to one question.
-  const week = target && target.state !== 'unknown' && Number.isFinite(Number(target.done))
-    ? Number(target.done) : null;
-  const today = wins && Number.isFinite(Number(wins.doneToday)) ? Number(wins.doneToday) : null;
-
-  const title = week !== null && target.target ? `${week} of ${target.target} tasks`
-    : week ? `${week} tasks this week`
-      : today ? wins.headline
-        : 'Off duty';
-
-  tile(row, 'todo', week || today ? HEX.positive : HEX.low, 30);
-  row.addSpacer(11);
-  const col = row.addStack();
-  col.layoutVertically();
-  text(col, title, { size: 15, weight: 'heavy', max: 2 });
-  col.addSpacer(3);
-  text(col, duty.reason || 'Not a working day.', { size: 12, color: MUTED, max: 2 });
-  row.addSpacer();
-
-  // The week, drawn. "40 this week" is a number; the SHAPE is the thing worth
-  // seeing — a 32-commit Thursday beside two quiet days says something a total
-  // cannot. Falls back to nothing at all rather than to a fake chart.
-  const last7 = Array.isArray(wins && wins.last7) ? wins.last7 : [];
-  if (last7.length) {
-    w.addSpacer(9);
-    const chart = sparkline(last7.map((d) => d.done), 130, 24, HEX.positive);
-    if (chart) {
-      const strip = w.addStack();
-      strip.centerAlignContent();
-      const img = strip.addImage(chart);
-      img.imageSize = new Size(130, 24);
-      strip.addSpacer(9);
-      const col = strip.addStack();
-      col.layoutVertically();
-      text(col, 'last 7 days', { size: 9, color: MUTED });
-      const best = Math.max(0, ...last7.map((x) => Number(x.done) || 0));
-      if (best) text(col, `best ${best}`, { size: 9, color: MUTED });
-      strip.addSpacer();
-    }
-  }
-
-  // The week's shape, by where the evidence came from. Only what the ledger
-  // actually holds — no invented categories, and nothing at all if it is empty.
-  const sources = wins && wins.bySource && typeof wins.bySource === 'object'
-    ? Object.entries(wins.bySource).filter(([, n]) => Number(n) > 0).slice(0, 4)
-    : [];
-  if (sources.length) {
-    w.addSpacer(9);
-    const strip = w.addStack();
-    strip.centerAlignContent();
-    for (let i = 0; i < sources.length; i++) {
-      if (i) strip.addSpacer(10);
-      text(strip, String(sources[i][1]), { size: 12, weight: 'bold', color: POSITIVE });
-      strip.addSpacer(3);
-      text(strip, sources[i][0], { size: 10, color: MUTED });
-    }
-    strip.addSpacer();
-  }
-
-  if (!wins) {
-    w.addSpacer(7);
-    // "We couldn't read the ledger" is not "you did nothing" — the distinction
-    // this whole codebase keeps insisting on, and never more worth keeping than
-    // on the one screen meant to be encouraging.
-    text(w, "Couldn't read the wins ledger.", { size: 10, color: MUTED });
-  }
-
-  w.url = tabUrl('today');
 }
 
 /**
@@ -1275,78 +878,15 @@ function build(res, family, wins, weather, target, personal) {
 
   const w = new ListWidget();
   bg(w);
-  w.setPadding(14, 14, 14, 14);
-  // Tell iOS when this is worth refreshing. It is a hint, not a promise — the
-  // system budgets widget refreshes and will ignore this when it wants to.
+  w.setPadding(15, 15, 15, 15);
+  // A hint, not a promise — iOS budgets widget refreshes and ignores this when
+  // it wants to.
   w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
 
-  const d = res.data || {};
-  const ctx = d.context || {};
-  const bad = res.error ? HEX.critical : d.poolAvailable === false ? HEX.high : null;
-
-  // When the context IS the answer — a context card, a silence, or a failure —
-  // the headline already says it, and repeating it in the pill puts the same
-  // words on screen twice ("In a meeting" above "In a meeting"). The pill only
-  // earns its place when it is framing something else.
-  const contextIsTheAnswer = !!res.error
-    || d.poolAvailable === false
-    || !d.primary
-    || d.primary.kind === 'context';
-  header(w, contextIsTheAnswer ? null : ctx.label, weather, bad);
-
-  // Off duty: show what he did, not what he owes. ⚠ Except when something is
-  // genuinely on fire — hiding a breaching escalation because it is Saturday is
-  // the wrong failure, and `context-state` already treats a live work signal on
-  // a non-working day as a contradiction rather than an all-clear.
-  const duty = ctx.duty;
-  const onFire = d.primary && d.primary.urgency === 'critical';
-  if (!res.error && duty && duty.known && duty.onDuty === false && !onFire) {
-    // Personal work is the point of being off duty — but only if any exists.
-    // Otherwise fall back to momentum rather than render an empty hero.
-    const shown = (family === 'large' || family === 'medium')
-      ? personalHero(w, personal)
-      : false;
-    if (!shown) offDutyView(w, duty, wins, target);
-    // The next working day still belongs here. On a Friday evening or a weekend
-    // "what is coming" is the most useful thing on the screen, and without it
-    // the off-duty view is one line and a chart in a large black rectangle.
-    if (family === 'large' || family === 'medium') agenda(w, d.agenda, family === 'large' ? 4 : 2);
-    w.addSpacer();
-    return w;
-  }
-
-  // Trailing spacer on EVERY path, or a short render floats in the vertical
-  // middle of a large widget with dead space above and below it.
-  if (silence(w, d, res.error)) { w.addSpacer(); return w; }
-
-  // The week's commitment leads on the large tile — it is the one number Nick
-  // chose, and the only large type on the widget. It renders nothing at all
-  // when there is no target, so the layout below simply moves up.
-  const heroShown = family === 'large' && heroProgress(w, target);
-  if (heroShown) rule(w, 10);
-
-  itemRow(w, d.primary, { primary: true });
-
-  const room = family === 'large' ? 4 : family === 'medium' ? 2 : 0;
-  const rest = (d.secondary || []).slice(0, room);
-  if (rest.length) {
-    rule(w, 9);
-    for (let i = 0; i < rest.length; i++) {
-      itemRow(w, rest[i]);
-      if (i < rest.length - 1) w.addSpacer(7);
-    }
-  }
-
-  // Only the large family has the height for the day's shape; on medium the
-  // three attention rows already fill it, and a cramped agenda is worse than none.
-  if (family === 'large') {
-    agenda(w, d.agenda, 4);
-    winsStrip(w, wins, target, heroShown);
-  }
-
-  footer(w, d);
-  w.addSpacer();
-  w.url = tabUrl(d.primary.tab);
+  // One thing, in her voice. saraSays draws its own header and footer; there is
+  // no second layout to fall through to, because a dashboard IS the thing this
+  // replaced.
+  saraSays(w, d0, res, target, weather, family, personal);
   return w;
 }
 
