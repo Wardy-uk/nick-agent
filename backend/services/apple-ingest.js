@@ -124,7 +124,17 @@ function normaliseEvent(raw) {
     // Namespaced so an Apple identifier can never collide with a Graph one in
     // the UNIQUE(event_id) index — they are opaque strings from two systems
     // that have never heard of each other.
-    id: `apple:${raw.id}`,
+    //
+    // ⚠ THE START TIME IS PART OF THE KEY, and it is not decoration. EventKit
+    // gives every occurrence of a RECURRING event the SAME `identifier` — a
+    // weekly Saturday commitment is one identifier and many occurrences. With
+    // the identifier alone, `calendar_cache.event_id` is UNIQUE and the upsert
+    // is INSERT OR REPLACE, so all of them would collapse into a single row and
+    // a repeating event would appear in the diary exactly once. Nothing throws;
+    // the calendar is just quietly wrong, in the direction of looking emptier
+    // than it is — which is the worst direction for something whose entire job
+    // is answering "is Nick free".
+    id: `apple:${raw.id}:${start}`,
     subject: raw.title ? String(raw.title).slice(0, 400) : '(no title)',
     start,
     end,
@@ -157,9 +167,29 @@ function normaliseEvent(raw) {
  * the shape a broken client sends, and honouring it would silently empty the
  * personal calendar.
  */
-function ingestCalendar({ from, to, events } = {}) {
+function ingestCalendar({ from, to, events, calendars } = {}) {
   if (!from || !to) return { ok: false, error: 'a from/to window is required' };
   if (!Array.isArray(events)) return { ok: false, error: 'events must be an array' };
+
+  // ── What the phone could SEE ───────────────────────────────────────────────
+  //
+  // Reported because "my Saturday event is missing" was unanswerable without it.
+  // The sync said how many events it sent and nothing about where it looked, so
+  // an empty diary and a calendar the phone cannot read produced an identical
+  // result — the same conflation the whole codebase keeps stamping out.
+  //
+  // iOS 17 can grant an app partial calendar access, so a calendar absent from
+  // this list is a PERMISSIONS answer, not an empty-diary one.
+  const byCalendar = {};
+  for (const e of events) {
+    const name = (e && e.calendar) ? String(e.calendar) : '(unknown)';
+    byCalendar[name] = (byCalendar[name] || 0) + 1;
+  }
+  const visible = Array.isArray(calendars) ? calendars.map(String) : null;
+  if (visible) {
+    console.log(`[Apple] ${visible.length} calendar(s) visible: ${visible.join(', ')}`);
+  }
+  console.log(`[Apple] ${events.length} event(s) in window ${from} → ${to}: ${JSON.stringify(byCalendar)}`);
 
   const normalised = events.map(normaliseEvent).filter(Boolean);
   const rejected = events.length - normalised.length;
@@ -215,6 +245,11 @@ function ingestCalendar({ from, to, events } = {}) {
     // Named rather than quietly dropped: if this starts climbing, the work
     // account has been added to the phone and that is worth knowing.
     duplicates,
+    // The diagnostic half. `visibleCalendars: null` means an older copy of the
+    // script that does not report them — distinct from an empty list, which
+    // would mean the phone can see no calendars at all.
+    visibleCalendars: visible,
+    byCalendar,
   };
 }
 

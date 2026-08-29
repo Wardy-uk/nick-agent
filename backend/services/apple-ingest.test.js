@@ -110,7 +110,49 @@ test('an unusable event is dropped rather than half-written', () => {
 
 test('an Apple id can never collide with a Graph one', () => {
   const row = apple.normaliseEvent({ id: 'abc', start: '2026-09-01T09:00:00' });
-  assert.equal(row.id, 'apple:abc');
+  assert.ok(String(row.id).startsWith('apple:abc'));
+});
+
+test('⚠ every occurrence of a RECURRING event survives', () => {
+  // EventKit gives every occurrence of a recurring event the SAME identifier —
+  // a weekly Saturday commitment is one identifier and many occurrences. With
+  // the identifier alone as the key, calendar_cache.event_id is UNIQUE and the
+  // upsert is INSERT OR REPLACE, so they all collapsed into a single row and a
+  // repeating event appeared in the diary exactly once. Nothing threw; the
+  // calendar was just quietly emptier than reality — the worst possible
+  // direction for the one thing that answers "is Nick free".
+  const res = apple.ingestCalendar({
+    from: '2026-11-01T00:00:00', to: '2026-11-30T00:00:00',
+    events: [
+      { id: 'weekly-sat', title: 'Parkrun', start: '2026-11-07T09:00:00', end: '2026-11-07T10:00:00' },
+      { id: 'weekly-sat', title: 'Parkrun', start: '2026-11-14T09:00:00', end: '2026-11-14T10:00:00' },
+      { id: 'weekly-sat', title: 'Parkrun', start: '2026-11-21T09:00:00', end: '2026-11-21T10:00:00' },
+    ],
+  });
+
+  assert.equal(res.stored, 3, 'three occurrences, three rows');
+  const held = db.getCalendarEvents('2026-11-01T00:00:00', '2026-11-30T00:00:00');
+  assert.equal(held.filter((e) => e.subject === 'Parkrun').length, 3);
+});
+
+test('the calendars the phone could see are reported, and absent is not empty', () => {
+  // "My Saturday event is missing" was unanswerable: an empty diary and a
+  // calendar iOS will not let Scriptable read produced an identical result.
+  const withList = apple.ingestCalendar({
+    from: '2026-12-01T00:00:00', to: '2026-12-02T00:00:00',
+    events: [{ id: 'x', title: 'Thing', start: '2026-12-01T09:00:00', calendar: 'Home' }],
+    calendars: ['Home', 'Work', 'UK Holidays'],
+  });
+  assert.deepEqual(withList.visibleCalendars, ['Home', 'Work', 'UK Holidays']);
+  assert.deepEqual(withList.byCalendar, { Home: 1 });
+
+  // An older copy of the script does not send them at all. `null` keeps that
+  // distinct from "the phone can see no calendars", which is a real and much
+  // more alarming answer.
+  const without = apple.ingestCalendar({
+    from: '2026-12-03T00:00:00', to: '2026-12-04T00:00:00', events: [],
+  });
+  assert.equal(without.visibleCalendars, null);
 });
 
 test('an all-day event is free, not a wall across the day', () => {

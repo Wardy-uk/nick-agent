@@ -32,7 +32,7 @@ const KEY_TOKEN = 'neuro_api_token';
 const DEFAULT_URL = 'https://pi5.tailecb90f.ts.net';
 const TIMEOUT_SECONDS = 20;
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 
 // How far ahead to send. Two weeks covers every question NEURO asks of the
 // diary (what is on today, is this slot free, when is the next 1-2-1 due) and
@@ -130,7 +130,31 @@ function attendeesOther(ev) {
 async function collectEvents() {
   const from = addDays(new Date(), -DAYS_BACK);
   const to = addDays(new Date(), DAYS_AHEAD);
-  const found = await CalendarEvent.between(from, to);
+
+  // Every calendar this device can see, reported whether it holds anything or
+  // not. Without it, "my Saturday event is missing" is unanswerable: an empty
+  // diary and a calendar iOS will not let Scriptable read look exactly the same
+  // from the server. iOS 17 can grant partial calendar access, so a calendar
+  // absent from this list is a PERMISSIONS answer, not an empty one.
+  let calendars = [];
+  try {
+    const all = await Calendar.forEvents();
+    calendars = all.map(function (c) { return c.title; });
+  } catch (e) {
+    calendars = [];
+  }
+
+  // ⚠ Pass the calendars explicitly. The no-argument form is documented as "all
+  // calendars", but asking for them by name is what makes the report above and
+  // the events below describe the same set — otherwise a calendar could be in
+  // one and not the other and the diagnostic would lie.
+  let found;
+  try {
+    const all = await Calendar.forEvents();
+    found = await CalendarEvent.between(from, to, all);
+  } catch (e) {
+    found = await CalendarEvent.between(from, to);
+  }
 
   const events = found.map(function (ev) {
     const out = {
@@ -140,6 +164,9 @@ async function collectEvents() {
       end: localStamp(ev.endDate),
       isAllDay: ev.isAllDay === true,
       location: ev.location || null,
+      // Which calendar it came from, so a missing event can be traced to a
+      // calendar rather than guessed at.
+      calendar: ev.calendar ? ev.calendar.title : null,
     };
     const other = attendeesOther(ev);
     // Only sent when it is actually known. An absent key stays undefined all the
@@ -148,7 +175,12 @@ async function collectEvents() {
     return out;
   });
 
-  return { from: localStamp(from), to: localStamp(to), events: events };
+  return {
+    from: localStamp(from),
+    to: localStamp(to),
+    events: events,
+    calendars: calendars,
+  };
 }
 
 async function collectReminders() {
@@ -199,6 +231,11 @@ async function run() {
     const res = await post(settings, '/api/apple/calendar', cal);
     if (res && res.ok) {
       lines.push(res.stored + ' events sent' + (res.rejected ? ' (' + res.rejected + ' unusable)' : ''));
+      // Said out loud on a manual run. A calendar missing from this list is a
+      // permissions problem, not an empty diary — and the two are otherwise
+      // indistinguishable from the phone.
+      lines.push('Calendars seen: ' + (cal.calendars.length ? cal.calendars.join(', ') : 'NONE — check Settings > Scriptable > Calendars'));
+      if (res.duplicates) lines.push(res.duplicates + ' already in the work diary');
     } else {
       failed = true;
       lines.push('Calendar failed: ' + ((res && res.error) || 'unknown'));
