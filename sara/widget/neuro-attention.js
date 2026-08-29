@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v20';
+const VERSION = 'v21';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -278,6 +278,23 @@ async function fetchWeather() {
     }
 
     return { now, next, label: wmo(now.code)[1], symbol: wmo(now.code)[0] };
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Open PERSONAL tasks. Fetched only when off duty: on a working day they are
+ * deliberately not what the widget is for.
+ */
+async function fetchPersonal({ base, token }) {
+  try {
+    const req = new Request(`${base}/api/tasks?domain=personal&status=open`);
+    req.headers = { 'X-NEURO-API-TOKEN': token };
+    req.timeoutInterval = TIMEOUT_SECONDS;
+    const json = await req.loadJSON();
+    if (!json || typeof json !== 'object' || json.ok === false) return null;
+    return json;
   } catch (e) {
     return null;
   }
@@ -873,7 +890,7 @@ function agenda(w, block, limit) {
  * seen. Zero is rendered honestly; there is no encouraging version of an empty
  * day, and inventing one is the register sara-voice rejects.
  */
-function winsStrip(w, wins, target) {
+function winsStrip(w, wins, target, weekShownAbove) {
   if (!wins) return;
   const done = Number(wins.doneToday);
   if (!Number.isFinite(done)) return;
@@ -893,7 +910,10 @@ function winsStrip(w, wins, target) {
   // meetings and replies (41) — and rendering both on one screen as "finished
   // this week" put two numbers a dozen apart under the same word. The widget
   // now speaks only in TASKS, which is what the ring is a picture of.
-  const week = target && target.state !== 'unknown' ? Number(target.done) : null;
+  // Suppressed when the hero has already said it — the same number twice on one
+  // tile is the fault Nick caught between the ring and the wins strip, one
+  // layout later.
+  const week = !weekShownAbove && target && target.state !== 'unknown' ? Number(target.done) : null;
   if (Number.isFinite(week) && week > done) {
     row.addSpacer(7);
     const label = target.target
@@ -906,6 +926,97 @@ function winsStrip(w, wins, target) {
   // A ledger that could not be read is NOT a day with nothing in it.
   const gaps = Array.isArray(wins.gaps) ? wins.gaps.length : 0;
   if (gaps) text(row, `${gaps} unread`, { size: 9, color: dyn(HEX.high) });
+}
+
+/**
+ * The hero: the week's progress, big enough to read across a room.
+ *
+ * This is the number Nick committed to on Monday, so it gets the top of the
+ * tile and the only large type on it. Everything below is what is competing for
+ * the rest of the week.
+ *
+ * ⚠ Renders NOTHING when there is no target or the ledger could not be read.
+ * A hero-sized empty bar is a picture of a failed week, and pictures are
+ * believed faster than numbers — the same reason `fraction` is null rather
+ * than 0 in the service.
+ */
+function heroProgress(w, t, { label = 'this week', width = 290 } = {}) {
+  if (!t || t.state === 'unknown' || !t.target) return false;
+
+  const pair = targetPair(t);
+  const row = w.addStack();
+  row.centerAlignContent();
+
+  const big = row.addStack();
+  big.centerAlignContent();
+  text(big, String(t.done), { size: 34, weight: 'heavy', color: dyn(pair) });
+  text(big, ` / ${t.target}`, { size: 17, weight: 'bold', color: MUTED });
+
+  row.addSpacer();
+
+  const right = row.addStack();
+  right.layoutVertically();
+  const r1 = right.addStack();
+  r1.addSpacer();
+  text(r1, label, { size: 10, color: MUTED });
+  const r2 = right.addStack();
+  r2.addSpacer();
+  // The state in words as well as colour — the whole reason the lock screen
+  // needed them, and it costs nothing to be consistent here.
+  const tail = t.state === 'exceeded' ? `${t.over} past target`
+    : t.state === 'met' ? 'target met'
+      : t.state === 'behind' ? `${t.remaining} to go · behind`
+        : `${t.remaining} to go`;
+  text(r2, tail, { size: 11, weight: 'bold', color: dyn(pair) });
+
+  w.addSpacer(7);
+  const bar = progressBar(width, 10, t.done, t.target, pair);
+  if (bar) {
+    const strip = w.addStack();
+    const img = strip.addImage(bar);
+    img.imageSize = new Size(width, 10);
+    strip.addSpacer();
+  }
+  return true;
+}
+
+/**
+ * The off-duty hero: what is waiting in the OTHER half of Nick's life.
+ *
+ * ⚠ Measured before building: every one of the 195 tasks in the store is
+ * `work` (the domain backfill's deliberate default), so a personal hero would
+ * render an empty box every weekend — the failure this codebase keeps naming.
+ * It therefore reports whether it had anything to say, and the caller falls
+ * back to momentum when it did not. It lights up the day Nick files his first
+ * personal task, and shows nothing misleading before then.
+ */
+function personalHero(w, personal) {
+  if (!personal || !Array.isArray(personal.tasks) || !personal.tasks.length) return false;
+
+  const row = w.addStack();
+  row.centerAlignContent();
+  const big = row.addStack();
+  big.centerAlignContent();
+  text(big, String(personal.tasks.length), { size: 34, weight: 'heavy', color: dyn(HEX.positive) });
+  row.addSpacer(9);
+  const col = row.addStack();
+  col.layoutVertically();
+  text(col, personal.tasks.length === 1 ? 'personal task' : 'personal tasks', { size: 11, color: MUTED });
+  text(col, 'off the clock', { size: 10, color: MUTED });
+  row.addSpacer();
+
+  w.addSpacer(9);
+  for (const t of personal.tasks.slice(0, 4)) {
+    const r = w.addStack();
+    r.centerAlignContent();
+    tile(r, 'todo', HEX.positive, 18);
+    r.addSpacer(8);
+    text(r, t.text || 'Untitled', { size: 12, max: 1 });
+    r.addSpacer();
+    w.addSpacer(6);
+  }
+  w.url = tabUrl('tasks');
+  return true;
 }
 
 /** Held-back and unreadable counts. Never a bare number, never swallowed. */
@@ -1156,7 +1267,7 @@ function accessoryView(family, res, d, wins, target) {
   return w;
 }
 
-function build(res, family, wins, weather, target) {
+function build(res, family, wins, weather, target, personal) {
   const d0 = res.data || {};
   if (String(family).startsWith('accessory')) {
     return accessoryView(family, res, d0, wins, target);
@@ -1190,7 +1301,12 @@ function build(res, family, wins, weather, target) {
   const duty = ctx.duty;
   const onFire = d.primary && d.primary.urgency === 'critical';
   if (!res.error && duty && duty.known && duty.onDuty === false && !onFire) {
-    offDutyView(w, duty, wins, target);
+    // Personal work is the point of being off duty — but only if any exists.
+    // Otherwise fall back to momentum rather than render an empty hero.
+    const shown = (family === 'large' || family === 'medium')
+      ? personalHero(w, personal)
+      : false;
+    if (!shown) offDutyView(w, duty, wins, target);
     // The next working day still belongs here. On a Friday evening or a weekend
     // "what is coming" is the most useful thing on the screen, and without it
     // the off-duty view is one line and a chart in a large black rectangle.
@@ -1202,6 +1318,12 @@ function build(res, family, wins, weather, target) {
   // Trailing spacer on EVERY path, or a short render floats in the vertical
   // middle of a large widget with dead space above and below it.
   if (silence(w, d, res.error)) { w.addSpacer(); return w; }
+
+  // The week's commitment leads on the large tile — it is the one number Nick
+  // chose, and the only large type on the widget. It renders nothing at all
+  // when there is no target, so the layout below simply moves up.
+  const heroShown = family === 'large' && heroProgress(w, target);
+  if (heroShown) rule(w, 10);
 
   itemRow(w, d.primary, { primary: true });
 
@@ -1219,7 +1341,7 @@ function build(res, family, wins, weather, target) {
   // three attention rows already fill it, and a cramped agenda is worse than none.
   if (family === 'large') {
     agenda(w, d.agenda, 4);
-    winsStrip(w, wins, target);
+    winsStrip(w, wins, target, heroShown);
   }
 
   footer(w, d);
@@ -1252,14 +1374,18 @@ const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
 // Off duty the wins ARE the view; on large they fill the strip at the bottom.
 // Anywhere else it would be a request bought for nothing.
 const needWins = !res.error && (offDuty || family === 'large');
-const wins = needWins ? await fetchWins(cfg) : null;
+const [wins, personal] = await Promise.all([
+  needWins ? fetchWins(cfg) : Promise.resolve(null),
+  // Personal tasks matter only off duty, and only where there is room to show them.
+  (offDuty && !isAccessory) ? fetchPersonal(cfg) : Promise.resolve(null),
+]);
 
 // The target rides on the attention payload already — composed server-side with
 // its own words, like `say` and `speech`. A second request would be a second
 // opinion about the same week.
 const target = res.data ? res.data.weeklyTarget : null;
 
-const widget = build(res, family, wins, weather, target);
+const widget = build(res, family, wins, weather, target, personal);
 
 if (config.runsInWidget) {
   Script.setWidget(widget);
