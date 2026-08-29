@@ -439,3 +439,48 @@ test('agenda: the day after today is still called "tomorrow"', () => {
   ]);
   assert.equal(a.scope, 'tomorrow');
 });
+
+// ── The personal agenda ─────────────────────────────────────────────────────
+
+test('a PERSONAL agenda keeps the all-day, free events a work one drops', () => {
+  // The three events the phone pushed first were two bank holidays and
+  // "hiking" — every one all-day, every one marked free. The work filter drops
+  // exactly those, which left Nick's weekend empty.
+  const sat = new Date('2026-08-29T10:00:00');
+  const cal = { known: true, events: [
+    { start: '2026-08-29T00:00:00', end: '2026-08-30T00:00:00', subject: 'Hiking', showAs: 'free', isAllDay: true, source: 'apple' },
+    { start: '2026-08-29T14:00:00', end: '2026-08-29T15:00:00', subject: 'Work thing', showAs: 'busy', source: 'graph' },
+  ] };
+
+  const personal = agendaFor(cal, sat, 4, [], { personal: true });
+  assert.deepEqual(personal.events.map((e) => e.subject), ['Hiking'],
+    'personal keeps the all-day free event and excludes the work one');
+
+  const work = agendaFor(cal, sat, 4, [], { personal: false });
+  assert.deepEqual(work.events.map((e) => e.subject), ['Work thing'],
+    'work is unchanged — all-day free events are still noise in a work diary');
+});
+
+test('an all-day personal event survives all day, not until midnight passed', () => {
+  // An all-day event ENDS at 00:00 the following morning, so judging it on the
+  // instant would make today's event vanish at one second past midnight.
+  const cal = { known: true, events: [
+    { start: '2026-08-29T00:00:00', end: '2026-08-30T00:00:00', subject: 'Hiking', showAs: 'free', isAllDay: true, source: 'apple' },
+  ] };
+  const morning = agendaFor(cal, new Date('2026-08-29T08:00:00'), 4, [], { personal: true });
+  const evening = agendaFor(cal, new Date('2026-08-29T21:00:00'), 4, [], { personal: true });
+  assert.equal(morning.events.length, 1);
+  assert.equal(evening.events.length, 1, 'still on today at 9pm');
+});
+
+test('a personal agenda never shows work, even when work is all there is', () => {
+  // The whole point of the weekend view: an empty personal agenda is correct,
+  // and must not quietly fall back to the work diary.
+  const cal = { known: true, events: [
+    { start: '2026-08-31T10:00:00', end: '2026-08-31T10:30:00', subject: 'Team Standup', showAs: 'busy', source: 'graph' },
+  ] };
+  const a = agendaFor(cal, new Date('2026-08-29T10:00:00'), 4,
+    [{ start: '2026-08-31T10:00:00', end: '2026-08-31T10:30:00', subject: 'Team Standup', showAs: 'busy', source: 'graph' }],
+    { personal: true });
+  assert.deepEqual(a.events, []);
+});

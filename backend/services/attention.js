@@ -386,6 +386,9 @@ function _calendarInput(gaps) {
         showAs: r.show_as,
         isAllDay: r.is_all_day === 1,
         isCancelled: r.show_as === 'cancelled',
+        // 'graph' = the work diary, 'apple' = the phone. The agenda needs this
+        // to answer a personal question with personal events.
+        source: r.source || null,
         // Three-valued in the column and three-valued here. NULL must stay
         // undecidable — context-state requires exactly `true` to call it a
         // meeting, so an unknown can never be announced as one.
@@ -409,18 +412,31 @@ function _calendarInput(gaps) {
  * ⚠ `known:false` is NOT an empty agenda. "The diary is clear" and "I could not
  * read the diary" license opposite behaviour, and only one of them is good news.
  */
-function agendaFor(calendar, now, limit = 4, tomorrow = null) {
+function agendaFor(calendar, now, limit = 4, tomorrow = null, opts = {}) {
   if (!calendar || calendar.known !== true) return { known: false, events: [], scope: 'today' };
+
+  // ⚠ A PERSONAL agenda needs the opposite filter to a work one.
+  //
+  // The work filter drops all-day and `free` events, because in a work diary
+  // those are birthdays and blocked-out noise. In a personal one they are the
+  // WHOLE POINT: the three events the phone has pushed so far are two bank
+  // holidays and "hiking", every one of them all-day and every one marked free.
+  // Applying the work filter to them leaves an empty weekend, which is the
+  // failure Nick has already seen twice.
+  const personal = opts.personal === true;
+  const keep = personal
+    ? (e) => !e.isCancelled && e.source === 'apple'
+    : (e) => !e.isCancelled && !e.isAllDay && e.showAs !== 'free';
 
   const nowMs = now.getTime();
   const events = (calendar.events || [])
-    .filter((e) => !e.isCancelled && !e.isAllDay && e.showAs !== 'free')
+    .filter(keep)
     .map((e) => {
       const startMs = new Date(e.start).getTime();
       const endMs = new Date(e.end).getTime();
       return { ...e, startMs, endMs };
     })
-    .filter((e) => Number.isFinite(e.endMs) && e.endMs > nowMs)
+    .filter((e) => Number.isFinite(e.endMs) && (personal ? e.endMs >= _dayStartMs(now) : e.endMs > nowMs))
     .sort((a, b) => a.startMs - b.startMs)
     .slice(0, limit)
     .map((e) => ({
@@ -447,7 +463,7 @@ function agendaFor(calendar, now, limit = 4, tomorrow = null) {
   // this on a Friday evening, when tomorrow is a Saturday with nothing in it —
   // rolling only one day forward leaves the widget just as empty as before.
   const ahead = tomorrow
-    .filter((e) => !e.isCancelled && !e.isAllDay && e.showAs !== 'free')
+    .filter(keep)
     .map((e) => ({ ...e, startMs: new Date(e.start).getTime() }))
     .filter((e) => Number.isFinite(e.startMs))
     .sort((a, b) => a.startMs - b.startMs);
@@ -496,6 +512,11 @@ function agendaFor(calendar, now, limit = 4, tomorrow = null) {
  * `next` mean everywhere. Returns [] on any failure — a roll-forward is a nicety
  * and must never be the thing that breaks the feed.
  */
+/** Midnight this morning, as ms. All-day events end at 00:00 the next day. */
+function _dayStartMs(now) {
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
 function _tomorrowEvents(days = 5) {
   try {
     const db = require('../db/database');
@@ -511,6 +532,7 @@ function _tomorrowEvents(days = 5) {
       showAs: r.show_as,
       isAllDay: r.is_all_day === 1,
       isCancelled: r.show_as === 'cancelled',
+      source: r.source || null,
       attendeesOther: r.attendees_other === 1 ? true : r.attendees_other === 0 ? false : null,
     }));
   } catch (e) {
@@ -717,7 +739,12 @@ async function build({ now = new Date() } = {}) {
     // `_calendarInput`'s window — context-state reasons about "am I in a
     // meeting" off that same list, and tomorrow's events in it would be a
     // silent change to what "current" and "next" mean.
-    agenda: agendaFor(inputs.calendar, now, 4, _tomorrowEvents()),
+    // Off duty he gets his OWN diary, not the work one. The duty read is the
+    // brain's, already resolved above, so the agenda cannot disagree with the
+    // rest of the payload about which kind of day this is.
+    agenda: agendaFor(inputs.calendar, now, 4, _tomorrowEvents(), {
+      personal: context.duty ? context.duty.onDuty === false : false,
+    }),
     // A failed pool is a GAP, never an empty feed presented as a calm day.
     poolAvailable: poolError === null,
     poolSize: items.length,

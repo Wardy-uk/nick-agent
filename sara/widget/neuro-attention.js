@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v23';
+const VERSION = 'v24';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -658,12 +658,12 @@ function saraSays(w, d, res, target, weather, family, personal) {
     text(w, 'Nothing needs you.', { size: big ? 20 : 15, weight: 'bold', color: MUTED, max: 2 });
   }
 
-  // ⚠ The next thing — and ONLY while Nick is on duty. Rendering "Next: Weekly
-  // reporting, Monday 10:00" on a Saturday is precisely what off-duty exists to
-  // prevent: he does not want Monday read back at him on his weekend. The
-  // footer already follows the context; the body has to as well, or the rule is
-  // only half applied.
-  if (big && !offDuty) {
+  // The next thing. ⚠ The AGENDA ITSELF is domain-switched on the server — off
+  // duty it carries only his own diary — so this renders whichever is his right
+  // now. That is why it no longer has to be suppressed off duty: what used to
+  // leak was "Next: Weekly reporting, Monday 10:00" on a Saturday, and the fix
+  // was the source of the list, not hiding the line.
+  if (big) {
     const ag = d.agenda;
     const next = ag && ag.known && Array.isArray(ag.events) && ag.events.length ? ag.events[0] : null;
     if (next) {
