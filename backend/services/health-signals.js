@@ -227,7 +227,7 @@ function assess({ days = [], metrics = [], now = new Date() } = {}) {
  * threshold would either shout about the weight or never notice the heart.
  */
 function sensorsQuiet(metrics = [], now = new Date()) {
-  const out = [];
+  const entries = [];
   for (const row of metrics) {
     if (!row || !row.metric || !row.last_at || !row.first_at) continue;
     if (!(row.samples >= QUIET_MIN_SAMPLES)) continue;
@@ -243,20 +243,76 @@ function sensorsQuiet(metrics = [], now = new Date()) {
     const silentDays = (now.getTime() - lastMs) / 86400000;
     if (silentDays < Math.max(QUIET_FLOOR_DAYS, typicalGapDays * QUIET_RATIO)) continue;
 
-    const sporadic = SPORADIC.has(row.metric);
-    out.push({
-      id: `quiet:${row.metric}`,
-      // Sporadic-by-nature metrics are informational; a monitor that used to
-      // report several times a day and has not for months is not.
-      level: sporadic ? 'info' : 'warn',
-      title: `${row.metric} stopped arriving`,
-      detail: `Last reading ${String(row.last_at).slice(0, 10)}, ${Math.round(silentDays)} days ago. It had been arriving roughly every ${formatGap(typicalGapDays)} across ${row.samples.toLocaleString()} readings.`,
-      caveat: sporadic ? 'This one is naturally occasional.' : 'A source that stops looks exactly like a source with nothing to report.',
-      evidence: [{ metric: row.metric, lastAt: row.last_at, samples: row.samples }],
+    entries.push({
+      metric: row.metric,
+      lastAt: row.last_at,
+      lastDay: String(row.last_at).slice(0, 10),
+      samples: row.samples,
+      silentDays: Math.round(silentDays),
+      typicalGapDays,
+      sporadic: SPORADIC.has(row.metric),
     });
   }
+
+  // ⚠ METRICS THAT STOPPED ON THE SAME DAY ARE ONE EVENT, and folding them is
+  // not cosmetic. Measured on the first live run: 23 findings, 20 of them
+  // warnings — and 17 were `dietary_*` metrics that all went quiet on
+  // 2026-03-30, because Nick stopped logging food. That is ONE fact rendered
+  // seventeen times, and a first open showing twenty warnings is a screen
+  // nobody reads by week two. Same rule as commits folding to one row per repo
+  // per day, and as a commitment extracted fourteen times still being one
+  // commitment: the pile is what stops the real item being seen.
+  //
+  // The fold is LOSSLESS — every metric is still named in `evidence`, so
+  // nothing that stopped is hidden, it just stops being its own row.
+  const byDay = new Map();
+  for (const e of entries) {
+    if (!byDay.has(e.lastDay)) byDay.set(e.lastDay, []);
+    byDay.get(e.lastDay).push(e);
+  }
+
+  const out = [];
+  for (const [day, group] of byDay) {
+    const anyReal = group.some(e => !e.sporadic);
+    const silentDays = Math.max(...group.map(e => e.silentDays));
+    // Sporadic-by-nature metrics are informational; a monitor that used to
+    // report several times a day and has not for months is not.
+    const level = anyReal ? 'warn' : 'info';
+
+    if (group.length === 1) {
+      const e = group[0];
+      out.push({
+        id: `quiet:${e.metric}`,
+        level,
+        title: `${e.metric} stopped arriving`,
+        detail: `Last reading ${day}, ${e.silentDays} days ago. It had been arriving roughly every ${formatGap(e.typicalGapDays)} across ${e.samples.toLocaleString()} readings.`,
+        caveat: e.sporadic ? 'This one is naturally occasional.' : 'A source that stops looks exactly like a source with nothing to report.',
+        evidence: [{ metric: e.metric, lastAt: e.lastAt, samples: e.samples }],
+      });
+      continue;
+    }
+
+    const names = group.map(e => e.metric).sort();
+    const shown = names.slice(0, 5).join(', ');
+    out.push({
+      // Keyed on the DAY, so the id is stable as long as the group is.
+      id: `quiet:${day}`,
+      level,
+      title: `${group.length} metrics stopped arriving on ${day}`,
+      detail: `${silentDays} days ago: ${shown}${names.length > 5 ? ` and ${names.length - 5} more` : ''}. Stopping together usually means one source stopped, not ${group.length}.`,
+      caveat: anyReal
+        ? 'A source that stops looks exactly like a source with nothing to report.'
+        : 'These are naturally occasional, so this may just be a habit that lapsed.',
+      evidence: group.map(e => ({ metric: e.metric, lastAt: e.lastAt, samples: e.samples })),
+    });
+  }
+
   // Longest silence first — the ones most likely to have been forgotten.
-  return out.sort((a, b) => (a.detail < b.detail ? 1 : -1));
+  return out.sort((a, b) => {
+    const aDay = String(a.id).startsWith('quiet:2') ? a.id.slice(6) : (a.evidence[0]?.lastAt || '');
+    const bDay = String(b.id).startsWith('quiet:2') ? b.id.slice(6) : (b.evidence[0]?.lastAt || '');
+    return aDay < bDay ? -1 : aDay > bDay ? 1 : 0;
+  });
 }
 
 function formatGap(days) {

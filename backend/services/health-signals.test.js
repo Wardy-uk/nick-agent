@@ -164,3 +164,46 @@ test('warnings rank above information', () => {
   assert.equal(r.findings[0].level, 'warn');
   assert.equal(r.findings[r.findings.length - 1].level, 'info');
 });
+
+test('metrics that stopped on the SAME DAY fold into one finding', () => {
+  // Measured on the first live run: 23 findings, 20 of them warnings — and 17
+  // were dietary_* metrics that all went quiet on 2026-03-30 because Nick
+  // stopped logging food. One fact, seventeen rows. A first open showing twenty
+  // warnings is a screen nobody reads by week two.
+  const dietary = ['sugar', 'sodium', 'iron', 'fiber', 'protein', 'vitamin_c', 'calcium'].map(n => ({
+    metric: `dietary_${n}`, samples: 128,
+    first_at: '2024-08-17 09:13:00', last_at: '2026-03-30 09:00:00',
+  }));
+  const quiet = signals.sensorsQuiet(dietary, NOW);
+  assert.equal(quiet.length, 1, 'seven metrics, one event');
+  assert.match(quiet[0].title, /7 metrics stopped arriving on 2026-03-30/);
+  assert.equal(quiet[0].evidence.length, 7, 'the fold is lossless — every metric still named');
+});
+
+test('a lone stopped metric is still reported on its own terms', () => {
+  const quiet = signals.sensorsQuiet([{
+    metric: 'blood_pressure_systolic', samples: 10389,
+    first_at: '2024-08-16 17:13:00', last_at: '2026-04-01 11:00:00',
+  }], NOW);
+  assert.equal(quiet.length, 1);
+  assert.match(quiet[0].title, /blood_pressure_systolic stopped arriving/);
+});
+
+test('a group of naturally-occasional metrics is info, not a wall of warnings', () => {
+  const group = ['weight_body_mass', 'body_fat_percentage', 'lean_body_mass'].map(m => ({
+    metric: m, samples: 300, first_at: '2024-08-17 09:24:00', last_at: '2026-08-07 08:23:05',
+  }));
+  const quiet = signals.sensorsQuiet(group, NOW);
+  assert.equal(quiet.length, 1);
+  assert.equal(quiet[0].level, 'info');
+});
+
+test('a real monitor in the group makes the whole group a warning', () => {
+  const mixed = [
+    { metric: 'weight_body_mass', samples: 300, first_at: '2024-08-17 09:24:00', last_at: '2026-04-01 09:00:00' },
+    { metric: 'blood_pressure_systolic', samples: 10389, first_at: '2024-08-16 17:13:00', last_at: '2026-04-01 11:00:00' },
+  ];
+  const quiet = signals.sensorsQuiet(mixed, NOW);
+  assert.equal(quiet.length, 1);
+  assert.equal(quiet[0].level, 'warn', 'the monitor decides, not the majority');
+});
