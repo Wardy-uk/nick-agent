@@ -65,7 +65,17 @@ const TRANSIENT_DIRS = [
 // own brain and he must be able to ask it about his own OH report; removing it
 // from search would be a real loss for a threat that is largely internal. The
 // outbound guards are what stop it leaving the building.
-const SENSITIVE_DIRS = (process.env.VAULT_SENSITIVE_DIRS || 'Personal')
+// ⚠ BOTH names are listed, and that is not indecision — it is what makes the
+// folder rename safe to do in either order. If the code said only 'Personal'
+// and Nick renamed the folder first, `Private/` would be unprotected until the
+// next deploy: entity extraction would walk it again and the HR officer, the OH
+// assessor and his GP would re-enter the person graph, silently, exactly as they
+// had been. This guard fails OPEN, so there must be no window where the folder
+// is not covered by whatever name it currently has.
+//
+// The old name can be dropped once the rename has actually happened — but a
+// stale entry here costs nothing, and removing it early costs everything.
+const SENSITIVE_DIRS = (process.env.VAULT_SENSITIVE_DIRS || 'Private,Personal')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 // ── Personal life ────────────────────────────────────────────────────────────

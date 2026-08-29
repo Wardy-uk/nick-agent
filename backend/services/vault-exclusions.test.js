@@ -64,6 +64,18 @@ test('⚠ Personal/ is kept OUT of the person graph and IN the search index', ()
   assert.equal(ex.isSensitivePath('Meetings/2026/08/standup.md'), false);
 });
 
+test('⚠ BOTH folder names are covered, so the rename has no exposed window', () => {
+  // This guard fails OPEN. If the code named only one and the folder were
+  // renamed first, the other name would be unprotected until the next deploy —
+  // entity extraction would walk it again and the HR officer, the OH assessor
+  // and Nick's GP would re-enter the person graph, silently, exactly as before.
+  // Listing both means the rename is safe in either order.
+  assert.equal(ex.isSensitivePath('Private/Occupational Health Debrief.md'), true);
+  assert.equal(ex.isSensitivePath('Personal/Occupational Health Debrief.md'), true);
+  assert.equal(ex.isExcludedPath('Private/Investigation Prep.md'), true);
+  assert.equal(ex.isExcludedPath('Private/Investigation Prep.md', { forEmbeddings: true }), false);
+});
+
 test('the two exclusion sets are NOT one a superset of the other', () => {
   // They used to differ only by Daily/, so anything added to the base was
   // excluded from both — which would have removed the sensitive folder from
