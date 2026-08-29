@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v25';
+const VERSION = 'v26';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -300,6 +300,30 @@ async function fetchPersonal({ base, token }) {
   }
 }
 
+/**
+ * Readiness, and the week of HRV behind it.
+ *
+ * `/api/health/stress` has scored HRV against Nick's own 14-day rolling
+ * baseline since August and no surface has ever rendered it. Fetched only where
+ * there is room to show it.
+ */
+async function fetchHealth({ base, token }) {
+  try {
+    const h = { 'X-NEURO-API-TOKEN': token };
+    const s = new Request(`${base}/api/health/stress`);
+    s.headers = h; s.timeoutInterval = TIMEOUT_SECONDS;
+    const hist = new Request(`${base}/api/health/history?days=7`);
+    hist.headers = h; hist.timeoutInterval = TIMEOUT_SECONDS;
+    const [stress, history] = await Promise.all([s.loadJSON(), hist.loadJSON()]);
+    return {
+      stress: stress && typeof stress === 'object' ? stress : null,
+      history: history && Array.isArray(history.history) ? history.history : [],
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 // ── Look ────────────────────────────────────────────────────────────────────
 //
 // Design rules, so this stays legible rather than merely decorated:
@@ -546,6 +570,173 @@ const ICONS = {
   context: ['circle.dashed', '○'],
 };
 
+/**
+ * The Field — SARA's presence, as a still.
+ *
+ * ⚠ NOT an orb. `sara/app/src/components/Field.jsx` and MANIFESTATION.md
+ * deprecate every avatar, glyph and single bright point permanently: she is not
+ * an object, and there is no "where SARA is". What you see is Nick's vault as a
+ * noisy substrate with SARA visible only as ENTROPY FALLING — jitter collapsing
+ * toward a seed, latent edges firming up.
+ *
+ * A widget cannot animate, so it renders ONE FRAME — and that is not a
+ * compromise, because the app's own rule is that THE COHERENCE ON SCREEN IS THE
+ * COHERENCE OF THE READ. A still frame carries that perfectly:
+ *
+ *   pool unreadable → no coherence at all; pure noise, no edges
+ *   low confidence  → barely settled, edges faint
+ *   high confidence → a clean, connected mesh
+ *   quiet           → the same picture, dimmed right back
+ *
+ * So the background is informative before a word of it is read, and it is never
+ * decoration: with nothing to say, there is nothing to see.
+ *
+ * Density, edge distance, clustering and colours are taken from Field.jsx
+ * deliberately, so the widget and the phone are visibly the same entity.
+ */
+function field(width, height, drive) {
+  try {
+    const dc = new DrawContext();
+    dc.size = new Size(width, height);
+    dc.opaque = false;
+    dc.respectScreenScale = true;
+
+    const area = width * height;
+    // Per AREA, not a fixed count — Field.jsx's own lesson, where 230 hardcoded
+    // nodes vanished on anything wider than a phone.
+    const nodeCount = Math.max(40, Math.min(260, Math.round(area / 900)));
+    const seedCount = Math.max(4, Math.min(14, Math.round(area / 9000)));
+    const EDGE_DIST_SQ = 2100;
+
+    const depth = Math.max(0, Math.min(1, drive.depth));
+    const dim = Math.max(0, Math.min(1, drive.dim));
+
+    // Seeds land freely rather than on a grid: an even scatter reads as
+    // wallpaper, the lumpy one reads as a mind.
+    const seeds = [];
+    for (let s = 0; s < seedCount; s++) {
+      seeds.push({ x: Math.random() * width, y: Math.random() * height });
+    }
+
+    const nodes = [];
+    for (let i = 0; i < nodeCount; i++) {
+      const seed = seeds[i % seeds.length];
+      const spread = 30 + Math.random() * 56;
+      // `depth` IS the settle: the more the brain has resolved, the closer each
+      // node sits to its cluster. At depth 0 nothing has collapsed at all.
+      const pull = 1 - depth * 0.55;
+      nodes.push({
+        x: seed.x + (Math.random() - 0.5) * spread * 2 * pull,
+        y: seed.y + (Math.random() - 0.5) * spread * 2 * pull,
+      });
+    }
+
+    // Latent edges, drawn only as far as the read has actually settled.
+    if (depth > 0.02) {
+      dc.setLineWidth(0.6);
+      for (let a = 0; a < nodes.length; a++) {
+        for (let b = a + 1; b < nodes.length; b++) {
+          const dx = nodes[a].x - nodes[b].x;
+          const dy = nodes[a].y - nodes[b].y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= EDGE_DIST_SQ) continue;
+          const near = 1 - d2 / EDGE_DIST_SQ;
+          dc.setStrokeColor(new Color('#78aaeb', 0.30 * near * depth * dim));
+          const p = new Path();
+          p.move(new Point(nodes[a].x, nodes[a].y));
+          p.addLine(new Point(nodes[b].x, nodes[b].y));
+          dc.addPath(p);
+          dc.strokePath();
+        }
+      }
+    }
+
+    for (const n of nodes) {
+      dc.setFillColor(new Color('#96bef0', (0.10 + 0.26 * depth) * dim));
+      dc.fillEllipse(new Rect(n.x - 1, n.y - 1, 2, 2));
+    }
+    return dc.getImage();
+  } catch (e) {
+    return null; // No field is fine. A broken widget is not.
+  }
+}
+
+/**
+ * How the read becomes a picture. Lifted from Field.jsx's `drive()` rather than
+ * re-invented, so the phone and the widget cannot disagree about what a given
+ * state looks like.
+ */
+function fieldDrive(d, res) {
+  if (res.error || d.poolAvailable === false) return { depth: 0, dim: 0.85 };
+  const ctx = d.context || {};
+  if (d.quiet === true) return { depth: 0.35, dim: 0.45 };
+  const level = ctx.confidence ? ctx.confidence.level : null;
+  const depth = level === 'high' ? 1 : level === 'moderate' ? 0.7 : 0.34;
+  return { depth, dim: 1 };
+}
+
+/**
+ * A readiness dial: an arc of segments with the number inside it.
+ *
+ * Segments rather than a stroked arc for the same reason progressRing uses
+ * them — filled ellipses are the best-supported thing DrawContext does — and a
+ * countable dial reads better small than a smooth sweep.
+ */
+function dial(size, fraction, pair) {
+  try {
+    const dc = new DrawContext();
+    dc.size = new Size(size, size);
+    dc.opaque = false;
+    dc.respectScreenScale = true;
+
+    const SEG = 28;
+    const cx = size / 2;
+    const cy = size / 2;
+    const r = size / 2 - size * 0.10;
+    const dot = Math.max(2.2, size * 0.072);
+    const ink = forTheme(pair);
+    const f = Math.max(0, Math.min(1, fraction));
+    const filled = Math.round(f * SEG);
+
+    for (let i = 0; i < SEG; i++) {
+      const a = (i / SEG) * Math.PI * 2 - Math.PI / 2;
+      const x = cx + Math.cos(a) * r - dot / 2;
+      const y = cy + Math.sin(a) * r - dot / 2;
+      dc.setFillColor(new Color(ink, i < filled ? 1 : 0.18));
+      dc.fillEllipse(new Rect(x, y, dot, dot));
+    }
+    return dc.getImage();
+  } catch (e) {
+    return null;
+  }
+}
+
+/** A week of bars. Zero days keep a visible stub so a quiet day is not a gap. */
+function spark(values, width, height, pair) {
+  try {
+    const dc = new DrawContext();
+    dc.size = new Size(width, height);
+    dc.opaque = false;
+    dc.respectScreenScale = true;
+
+    const nums = values.map((v) => (Number.isFinite(Number(v)) ? Math.max(0, Number(v)) : 0));
+    const max = Math.max(1, ...nums);
+    const slot = width / Math.max(1, nums.length);
+    const barW = Math.max(2, slot - 3);
+    const ink = forTheme(pair);
+
+    for (let i = 0; i < nums.length; i++) {
+      const last = i === nums.length - 1;
+      const h = nums[i] === 0 ? 2 : Math.max(3, (nums[i] / max) * height);
+      dc.setFillColor(new Color(ink, nums[i] === 0 ? 0.22 : (last ? 1 : 0.45)));
+      dc.fillRect(new Rect(i * slot, height - h, barW, h));
+    }
+    return dc.getImage();
+  } catch (e) {
+    return null;
+  }
+}
+
 function bg(w) {
   const g = new LinearGradient();
   g.colors = [
@@ -616,19 +807,41 @@ function tile(stack, type, pair, box) {
  * Everything the old layout shouted is demoted to ONE quiet footer line: it is
  * ambient, and she is not.
  */
-function saraSays(w, d, res, target, weather, family, personal) {
+/**
+ * SARA, saying one thing - over her own field.
+ *
+ * `speech` is composed on the SERVER and is literally what she would say aloud,
+ * so rendering it is what keeps the widget, the notification and the spoken
+ * briefing one voice rather than three.
+ *
+ * It NEVER writes her lines. When `speech` is null she is quiet - a correct
+ * answer, and most of a calm day - so it falls back to the summary she already
+ * composed, then to "Nothing needs you."
+ *
+ * -- One instrument, measuring whatever matters now ---------------------------
+ * The dial and the week of bars are the same shape in both contexts, and what
+ * they MEASURE follows the duty read:
+ *
+ *   on duty  -> the week's task target, and tasks closed per day
+ *   off duty -> readiness, and a week of HRV
+ *
+ * Neither is drawn when its source could not be read: an empty dial is a
+ * picture of a bad week, and pictures are believed faster than numbers.
+ */
+function saraSays(w, d, res, target, weather, family, personal, health) {
   const ctx = d.context || {};
   const big = family === 'large';
 
-  // Who is talking, and when. Small, because the sentence is the point.
+  // Her presence, behind everything. Not decoration - the coherence of the
+  // picture IS the coherence of the read.
+  const fieldImg = field(big ? 330 : 340, big ? 350 : 160, fieldDrive(d, res));
+  if (fieldImg) w.backgroundImage = fieldImg;
+
+  const duty = ctx.duty;
+  const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
+
   const head = w.addStack();
   head.centerAlignContent();
-  const dotPair = res.error ? HEX.critical
-    : d.poolAvailable === false ? HEX.high
-      : d.primary && d.primary.urgency === 'critical' ? HEX.critical
-        : HEX.normal;
-  tile(head, 'context', dotPair, 15);
-  head.addSpacer(7);
   text(head, 'SARA', { size: 11, weight: 'bold', color: MUTED });
   head.addSpacer();
   const clock = head.addDate(new Date());
@@ -638,80 +851,96 @@ function saraSays(w, d, res, target, weather, family, personal) {
   head.addSpacer(6);
   text(head, VERSION, { size: 9, color: MUTED });
 
-  // Worked out BEFORE anything is drawn, because both the body and the footer
-  // depend on it.
-  const duty = ctx.duty;
-  const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
+  w.addSpacer(big ? 14 : 9);
 
-  w.addSpacer(big ? 16 : 10);
-
-  // What she says. Her words, never ours.
   let line = null;
   if (res.error) line = "I can't reach the brain right now.";
-  else if (d.poolAvailable === false) line = "I can't see your work at the moment — don't take that as an all-clear.";
+  else if (d.poolAvailable === false) line = "I can't see your work at the moment - don't take that as an all-clear.";
   else line = d.speech || ctx.summary || (d.primary ? (d.primary.say || d.primary.title) : null);
 
-  if (line) {
-    text(w, line, { size: big ? 20 : 15, weight: 'bold', max: big ? 6 : 4 });
-  } else {
-    // Genuinely nothing, and she says so plainly rather than going blank.
-    text(w, 'Nothing needs you.', { size: big ? 20 : 15, weight: 'bold', color: MUTED, max: 2 });
-  }
+  text(w, line || 'Nothing needs you.', {
+    size: big ? 19 : 15,
+    weight: 'bold',
+    color: line ? INK : MUTED,
+    max: big ? 4 : 3,
+  });
 
-  // The next thing. ⚠ The AGENDA ITSELF is domain-switched on the server — off
-  // duty it carries only his own diary — so this renders whichever is his right
-  // now. That is why it no longer has to be suppressed off duty: what used to
-  // leak was "Next: Weekly reporting, Monday 10:00" on a Saturday, and the fix
-  // was the source of the list, not hiding the line.
-  if (big) {
-    const ag = d.agenda;
-    const next = ag && ag.known && Array.isArray(ag.events) && ag.events.length ? ag.events[0] : null;
-    if (next) {
-      const start = new Date(next.start);
-      const hhmm = Number.isNaN(start.getTime()) ? ''
-        : `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
-      const day = !ag.scope || ag.scope === 'today'
-        ? 'today'
-        : `${String(ag.scope).charAt(0).toUpperCase()}${String(ag.scope).slice(1)}`;
-      // An all-day event is named by its DAY, never by a clock reading it does
-      // not have — "hiking at 00:00" is a placeholder presented as a fact.
-      const when = next.allDay
-        ? (day === 'today' ? 'all day' : `${day}, all day`)
-        : (day === 'today' ? `at ${hhmm}` : `${day} ${hhmm}`);
-      w.addSpacer(10);
-      text(w, `Next: ${next.subject || 'something'} — ${when}.`, { size: 13, color: MUTED, max: 2 });
-    }
+  // The next thing in whichever diary is his right now - the agenda is
+  // domain-switched on the server, so this is personal off duty.
+  const ag = d.agenda;
+  const next = ag && ag.known && Array.isArray(ag.events) && ag.events.length ? ag.events[0] : null;
+  if (next) {
+    const st = new Date(next.start);
+    const hhmm = Number.isNaN(st.getTime()) ? ''
+      : `${String(st.getHours()).padStart(2, '0')}:${String(st.getMinutes()).padStart(2, '0')}`;
+    const day = !ag.scope || ag.scope === 'today'
+      ? 'today'
+      : `${String(ag.scope).charAt(0).toUpperCase()}${String(ag.scope).slice(1)}`;
+    const when = next.allDay
+      ? (day === 'today' ? 'all day' : `${day}, all day`)
+      : (day === 'today' ? `at ${hhmm}` : `${day} ${hhmm}`);
+    w.addSpacer(7);
+    text(w, `Next: ${next.subject || 'something'} - ${when}.`, { size: 12.5, color: MUTED, max: 2 });
   }
 
   w.addSpacer();
 
-  // ── The quiet footer ──────────────────────────────────────────────────────
-  // Everything the dashboard version shouted, said once and small. Ambient
-  // context belongs under her, not around her.
+  if (big) {
+    const gauge = offDuty ? readinessGauge(health) : targetGauge(target);
+    if (gauge) {
+      const row = w.addStack();
+      row.centerAlignContent();
+
+      const img = dial(66, gauge.fraction, gauge.pair);
+      if (img) {
+        const dstack = row.addStack();
+        dstack.size = new Size(66, 66);
+        dstack.centerAlignContent();
+        dstack.backgroundImage = img;
+        const inner = dstack.addStack();
+        inner.layoutVertically();
+        inner.centerAlignContent();
+        text(inner, gauge.value, { size: 18, weight: 'heavy', color: dyn(gauge.pair) });
+        text(inner, gauge.unit, { size: 8, color: MUTED });
+        row.addSpacer(12);
+      }
+
+      const col = row.addStack();
+      col.layoutVertically();
+      text(col, gauge.label, { size: 13.5, weight: 'bold' });
+      col.addSpacer(2);
+      text(col, gauge.detail, { size: 10.5, color: MUTED, max: 2 });
+
+      if (gauge.series && gauge.series.length) {
+        col.addSpacer(6);
+        const bars = spark(gauge.series, 118, 26, gauge.pair);
+        if (bars) {
+          const bs = col.addStack();
+          const bimg = bs.addImage(bars);
+          bimg.imageSize = new Size(118, 26);
+          bs.addSpacer();
+        }
+        col.addSpacer(3);
+        text(col, gauge.seriesLabel, { size: 9, color: MUTED });
+      }
+      row.addSpacer();
+      w.addSpacer(9);
+    }
+  }
+
   const foot = w.addStack();
   foot.centerAlignContent();
-
-  // ⚠ The footer follows the CONTEXT, which is Nick's ask: work data while he is
-  // working, personal while he is not. Off duty his week's work target is not
-  // what he wants read back at him.
   const bits = [];
   if (offDuty) {
     const open = personal && Array.isArray(personal.tasks) ? personal.tasks.length : null;
-    // Only when there ARE some — every task in the store is still `work`, so a
-    // permanent "0 personal" would be an empty box wearing a number.
     if (open) bits.push(open === 1 ? '1 personal task' : `${open} personal tasks`);
-  } else if (target && target.state !== 'unknown' && target.target) {
-    bits.push(`${target.done} of ${target.target} this week`);
-  } else if (target && target.state === 'unset' && Number.isFinite(target.done)) {
-    bits.push(`${target.done} done this week`);
   }
   if (weather) bits.push(`${weather.now.temp}°`);
   if (bits.length) text(foot, bits.join('  ·  '), { size: 11, color: MUTED, max: 1 });
   foot.addSpacer();
 
-  // Held and unreadable still get said — quietly, but never swallowed.
-  // ⚠ Except off duty, where they are work too. "3 held" on a Saturday is the
-  // same intrusion as naming Monday's first meeting, just in smaller type.
+  // Held and unread are WORK, so they stay off the weekend - the same intrusion
+  // as naming Monday's first meeting, in smaller type.
   const dropped = !offDuty && Array.isArray(d.dropped) ? d.dropped.length : 0;
   const gaps = !offDuty && Array.isArray(d.gaps) ? d.gaps.length : 0;
   if (dropped || gaps) {
@@ -724,7 +953,62 @@ function saraSays(w, d, res, target, weather, family, personal) {
   w.url = tabUrl(d.primary ? d.primary.tab : 'surface');
 }
 
-/** Held-back and unreadable counts. Never a bare number, never swallowed. */
+/**
+ * Readiness, off duty.
+ *
+ * `/api/health/stress` scores HRV against Nick's OWN 14-day rolling baseline -
+ * 45ms is good for one person and poor for another - and returns `calibrating`
+ * or `stale` rather than inventing a number. Both render as NO GAUGE, which is
+ * the honest picture; it has been computed since August and shown by nothing.
+ */
+function readinessGauge(health) {
+  const s = health && health.stress;
+  if (!s || s.status !== 'ok' || !Number.isFinite(Number(s.score))) return null;
+
+  const score = Math.round(Number(s.score));
+  const pair = score >= 66 ? HEX.positive : score >= 40 ? HEX.high : HEX.critical;
+
+  const hrv = Number.isFinite(Number(s.hrv)) ? Number(s.hrv).toFixed(1) : null;
+  const base = Number.isFinite(Number(s.baselineMs)) ? Math.round(Number(s.baselineMs)) : null;
+
+  // Oldest to newest, so the emphasised last bar is today.
+  const series = (health.history || [])
+    .map((h) => Number(h.hrvMedian))
+    .filter((v) => Number.isFinite(v))
+    .reverse();
+
+  return {
+    value: String(score),
+    unit: 'ready',
+    fraction: score / 100,
+    label: s.label || 'Readiness',
+    detail: hrv && base ? `HRV ${hrv}ms · baseline ${base}` : 'HRV against your baseline',
+    pair,
+    series: series.length > 2 ? series : null,
+    seriesLabel: 'HRV, last 7 days',
+  };
+}
+
+/** The week's task target, on duty. The same instrument, measuring the commitment. */
+function targetGauge(t) {
+  if (!t || t.state === 'unknown' || !t.target) return null;
+  const pair = targetPair(t);
+  const series = Array.isArray(t.byDay) ? t.byDay.map((x) => Number(x.done) || 0) : null;
+  return {
+    value: String(t.done),
+    unit: `of ${t.target}`,
+    fraction: t.target > 0 ? t.done / t.target : 0,
+    label: 'This week',
+    detail: t.state === 'exceeded' ? `${t.over} past target`
+      : t.state === 'met' ? 'target met'
+        : t.state === 'behind' ? `${t.remaining} to go · behind pace`
+          : `${t.remaining} to go`,
+    pair,
+    series: series && series.length > 2 ? series : null,
+    seriesLabel: 'tasks closed, Mon-Sun',
+  };
+}
+
 function footer(w, d) {
   const dropped = Array.isArray(d.dropped) ? d.dropped.length : 0;
   const gaps = Array.isArray(d.gaps) ? d.gaps.length : 0;
@@ -884,7 +1168,7 @@ function accessoryView(family, res, d, wins, target) {
   return w;
 }
 
-function build(res, family, wins, weather, target, personal) {
+function build(res, family, wins, weather, target, personal, health) {
   const d0 = res.data || {};
   if (String(family).startsWith('accessory')) {
     return accessoryView(family, res, d0, wins, target);
@@ -900,7 +1184,7 @@ function build(res, family, wins, weather, target, personal) {
   // One thing, in her voice. saraSays draws its own header and footer; there is
   // no second layout to fall through to, because a dashboard IS the thing this
   // replaced.
-  saraSays(w, d0, res, target, weather, family, personal);
+  saraSays(w, d0, res, target, weather, family, personal, health);
   return w;
 }
 
@@ -928,10 +1212,12 @@ const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
 // Off duty the wins ARE the view; on large they fill the strip at the bottom.
 // Anywhere else it would be a request bought for nothing.
 const needWins = !res.error && (offDuty || family === 'large');
-const [wins, personal] = await Promise.all([
+const [wins, personal, health] = await Promise.all([
   needWins ? fetchWins(cfg) : Promise.resolve(null),
   // Personal tasks matter only off duty, and only where there is room to show them.
   (offDuty && !isAccessory) ? fetchPersonal(cfg) : Promise.resolve(null),
+  // Readiness is the off-duty instrument, and only the large tile has room.
+  (offDuty && family === 'large') ? fetchHealth(cfg) : Promise.resolve(null),
 ]);
 
 // The target rides on the attention payload already — composed server-side with
@@ -939,7 +1225,7 @@ const [wins, personal] = await Promise.all([
 // opinion about the same week.
 const target = res.data ? res.data.weeklyTarget : null;
 
-const widget = build(res, family, wins, weather, target, personal);
+const widget = build(res, family, wins, weather, target, personal, health);
 
 if (config.runsInWidget) {
   Script.setWidget(widget);

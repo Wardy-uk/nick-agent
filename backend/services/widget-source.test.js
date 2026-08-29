@@ -112,3 +112,65 @@ test('the token is never hardcoded in the widget', () => {
     'a literal token appears to be embedded in the widget'
   );
 });
+
+test('the field is informative, not decorative — its coherence tracks the read', () => {
+  // sara/app's Field.jsx rule, carried into the widget: THE COHERENCE ON SCREEN
+  // IS THE COHERENCE OF THE READ. A widget cannot animate, so it renders one
+  // frame — and that frame still has to be honest. If the pool is unreadable
+  // there must be NO mesh at all, because a confident-looking picture over a
+  // failed read is the false all-clear this whole layer exists to prevent.
+  const src = source();
+  const body = src.slice(src.indexOf('function field('), src.indexOf('function dial('));
+
+  const stub = {
+    DrawContext: function () {
+      this._d = 0; this._e = 0;
+      this.setFillColor = () => {}; this.setStrokeColor = () => {}; this.setLineWidth = () => {};
+      this.fillEllipse = () => { this._d++; }; this.addPath = () => {}; this.strokePath = () => { this._e++; };
+      this.getImage = () => ({ dots: this._d, edges: this._e });
+    },
+    Size: function (w, h) { this.w = w; this.h = h; },
+    Rect: function () {}, Point: function () {}, Color: function () {},
+    Path: function () { this.move = () => {}; this.addLine = () => {}; },
+  };
+  const make = new Function(...Object.keys(stub), body + '; return { field, fieldDrive };');
+  const { field, fieldDrive } = make(...Object.values(stub));
+
+  const run = (d) => field(330, 350, fieldDrive(d, {}));
+
+  const blind = run({ poolAvailable: false, context: {} });
+  assert.equal(blind.edges, 0, 'an unreadable pool must show no coherence at all');
+  assert.ok(blind.dots > 0, 'the substrate is still there — noise, not emptiness');
+
+  const high = run({ poolAvailable: true, context: { confidence: { level: 'high' } } });
+  const low = run({ poolAvailable: true, context: { confidence: { level: 'low' } } });
+  assert.ok(high.edges > low.edges,
+    `a confident read must settle further than an unsure one (${high.edges} vs ${low.edges})`);
+
+  // Quiet dims rather than disconnects — she is present and staying out of the way.
+  const quiet = fieldDrive({ poolAvailable: true, quiet: true, context: {} }, {});
+  assert.ok(quiet.dim < 0.6, 'quiet must be visibly dimmed');
+  assert.ok(quiet.depth > 0, 'quiet is not the same as blind');
+});
+
+test('the widget renders no orb, avatar or glyph', () => {
+  // MANIFESTATION.md deprecates every one of those permanently: SARA is not an
+  // object and there is no "where SARA is". I proposed three orbs before being
+  // corrected, so this is here to stop the next attempt.
+  //
+  // ⚠ No regex here. The first version built one from a template literal, where
+  // a lone backslash is swallowed — `\s` became `s`, so the pattern could never
+  // match and the test passed by being broken. Exactly the untested-pattern
+  // trap already in mistakes.md, and a substring check needs no escaping at all.
+  const src = source();
+  const declares = (name) => ['function ', 'const ', 'let '].some((kw) =>
+    src.toLowerCase().indexOf(kw + name) !== -1);
+
+  for (const banned of ['orb', 'avatar', 'nebula']) {
+    assert.ok(!declares(banned), `the widget defines a ${banned} — she is a field, not an object`);
+  }
+
+  // Positive control: the check must be capable of finding something. Without
+  // this, a typo'd helper would make every assertion above pass by absence.
+  assert.ok(declares('field'), 'the guard cannot detect a declaration at all');
+});
