@@ -48,7 +48,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v22';
+const VERSION = 'v23';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -638,6 +638,11 @@ function saraSays(w, d, res, target, weather, family, personal) {
   head.addSpacer(6);
   text(head, VERSION, { size: 9, color: MUTED });
 
+  // Worked out BEFORE anything is drawn, because both the body and the footer
+  // depend on it.
+  const duty = ctx.duty;
+  const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
+
   w.addSpacer(big ? 16 : 10);
 
   // What she says. Her words, never ours.
@@ -653,9 +658,12 @@ function saraSays(w, d, res, target, weather, family, personal) {
     text(w, 'Nothing needs you.', { size: big ? 20 : 15, weight: 'bold', color: MUTED, max: 2 });
   }
 
-  // The next thing, one line, only when there IS one and only on the big tile.
-  // Not a list — a list is the menu she is not supposed to be.
-  if (big) {
+  // ⚠ The next thing — and ONLY while Nick is on duty. Rendering "Next: Weekly
+  // reporting, Monday 10:00" on a Saturday is precisely what off-duty exists to
+  // prevent: he does not want Monday read back at him on his weekend. The
+  // footer already follows the context; the body has to as well, or the rule is
+  // only half applied.
+  if (big && !offDuty) {
     const ag = d.agenda;
     const next = ag && ag.known && Array.isArray(ag.events) && ag.events.length ? ag.events[0] : null;
     if (next) {
@@ -680,8 +688,6 @@ function saraSays(w, d, res, target, weather, family, personal) {
   // ⚠ The footer follows the CONTEXT, which is Nick's ask: work data while he is
   // working, personal while he is not. Off duty his week's work target is not
   // what he wants read back at him.
-  const duty = ctx.duty;
-  const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
   const bits = [];
   if (offDuty) {
     const open = personal && Array.isArray(personal.tasks) ? personal.tasks.length : null;
@@ -698,8 +704,10 @@ function saraSays(w, d, res, target, weather, family, personal) {
   foot.addSpacer();
 
   // Held and unreadable still get said — quietly, but never swallowed.
-  const dropped = Array.isArray(d.dropped) ? d.dropped.length : 0;
-  const gaps = Array.isArray(d.gaps) ? d.gaps.length : 0;
+  // ⚠ Except off duty, where they are work too. "3 held" on a Saturday is the
+  // same intrusion as naming Monday's first meeting, just in smaller type.
+  const dropped = !offDuty && Array.isArray(d.dropped) ? d.dropped.length : 0;
+  const gaps = !offDuty && Array.isArray(d.gaps) ? d.gaps.length : 0;
   if (dropped || gaps) {
     const notes = [];
     if (dropped) notes.push(`${dropped} held`);
