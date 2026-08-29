@@ -85,7 +85,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v30';
+const VERSION = 'v31';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -1286,7 +1286,7 @@ function footer(w, d) {
  * thing, said in a sentence. Secondary items are dropped rather than crammed —
  * an unreadable lock screen is worse than a blank one.
  */
-function accessoryView(family, res, d, wins, target) {
+function accessoryView(family, res, d, wins, target, health) {
   const w = new ListWidget();
   // Fully transparent — the system paints the lock screen's own material behind
   // this, so any ground of ours would sit on top of it as a grey slab.
@@ -1295,7 +1295,13 @@ function accessoryView(family, res, d, wins, target) {
 
   const ctx = d.context || {};
   const duty = ctx.duty;
-  const offDuty = !res.error && duty && duty.known && duty.onDuty === false;
+  // Same resolution as the large tile — the brain decides the side, including
+  // for a pinned or flipped instance, so a lock widget can never disagree with
+  // the home screen about what kind of day it is.
+  const resolved = d.viewResolved || null;
+  const offDuty = resolved
+    ? resolved === 'personal'
+    : (!res.error && duty && duty.known && duty.onDuty === false);
   const onFire = d.primary && d.primary.urgency === 'critical';
 
   // ⚠ The head line names the SITUATION, never "SARA · <state>".
@@ -1332,33 +1338,40 @@ function accessoryView(family, res, d, wins, target) {
   }
 
   if (family === 'accessoryCircular') {
-    // The week's task target as a ring, with the count inside it. A bare number
-    // has no denominator — 28 is only good or bad against something.
-    const t = target;
-    if (t && t.state !== 'unknown' && t.target) {
-      const img = progressRing(58, t.done, t.target, targetPair(t));
+    // The BODY gauge, following the same context switch as the large tile:
+    // readiness off duty, strain on it. It is the one number worth a
+    // lock-screen slot, because it is true whatever else is going on and it is
+    // the thing Nick cannot check any other way at a glance.
+    //
+    // The week's target keeps the rectangular widget below — a target is a
+    // commitment with a denominator, and a bare ring cannot carry that as well
+    // as a bar and its numbers can.
+    //
+    // ⚠ Fill, not hue: iOS tints lock-screen accessories, so the ring reads by
+    // how much of it is solid. Readiness fills as it improves, strain fills as
+    // it worsens — each gauge already carries the fraction pointing its own way.
+    const gauge = offDuty ? readinessGauge(health) : stressGauge(health);
+    if (gauge) {
+      const img = dial(58, gauge.fraction, gauge.pair);
       if (img) w.backgroundImage = img;
       const stack = w.addStack();
       stack.layoutVertically();
       stack.centerAlignContent();
-      text(stack, String(t.done), { size: 17, weight: 'heavy', max: 1 });
-      text(stack, `of ${t.target}`, { size: 8, max: 1 });
-      w.url = tabUrl('tasks');
+      text(stack, gauge.value, { size: 17, weight: 'heavy', max: 1 });
+      text(stack, gauge.unit, { size: 8, max: 1 });
+      w.url = tabUrl('today');
       return w;
     }
 
-    // No target set, or the ledger could not be read. Both render the honest
-    // thing rather than an empty ring, which would read as "you have done none".
-    const blind = t && t.state === 'unknown';
-    const n = !blind && t && Number.isFinite(t.done)
-      ? t.done
-      : (d.primary ? 1 : 0) + ((d.secondary || []).length);
-    const label = !blind && t && Number.isFinite(t.done) ? 'done' : 'now';
+    // No usable reading — calibrating, stale, or the watch has not synced.
+    // "?" rather than a zero ring, which would read as "you are finished",
+    // and rather than silently falling back to the task target, which would
+    // put a different meaning behind an identical ring.
     const stack = w.addStack();
     stack.layoutVertically();
     stack.centerAlignContent();
-    text(stack, blind ? '?' : String(n), { size: 19, weight: 'heavy', max: 1 });
-    text(stack, blind ? 'no data' : label, { size: 8, max: 1 });
+    text(stack, '?', { size: 19, weight: 'heavy', max: 1 });
+    text(stack, 'no read', { size: 8, max: 1 });
     w.url = tabUrl(offDuty ? 'today' : 'surface');
     return w;
   }
@@ -1411,7 +1424,7 @@ function accessoryView(family, res, d, wins, target) {
 function build(res, family, wins, weather, target, personal, health, view) {
   const d0 = res.data || {};
   if (String(family).startsWith('accessory')) {
-    return accessoryView(family, res, d0, wins, target);
+    return accessoryView(family, res, d0, wins, target, health);
   }
 
   const w = new ListWidget();
@@ -1464,9 +1477,10 @@ const [wins, personal, health] = await Promise.all([
   needWins ? fetchWins(cfg) : Promise.resolve(null),
   // Personal tasks matter only off duty, and only where there is room to show them.
   (offDuty && !isAccessory) ? fetchPersonal(cfg) : Promise.resolve(null),
-  // The gauge is on the large tile in BOTH contexts now — recovery off duty,
-  // strain on it — so health is fetched whenever there is room for it.
-  (family === 'large') ? fetchHealth(cfg) : Promise.resolve(null),
+  // The gauge is on the large tile in both contexts AND on the circular lock
+  // widget, so health is fetched for either. The rectangular lock widget shows
+  // the task target instead and does not pay for this.
+  (family === 'large' || family === 'accessoryCircular') ? fetchHealth(cfg) : Promise.resolve(null),
 ]);
 
 // The target rides on the attention payload already — composed server-side with
