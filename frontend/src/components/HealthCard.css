@@ -181,3 +181,10 @@
    reading is most likely to be over-read into a diagnosis nobody made. */
 .hc-signal-caveat { font-size: 11px; color: var(--text-muted); opacity: 0.8; margin-top: 2px; font-style: italic; }
 .hc-signal-unknown { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+/* Names the WINDOW a score describes. Readiness is the whole day against a
+   fortnight; the stress score is the last few HRV readings inside six hours.
+   They legitimately disagree — seen live, "Balanced 52" against "low 31", with
+   stress's current HRV equal to readiness's baseline — and two unlabelled
+   headline numbers that contradict each other read as one of them being broken. */
+.hc-ready-window { color: var(--text-muted); font-weight: 400; }

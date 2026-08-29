@@ -98,6 +98,15 @@ export default function HealthCard() {
             <div className={`hc-ready-score ${READY_CLASS[ready.state] || ''}`}>{ready.score}</div>
             <div className="hc-ready-side">
               <div className="hc-ready-label">
+                {/* ⚠ LABELLED, because the stress score below is a DIFFERENT
+                    window and the two legitimately disagree. Seen live on this
+                    card: stress "Balanced 52" against readiness "low 31" — and
+                    stress's current HRV (16.3ms, its last few readings) is
+                    readiness's BASELINE, because readiness compares the whole
+                    day's median against the fortnight. Both are right; two
+                    unlabelled headline numbers that contradict each other are
+                    not, and a reader would reasonably decide one is broken. */}
+                <span className="hc-ready-window">Today · </span>
                 {ready.state === 'low' ? 'Running low' : ready.state === 'high' ? 'Well recovered' : 'About normal'}
                 {ready.partial && (
                   <span className="hc-ready-partial" title={`Only ${ready.inputsRead} of 3 inputs could be read`}>
@@ -177,7 +186,14 @@ export default function HealthCard() {
               <span className="hc-score-of">/100</span>
             </div>
             <div className="hc-score-side">
-              <div className="hc-score-label">{stress.label || stress.band || 'Stress'}</div>
+              <div className="hc-score-label">
+                {/* The other half of the pair above: this one is the ACUTE read
+                    — the last few HRV samples inside a 6-hour window — where
+                    readiness is the whole day against the fortnight. Naming the
+                    window is what stops the two reading as a contradiction. */}
+                <span className="hc-ready-window">Right now · </span>
+                {stress.label || stress.band || 'Stress'}
+              </div>
               <div className="hc-score-sub">
                 HRV {stress.hrv}ms{stress.hrvAt ? ` · ${stress.hrvAt.slice(11, 16)}` : ''}
               </div>
