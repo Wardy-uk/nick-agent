@@ -52,16 +52,31 @@ export default function MeetingPrep() {
                 <div className="mp__person" key={i}>
                   <div className="mp__person-name">{a.name}{a.role ? <span className="mp__role"> · {a.role}</span> : ''}</div>
                   {a.recentNotes && <div className="mp__person-notes">{a.recentNotes}</div>}
-                  {/* What they owe Nick. Read-only on purpose — chasing needs an
-                      approval step, and that lives in NEURO's People board. */}
+                  {/* ⚠ "Noted as outstanding", NOT "Owes you".
+                      These rows were extracted automatically from 232 meeting
+                      notes and some are misparses. "Owes you" states as fact
+                      that a named colleague failed to do something, seconds
+                      before Nick sits down opposite them — on the strength of a
+                      parse he cannot see. This reports what a note recorded and
+                      shows which note, so he can weigh it himself.
+
+                      Read-only on purpose: chasing needs an approval step, and
+                      that lives in NEURO's People board. */}
                   {a.waitingOn?.length > 0 && (
                     <div className="mp__owes">
-                      <div className="mp__owes-h">Owes you ({a.waitingOn.length})</div>
+                      <div className="mp__owes-h">Noted as outstanding ({a.waitingOn.length})</div>
                       {a.waitingOn.map((w, j) => (
                         <div className="mp__owes-item" key={j}>
                           <span className="mp__owes-text">{w.text}</span>
                           <span className={`mp__owes-age${w.stale ? ' stale' : ''}`}>
                             {w.ageDays}d{w.chaseCount > 0 ? ` · chased ${w.chaseCount}×` : ''}
+                          </span>
+                          {/* The evidence. An unattributed row SAYS it is
+                              unattributed rather than looking like the others. */}
+                          <span className="mp__owes-src">
+                            {w.sourcePath
+                              ? `from ${String(w.sourcePath).split('/').pop().replace(/\.md$/, '')}${w.sourceDate ? ` · ${w.sourceDate}` : ''}`
+                              : 'no source recorded — worth checking before raising'}
                           </span>
                         </div>
                       ))}
@@ -76,6 +91,20 @@ export default function MeetingPrep() {
             <div className="mp__block">
               <div className="mp__h">Topics</div>
               <ul className="mp__list">{prep.suggestedTopics.map((t, i) => <li key={i}>{t}</li>)}</ul>
+            </div>
+          )}
+
+          {/* ⚠ What could NOT be read. "Nothing outstanding" and "I couldn't
+              check what is outstanding" are opposite facts about a colleague,
+              and a prep sheet that renders the second as the first is how Nick
+              walks in believing everything is clear. */}
+          {prep?.gaps?.length > 0 && (
+            <div className="mp__block mp__block--gaps">
+              <div className="mp__h">Couldn&rsquo;t check</div>
+              <ul className="mp__list">
+                {prep.gaps.map((g, i) => <li key={i}>{g.input}{g.why ? ` — ${g.why}` : ''}</li>)}
+              </ul>
+              <div className="mp__gapnote">Treat the sections above as incomplete, not clear.</div>
             </div>
           )}
 

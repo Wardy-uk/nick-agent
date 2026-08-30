@@ -200,6 +200,15 @@ function _buildPrep(meeting) {
     recentDecisions: [],
     suggestedTopics: [],
     checklist: [],
+    // ⚠ Gate 4: what could NOT be read, by name.
+    //
+    // Every enrichment below is wrapped in a catch, and each one used to fail
+    // to a `console.warn` — so an unreachable vault or a broken roster rendered
+    // as a prep sheet with no commitments on it, which is indistinguishable
+    // from a person who owes Nick nothing. That is the whole species of bug
+    // this codebase keeps finding, arriving at the surface where it matters
+    // most: a 1-2-1 he walks into believing everything is clear.
+    gaps: [],
   };
 
   // 1. Get attendees from Graph API data first, then fall back to subject matching
@@ -271,7 +280,11 @@ function _buildPrep(meeting) {
         .slice(0, 5)
         .map(d => ({ date: d.date, text: d.text }));
     }
-  } catch {}
+  } catch (e) {
+    // Named, not swallowed. An unreadable source and a source with
+    // nothing in it are different facts about a colleague.
+    prep.gaps.push({ input: 'decisions', why: e.message });
+  }
 
   // 4. Search vault for recent mentions of attendees
   prep.vaultContext = [];
@@ -293,7 +306,11 @@ function _buildPrep(meeting) {
         }
       }
     }
-  } catch {}
+  } catch (e) {
+    // Named, not swallowed. An unreadable source and a source with
+    // nothing in it are different facts about a colleague.
+    prep.gaps.push({ input: 'notes', why: e.message });
+  }
 
   // 5. Check recent daily notes for mentions
   try {
@@ -325,7 +342,11 @@ function _buildPrep(meeting) {
         }
       }
     }
-  } catch {}
+  } catch (e) {
+    // Named, not swallowed. An unreadable source and a source with
+    // nothing in it are different facts about a colleague.
+    prep.gaps.push({ input: 'daily-notes', why: e.message });
+  }
 
   // Deduplicate vault context
   const seenLabels = new Set();
@@ -390,6 +411,7 @@ function _buildPrep(meeting) {
     }
   } catch (e) {
     console.warn('[MeetingPrep] Could not check attendee leave:', e.message);
+    prep.gaps.push({ input: 'leave', why: e.message });
   }
 
   const ROOM_SIZE = 8;
@@ -412,6 +434,18 @@ function _buildPrep(meeting) {
         const open = waitingOn.list({ status: 'open', person: first }).filter(i => !i.snoozed);
         if (!open.length) continue;
 
+        // ⚠ Gate 4: every commitment carries WHERE IT CAME FROM.
+        //
+        // `source_path` has been in the table since the feature shipped and was
+        // being dropped here — at the one surface where it matters most. These
+        // rows were backfilled automatically out of 232 meeting notes, and the
+        // service's own notes say some are misparses. Putting an unattributed
+        // "they owe you this" in front of Nick before he walks into a room with
+        // that person is exactly the failure the brief names: implying someone
+        // promised something without showing the evidence.
+        //
+        // With the note attached he can check it in one tap. Without it, he is
+        // being asked to trust a parse.
         att.waitingOn = open.map(i => ({
           key: i.key,
           text: i.text,
@@ -419,6 +453,11 @@ function _buildPrep(meeting) {
           stale: i.stale,
           chaseCount: i.chaseCount || 0,
           sourceDate: i.sourceDate,
+          // The evidence. `null` is left as null and rendered as "no source
+          // recorded" rather than hidden — an unattributed row is precisely the
+          // one to be most careful about.
+          sourcePath: i.sourcePath || null,
+          sightings: i.sightings || 1,
         }));
         owed.push({ first, open });
       }
@@ -427,12 +466,24 @@ function _buildPrep(meeting) {
       // carry the detail, so the topic list is a pointer, not a second copy.
       owed.sort((a, b) => b.open[0].ageDays - a.open[0].ageDays);
       for (const { first, open } of owed.slice(0, MAX_TOPICS)) {
+        const top = open[0];
+        // ⚠ ATTRIBUTED, not asserted. This used to read "2 outstanding from
+        // Hope", which states as fact that she owes it — a claim built on an
+        // automated parse of a meeting note, put in front of Nick moments
+        // before he sits down with her. It now says where it came from and
+        // whether it has been seen since, so he can weigh it.
+        const when = top.sourceDate ? ` (${top.sourceDate})` : '';
+        const from = top.sourcePath ? ` — from ${top.sourcePath.split('/').pop().replace(/\.md$/, '')}${when}` : ' — no source recorded';
         prep.suggestedTopics.push(
-          `${open.length} outstanding from ${first} — oldest ${open[0].ageDays}d: "${open[0].text.slice(0, 60)}"`
+          `Noted as outstanding for ${first}${from}: "${top.text.slice(0, 60)}"`
+            + (open.length > 1 ? ` (+${open.length - 1} more)` : '')
         );
       }
     } catch (e) {
       console.warn('[MeetingPrep] waiting-on lookup failed:', e.message);
+      // The expensive one to lose silently: "nothing outstanding" and "I could
+      // not check what is outstanding" are opposite facts about a colleague.
+      prep.gaps.push({ input: 'commitments', why: e.message });
     }
   }
 

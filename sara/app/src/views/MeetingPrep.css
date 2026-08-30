@@ -66,3 +66,17 @@
 .mp__later-item { display: flex; gap: 0.75rem; padding: 0.6rem 0.8rem; align-items: center; }
 .mp__later-time { color: var(--accent); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
 .mp__later-subject { font-size: 0.9rem; }
+
+/* The evidence line under a commitment. Quiet, but always present — an
+   unattributed row reads differently from a sourced one, which is the point. */
+.mp__owes-src {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+/* What could not be read. Warm rather than red: this is not an error, it is an
+   incomplete picture, and it must not look like a failure to be dismissed. */
+.mp__block--gaps { border-left: 2px solid #e0c97e; padding-left: 0.6rem; }
+.mp__gapnote { font-size: 0.72rem; color: #e0c97e; margin-top: 0.3rem; }
