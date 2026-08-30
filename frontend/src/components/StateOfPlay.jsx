@@ -110,7 +110,12 @@ export default function StateOfPlay({ onNavigate }) {
   if (error && !data) return <div className="sop-panel"><div className="sop-error">Couldn’t load<span>{error}</span></div></div>;
   if (!data) return null;
 
-  const { tasks, commitments, approvals, queue, inbox, rituals, vault, jobs, calendar, issues, overall } = data;
+  // ⚠ `queue` is deliberately NOT destructured. The service stopped sending it
+  // when the Jira queue was removed on 27 Aug 2026; reading it here is what
+  // crashed the panel. If it ever comes back it needs a card that tolerates the
+  // field being absent, because a missing block must render as "not known",
+  // never as a throw.
+  const { tasks, commitments, approvals, inbox, rituals, vault, jobs, calendar, issues, overall } = data;
   const go = (view) => onNavigate && onNavigate(view);
 
   const moscowSegments = [
@@ -202,24 +207,18 @@ export default function StateOfPlay({ onNavigate }) {
           </ul>
         </Card>
 
-        {/* ── Queue ──────────────────────────────────────────────────────── */}
-        <Card title="Support queue" action={<button className="sop-link" onClick={() => go('escalations')}>Open →</button>}>
-          {/* Staleness sits above the numbers deliberately — reading the counts
-              first and the date second is how a six-week-old cache goes unnoticed. */}
-          <div className={`sop-freshness${queue.staleDays > 3 ? ' sop-stale' : ''}`}>
-            {queue.staleDays > 3
-              ? `Stale — last synced ${fmtDate(queue.fetchedAt)} (${queue.staleDays} days ago)`
-              : `Synced ${fmtDate(queue.fetchedAt)}`}
-          </div>
-          <div className="sop-queue-nums">
-            <div><b>{queue.cached}</b><span>cached</span></div>
-            <div><b className={queue.atRisk ? 'sop-bad' : ''}>{queue.atRisk}</b><span>at risk</span></div>
-          </div>
-          <ul className="sop-statuses">
-            {queue.byStatus.map(s => <li key={s.k}><span>{s.k}</span><b>{s.c}</b></li>)}
-            {queue.byStatus.length === 0 && <li className="sop-empty">No tickets cached.</li>}
-          </ul>
-        </Card>
+        {/* ⚠ The "Support queue" card was REMOVED here on 30 Aug 2026, and it had
+            been crashing this whole panel since 27 Aug.
+
+            The Jira queue was ripped out that day — `getQueueSummary` and the
+            cache it read are gone, and the service correctly stopped emitting a
+            `queue` block. This component was missed, so `queue` destructured to
+            `undefined` and `queue.staleDays` threw on every render. With no
+            error boundary above it that took the entire app down, not just this
+            screen, which is why several unrelated menus looked broken at once.
+
+            Escalations are untouched and are still reachable from the issue list
+            above; they never came from the queue cache. */}
 
         {/* ── Rituals ────────────────────────────────────────────────────── */}
         <Card title="Rituals" action={<button className="sop-link" onClick={() => go('standup')}>Standup →</button>}>

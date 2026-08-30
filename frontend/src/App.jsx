@@ -29,6 +29,7 @@ import FocusPanel from './components/FocusPanel';
 import AdhdPanel from './components/AdhdPanel';
 import BriefingPanel from './components/BriefingPanel';
 import StateOfPlay from './components/StateOfPlay';
+import ErrorBoundary from './components/ErrorBoundary';
 import PiHealthPanel from './components/PiHealthPanel';
 import HealthPanel from './components/HealthPanel';
 import MeetingPrep from './components/MeetingPrep';
@@ -312,7 +313,15 @@ function AuthenticatedApp() {
       <div className="app-body">
         <Sidebar activeView={activeView} onNavigate={handleNavigate} open={sidebarOpen} />
         <main className="main-panel">
-          {renderView()}
+          {/* ⚠ Inside the shell, not around it: the sidebar and chat must keep
+              working when a view throws. Before this, one panel crashing
+              unmounted the whole root and every menu went dead — which is how a
+              single stale field in StateOfPlay read as "a number of menus fail
+              to open". `viewKey` clears the boundary on navigation, so a bad
+              screen never latches the good ones shut. */}
+          <ErrorBoundary viewKey={activeView}>
+            {renderView()}
+          </ErrorBoundary>
         </main>
         <aside className={`chat-panel ${chatOpen ? 'chat-open' : ''}`}>
           <ChatPanel location={location} />

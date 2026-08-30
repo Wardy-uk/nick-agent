@@ -1,0 +1,45 @@
+/* A crashed view. Legible and calm — this is not an emergency, it is one screen. */
+
+.eb {
+  padding: 1.5rem;
+  max-width: 46rem;
+}
+
+.eb__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.eb__lead {
+  margin: 0 0 0.9rem;
+  color: var(--text-muted, #8b98a8);
+  font-size: 0.9rem;
+}
+
+/* The message is the point of the whole component — it must be readable and
+   selectable, so it can be pasted into a bug report rather than retyped. */
+.eb__detail {
+  margin: 0 0 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border, #26313f);
+  border-radius: 8px;
+  background: var(--bg-alt, #141b24);
+  color: var(--text, #e6edf3);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  overflow-x: auto;
+}
+
+.eb__btn {
+  background: var(--bg-alt, #141b24);
+  border: 1px solid var(--border, #26313f);
+  color: var(--text, #e6edf3);
+  border-radius: 8px;
+  padding: 0.5rem 0.9rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  min-height: 40px;
+}
