@@ -131,12 +131,16 @@ test('the field is informative, not decorative — its coherence tracks the read
     DrawContext: function () {
       this._d = 0; this._e = 0;
       this.setFillColor = () => {}; this.setStrokeColor = () => {}; this.setLineWidth = () => {};
+      this.fillRect = () => {};
       this.fillEllipse = () => { this._d++; }; this.addPath = () => {}; this.strokePath = () => { this._e++; };
       this.getImage = () => ({ dots: this._d, edges: this._e });
     },
     Size: function (w, h) { this.w = w; this.h = h; },
     Rect: function () {}, Point: function () {}, Color: function () {},
     Path: function () { this.move = () => {}; this.addLine = () => {}; },
+    // Injected: it is defined outside the slice, and a slice that silently
+    // drops a dependency fails for the wrong reason (logged 2026-08-30).
+    forTheme: (pair) => pair[1],
   };
   const make = new Function(...Object.keys(stub), body + '; return { field, fieldDrive };');
   const { field, fieldDrive } = make(...Object.values(stub));
@@ -210,14 +214,23 @@ test('quiet is dimmed, never invisible', () => {
   let seen = [];
   const stub = {
     DrawContext: function () {
-      this.setFillColor = (c) => seen.push(['node', c.a]);
+      // ⚠ Capture on the DRAW, not on the colour change. The field sets a fill
+      // colour for its opaque ground before any node is drawn, so reading the
+      // first setFillColor measures the card rather than her.
+      let pending = null;
+      this.setFillColor = (c) => { pending = c.a; };
+      this.fillRect = () => {};
+      this.fillEllipse = () => seen.push(['node', pending]);
       this.setStrokeColor = (c) => seen.push(['edge', c.a]);
-      this.setLineWidth = () => {}; this.fillEllipse = () => {};
+      this.setLineWidth = () => {};
       this.addPath = () => {}; this.strokePath = () => {};
       this.getImage = () => ({});
     },
     Size: function () {}, Rect: function () {}, Point: function () {},
     Path: function () { this.move = () => {}; this.addLine = () => {}; },
+    // Injected: it is defined outside the slice, and a slice that silently
+    // drops a dependency fails for the wrong reason (logged 2026-08-30).
+    forTheme: (pair) => pair[1],
     Color: function (h, a) { this.h = h; this.a = a; },
   };
   const { field, fieldDrive } = new Function(

@@ -85,7 +85,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v33';
+const VERSION = 'v34';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -677,6 +677,10 @@ const ICONS = {
 // and staying out of the way; rendering nothing says she has gone, which is a
 // different and wrong fact. So the floor is raised until the dimmest live state
 // is still legible against the darkest ground.
+// The card itself. Light and dark, resolved once — a DrawContext bakes an
+// image, so it cannot carry a dynamic colour the way a stack can.
+const GROUND = ['#f2f3f7', '#15181f'];
+
 const EDGE_ALPHA = 0.5;
 const NODE_BASE = 0.18;
 const NODE_GAIN = 0.34;
@@ -687,6 +691,17 @@ function field(width, height, drive) {
     dc.size = new Size(width, height);
     dc.opaque = false;
     dc.respectScreenScale = true;
+
+    // ⚠ The field paints its OWN ground and becomes the whole card background.
+    //
+    // It used to be a transparent overlay while `bg()` set a backgroundGradient
+    // underneath, which left two background properties set on one widget and
+    // the layering order up to Scriptable. That is not something to be right
+    // about by luck: the mesh was plainly visible one build and gone the next
+    // with no change to the field code at all. An opaque ground removes the
+    // question — there is one background, and it is her.
+    dc.setFillColor(new Color(forTheme(GROUND), 1));
+    dc.fillRect(new Rect(0, 0, width, height));
 
     const area = width * height;
     // Per AREA, not a fixed count — Field.jsx's own lesson, where 230 hardcoded
@@ -924,8 +939,13 @@ function saraSays(w, d, res, target, weather, family, personal, health, view) {
 
   // Her presence, behind everything. Not decoration - the coherence of the
   // picture IS the coherence of the read.
-  const fieldImg = field(big ? 330 : 340, big ? 350 : 160, fieldDrive(d, res));
+  // Sized per family: Scriptable scales a background image to fill, so a
+  // medium-shaped field stretched onto a small tile would distort the mesh.
+  const fw = big ? 340 : family === 'medium' ? 340 : 160;
+  const fh = big ? 360 : family === 'medium' ? 160 : 160;
+  const fieldImg = field(fw, fh, fieldDrive(d, res));
   if (fieldImg) w.backgroundImage = fieldImg;
+  else bg(w); // she could not be drawn; the card still needs a ground
 
   // A pinned instance shows its own side whatever kind of day it is; an
   // unpinned one follows the brain. `pinned` is kept separate from the result
@@ -1419,7 +1439,9 @@ function build(res, family, wins, weather, target, personal, health, view) {
   }
 
   const w = new ListWidget();
-  bg(w);
+  // No gradient here — saraSays paints the field as the background, and setting
+  // both leaves the layering to chance. bg() stays for the accessory path,
+  // which has no field of its own.
   w.setPadding(15, 15, 15, 15);
   // A hint, not a promise — iOS budgets widget refreshes and ignores this when
   // it wants to.
