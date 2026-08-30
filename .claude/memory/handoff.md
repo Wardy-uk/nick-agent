@@ -174,8 +174,28 @@ between them will hit this.
   be picking up the SARA-default + Controls + shared-Field build. **Confirm the
   asset hash CHANGED** before believing it (a marker that could exist in the old
   bundle proves nothing).
-- **The kiosk (`sara/frontend`) has NOT been deployed** to pi-dev. It builds
-  clean here; nobody has seen it on the actual DSI panel.
+- **The kiosk IS deployed and was verified ON THE PANEL** (built on pi5, served
+  by `sara-backend:3005`, Chromium on pi-dev restarted via `lwrespawn`,
+  screenshotted with `grim`). ⚠ **The screenshot caught two bugs a clean build
+  could not**, and both are worth remembering:
+  1. `min-height: 100vh`, copied from the phone where the Surface owns the whole
+     viewport. On the kiosk the view sits inside `.app__view` below a banner and
+     scrolls, so the section overflowed and everything anchored to the bottom sat
+     **below the fold** — the field drew and not one word of hers did. Now bounded
+     against the MEASURED chrome (`calc(100vh - 200px)`).
+  2. **`provenance` has FIVE roll-up states, not four.** `mixed` ("partly live")
+     is real and is what the live kiosk was actually in; there was no case for it
+     so it fell through to "I can't see the brain" — a false negative when most
+     of the read was fine. ⚠ **CLAUDE.md's "exactly four provenances" is wrong
+     about the roll-up.**
+  A third was fixed on the way: there was no branch for a live read with no
+  headline, so the screen could render the field and NO WORDS — indistinguishable
+  from a broken view. Exactly one branch always renders now.
+- ⚠ **The field reads faint on the panel**, which is CORRECT for a `mixed`,
+  low-confidence read (it barely settles by design) — but nobody has yet seen it
+  on a clean `neuro` read at 1280x720. If it still looks invisible then, re-derive
+  the opacity for that size and ground rather than copying the phone's, which is
+  the mistake the widget already made once.
 
 ## Residual risks
 
