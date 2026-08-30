@@ -13,8 +13,42 @@ menu entry pointing at a component that is not in the repo — a broken build on
 the Pi. `NOTION_SYNC_ENABLED` defaults false and the mapping table is empty, so
 it ships inert.
 
-⚠ **Deployed to the Pi, but not yet used through a real day.** Everything below
-is verified by tests and by real-HTTP routing checks, not by Nick's own work.
+## Deployed — `7b5be99`, 30 Aug 2026
+
+Pi 5 pulled to `7b5be99` (confirmed with `git log -1` **on the target**, never
+from the pull's own output), frontend rebuilt on the Pi, **1534 backend tests
+and 96 sara/backend tests pass there**, `neuro-backend` and `sara-backend`
+restarted. Both `online`, `unstable_restarts: 0`, nothing in the error log.
+
+**Verified live on the box, not just in tests:**
+
+| Check | Result |
+|---|---|
+| Desktop bundle served | `index-CQEpCwKW.js` — matches the local build hash exactly |
+| `/api/attention/records` | 2 records, each carrying `engineId` and the full action set incl. `start` + `complete` |
+| `/api/friction` | 200, and returned a REAL insight ("made smaller twice") off a Gate 3 session |
+| `/api/{adhd,session,attention,actions}` | all 200 |
+| **`/api/vault/search?dir=Meetings`** | **20 results, `semanticCount: 20`, ALL inside `Meetings/`** — the scope-leak bug proven fixed against the live vault, since every one of those semantic results was previously unchecked |
+| Kiosk `GET /api/attention/records` | 200, records carry `engineId` |
+| Kiosk `POST /records/:id/act` | reaches NEURO and returns NEURO's own `400 "no such attention record"` — the passthrough works and reports a refusal as a refusal |
+| Kiosk `POST /api/actions/focus/done` | **404** — the bug is gone |
+
+⚠ **Not exercised live, deliberately:** a real todo capture. The route and the
+vault write are covered by `capture-durability.test.js` against a real temp
+vault (which ran on the Pi), and a live check would have put a junk task on
+Nick's actual list and a junk line in an append-only log that must not be edited.
+
+⚠ **Not yet used through a real day.** Everything above is a check, not Nick's
+own work going through it.
+
+⚠ **The kiosk's chromium is still showing the pre-deploy bundle** until it
+reloads — it has a service worker, so a stale bundle can persist. Reloading it
+is a visible change to a physical screen on Nick's desk and was left for him.
+
+⚠ **63 core dumps, ~8 GB, in `/mnt/data/nuero/backend/`**, all stamped
+2026-08-28 20:05 — a crash burst two days before this deploy, unrelated to it
+and untracked by git. Disk is fine (403 G free) but they are worth clearing once
+someone has decided they are not needed.
 
 ---
 
