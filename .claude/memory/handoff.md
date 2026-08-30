@@ -451,8 +451,13 @@ forced three correct pieces of code to be rewritten. Verified live:
 4. **The widget cannot ACKNOWLEDGE.** It renders the canonical payload and now
    shows transitions, but a Scriptable widget can only open a URL — acting on a
    record from the lock screen would need a Shortcut, which is a separate call.
-5. **Kiosk convergence is half done.** Shared Field + the attention feed, but it
-   is still not a direct NEURO client — see the two routes above.
+5. **Kiosk convergence: the components are now SHARED** (`0c97510`). The kiosk
+   renders the phone's actual screen via `sara/shared-ui/AttentionSurface` —
+   verified on the panel, and it now carries the "2 held" honesty line it never
+   had. What remains is only the transport question, and that is a decision
+   about where the CREDENTIAL lives: a direct NEURO client would put a token in
+   a browser on an always-on desk screen. Sharing the components did not need
+   it, so there is no longer a reason to change it unless you want one.
 6. **`sara/frontend` still has no runner of its own** — its invariants are
    guarded from the backend suite, which covers structure but not rendering.
    Anything visual on the kiosk still needs `grim` and a pair of eyes.
