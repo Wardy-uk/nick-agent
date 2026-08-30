@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNickNow, stampFor } from '../mobile/useNickNow';
+import { apiFetch } from '../api';
 import { enqueue, flush, outcomeFor, pending as pendingOps, subscribe } from '../mobile/outbox';
 import Freshness from '../components/Freshness';
 import './Now.css';
@@ -16,6 +17,140 @@ import './Now.css';
 //  • Nothing here re-derives what the brain already decided — `say`, the tab a
 //    card routes to, the agenda's `scope` — because three surfaces phrasing one
 //    fact three ways is how they drift.
+
+/**
+ * The live focus session, with the controls that matter on a phone.
+ *
+ * ⚠ "Make it smaller" is the point of this card. Every other control answers
+ * WHEN — pause, done, let it go — and Nick's difficulty is INITIATION, not
+ * timing: anything that raises awareness without lowering the barrier is the
+ * wrong shape. Shrinking is the only one here that lowers it, so it is the
+ * first button and it is never phrased as giving up.
+ *
+ * Nothing on this card is scored. A session shrunk three times shows what it
+ * shows; it is a finding about the work, not a mark against him.
+ *
+ * ⚠ Online-only, deliberately. These are not captures — they are edits to a
+ * live session, and queueing them would mean replaying "shrink to X" against a
+ * session that has since ended. The outbox is for things whose identity
+ * survives sitting in a queue; this is not one of them.
+ */
+function SessionCard({ session, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [step, setStep] = useState('');
+  const [error, setError] = useState(null);
+
+  async function post(path, body) {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch(`/api/session/${path}`, { method: 'POST', body: JSON.stringify(body || {}) });
+      setAsking(false);
+      setStep('');
+      await onChanged?.();
+    } catch (e) {
+      // Say what failed and leave the card exactly as it was. A control that
+      // silently does nothing is worse than one that refuses out loud.
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const stuck = session.status === 'needs-smaller';
+  const banked = session.status === 'paused' || session.status === 'interrupted' || stuck;
+
+  return (
+    <div className="card now__focus">
+      <div className="now__focus-label">
+        {stuck
+          ? 'Stuck on how big this is'
+          : session.status === 'interrupted'
+            ? 'You were pulled off this'
+            : session.status === 'paused'
+              ? 'Paused'
+              : 'In a focus session'}
+        {session.stale ? ' — this one ran away, worth settling' : ''}
+      </div>
+
+      <div className="now__focus-text">{session.text || 'Untitled session'}</div>
+
+      {/* The concrete physical step. This is what makes coming back thinkable:
+          "the task" is a wall, a named action is a decision. */}
+      {session.nextStep && <div className="now__next">Next: {session.nextStep}</div>}
+
+      <div className="now__meta">
+        {session.elapsedMinutes != null && `${session.elapsedMinutes}m in`}
+        {session.plannedMinutes != null && ` of ${session.plannedMinutes}m`}
+        {/* #87's rule: an assumed length must say it is assumed, every time. */}
+        {session.plannedAssumed && ' (assumed)'}
+        {/* Stated plainly, with no verdict attached. */}
+        {session.shrinks > 0 && ` · made smaller ${session.shrinks}x`}
+      </div>
+
+      {error && <div className="now__sess-err">{error}</div>}
+
+      {asking ? (
+        <div className="now__sess-shrink">
+          <label className="now__sess-label" htmlFor="now-step">
+            {stuck ? 'What is the smallest next bit of it?' : 'What is the smaller version?'}
+          </label>
+          <input
+            id="now-step"
+            className="now__sess-input"
+            value={step}
+            onChange={(e) => setStep(e.target.value)}
+            placeholder="e.g. open the doc and write the first heading"
+            autoFocus
+          />
+          <div className="now__sess-acts">
+            <button
+              type="button"
+              className="now__sess-btn now__sess-btn--go"
+              disabled={busy || !step.trim()}
+              onClick={() => post('shrink', { step: step.trim() })}
+            >
+              That is the step
+            </button>
+            <button type="button" className="now__sess-btn" disabled={busy} onClick={() => setAsking(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="now__sess-acts">
+          {/* First, and first on purpose. */}
+          <button type="button" className="now__sess-btn now__sess-btn--go" disabled={busy} onClick={() => setAsking(true)}>
+            Make it smaller
+          </button>
+          {banked ? (
+            <button type="button" className="now__sess-btn" disabled={busy} onClick={() => post('resume')}>
+              Back to it
+            </button>
+          ) : (
+            <button type="button" className="now__sess-btn" disabled={busy} onClick={() => post('step-away')}>
+              Stepping away
+            </button>
+          )}
+          <button type="button" className="now__sess-btn" disabled={busy} onClick={() => post('finish', {})}>
+            Done
+          </button>
+          {/* Offered without ceremony. Letting something go is a legitimate
+              outcome, and dressing it up as failure is how it stops being used. */}
+          <button type="button" className="now__sess-btn" disabled={busy} onClick={() => post('abandon')}>
+            Let it go
+          </button>
+        </div>
+      )}
+      {/* Only offered where it is the honest answer: he has said it is too big
+          and has not yet named the smaller thing. */}
+      {stuck && !asking && (
+        <div className="now__meta">No smaller step named yet — that is fine, it is the next thing to work out.</div>
+      )}
+    </div>
+  );
+}
 
 function Section({ title, state, children }) {
   return (
@@ -129,18 +264,7 @@ export default function Now({ onNavigate }) {
           {/* ── The one current action ─────────────────────────────────── */}
           <Section title="Right now" state={s.focus}>
             {s.focus.session ? (
-              <div className="card now__focus">
-                <div className="now__focus-label">
-                  In a focus session{s.focus.session.stale ? ' — this one ran away, worth settling' : ''}
-                </div>
-                <div className="now__focus-text">{s.focus.session.text || 'Untitled session'}</div>
-                <div className="now__meta">
-                  {s.focus.session.elapsedMinutes != null && `${s.focus.session.elapsedMinutes}m in`}
-                  {s.focus.session.plannedMinutes != null && ` of ${s.focus.session.plannedMinutes}m`}
-                  {/* #87's rule: an assumed length must say it is assumed, every time. */}
-                  {s.focus.session.plannedAssumed && ' (assumed)'}
-                </div>
-              </div>
+              <SessionCard session={s.focus.session} onChanged={refresh} />
             ) : s.focus.item ? (
               <div className="card now__focus">
                 <div className="now__focus-text">{s.focus.item.title}</div>

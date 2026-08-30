@@ -190,6 +190,15 @@ function focusSection(attentionPayload) {
         // #87's rule, carried through: a "you're halfway" built on an assumed
         // length must SAY it is assumed, every time it is read.
         plannedAssumed: !!s.plannedAssumed,
+        // Gate 3. The concrete next step is the thing that makes resuming
+        // possible at all — coming back to "the task" is a wall, coming back to
+        // a named physical action is a decision. It has to reach the phone,
+        // which is where returning actually happens.
+        nextStep: s.nextStep || null,
+        // Reported so the phone can offer the right control, and NEVER as a
+        // score. A task shrunk three times is a finding about the work.
+        shrinks: s.shrinks || 0,
+        originalText: s.originalText || null,
       };
     }
   } catch (e) {

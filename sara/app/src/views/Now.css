@@ -146,3 +146,59 @@
 .now__gaps summary { cursor: pointer; }
 .now__gaps ul { margin: 0.5rem 0 0; padding-left: 1.1rem; line-height: 1.5; }
 .now__gaps strong { color: var(--text); }
+
+/* ── The focus session's controls (Gate 3) ─────────────────────────────────
+   "Make it smaller" leads, because it is the only control here that lowers the
+   barrier rather than raising awareness. Everything else answers "when". */
+
+.now__sess-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.now__sess-btn {
+  background: var(--panel-2, #1c2530);
+  border: 1px solid var(--line, #26313f);
+  color: var(--text, #e6edf3);
+  border-radius: 10px;
+  padding: 0.5rem 0.8rem;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  /* A phone, one-handed. */
+  min-height: 44px;
+}
+.now__sess-btn--go {
+  background: var(--accent-dim, #2b3d57);
+  border-color: var(--accent, #4c9aff);
+}
+.now__sess-btn:disabled { opacity: 0.5; }
+
+.now__sess-shrink { margin-top: 0.6rem; }
+.now__sess-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted, #8b98a8);
+  margin-bottom: 0.35rem;
+}
+.now__sess-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg, #0b0f14);
+  border: 1px solid var(--line, #26313f);
+  color: var(--text, #e6edf3);
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  font: inherit;
+  font-size: 0.9rem;
+  /* 16px+ so iOS does not zoom the viewport on focus. */
+  min-height: 44px;
+}
+
+.now__sess-err {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: #ff9d9d;
+}
