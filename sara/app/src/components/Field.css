@@ -25,8 +25,8 @@
 .field__scrim {
   position: absolute;
   inset: 0;
-   The first version was far too heavy — it took the cloud out almost entirely
-   and left a smudge. These stops are the ones that read well in the mockup. */
+  /* The first version was far too heavy — it took the cloud out almost entirely
+     and left a smudge. These stops are the ones that read well in the mockup. */
   background:
     radial-gradient(130% 100% at 84% 6%,
       rgba(11, 15, 20, 0) 0%,
