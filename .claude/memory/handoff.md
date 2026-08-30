@@ -390,6 +390,42 @@ oldest is an April note, and no way to check.
 | 3 — Supported execution | done (`14df208`, `34fe8d2`, `c134663`, `6ed0773`) |
 | 4 — Relationship support | done (`9bcad4b`) |
 
+## The standup bug — FOUND and fixed (`4e28eb5`)
+
+Nick's screenshot carried the whole story under the claim:
+
+```
+## Focus Today
+- [ ]
+```
+
+An **empty checkbox**. NEURO writes that skeleton into every daily note, and
+`routes/standup.js` matched `- [ ]` — so the scaffold satisfied its own test and
+the screen announced work nobody had done. The `task-blocks` empty-stub rule
+exactly: NEURO writes the evidence its own detector accepts.
+
+⚠ **The deeper fault was FOUR implementations of one question** at three
+strictness levels — `parseDailyNote` (correct), `nudges.js` (correct,
+independently reimplemented), `routes/standup.js` (empty checkbox counted),
+`activity.js` (the bare HEADING counted). So the nudge kept correctly asking
+while the screen said it was finished. `standupDoneIn` is the one predicate now.
+
+⚠ **The scan itself was NOT banned.** `standup.js` walks Focus Today three more
+times — carry-over items, EOD context — and those answer a different question
+legitimately. A first cut of the guard banned `inFocus` outright and would have
+forced three correct pieces of code to be rewritten. Verified live:
+`/api/standup/ritual-state` → `standupDoneToday: false` against the real note.
+
+## Also done this session
+
+- **The widget shows transitions** (`a827840`). "Leave now" is worthless five
+  minutes late and a lock screen is where it can arrive in time, so a transition
+  outranks the ranked card — and only a transition does. Written with **no
+  backslashes** (checked before saving); exporter re-run to the vault (v35).
+- **The kiosk has guards** (`1505473`). Its three bugs today were caught by
+  screenshotting a panel, which is not a gate. Now pinned from the backend
+  suite, and **proved by reintroducing the alias bug and watching it fail**.
+
 ## Next — all four gates are closed, so these are the open ends
 
 1. **The iPhone acceptance test (Phase 2) is STILL not done.** Aeroplane mode →
@@ -402,10 +438,12 @@ oldest is an April note, and no way to check.
 3. **Where does the standup "say it's done"?** Measured and it is NOT claiming
    that (no `standup_done` row; it was a Sunday). The screen that words a weekend
    as "done" was never found — ask Nick when he next sees it.
-4. **The widget still reads the pre-Gate-2 payload.** It works, but it does not
-   yet carry `recordId`, so a card tapped there cannot be acknowledged.
+4. **The widget cannot ACKNOWLEDGE.** It renders the canonical payload and now
+   shows transitions, but a Scriptable widget can only open a URL — acting on a
+   record from the lock screen would need a Shortcut, which is a separate call.
 5. **Kiosk convergence is half done.** Shared Field + the attention feed, but it
    is still not a direct NEURO client — see the two routes above.
-6. **`sara/frontend` has no test suite at all.** The kiosk bugs on 30 Aug were
-   caught by screenshotting the panel, which is not a repeatable gate.
+6. **`sara/frontend` still has no runner of its own** — its invariants are
+   guarded from the backend suite, which covers structure but not rendering.
+   Anything visual on the kiosk still needs `grim` and a pair of eyes.
 7. The other session's **notion-sync** work is still uncommitted in this tree.
