@@ -5,7 +5,11 @@
 // here silently falls back to Focus. Pinned in both directions by
 // backend/services/action-surfaces.test.js, because neither half errors.
 // 'now' and 'review' are Phase 2's primary modes (30 Aug 2026).
-const SARA_LITE_TABS = new Set(['surface', 'now', 'review', 'today', 'focus', 'tasks', 'capture', 'voice', 'chat', 'prep', 'standup', 'brain']);
+// 'controls' is Phase 3's attention control surface (30 Aug 2026) — registered
+// here even though nothing routes a notification TO it, because the parity test
+// reads both lists and an id in one and not the other is silent in both
+// directions.
+const SARA_LITE_TABS = new Set(['surface', 'now', 'review', 'today', 'focus', 'tasks', 'capture', 'voice', 'chat', 'prep', 'standup', 'brain', 'controls']);
 
 function lower(value) {
   return String(value || '').trim().toLowerCase();

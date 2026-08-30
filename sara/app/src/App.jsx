@@ -16,6 +16,7 @@ import Chat from './views/Chat';
 import MeetingPrep from './views/MeetingPrep';
 import Standup from './views/Standup';
 import BrainManagement from './views/BrainManagement';
+import Controls from './views/Controls';
 import actionSurfaces from '../../../shared/action-surfaces.cjs';
 import DeploymentGuard from './components/DeploymentGuard';
 import { readRuntime } from './runtime';
@@ -69,6 +70,11 @@ const SECONDARY = [
   // is outstanding and shows a toggle either way.
   { id: 'standup', label: 'Ritual', icon: '📝', Component: Standup },
   { id: 'brain', label: 'Brain', icon: '🧠', Component: BrainManagement },
+  // How loud SARA is allowed to be, and what she has already done. Secondary on
+  // purpose: it is a screen Nick visits to change his mind, not one he works
+  // from — but it must be findable, because a system you cannot turn down is one
+  // you eventually turn off.
+  { id: 'controls', label: 'Controls', icon: '⚙', Component: Controls },
 ];
 
 const TABS = [...PRIMARY, ...SECONDARY];
@@ -124,7 +130,15 @@ function clearLaunchIntentFromUrl() {
 export default function App() {
   const runtime = readRuntime();
   const [authed, setAuthed] = useState(() => !!getPin());
-  const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'now');
+  // ⚠ SARA is the default screen, always (Nick, 30 Aug 2026). Phase 2 opened on
+  // `Now`, and that was wrong: opening on a list makes this an app you read,
+  // when the whole point is that SARA is PRESENT and comes to him. Her field —
+  // the substrate she is visible in — is the first thing on screen.
+  //
+  // A launch INTENT still wins, and must: tapping a notification has to land on
+  // the thing that pinged him, not on the home screen. This is only the default
+  // when he opened the app himself.
+  const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'surface');
   // The strip is revealed on request, and stays revealed while Nick is off the
   // Surface — otherwise the one screen with no menu is also the only way back.
   const [navOpen, setNavOpen] = useState(false);

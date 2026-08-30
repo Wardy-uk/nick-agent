@@ -1,0 +1,98 @@
+/* SARA Controls — how loud she is allowed to be, and what she has already done. */
+
+.controls { padding-bottom: 1rem; }
+
+.controls__title { margin: 0 0 0.75rem; font-size: 1.15rem; }
+
+.controls__section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.75rem 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.controls__heading {
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.controls__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+}
+.controls__row + .controls__row { border-top: 1px solid var(--line); }
+.controls__row span { display: flex; flex-direction: column; gap: 0.15rem; }
+
+/* Touch targets stay at 44px — this screen is used one-handed on a phone, and a
+   mis-tap here changes whether SARA is allowed to speak at all. */
+.controls__row input[type='checkbox'],
+.controls__row input[type='radio'] { width: 22px; height: 22px; min-width: 22px; accent-color: var(--accent); }
+
+.controls__hint { color: var(--muted); font-size: 0.75rem; font-style: normal; }
+.controls__muted { color: var(--muted); font-size: 0.8rem; margin: 0.4rem 0 0; }
+.controls__error { color: #ff9d9d; font-size: 0.82rem; margin: 0.4rem 0; }
+
+.controls__chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.controls__chip,
+.controls__btn {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.5rem 0.85rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  min-height: 40px;
+}
+.controls__chip--on { border-color: var(--accent); color: var(--accent); }
+.controls__btn--primary { background: var(--accent-dim); border-color: var(--accent); }
+.controls__chip:disabled, .controls__btn:disabled { opacity: 0.5; }
+
+/* ── Records ─────────────────────────────────────────────────────────────── */
+
+.controls__record { padding: 0.6rem 0; }
+.controls__record + .controls__record { border-top: 1px solid var(--line); }
+
+.controls__recordTop { display: flex; align-items: baseline; gap: 0.5rem; }
+.controls__recordTitle { font-size: 0.9rem; }
+
+/* The lifecycle state, carried by SHAPE and weight as well as colour — the
+   widget's lesson: a tint is not a signal everywhere it is rendered. */
+.controls__state {
+  flex: none;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.1rem 0.35rem;
+  color: var(--muted);
+}
+.controls__state--active { border-color: var(--accent); color: var(--accent); }
+.controls__state--deferred { border-style: dashed; }
+.controls__state--suppressed, .controls__state--expired { opacity: 0.6; }
+
+.controls__why { margin: 0.3rem 0 0; font-size: 0.8rem; color: var(--text); }
+.controls__evidence { margin: 0.2rem 0 0; font-size: 0.75rem; color: var(--muted); }
+.controls__stamps { margin: 0.2rem 0 0; font-size: 0.72rem; color: var(--muted); }
+
+/* ── History ─────────────────────────────────────────────────────────────── */
+
+.controls__history { list-style: none; margin: 0; padding: 0; }
+.controls__history li {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.4rem 0;
+  font-size: 0.8rem;
+  border-top: 1px solid var(--line);
+}
+.controls__history li:first-child { border-top: none; }
+.controls__historyWhen { flex: none; width: 4.5rem; color: var(--muted); font-size: 0.75rem; }
