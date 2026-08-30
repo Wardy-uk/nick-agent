@@ -403,7 +403,12 @@ router.get('/ms-queue', (req, res) => {
 
 router.post('/ms-queue/drain', async (req, res) => {
   try {
-    res.json({ ...(await msQueue.drain()), ...msQueue.status() });
+    // ⚠ Nested, not spread. `drain()` returns `failed` as a COUNT and `status()`
+    // returns it as a LIST, so spreading both silently hands the client one
+    // shape where it expects the other — and the number it would lose is how
+    // many completions were just given up on.
+    const run = await msQueue.drain();
+    res.json({ run, ...msQueue.status() });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
