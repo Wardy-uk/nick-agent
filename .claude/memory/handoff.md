@@ -1,177 +1,207 @@
-# Handoff — 30 Aug 2026: Phase 2, the Neuro Mobile contract
+# Handoff — 30 Aug 2026: Phase 3 Gate 1, and three live bugs
 
-**Commits:** `c0e66a3` (the build), `bf6d341` (CLAUDE.md), `c46e70b` (the two
-review fixes), `2c1ff11` (mistakes log). **Not pushed** — you said commits, not
-pushes. Not deployed to the Pi either.
-**Tests:** backend 1406 pass / 0 fail (73 new). sara/backend 82 pass / 0 fail.
-Both frontends build.
+**Commits (all pushed, `main`):**
+- `6655ccd` attention lifecycle (Gate 1 backend + contract)
+- `769cae0` **fix:** State of Play was killing every menu
+- `7d7b6d8` SARA is the default screen + the control surface
+- `e1c62a7` one Field, shared by the phone and the Pi
 
-## Review round 1 — both findings fixed (`c46e70b`)
+**Deployed:** Pi 5 on `e1c62a7`… **NO — on `7d7b6d8`.** The full deploy
+(backend + frontend + restart) was done at `7d7b6d8` and verified live. `e1c62a7`
+is pushed but **NOT on the Pi**, and the kiosk on pi-dev has **not** been
+deployed at all. See "What still needs deploying".
 
-**P0, and it was worse than a mobile bug.** `capture-store.writeNote` named
-files from a SECOND-precision timestamp, so two notes written in one tick got
-the same path and the second silently overwrote the first — with the ledger
-acknowledging BOTH as `applied` against the same canonical id. Reachable from
-the web route all along; the outbox made it ordinary, because a drained queue
-replays several notes into the same tick. Fixed with the `wx` flag
-(O_CREAT|O_EXCL, atomic) plus a bounded `-2`/`-3` suffix retry — not
-`existsSync`-then-write, which is a race with a gap in the middle. Only EEXIST
-retries; a permissions error surfaces as itself.
+**Tests:** backend 1438 pass / 0 fail (dev), 1388 on the Pi. sara/backend 82.
+All three frontends build (`frontend`, `sara/app`, `sara/frontend`).
 
-**P1.** `Now.tick` read `flush().confirmed`, an aggregate over the whole queue,
-to describe ONE completion — so any older capture landing in the same round trip
-printed "Done" over a rejected or HELD completion. `Capture.submit` had the
-milder version. `flush()` now returns `receipts` keyed by operationId (every
-early return included, so callers can index without guarding) and
-`outcomeFor(receipt)` gives `{state, done, message}` — confirmed / held /
-refused / pending. **`held` is not `done`** and says why.
+---
 
-Both guards were proved by reintroducing the bug and watching them fail: three
-collision tests, and a source pin that stops either view drifting back to the
-aggregate counts.
-## DEPLOYED — 30 Aug 2026, verified live
+## The three bugs Nick reported mid-session
 
-Pi 5 on `3e36e17`, `neuro-backend` online, no new core dumps. Netlify bundle
-`index-BOsZnG2Q.js` confirmed to be the FIXED build (post-fix strings present,
-the pre-fix string absent — a negative control, not just a positive one).
+### 1. "A number of menus now fail to open" — FIXED and deployed
 
-Verified against the RUNNING server, not the suite:
-- `/v1/readiness` → `ready:true`, vault reachable, 152 open tasks, outbox table live
-- `/v1/nick-now` → all 7 sources `live`, 152 tasks / 12 shown, agenda scope
-  `saturday`, `poolAvailable:true`, `gaps:[presence]` (the known stale HA feed,
-  correctly named rather than swallowed)
-- `/v1/sync/operations` probed with a payload **harmless on success** (an unknown
-  kind) — rejected identically twice, and **zero ledger rows**, because
-  validation answers before the ledger is touched. Nothing was written to the
-  real vault to test a write path.
-- Pi suite: 1356 pass / 0 fail, gated on the EXIT CODE. All five mobile suites
-  confirmed present by distinctive test name.
+One cause, and the reason it spread to several menus.
 
-⚠ **Two things found on the Pi that are NOT mine and are still open:**
+`StateOfPlay.jsx` still rendered a **"Support queue"** card after the Jira queue
+was ripped out on 27 Aug. The service correctly stopped sending a `queue` block;
+this component was missed, so `queue` destructured to `undefined` and
+`queue.staleDays` threw on **every** render.
 
-1. **63 core dumps, ~7.9 GB, in `/mnt/data/nuero/backend/`** — all inside one
-   minute, 28 Aug 20:04–20:05. Not recurring, nothing since, backend stable. No
-   segfault/abort signature in the error log (grep run with a positive control).
-   Untracked, so they do not block a pull, but they are 7.9 GB of the disk and
-   nobody has looked at them. **Not deleted — that is your call**, they may still
-   be diagnosable.
-2. **The Pi runs 50 FEWER tests than the dev box** (1356 vs 1406), both green,
-   0 skipped on both. Pre-existing — the gap is the same size with my 73 tests
-   removed from each side. It means the deploy gate is weaker than it looks, and
-   it is worth knowing WHICH 50 before trusting a green Pi run as equivalent.
+⚠ **The spread is the important half.** There was **no ErrorBoundary anywhere in
+the app**, so a throw in the rendered view unmounted the entire React root. Once
+the root is gone every later click does nothing until a reload — which is why the
+report was *plural* and why unrelated menus looked broken. `ErrorBoundary` now
+wraps the view **inside** the shell (sidebar and chat keep working), names the
+error on screen, and clears on navigation via `viewKey` so a bad screen cannot
+latch the good ones shut.
 
-**Full contract doc:** `docs/mobile-contract.md`.
+Backend was verified healthy FIRST — `state-of-play`, `todos/focus`, `todos` and
+`attention` all 200 on the Pi. This was never a server fault.
 
-## What was built
+### 2. "Morning standup says it's done — I didn't do it" — NOT a bug, and NOT fixed
 
-| Gate | State |
-|---|---|
-| 1 — Contract | done: `/api/mobile/v1/{nick-now, sync/operations, readiness, sync/diagnostics}` |
-| 2 — Offline core | done: IndexedDB store + outbox + snapshot cache, driven end to end |
-| 3 — Mobile surface | done: Capture / Now / Review as primary modes |
-| 4 — Hardening | done: contract, idempotency, migration and routing tests; docs |
+Measured, read-only, against the live DB:
 
-## The decisions worth arguing with
+- `standupDone` is `todayActivity.some(a => a.event_type === 'standup_done')`.
+- There is **no `standup_done` row for 2026-08-30**. The last one is 28 Aug.
+- So `standupDone` is **false**, and NEURO is not claiming it was done.
 
-**1. `Now` is the root, and the SARA Surface moved to "More".** The brief says
-three primary modes; CLAUDE.md says the Surface is load-bearing and deliberate.
-Both are honoured: the Surface is **not retired**, is still what notification
-routing lands on, and is one tap away. But the app now opens on `Now`. If you
-want the Surface back as the root, it is one line in `App.jsx` (`useState(() =>
-… || 'now')`).
+**30 Aug 2026 is a SUNDAY** (`day_of_week: 0`, and `/api/attention` reports
+`activity: "off"`, *"It's the weekend."*). So whatever Nick is reading as "it says
+it's done" is a **weekend rendering**, not a completion claim — most likely a
+surface showing the ritual as not-outstanding because it is not a working day.
 
-**2. `todo.complete` accepts a NEURO task id only.** SARA's `completeTask.js`
-knows three owners (`task_id` → `ms_id` → `filePath`+`lineNumber`). Only the
-first has an identity that survives sitting in a queue for four hours — a line
-number recorded this morning can name a different row by the time it replays,
-which is exactly the 27 Aug bug with a delay bolted on. Microsoft and vault ticks
-still work **online**, through the existing routes. Tasks the phone cannot tick
-offline are marked `completableOffline:false` and the button is disabled with a
-reason, rather than queuing something that will fail later.
+⚠ **I could not identify WHICH screen says it**, and I did not guess at a fix.
+Ask Nick where he saw it (NEURO Standup tab? SARA Review? the briefing?) — the
+wording is almost certainly a weekend/`off` branch that reads as "done" when it
+means "not expected today". Those are different facts and the screen should say
+the second one.
 
-**3. Feature capture stays online-only.** `feature-tracker` appends a row to a
-vault markdown file with no idempotency key, so a replay writes it twice.
-Queueing it would have been the easy thing and the wrong one. Capture says so in
-words when there is no signal, and keeps the text.
+### 3. "SARA's default screen should ALWAYS be SARA, with her presence" — DONE
 
-**4. `fake-indexeddb` is a new backend devDependency.** The alternative was
-source assertions over the migration path, and the migration path is the one
-piece of client code whose failure destroys the only copy of something you typed.
-It buys a real test: put an unsent capture in a v1 database, reopen it through
-the module, assert it is still there.
+- **Phone:** `sara/app` opens on `surface` again (Phase 2 had moved it to `now`).
+  A launch **intent still wins**, so tapping a notification lands on the thing
+  that pinged him, not the home screen.
+- **Pi kiosk:** new `screens/presence/PresenceView`, and `DEFAULT_VIEW` is now
+  `PRESENCE`. It renders **the same Field file** as the phone.
 
-**5. One commit, not several.** The contract, the client and the IA are one
-change — a half-landed version of it has a phone talking to endpoints that do
-not exist. `git show c0e66a3 --stat` is the review surface.
+Nick's steer: *"the pi app and sara mobile should essentially be the same app."*
+See "The convergence" below for what that still needs.
 
-## What I did NOT do
+---
 
-- **No new database.** `mobile_sync_operations` is a table in `agent.db`,
-  additive via `schema.sql`. No migration to run beyond a restart.
-- **No push, no proactive workflows, no background agent.** Explicit non-goals.
-- **No arbitrary two-way sync**, no conflict UI, no legacy dashboard rewrite.
-- **The Phase 1 SARA capture bridge is untouched.**
+## Phase 3 Gate 1 — one attention model
 
-## ⚠ Concurrency note — read before you deploy
+**Contract: `docs/attention-contract.md`.** Read it before touching any of this.
 
-Another session has uncommitted work in this tree (notion-sync: `backend/routes/
-notion-sync.js`, `backend/services/notion-sync/`, the frontend panel,
-`.env.example`, `scheduler.js`, `frontend/src/{App.jsx,components/Sidebar.jsx}`).
+### The audit (what was actually wrong)
 
-Their `app.use('/api/notion-sync', …)` line in `server.js` sits in the same hunk
-as mine. **I staged only my three lines** (`git apply --cached` with a hand-cut
-patch), so `HEAD:backend/server.js` mounts `/api/mobile` and **not**
-`/api/notion-sync` — committing theirs would have made the app crash on boot for
-anyone pulling, because the route file is untracked.
+`decision-engine` was already the single generator and `attention.gate()` the
+single re-ranker — both good, both unchanged. Four things blocked the contract:
 
-**Consequence for the deploy:** the Pi will get `/api/mobile` and will not get
-`/api/notion-sync` until that session commits its own work. That is correct, but
-it means the deployed `server.js` will differ from this working tree.
+1. **No lifecycle.** An attention item lived for one HTTP request. The only
+   durable state was a suppression timer, which cannot tell *"I have seen this"*
+   from *"hide it for 30 minutes"* from *"this is finished"*.
+2. **Notifications were not linked to items.** All 30 `sendToAll` sites pass free
+   text and the governor deduped on a fingerprint of **that text** — so a meeting
+   alert counting down ("in 25 min" → "in 10 min") produced a fresh fingerprint
+   each pass and every one went out. The rule was not merely unenforced, it was
+   unexpressible.
+3. **Item ids were unstable.** `todo-overdue-top` becomes `todo-overdue-summary`
+   the moment a second task goes overdue, so a dismissal stopped applying as the
+   pile grew.
+4. **No control surface.** Quiet hours were env-only; no pause, no level, no
+   history.
+
+### What was built
+
+`attention_records` + `attention_events` (additive, `CREATE TABLE IF NOT
+EXISTS`), `services/attention-lifecycle.js` (judgement PURE, storage separate),
+`services/attention-settings.js`, the webpush funnel, and
+`/api/attention/{records,history,settings,records/:id/act}`.
+
+**Verified live on the Pi**, not just in the suite: two held records with
+evidence cited from real tasks, correctly `surfaced: no (held)` because it is a
+Sunday and the gate holds work back. And the headline claim proved directly —
+two standup pushes with **different wording**, the second held as *"already
+notified, nothing changed"*.
+
+### The refusals worth not undoing
+
+- **Surfacing without evidence is allowed; INTERRUPTING is not.** Hiding real
+  work on a bookkeeping gap is the worse error. Operational alerts (watchdog,
+  scheduler) are exempt, or the rule eats the thing it protects.
+- **The sweep never ages records out while the pool is unreadable**, and ages
+  them to `expired`, never `resolved` — Nick decided nothing.
+- **An operational push never overwrites a pool record** it shares a key with, or
+  the nag escalation the tone is built on gets flattened to the push default.
+- **Terminal states never re-match**, so today's standup opens a fresh record
+  rather than inheriting yesterday's dismissal.
+- **The webpush funnel fails OPEN** and says so in `push_log`. The contract wants
+  no notification without a record; it wants an unanswered escalation more.
+
+### ⚠ The permission prompt no longer fires on launch
+
+`usePushSubscription` called `requestPermission()` the moment the PIN was
+accepted — the browser's one-shot dialog in front of someone who opened the app
+to write a thought down, and on iOS a denial is close to permanent. Now split:
+the automatic path only **re-registers an already-granted** subscription, and the
+prompt is reachable only from an explicit tap in **Controls**. Pinned by a source
+test **with a positive control**, because node has no `Notification` and the only
+other thing that would catch it is Nick's phone.
+
+---
+
+## The convergence: phone and Pi as one app
+
+Done so far: **`sara/shared-ui/Field.{jsx,css}`** is now ONE source imported by
+both apps (git recorded it as a 100% rename). Verified `field__canvas` is present
+in **both** built bundles. It needed no re-tuning for the bigger panel because
+its density is per **area**, not a node count — which is also why the widget's
+opacity mistake does not repeat here.
+
+⚠ **The `presence` ALIAS had to be removed** from `views.js`. It pointed at
+mission-control from when no presence screen existed; leaving it would have
+silently rewritten every request for the new screen into the briefing.
+
+### What full convergence still needs
+
+The kiosk **cannot yet render the attention feed**: `sara/backend` has no route
+to NEURO's `/api/attention` (grepped — there is nothing). So `PresenceView` shows
+her presence and the honest connection state, and **deliberately invents no
+ranking** — inventing a second one on that side is exactly what
+`state/inference.js` was retired for.
+
+Two routes forward, and it is a real decision:
+
+1. **Make the kiosk a direct NEURO client**, as `sara/app` already is. Truest to
+   "the same app". Needs PIN/token handling on the kiosk and Pi 4 → Pi 5
+   reachability over the tailnet.
+2. **Proxy `/api/attention` through `sara/backend`.** Smaller, keeps the kiosk's
+   existing transport, but leaves two client shapes.
+
+Also unresolved: the kiosk is **React 18**, the phone is **React 19**. `Field`
+uses only `useEffect`/`useRef` so it is fine in both, but anything richer shared
+between them will hit this.
+
+---
+
+## What still needs deploying
+
+- **Pi 5 is on `7d7b6d8`.** `e1c62a7` (the shared Field) is pushed but not
+  pulled. Harmless — it only affects `sara/*` — but the Pi is one commit behind.
+- **`sara/app` ships via Netlify on push to main**, so the phone should already
+  be picking up the SARA-default + Controls + shared-Field build. **Confirm the
+  asset hash CHANGED** before believing it (a marker that could exist in the old
+  bundle proves nothing).
+- **The kiosk (`sara/frontend`) has NOT been deployed** to pi-dev. It builds
+  clean here; nobody has seen it on the actual DSI panel.
 
 ## Residual risks
 
-1. **iOS background sync does not exist.** Replay is foreground-only — launch,
-   returning to the app, coming back online, after a capture, "Send now". A
-   capture made offline sits on the phone until the app is opened with signal.
-   This is a Safari limitation, not a shortcut; it is stated in the UI and in the
-   doc. A native app is the only thing that changes it, and that is a non-goal.
-2. **iOS can evict IndexedDB.** The outbox is durable against app restarts and
-   upgrades, **not** against the OS reclaiming storage or the user clearing site
-   data. Nothing warns before eviction, because nothing can.
-3. **Not tested on the actual phone.** Everything here is proven under node and
-   in a build; the last time a util was called "proven" without naming the
-   device, three deploys went into chasing it (15 Aug). Worth doing on the phone:
-   the Freshness banner in aeroplane mode, the queue surviving a swipe-away, and
-   whether the four-button primary row reads well at 390px.
-4. **`event:derived:` ids are content-derived.** A meeting renamed in Outlook
-   gets a new id. Nothing depends on that today (they are display-only), but a
-   future feature that stores one will be surprised.
-5. **The v1→v2 store migration is not driven by a test**, because there is no v2
-   yet — only a source assertion that the upgrade body contains no
-   `deleteObjectStore` or `.clear(`. When you write a v2 branch, drive it for
-   real in `mobile-store.test.js`.
-6. **`capture.note` idempotency depends on the ledger, not on content.** Two
-   genuinely different captures with identical text create two notes, correctly.
-   But a `pending` row left by a crash mid-write is reported `needs-attention`
-   and the user decides — there is no way to know whether the file landed.
+1. **Nothing has been seen on real hardware.** The kiosk Presence screen, the
+   Controls screen at 390px, and the SARA-default landing are all proven only in
+   a build. The 15 Aug lesson — "proven means proven ON THE TARGET PLATFORM" —
+   applies to all three.
+2. **Phase 2's iPhone acceptance test is still not done** (aeroplane mode →
+   capture → swipe away → reopen → reconnect → lands exactly once). Still Nick's
+   to run; I cannot fly a phone into aeroplane mode.
+3. **Gate 1's "one card generated → displayed → deferred → re-surfaced →
+   resolved" is proven by test, not by hand on the live box.** The test does the
+   full circuit; nobody has driven it through the UI.
+4. **The 63 core dumps (~7.9 GB) on the Pi are still there**, untracked, from
+   28 Aug. Still nobody's call but Nick's.
+5. **The Pi runs 50 fewer tests than the dev box** (1388 vs 1438). Pre-existing
+   and still unexplained; the deploy gate is weaker than it looks.
+6. **The other session's notion-sync work is still uncommitted** in this tree
+   (`backend/{server.js,services/scheduler.js,.env.example,routes/notion-sync.js,
+   services/notion-sync/}`, `frontend/src/{App.jsx,components/Sidebar.jsx,
+   components/NotionSyncPanel.*}`). I staged around it throughout — my
+   `frontend/src/App.jsx` commit contains **only** the ErrorBoundary hunks.
 
-## Deploy notes (unchanged, and they still bite)
+## Next
 
-- `export PATH=/home/nickw/.nvm/versions/node/v22.22.2/bin:$PATH` before any pm2
-  command.
-- Never pipe a deploy step to `head`/`tail`; confirm with `git log --oneline -1`
-  **on the Pi**.
-- Scratch scripts go in `/tmp` on the Pi, never the repo tree.
-- `sara/app` ships via Netlify on push to main (`sara-nickward` →
-  sara.nickward.co.uk). The backend must be deployed **first**, or the phone
-  fetches `/api/mobile/v1/nick-now` from a server that does not serve it — the
-  Freshness banner will say "I couldn't ask", which is honest but pointless.
-
-## Next, if you want it
-
-- Wire `Now`'s task tick to the Microsoft/vault owners **when online** (the
-  outbox path is already there for NEURO tasks; the other two just need the
-  existing routes called directly with an "online only" label).
-- A `sara/widget` read of `/api/mobile/v1/nick-now` instead of `/api/attention`,
-  so the fourth renderer also gets the sourced/timestamped payload.
-- The parked "one interface — the chat" direction is untouched and still parked.
+- Gate 2 (ambient SARA): wire the canonical record into the widget and kiosk
+  payloads, verify dedupe and deep-linking across surfaces.
+- Ask Nick where the standup "says it's done" so bug 2 can be pinned to a screen.
+- Decide route 1 vs 2 for kiosk convergence above.
