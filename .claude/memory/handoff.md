@@ -445,9 +445,9 @@ forced three correct pieces of code to be rewritten. Verified live:
    evidence lines are all proven in a build and against the API, never on a
    390px screen in a pocket. The 15 Aug lesson stands: *proven means proven on
    the target platform.*
-3. **Where does the standup "say it's done"?** Measured and it is NOT claiming
-   that (no `standup_done` row; it was a Sunday). The screen that words a weekend
-   as "done" was never found — ask Nick when he next sees it.
+3. ~~Where does the standup "say it's done"?~~ **FOUND AND FIXED** (`4e28eb5`)
+   — Nick's screenshot showed the empty `- [ ]`, `routes/standup.js` matched it,
+   and four detectors of one question disagreed. See the section above.
 4. **The widget cannot ACKNOWLEDGE.** It renders the canonical payload and now
    shows transitions, but a Scriptable widget can only open a URL — acting on a
    record from the lock screen would need a Shortcut, which is a separate call.
