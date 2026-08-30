@@ -13,6 +13,7 @@ import TodosView from '../screens/todos/TodosView';
 import VaultView from '../screens/vault/VaultView';
 import CaptureView from '../screens/capture/CaptureView';
 import SettingsView from '../screens/settings/SettingsView';
+import PresenceView from '../screens/presence/PresenceView';
 import PlannedView from './PlannedView';
 
 // ViewRouter — renders the screen for the current view.
@@ -24,6 +25,8 @@ export default function ViewRouter() {
   const { currentView } = useSaraState();
 
   switch (currentView) {
+    case SARA_VIEWS.PRESENCE:
+      return <PresenceView />;
     case SARA_VIEWS.COGNITION:
       return <CognitionEnvironment />;
     case SARA_VIEWS.CONTEXT:

@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch, chatStream } from '../api';
 import actionSurfaces from '../../../../shared/action-surfaces.cjs';
 import { speakIfEnabled, isAudioUnlocked, unlockAudio, isVoiceOutEnabled, setVoiceOutEnabled } from '../voiceUtils';
-import Field from '../components/Field';
+// ⚠ ONE source, shared with the Pi kiosk (`sara/shared-ui`). SARA's presence
+// must look the same wherever she is; two copies would drift, which is exactly
+// what happened to `voiceUtils.js` when the phone and the desktop each kept
+// their own. Field itself is size-agnostic — its density is per AREA, not a
+// node count — so the same file reads correctly on a 390px phone and a 1280px
+// desk panel without re-tuning.
+import Field from '../../../shared-ui/Field';
 import './Surface.css';
 
 // Surface — SARA without a menu.

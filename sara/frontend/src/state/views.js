@@ -17,6 +17,11 @@
 // Canonical SaraView identifiers. The string value is the stable view id used in
 // the registry, the router, and (later) the recommended/selected view in state.
 export const SARA_VIEWS = {
+  // SARA's presence — the field, shared file-for-file with the phone. This is
+  // what the kiosk opens on (Nick, 30 Aug 2026): the Pi and SARA mobile should
+  // essentially be the same app, and the first thing that means is that she
+  // LOOKS the same in both places.
+  PRESENCE: 'presence',
   COGNITION: 'cognition',
   CONTEXT: 'context',
   BRIEFING: 'mission-control',
@@ -36,7 +41,10 @@ const VIEW_ALIASES = {
   'mission-control': SARA_VIEWS.BRIEFING,
   'executive-dashboard': SARA_VIEWS.QUEUE,
   companion: SARA_VIEWS.SARA,
-  presence: SARA_VIEWS.BRIEFING,
+  // ⚠ `presence` USED to alias to the briefing, back when no presence screen
+  // existed. It is a real view now, so the alias is removed — leaving it would
+  // silently rewrite every request for the presence screen into mission
+  // control, and the kiosk would never open where it was told to.
   'stream-deck': SARA_VIEWS.CAPTURE,
 };
 
@@ -45,6 +53,12 @@ const VIEW_ALIASES = {
 //   status: 'available' -> a screen exists and renders now
 //   status: 'planned'   -> reserved by the architecture; screen is a placeholder
 export const VIEW_REGISTRY = [
+  {
+    id: SARA_VIEWS.PRESENCE,
+    label: 'SARA',
+    blurb: 'Her presence — the same field the phone renders, driven by whether the brain can be seen.',
+    status: 'available',
+  },
   {
     id: SARA_VIEWS.COGNITION,
     label: 'Cognition',
@@ -130,7 +144,11 @@ export const VIEW_REGISTRY = [
 // *recommended* view (model.inference.recommendedView), surfaced by RecommendedView —
 // but it is ADVISORY ONLY: it never sets DEFAULT_VIEW or currentView on its own. SARA
 // opens on the Cognition Environment and only a user action changes the view.
-export const DEFAULT_VIEW = SARA_VIEWS.COGNITION;
+// ⚠ The kiosk opens on SARA's PRESENCE (Nick, 30 Aug 2026), matching the phone,
+// which now opens on the Surface for the same reason: opening on a dashboard
+// makes this a thing you read, when the point is that SARA is present. The
+// advisory `recommendedView` still never sets this on its own.
+export const DEFAULT_VIEW = SARA_VIEWS.PRESENCE;
 
 export function normalizeViewId(id) {
   return VIEW_ALIASES[id] || id;
