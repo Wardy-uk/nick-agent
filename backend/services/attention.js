@@ -733,10 +733,40 @@ async function build({ now = new Date(), view = null } = {}) {
     };
   }
 
+  // The body reading, composed here for the same reason `weeklyTarget` is.
+  //
+  // ⚠ This exists because the WIDGET WAS MAKING SIX REQUESTS A REFRESH and
+  // quietly losing one: `fetchHealth` folded any failure into null, so a slow
+  // radio inside a widget's execution budget silently removed the gauge while
+  // leaving everything around it intact. A missing dial reads as "no data"
+  // rather than "the request never finished", which is the same false-silence
+  // this whole layer exists to avoid.
+  //
+  // Both halves are optional and INDEPENDENT: the score is what the gauge
+  // needs, the week of HRV only decorates it, so a failure in one must never
+  // remove the other. That coupling was the second half of the bug.
+  let readiness = { known: false, why: 'not read' };
+  try {
+    const score = require('./stress-score').computeStressScore();
+    let hrvWeek = [];
+    try {
+      hrvWeek = (require('./health-daily').recentDays(7) || [])
+        .map((day) => Number(day.hrvMedian))
+        .filter((v) => Number.isFinite(v))
+        .reverse();
+    } catch (e) {
+      hrvWeek = [];
+    }
+    readiness = { known: true, ...score, hrvWeek };
+  } catch (e) {
+    readiness = { known: false, why: e.message };
+  }
+
   return {
     generatedAt: now.toISOString(),
     context,
     weeklyTarget,
+    readiness,
     ...gated,
     // The rest of the day, for surfaces with room. Not part of the pool: an
     // agenda is the shape of the day, not a list of things to decide about.

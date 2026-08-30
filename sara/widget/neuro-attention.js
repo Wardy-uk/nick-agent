@@ -85,7 +85,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v31';
+const VERSION = 'v32';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -391,30 +391,6 @@ async function fetchPersonal({ base, token }) {
     const json = await req.loadJSON();
     if (!json || typeof json !== 'object' || json.ok === false) return null;
     return json;
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * Readiness, and the week of HRV behind it.
- *
- * `/api/health/stress` has scored HRV against Nick's own 14-day rolling
- * baseline since August and no surface has ever rendered it. Fetched only where
- * there is room to show it.
- */
-async function fetchHealth({ base, token }) {
-  try {
-    const h = { 'X-NEURO-API-TOKEN': token };
-    const s = new Request(`${base}/api/health/stress`);
-    s.headers = h; s.timeoutInterval = TIMEOUT_SECONDS;
-    const hist = new Request(`${base}/api/health/history?days=7`);
-    hist.headers = h; hist.timeoutInterval = TIMEOUT_SECONDS;
-    const [stress, history] = await Promise.all([s.loadJSON(), hist.loadJSON()]);
-    return {
-      stress: stress && typeof stress === 'object' ? stress : null,
-      history: history && Array.isArray(history.history) ? history.history : [],
-    };
   } catch (e) {
     return null;
   }
@@ -1082,7 +1058,10 @@ function saraSays(w, d, res, target, weather, family, personal, health, view) {
  * the honest picture; it has been computed since August and shown by nothing.
  */
 function readinessGauge(health, outdoor) {
-  const s = health && health.stress;
+  // The block comes off the attention payload: the stress fields at the top
+  // level, `hrvWeek` beside them. `calibrating` and `stale` are real answers
+  // and render as NO GAUGE rather than a number nobody should act on.
+  const s = health && health.known ? health : null;
   if (!s || s.status !== 'ok' || !Number.isFinite(Number(s.score))) return null;
 
   const score = Math.round(Number(s.score));
@@ -1092,10 +1071,7 @@ function readinessGauge(health, outdoor) {
   const base = Number.isFinite(Number(s.baselineMs)) ? Math.round(Number(s.baselineMs)) : null;
 
   // Oldest to newest, so the emphasised last bar is today.
-  const series = (health.history || [])
-    .map((h) => Number(h.hrvMedian))
-    .filter((v) => Number.isFinite(v))
-    .reverse();
+  const series = Array.isArray(health.hrvWeek) ? health.hrvWeek : [];
 
   return {
     value: String(score),
@@ -1153,7 +1129,7 @@ function suitability(score, outdoor) {
  * where the two directions appear together.
  */
 function stressGauge(health) {
-  const s = health && health.stress;
+  const s = health && health.known ? health : null;
   if (!s || s.status !== 'ok' || !Number.isFinite(Number(s.score))) return null;
 
   const score = Math.round(Number(s.score));
@@ -1167,10 +1143,7 @@ function stressGauge(health) {
   const hrv = Number.isFinite(Number(s.hrv)) ? Number(s.hrv).toFixed(1) : null;
   const base = Number.isFinite(Number(s.baselineMs)) ? Math.round(Number(s.baselineMs)) : null;
 
-  const series = (health.history || [])
-    .map((h) => Number(h.hrvMedian))
-    .filter((v) => Number.isFinite(v))
-    .reverse();
+  const series = Array.isArray(health.hrvWeek) ? health.hrvWeek : [];
 
   return {
     value: String(stress),
@@ -1473,15 +1446,16 @@ const offDuty = resolvedView
 // Off duty the wins ARE the view; on large they fill the strip at the bottom.
 // Anywhere else it would be a request bought for nothing.
 const needWins = !res.error && (offDuty || family === 'large');
-const [wins, personal, health] = await Promise.all([
+const [wins, personal] = await Promise.all([
   needWins ? fetchWins(cfg) : Promise.resolve(null),
   // Personal tasks matter only off duty, and only where there is room to show them.
   (offDuty && !isAccessory) ? fetchPersonal(cfg) : Promise.resolve(null),
-  // The gauge is on the large tile in both contexts AND on the circular lock
-  // widget, so health is fetched for either. The rectangular lock widget shows
-  // the task target instead and does not pay for this.
-  (family === 'large' || family === 'accessoryCircular') ? fetchHealth(cfg) : Promise.resolve(null),
 ]);
+
+// Readiness rides on the attention payload, like the target. It used to be two
+// more requests of its own, and losing either of them silently removed the
+// gauge — see the note in attention.build().
+const health = res.data ? res.data.readiness : null;
 
 // The target rides on the attention payload already — composed server-side with
 // its own words, like `say` and `speech`. A second request would be a second
