@@ -69,6 +69,36 @@ function parseDailyNote(content) {
   return { focus, carry, eodDone, didntGo, standupDone };
 }
 
+/**
+ * Has a standup actually been done, according to this daily note? PURE.
+ *
+ * ⚠ THE ONE PREDICATE. There were FOUR implementations of this question and
+ * they disagreed, which is exactly how NEURO came to tell Nick "Standup already
+ * done today" on a morning he had not done one:
+ *
+ *   * `parseDailyNote` (here)   — correct: a Focus item needs real text.
+ *   * `nudges.js`               — correct, independently reimplemented.
+ *   * `routes/standup.js`       — matched `- [ ]`, an EMPTY checkbox, so the
+ *                                 skeleton NEURO writes into every daily note
+ *                                 satisfied its own test. This is the one the
+ *                                 screen read.
+ *   * `activity.js`             — worst: the bare HEADING `## Focus Today`
+ *                                 counted, so a note with nothing in it at all
+ *                                 was a completed standup.
+ *
+ * So the nudge kept (correctly) asking for a standup while the screen said it
+ * was already done. Same species as the `task-blocks` empty-stub rule: NEURO
+ * writes the scaffold, so a detector that accepts the scaffold creates the
+ * evidence for its own test and marks work done that nobody did.
+ *
+ * `## Focus Today` is a parsed CONTRACT (standup-session writes it, this reads
+ * it back tomorrow), so the heading is not touched — only what counts as filled.
+ */
+function standupDoneIn(content) {
+  if (!content || typeof content !== 'string') return false;
+  return parseDailyNote(content).standupDone;
+}
+
 // Walk back over the last `lookbackDays` calendar days, newest first
 function readRecentNotes(lookbackDays) {
   const dir = path.join(vaultPath(), 'Daily');
@@ -235,4 +265,4 @@ function buildAccountability({ lookbackDays = 14 } = {}) {
   };
 }
 
-module.exports = { buildAccountability, commitmentKey };
+module.exports = { buildAccountability, commitmentKey, parseDailyNote, standupDoneIn };

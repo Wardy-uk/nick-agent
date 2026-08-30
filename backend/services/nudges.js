@@ -349,29 +349,16 @@ function getNagMessage(type, nagCount) {
   return messages[shuffledOrder[n % messages.length]];
 }
 
-// Check if standup/daily ritual has been done today
-// The ritual may happen in Obsidian directly — check if today's note exists and has real content
+// Has the standup been done today?
+//
+// ⚠ This was the CORRECT one of four implementations and it is still gone,
+// because being right is not the same as being the only answer. While the
+// screen said "Standup already done today" this kept (rightly) nudging, and
+// two surfaces disagreeing about one fact is worse than either being wrong on
+// its own — Nick cannot tell which to believe. `standupDoneIn` is the one
+// predicate; its rule is this rule.
 function isStandupDone() {
-  const dailyNote = obsidian.readTodayDailyNote();
-  if (!dailyNote) return false;
-
-  // Check for a populated Focus Today section (has actual task items, not just the heading)
-  if (dailyNote.includes('## Focus Today')) {
-    const lines = dailyNote.split('\n');
-    let inFocus = false;
-    for (const line of lines) {
-      if (line.startsWith('## Focus Today')) { inFocus = true; continue; }
-      if (line.startsWith('## ') && inFocus) break;
-      // Require actual text after the checkbox — not just an empty item
-      const match = line.match(/^\s*-\s+\[.\]\s+(.+)$/);
-      if (inFocus && match && match[1].trim().length > 2) return true;
-    }
-  }
-
-  // Also accept explicit ## Standup section (added by the app)
-  if (dailyNote.includes('## Standup')) return true;
-
-  return false;
+  return require('./standup-accountability').standupDoneIn(obsidian.readTodayDailyNote());
 }
 
 // Check if there are overdue/pending todos (from vault)

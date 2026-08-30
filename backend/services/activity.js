@@ -285,11 +285,14 @@ function detectPatterns() {
     const dailyDir = path.join(vaultPath, 'Daily');
     if (fs.existsSync(dailyDir)) {
       // Check today
+      const { standupDoneIn } = require('./standup-accountability');
       const todayFile = path.join(dailyDir, `${todayKey}.md`);
       if (fs.existsSync(todayFile)) {
         const content = fs.readFileSync(todayFile, 'utf-8');
         if (content.includes('## EOD')) todayLive.eod_done = true;
-        if (content.includes('## Standup') || content.includes('## Focus Today')) todayLive.standup_done = true;
+        // ⚠ The bare HEADING used to count, so a daily note with nothing in
+        // it at all was a completed standup. Shared predicate now.
+        if (standupDoneIn(content)) todayLive.standup_done = true;
       }
       // Enrich recent summaries from vault too
       for (const s of summaries) {
@@ -297,7 +300,7 @@ function detectPatterns() {
         if (fs.existsSync(file)) {
           const content = fs.readFileSync(file, 'utf-8');
           if (content.includes('## EOD')) s.eod_done = 1;
-          if (content.includes('## Standup') || content.includes('## Focus Today')) s.standup_done = 1;
+          if (standupDoneIn(content)) s.standup_done = 1;
         }
       }
     }

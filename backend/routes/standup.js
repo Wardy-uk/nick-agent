@@ -780,22 +780,12 @@ router.post('/save-to-daily', (req, res) => {
 router.get('/ritual-state', (req, res) => {
   const dailyNote = obsidianService.readTodayDailyNote();
 
-  let standupDoneToday = false;
-
-  if (dailyNote) {
-    // Check for populated Focus Today section
-    if (dailyNote.includes('## Focus Today')) {
-      const lines = dailyNote.split('\n');
-      let inFocus = false;
-      for (const line of lines) {
-        if (line.startsWith('## Focus Today')) { inFocus = true; continue; }
-        if (line.startsWith('## ') && inFocus) break;
-        if (inFocus && line.match(/^\s*-\s+\[.\]/)) { standupDoneToday = true; break; }
-      }
-    }
-    // Also accept explicit Standup section
-    if (dailyNote.includes('## Standup')) standupDoneToday = true;
-  }
+  // ⚠ ONE predicate, shared. This used to match `- [ ]` — an EMPTY checkbox —
+  // so the skeleton NEURO writes into every daily note satisfied its own test
+  // and the screen announced "Standup already done today" on a morning Nick had
+  // not done one. Meanwhile the nudge, which checked properly, kept asking:
+  // four implementations of one question, disagreeing. Now there is one.
+  const standupDoneToday = require('../services/standup-accountability').standupDoneIn(dailyNote);
 
   res.json({
     lastRun: null,
