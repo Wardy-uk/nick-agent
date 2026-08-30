@@ -397,3 +397,65 @@ test('a session can be started with its first concrete step already named', () =
   const bare = fs2.start({ text: 'Prep the 1-2-1' }, T0);
   assert.equal(bare.session.nextStep, null);
 });
+
+// ── Gate 3: the private body-double ─────────────────────────────────────────
+
+test('a check-in is asked for only on a RUNNING session, and only after a while', () => {
+  reset();
+  fs2.start({ text: 'Long piece of writing', minutes: 60 }, T0);
+
+  // Asking "still on this?" in the first minutes is noise.
+  assert.equal(fs2.current(T0 + 5 * MIN).dueCheckIn, false);
+  assert.equal(fs2.current(T0 + 25 * MIN).dueCheckIn, true);
+
+  // And never about something he is not currently doing.
+  fs2.stepAway({ source: 'meeting' }, T0 + 26 * MIN);
+  assert.equal(fs2.current(T0 + 60 * MIN).dueCheckIn, false);
+});
+
+test('saying "still here" resets the ask WITHOUT touching the clock', () => {
+  reset();
+  fs2.start({ text: 'Long piece of writing', minutes: 60 }, T0);
+  const before = fs2.current(T0 + 25 * MIN).elapsedMinutes;
+
+  const { ok, session } = fs2.checkIn({}, T0 + 25 * MIN);
+  assert.equal(ok, true);
+  assert.equal(session.checkIns, 1);
+  assert.equal(session.dueCheckIn, false);
+  // ⚠ A check-in is a statement about PRESENCE, not about time. Quietly moving
+  // the estimate because he said hello would make the one honest number here
+  // dishonest.
+  assert.equal(session.elapsedMinutes, before);
+  assert.equal(session.plannedMinutes, 60);
+
+  // It comes back round once enough time has passed again.
+  assert.equal(fs2.current(T0 + 50 * MIN).dueCheckIn, true);
+});
+
+test('a check-in on nothing, or on a paused session, is refused not invented', () => {
+  reset();
+  assert.equal(fs2.checkIn({}, T0).ok, false);
+  fs2.start({ text: 'A thing' }, T0);
+  fs2.pause({}, T0 + MIN);
+  const r = fs2.checkIn({}, T0 + 2 * MIN);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'not-running');
+});
+
+test('a reflection is optional and rides into history when given', () => {
+  reset();
+  fs2.start({ text: 'Wrote the thing' }, T0);
+  fs2.checkIn({}, T0 + 21 * MIN);
+  fs2.finish({ reflection: 'Easier once I had the headings down.' }, T0 + 40 * MIN);
+
+  const [record] = fs2.history();
+  assert.equal(record.reflection, 'Easier once I had the headings down.');
+  assert.equal(record.checkIns, 1);
+
+  // And finishing without one is a perfectly good outcome — a box you have to
+  // fill to close a session is a reason not to close sessions.
+  reset();
+  fs2.start({ text: 'Another thing' }, T0);
+  fs2.finish({}, T0 + 10 * MIN);
+  assert.equal(fs2.history()[0].reflection, null);
+});

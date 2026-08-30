@@ -71,6 +71,15 @@ const STALE_FLOOR_MINUTES = 90;
 // one any more, and the prompt changes from "back to it?" to "did this happen?".
 const PAUSE_STALE_MINUTES = 8 * 60;
 
+// How long into a running session before it is worth asking "still on this?".
+//
+// ⚠ This is a PULL, never a push. Nothing here notifies — the whole service is
+// pull-only, because nudge volume is the one signal allowed to argue against
+// building more of this system, and body-doubling is precisely the feature that
+// would justify a timer to itself. The prompt appears when Nick has already
+// opened a surface; if he is not looking, it costs nothing.
+const CHECK_IN_MINUTES = 20;
+
 const VALID_SOURCES = ['manual', 'task-switch', 'escalation', 'meeting', 'unknown'];
 
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -139,6 +148,11 @@ function _archive(session, now) {
     shrinks: (session.shrinks || []).length,
     finalStep: session.nextStep || null,
     originalText: session.originalText || null,
+    checkIns: (session.checkIns || []).length,
+    // Optional, always. An empty reflection is a perfectly good outcome and
+    // must never block finishing — a box you have to fill to close a session is
+    // a reason not to close sessions.
+    reflection: session.reflection || null,
   });
   db.setState(HISTORY_KEY, JSON.stringify(rows.slice(0, HISTORY_LIMIT)));
 }
@@ -219,7 +233,26 @@ function _decorate(session, now) {
     // The wording he started with, kept so a shrunk session can still say what
     // it came from. Null until something is actually shrunk.
     originalText: session.originalText || null,
+    // Body-doubling, the private kind. A count of the times he said he was
+    // still on it — never a target, never a streak, and nothing is inferred
+    // from a missed one: being heads-down is exactly why a check-in gets
+    // skipped, so treating that as a signal would punish the good case.
+    checkIns: (session.checkIns || []).length,
+    lastCheckInAt: (session.checkIns || [])[0]?.at || null,
+    // Only ever true on a RUNNING session. Asking "still on this?" about
+    // something paused is noise, and asking it in the first minutes is worse.
+    dueCheckIn: session.status === 'active'
+      && !stale
+      && minutesSinceLastCheckIn(session, now) >= CHECK_IN_MINUTES,
+    minutesSinceCheckIn: minutesSinceLastCheckIn(session, now),
   };
+}
+
+/** Minutes since the last check-in, or since the session began. */
+function minutesSinceLastCheckIn(session, now) {
+  const last = (session.checkIns || [])[0]?.at || session.resumedAt || session.startedAt;
+  const at = parseTime(last);
+  return at == null ? 0 : minutesBetween(at, now);
 }
 
 // ── Reads ────────────────────────────────────────────────────────────────────
@@ -623,6 +656,29 @@ function noteInterruption({ source = 'unknown', detail = null } = {}, now = Date
   return { ok: true, session: _decorate(session, now) };
 }
 
+/**
+ * "Still here." — the body-double, answered by Nick rather than assumed.
+ *
+ * Records that he confirmed he is still on it. Deliberately does NOT extend,
+ * reset or otherwise touch the clock: this is a statement about presence, not
+ * about time, and quietly moving the estimate because he said hello would make
+ * the one honest number here dishonest.
+ */
+function checkIn({ note = null } = {}, now = Date.now()) {
+  const session = _read();
+  if (!session) return { ok: false, reason: 'no-session' };
+  if (session.status !== 'active') return { ok: false, reason: 'not-running' };
+
+  session.checkIns = session.checkIns || [];
+  session.checkIns.unshift({
+    at: new Date(now).toISOString(),
+    atMinutes: Math.round(_elapsedMs(session, now) / 60000),
+    note: note ? String(note).slice(0, 200) : null,
+  });
+  _write(session);
+  return { ok: true, session: _decorate(session, now) };
+}
+
 function _end(reason, now) {
   const session = _read();
   if (!session) return { ok: false, reason: 'no-session' };
@@ -647,9 +703,17 @@ function _end(reason, now) {
  * quietly closed tasks by a private route would be invisible to the panel that
  * asked for it.
  */
-function finish({ completeTask = false } = {}, now = Date.now()) {
+function finish({ completeTask = false, reflection = null } = {}, now = Date.now()) {
   const session = _read();
   if (!session) return { ok: false, reason: 'no-session' };
+
+  // Written onto the session BEFORE it is archived, so it travels into history
+  // with everything else. Optional, always: a box you have to fill in to close
+  // a session is a reason not to close sessions.
+  if (reflection) {
+    session.reflection = String(reflection).slice(0, 500);
+    _write(session);
+  }
 
   const result = _end('completed', now);
   let taskCompleted = false;
@@ -692,6 +756,7 @@ function abandon(now = Date.now()) {
 }
 
 module.exports = {
+  checkIn,
   shrink,
   setNextStep,
   stepAway,

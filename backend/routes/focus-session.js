@@ -134,9 +134,30 @@ router.post('/step-away', (req, res) => {
   }
 });
 
+/**
+ * POST /api/session/check-in — "still here".
+ *
+ * ⚠ A PULL, never a push. Nothing in this service notifies; the prompt appears
+ * on a surface Nick has already opened. Body-doubling is exactly the feature
+ * that would justify a timer to itself, and nudge volume is the one signal
+ * allowed to argue against building more of this system.
+ */
+router.post('/check-in', (req, res) => {
+  try {
+    const result = session.checkIn({ note: req.body?.note || null });
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/finish', (req, res) => {
   try {
-    res.json(session.finish({ completeTask: Boolean(req.body?.completeTask) }));
+    res.json(session.finish({
+      completeTask: Boolean(req.body?.completeTask),
+      // Optional. An empty reflection is a perfectly good outcome.
+      reflection: req.body?.reflection || null,
+    }));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

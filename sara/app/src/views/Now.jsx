@@ -37,7 +37,8 @@ import './Now.css';
  */
 function SessionCard({ session, onChanged }) {
   const [busy, setBusy] = useState(false);
-  const [asking, setAsking] = useState(false);
+  // 'shrink' | 'finish' | null — which follow-up box is open.
+  const [asking, setAsking] = useState(null);
   const [step, setStep] = useState('');
   const [error, setError] = useState(null);
 
@@ -46,7 +47,7 @@ function SessionCard({ session, onChanged }) {
     setError(null);
     try {
       await apiFetch(`/api/session/${path}`, { method: 'POST', body: JSON.stringify(body || {}) });
-      setAsking(false);
+      setAsking(null);
       setStep('');
       await onChanged?.();
     } catch (e) {
@@ -91,7 +92,56 @@ function SessionCard({ session, onChanged }) {
 
       {error && <div className="now__sess-err">{error}</div>}
 
-      {asking ? (
+      {/* ── The private body-double ─────────────────────────────────────────
+          Shown only when it is actually due, and only on a RUNNING session.
+          ⚠ It is a PULL: nothing pushed this, it is here because Nick already
+          opened the screen. Saying "still here" records presence and touches
+          nothing else — moving the estimate because he said hello would make
+          the one honest number on this card dishonest. */}
+      {session.dueCheckIn && !asking && (
+        <div className="now__sess-checkin">
+          <span className="now__sess-label">Still on this one?</span>
+          <button
+            type="button"
+            className="now__sess-btn now__sess-btn--go"
+            disabled={busy}
+            onClick={() => post('check-in')}
+          >
+            Still here
+          </button>
+        </div>
+      )}
+
+      {asking === 'finish' ? (
+        <div className="now__sess-shrink">
+          <label className="now__sess-label" htmlFor="now-reflect">
+            Anything worth remembering about that? (optional)
+          </label>
+          <input
+            id="now-reflect"
+            className="now__sess-input"
+            value={step}
+            onChange={(e) => setStep(e.target.value)}
+            placeholder="what made it easier, or harder"
+            autoFocus
+          />
+          <div className="now__sess-acts">
+            {/* ⚠ Finishing NEVER depends on the box. A field you have to fill in
+                to close a session is a reason not to close sessions. */}
+            <button
+              type="button"
+              className="now__sess-btn now__sess-btn--go"
+              disabled={busy}
+              onClick={() => post('finish', { reflection: step.trim() || null })}
+            >
+              Finish
+            </button>
+            <button type="button" className="now__sess-btn" disabled={busy} onClick={() => setAsking(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : asking === 'shrink' ? (
         <div className="now__sess-shrink">
           <label className="now__sess-label" htmlFor="now-step">
             {stuck ? 'What is the smallest next bit of it?' : 'What is the smaller version?'}
@@ -113,7 +163,7 @@ function SessionCard({ session, onChanged }) {
             >
               That is the step
             </button>
-            <button type="button" className="now__sess-btn" disabled={busy} onClick={() => setAsking(false)}>
+            <button type="button" className="now__sess-btn" disabled={busy} onClick={() => setAsking(null)}>
               Cancel
             </button>
           </div>
@@ -121,7 +171,7 @@ function SessionCard({ session, onChanged }) {
       ) : (
         <div className="now__sess-acts">
           {/* First, and first on purpose. */}
-          <button type="button" className="now__sess-btn now__sess-btn--go" disabled={busy} onClick={() => setAsking(true)}>
+          <button type="button" className="now__sess-btn now__sess-btn--go" disabled={busy} onClick={() => { setStep(''); setAsking('shrink'); }}>
             Make it smaller
           </button>
           {banked ? (
@@ -133,7 +183,7 @@ function SessionCard({ session, onChanged }) {
               Stepping away
             </button>
           )}
-          <button type="button" className="now__sess-btn" disabled={busy} onClick={() => post('finish', {})}>
+          <button type="button" className="now__sess-btn" disabled={busy} onClick={() => { setStep(''); setAsking('finish'); }}>
             Done
           </button>
           {/* Offered without ceremony. Letting something go is a legitimate
