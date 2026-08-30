@@ -216,6 +216,9 @@ app.use('/api/task-dedupe', require('./routes/task-dedupe'));
 // Same reason, same trap.
 app.use('/api/task-blocks', require('./routes/task-blocks'));
 app.use('/api/day-plan', require('./routes/day-planner'));
+// The Neuro Mobile contract (Phase 2) — versioned in the path, because the
+// phone caches responses and replays operations across app upgrades.
+app.use('/api/mobile', require('./routes/mobile'));
 app.use('/api/calendar', require('./routes/calendar'));
 app.use('/api/adhd', require('./routes/adhd'));
 app.use('/api/wins', require('./routes/wins'));

@@ -4,7 +4,8 @@
 // there routes to a screen that does not exist, and a tab there missing from
 // here silently falls back to Focus. Pinned in both directions by
 // backend/services/action-surfaces.test.js, because neither half errors.
-const SARA_LITE_TABS = new Set(['surface', 'today', 'focus', 'tasks', 'capture', 'voice', 'chat', 'prep', 'standup', 'brain']);
+// 'now' and 'review' are Phase 2's primary modes (30 Aug 2026).
+const SARA_LITE_TABS = new Set(['surface', 'now', 'review', 'today', 'focus', 'tasks', 'capture', 'voice', 'chat', 'prep', 'standup', 'brain']);
 
 function lower(value) {
   return String(value || '').trim().toLowerCase();

@@ -1,0 +1,244 @@
+import { useCallback, useEffect, useState } from 'react';
+import { useNickNow, stampFor } from '../mobile/useNickNow';
+import { flush, pending as pendingOps, subscribe } from '../mobile/outbox';
+import { enqueue } from '../mobile/outbox';
+import Freshness from '../components/Freshness';
+import './Now.css';
+
+// NOW — one current action and the next transition.
+//
+// Everything on this screen is sourced and timestamped, because the whole screen
+// may be a cached copy of a morning that has since moved on. The rules it holds
+// to, all of them borrowed rather than reinvented:
+//
+//  • A section NEURO could not read says so. It is never rendered as empty.
+//  • "The pool was unavailable" is NOT an all-clear, and gets those words.
+//  • A quiet day is a correct answer, and reads as calm rather than broken.
+//  • Nothing here re-derives what the brain already decided — `say`, the tab a
+//    card routes to, the agenda's `scope` — because three surfaces phrasing one
+//    fact three ways is how they drift.
+
+function Section({ title, state, children }) {
+  return (
+    <section className="now__sec">
+      <h2 className="now__sech">{title}</h2>
+      {state && state.known === false ? (
+        <div className="card now__unread">
+          I couldn&rsquo;t read this{state.why ? ` — ${state.why}` : ''}.
+          <span className="now__unread-note"> That isn&rsquo;t the same as nothing being there.</span>
+        </div>
+      ) : children}
+    </section>
+  );
+}
+
+function Countdown({ minutesAway, running, allDay }) {
+  // ⚠ Null-check BEFORE coercing. `Number(null)` is 0 and `isFinite(0)` is true,
+  // so a deliberate "no answer" prints a confident "0m" (28 Aug).
+  if (allDay) return <span className="now__when">all day</span>;
+  if (minutesAway === null || minutesAway === undefined) return null;
+  const mins = Number(minutesAway);
+  if (!Number.isFinite(mins)) return null;
+  if (running) return <span className="now__when now__when--live">on now</span>;
+  if (mins < 60) return <span className="now__when">in {mins}m</span>;
+  return <span className="now__when">in {Math.round(mins / 60)}h</span>;
+}
+
+export default function Now({ onNavigate }) {
+  const { snapshot, freshness, fetchedAt, error, busy, refresh } = useNickNow();
+  const [queue, setQueue] = useState([]);
+  const [ticking, setTicking] = useState(null);
+  const [flash, setFlash] = useState(null);
+
+  const reloadQueue = useCallback(async () => {
+    try { setQueue(await pendingOps()); } catch { /* the queue view is a nicety */ }
+  }, []);
+
+  useEffect(() => {
+    reloadQueue();
+    return subscribe(() => reloadQueue());
+  }, [reloadQueue]);
+
+  // Ticking a task offline is the one WRITE on this screen, and it goes through
+  // the outbox like everything else — never straight to the API. Two code paths
+  // for one act is what Phase 2 exists to remove.
+  async function tick(task) {
+    if (ticking) return;
+    setTicking(task.id);
+    setFlash(null);
+    try {
+      await enqueue('todo.complete', { taskId: task.taskId });
+      const result = await flush();
+      // Only NEURO's acknowledgement makes this "done". Anything else is
+      // "queued on this device", in those words.
+      setFlash(result.confirmed
+        ? { ok: true, msg: `Done — ${task.text.slice(0, 40)}` }
+        : { ok: false, msg: 'Queued on this device — not in NEURO yet.' });
+    } catch (e) {
+      setFlash({ ok: false, msg: `Couldn't queue that: ${e.message}` });
+    } finally {
+      setTicking(null);
+      reloadQueue();
+    }
+  }
+
+  const s = snapshot;
+  const queuedCount = queue.filter((o) => o.status === 'queued' || o.status === 'sending' || o.status === 'failed').length;
+  const attentionCount = queue.filter((o) => o.status === 'needs-attention').length;
+
+  return (
+    <section className="now">
+      <h1 className="view__title">Now</h1>
+      <p className="view__lede">
+        {s ? `As of ${stampFor(s.generatedAt) || '—'}` : 'Loading your working set…'}
+      </p>
+
+      <Freshness
+        freshness={freshness}
+        fetchedAt={fetchedAt}
+        error={error}
+        busy={busy}
+        onRetry={() => refresh()}
+      />
+
+      {(queuedCount > 0 || attentionCount > 0) && (
+        <div className="now__outbox">
+          {queuedCount > 0 && <span>{queuedCount} waiting to reach NEURO</span>}
+          {queuedCount > 0 && attentionCount > 0 && <span> · </span>}
+          {attentionCount > 0 && <span className="err">{attentionCount} need{attentionCount === 1 ? 's' : ''} attention</span>}
+          <button type="button" className="now__outbox-btn" onClick={() => flush({ force: true })}>Send now</button>
+        </div>
+      )}
+
+      {flash && <div className={`now__flash${flash.ok ? '' : ' err'}`}>{flash.msg}</div>}
+
+      {!s && freshness !== 'loading' && (
+        <div className="card now__unread">Nothing to show yet.</div>
+      )}
+
+      {s && (
+        <>
+          {/* ── The one current action ─────────────────────────────────── */}
+          <Section title="Right now" state={s.focus}>
+            {s.focus.session ? (
+              <div className="card now__focus">
+                <div className="now__focus-label">
+                  In a focus session{s.focus.session.stale ? ' — this one ran away, worth settling' : ''}
+                </div>
+                <div className="now__focus-text">{s.focus.session.text || 'Untitled session'}</div>
+                <div className="now__meta">
+                  {s.focus.session.elapsedMinutes != null && `${s.focus.session.elapsedMinutes}m in`}
+                  {s.focus.session.plannedMinutes != null && ` of ${s.focus.session.plannedMinutes}m`}
+                  {/* #87's rule: an assumed length must say it is assumed, every time. */}
+                  {s.focus.session.plannedAssumed && ' (assumed)'}
+                </div>
+              </div>
+            ) : s.focus.item ? (
+              <div className="card now__focus">
+                <div className="now__focus-text">{s.focus.item.title}</div>
+                {s.focus.nextStep && <div className="now__next">{s.focus.nextStep}</div>}
+                {s.focus.item.tab && onNavigate && (
+                  <button type="button" className="now__go" onClick={() => onNavigate(s.focus.item.tab)}>
+                    Open →
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="card now__calm">
+                {s.poolAvailable
+                  ? 'Nothing pending. That is the real answer, not a blank screen.'
+                  : "I couldn't read what needs doing — this is NOT an all-clear."}
+              </div>
+            )}
+          </Section>
+
+          {/* ── The next transition ─────────────────────────────────────── */}
+          <Section title={s.agenda.known && s.agenda.scope !== 'today' ? `Next — ${s.agenda.scope}` : 'Next'} state={s.agenda}>
+            {s.agenda.items.length === 0 ? (
+              <div className="card now__calm">Nothing left in the diary.</div>
+            ) : (
+              s.agenda.items.map((e) => (
+                <div className="card now__event" key={e.id}>
+                  <div className="now__event-top">
+                    <span className="now__event-title">{e.title}</span>
+                    <Countdown minutesAway={e.minutesAway} running={e.running} allDay={e.allDay} />
+                  </div>
+                  {e.withOthers === true && <div className="now__meta">with other people</div>}
+                </div>
+              ))
+            )}
+          </Section>
+
+          {/* ── Follow-ups ──────────────────────────────────────────────── */}
+          <Section title="Needs a decision" state={s.followUps}>
+            {s.followUps.items.length === 0 ? (
+              <div className="card now__calm">
+                {s.followUps.quiet ? 'Quiet — nothing worth interrupting you for.' : 'Nothing pending.'}
+              </div>
+            ) : (
+              s.followUps.items.map((f) => (
+                <div className="card now__item" key={f.id}>
+                  <div className="now__item-title">{f.title}</div>
+                  {f.say && <div className="now__item-say">{f.say}</div>}
+                  {f.tab && onNavigate && (
+                    <button type="button" className="now__go" onClick={() => onNavigate(f.tab)}>Open →</button>
+                  )}
+                </div>
+              ))
+            )}
+            {s.followUps.known && s.followUps.dropped > 0 && (
+              <div className="now__meta">{s.followUps.dropped} held back for now — held is not lost.</div>
+            )}
+          </Section>
+
+          {/* ── The bounded task set ────────────────────────────────────── */}
+          <Section title="Tasks" state={s.tasks}>
+            {s.tasks.items.length === 0 ? (
+              <div className="card now__calm">Nothing open.</div>
+            ) : (
+              <>
+                {s.tasks.items.map((t) => (
+                  <div className="card now__task" key={t.id}>
+                    <button
+                      type="button"
+                      className="now__tick"
+                      onClick={() => tick(t)}
+                      disabled={!t.completableOffline || ticking === t.id}
+                      aria-label={`Complete ${t.text}`}
+                      title={t.completableOffline ? 'Complete' : 'Owned elsewhere — open it online to tick it'}
+                    >{ticking === t.id ? '…' : '○'}</button>
+                    <div className="now__task-body">
+                      <div className="now__task-text">{t.text}</div>
+                      <div className="now__meta">
+                        {t.dueDate ? `due ${String(t.dueDate).slice(0, 10)}` : 'no due date'}
+                        {t.moscow ? ` · ${t.moscow}` : ''}
+                        {t.estimateMinutes ? ` · ${t.estimateMinutes}m` : ''}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {s.tasks.total > s.tasks.items.length && (
+                  <div className="now__meta">
+                    Showing {s.tasks.items.length} of {s.tasks.total} — the rest live in NEURO.
+                  </div>
+                )}
+              </>
+            )}
+          </Section>
+
+          {/* Everything NEURO could not see, named rather than swallowed. */}
+          {s.gaps && s.gaps.length > 0 && (
+            <details className="now__gaps">
+              <summary>{s.gaps.length} thing{s.gaps.length === 1 ? '' : 's'} I couldn&rsquo;t read</summary>
+              <ul>
+                {s.gaps.map((g, i) => (
+                  <li key={`${g.input}-${i}`}><strong>{g.input}</strong> — {g.why}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </>
+      )}
+    </section>
+  );
+}

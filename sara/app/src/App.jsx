@@ -6,6 +6,9 @@ import LockScreen from './components/LockScreen';
 import NotificationActionCard from './components/NotificationActionCard';
 import Surface from './views/Surface';
 import Capture from './views/Capture';
+import Now from './views/Now';
+import Review from './views/Review';
+import { startAutoFlush } from './mobile/outbox';
 import Focus from './views/Focus';
 import Today from './views/Today';
 import Tasks from './views/Tasks';
@@ -31,13 +34,33 @@ import './App.css';
 // failure mode is avoidance, and a thing he cannot find is worse than a menu he
 // does not need — an ambient surface that is sometimes wrong must always have a
 // way round it, or being wrong once costs the whole feature.
-const TABS = [
-  // The root. Everything below is reachable from here, by SARA's choice or Nick's.
-  { id: 'surface', label: 'SARA', icon: '◉', Component: Surface },
-  { id: 'today', label: 'Today', icon: '◐', Component: Today },
+// ── Phase 2: three primary modes ─────────────────────────────────────────────
+//
+// Neuro Mobile is the app Nick opens; SARA is the layer that comes to him. So
+// this app has exactly THREE primary modes, always on screen:
+//
+//   Capture — get it out of his head immediately, online or off
+//   Now     — one current action and the next transition, sourced and stamped
+//   Review  — morning orientation, shutdown, weekly reset
+//
+// ⚠ Everything else is SECONDARY, not deleted — including the SARA Surface,
+// which remains what notifications route to and is one tap away. The "a thing
+// he cannot find is worse than a menu he does not need" rule from 25 Aug is
+// unchanged; the strip below just no longer leads with ten equal choices.
+// Retrieval (Chat, Brain) stays available and deliberately does not compete
+// with the three above for the primary row.
+const PRIMARY = [
+  { id: 'capture', label: 'Capture', icon: '➕', Component: Capture },
+  { id: 'now', label: 'Now', icon: '◉', Component: Now },
+  { id: 'review', label: 'Review', icon: '◐', Component: Review },
+];
+
+const SECONDARY = [
+  // The ambient SARA feed. Still the destination for notification routing.
+  { id: 'surface', label: 'SARA', icon: '✦', Component: Surface },
+  { id: 'today', label: 'Today', icon: '☀', Component: Today },
   { id: 'focus', label: 'Focus', icon: '🎯', Component: Focus },
   { id: 'tasks', label: 'Tasks', icon: '✓', Component: Tasks },
-  { id: 'capture', label: 'Capture', icon: '➕', Component: Capture },
   { id: 'voice', label: 'Voice', icon: '🎙️', Component: Capture }, // jumps straight into recording
   { id: 'chat', label: 'Chat', icon: '💬', Component: Chat },
   { id: 'prep', label: 'Prep', icon: '📅', Component: MeetingPrep },
@@ -47,6 +70,8 @@ const TABS = [
   { id: 'standup', label: 'Ritual', icon: '📝', Component: Standup },
   { id: 'brain', label: 'Brain', icon: '🧠', Component: BrainManagement },
 ];
+
+const TABS = [...PRIMARY, ...SECONDARY];
 
 const VALID_TABS = new Set(TABS.map((tab) => tab.id));
 const { resolveSaraLitePlan, resolveSaraLiteTab } = actionSurfaces;
@@ -99,7 +124,7 @@ function clearLaunchIntentFromUrl() {
 export default function App() {
   const runtime = readRuntime();
   const [authed, setAuthed] = useState(() => !!getPin());
-  const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'surface');
+  const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'now');
   // The strip is revealed on request, and stays revealed while Nick is off the
   // Surface — otherwise the one screen with no menu is also the only way back.
   const [navOpen, setNavOpen] = useState(false);
@@ -116,6 +141,15 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   usePushSubscription(authed);
   const wakeLock = useWakeLock(authed);
+
+  // Drain the outbox on the foreground triggers iOS actually gives us: launch,
+  // returning to the app, coming back online. Deliberately NOT Background Sync
+  // — Safari does not implement it, and a queue Nick believes is draining in his
+  // pocket is worse than one he knows he has to open the app for.
+  useEffect(() => {
+    if (!authed) return undefined;
+    return startAutoFlush();
+  }, [authed]);
 
   useEffect(() => {
     const intent = readLaunchIntent();
@@ -161,9 +195,9 @@ export default function App() {
     setActive(tab);
     setIntentKind(null);
     setArrivedFrom(null);
-    // Landing back on the Surface puts the menu away again; it is meant to be
+    // Landing on a primary mode puts the extra row away again; it is meant to be
     // an escape hatch, not a thing that creeps back into being the navigation.
-    if (tab === 'surface') setNavOpen(false);
+    if (PRIMARY.some((t) => t.id === tab)) setNavOpen(false);
   }
 
   async function refreshApp() {
@@ -183,10 +217,14 @@ export default function App() {
   // below a conditional return changes the hook count between renders, which
   // React rejects outright ("rendered more hooks than during the previous render").
   const ActiveView = useMemo(
-    () => TABS.find((t) => t.id === active)?.Component || Surface,
+    () => TABS.find((t) => t.id === active)?.Component || Now,
     [active]
   );
-  const navVisible = navOpen || active !== 'surface';
+  // The primary row is ALWAYS visible — three modes is navigation, not a menu.
+  // The secondary row is revealed on request, and stays revealed while Nick is
+  // on one of its screens, or the way back is only through the way he came.
+  const isSecondary = SECONDARY.some((t) => t.id === active);
+  const moreVisible = navOpen || isSecondary;
 
   if (runtime.deploymentIssue) return <DeploymentGuard />;
 
@@ -251,8 +289,11 @@ export default function App() {
         />
       </main>
 
-      <nav className="app__nav" aria-label="SARA sections" hidden={!navVisible}>
-        {TABS.map((t) => (
+      {/* ⚠ `.app__nav[hidden]{display:none}` is load-bearing — the rule above it
+          is display:flex, which beats the bare `hidden` attribute. Without it
+          the secondary row renders permanently open. */}
+      <nav className="app__nav app__nav--more" aria-label="Everything else" hidden={!moreVisible}>
+        {SECONDARY.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -264,6 +305,30 @@ export default function App() {
             <span className="navbtn__label">{t.label}</span>
           </button>
         ))}
+      </nav>
+
+      <nav className="app__nav" aria-label="Neuro Mobile">
+        {PRIMARY.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`navbtn${active === t.id ? ' navbtn--on' : ''}`}
+            aria-current={active === t.id ? 'page' : undefined}
+            onClick={() => goTab(t.id)}
+          >
+            <span className="navbtn__icon" aria-hidden="true">{t.icon}</span>
+            <span className="navbtn__label">{t.label}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          className={`navbtn${moreVisible ? ' navbtn--on' : ''}`}
+          aria-expanded={moreVisible}
+          onClick={() => setNavOpen((open) => !open)}
+        >
+          <span className="navbtn__icon" aria-hidden="true">⋯</span>
+          <span className="navbtn__label">More</span>
+        </button>
       </nav>
     </div>
   );

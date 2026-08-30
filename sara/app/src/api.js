@@ -3,9 +3,15 @@
 //   Prod: API_BASE = VITE_API_URL → the NEURO backend's Tailscale Serve HTTPS URL.
 // Auth matches the NEURO/machine convention: PIN header on every /api call,
 // vault API key on /api/vault* routes.
-export const API_BASE = import.meta.env.VITE_API_URL || '';
+// Guarded rather than bare, so this module can also be imported outside Vite
+// (the outbox end-to-end test drives it under node, where `import.meta.env` does
+// not exist). Vite still statically replaces the property read at build time, so
+// the bundle is unchanged.
+const ENV = (typeof import.meta !== 'undefined' && import.meta.env) || {};
 
-const VAULT_API_KEY = import.meta.env.VITE_VAULT_API_KEY || '';
+export const API_BASE = ENV.VITE_API_URL || '';
+
+const VAULT_API_KEY = ENV.VITE_VAULT_API_KEY || '';
 const PIN_KEY = 'neuro_pin';
 
 export function getPin() {

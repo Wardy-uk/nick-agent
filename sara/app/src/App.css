@@ -196,3 +196,19 @@ body {
   text-decoration: none;
   font-weight: 600;
 }
+
+/* Phase 2: the secondary row sits ABOVE the primary one and scrolls sideways.
+   The primary row is three modes plus "More" — four buttons, so it keeps the
+   generous target size the ten-tab strip could not afford. */
+.app__nav--more {
+  overflow-x: auto;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0;
+  background: var(--panel-2);
+}
+
+.app__nav--more .navbtn {
+  flex: 0 0 auto;
+  min-width: 64px;
+}

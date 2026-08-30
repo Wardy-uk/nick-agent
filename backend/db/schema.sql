@@ -825,3 +825,46 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_blocks_slot ON task_blocks(date_key, 
 CREATE INDEX IF NOT EXISTS idx_task_blocks_status ON task_blocks(status);
 CREATE INDEX IF NOT EXISTS idx_task_block_items_task ON task_block_items(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_block_items_block ON task_block_items(block_id);
+
+-- ── Mobile outbox ledger (Phase 2) ───────────────────────────────────────────
+--
+-- Every operation the phone sends, recorded ONCE, keyed on the id the DEVICE
+-- generated. This is the whole idempotency story: NEURO owns the canonical
+-- record, and the device owns the identity of the intent that created it.
+--
+-- ⚠ `status` has four values and keeping them apart is the point:
+--   applied         — the canonical record exists; `canonical_id` names it.
+--   failed          — nothing was written; a replay is SAFE and expected.
+--   rejected        — the operation was refused (unknown kind, bad payload).
+--                     A replay changes nothing; the device must stop retrying.
+--   pending         — a row written immediately before the work started, which
+--                     can only survive a crash MID-APPLY. It is never replayed:
+--                     a note may or may not have landed and re-applying would
+--                     duplicate it, so it is reported as needing attention and
+--                     the device keeps its copy. Local intent is preserved and
+--                     nothing is silently overwritten or discarded.
+--
+-- The applier is fully SYNCHRONOUS between the ledger read and the write, so in
+-- a single Node process better-sqlite3 makes this a real mutex — two concurrent
+-- replays of one operationId cannot both see "not there yet". That is only true
+-- in-process (`plaud-admin-blocks`' rule), which is where it runs.
+--
+-- Deliberately NO capture text is stored here: the payload lives in the vault or
+-- the tasks table, which are the canonical homes for it. A second copy in a
+-- ledger is a second store, and SARA/mobile stores nothing.
+CREATE TABLE IF NOT EXISTS mobile_sync_operations (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id     TEXT NOT NULL,
+  operation_id  TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  client_schema TEXT,
+  created_at    TEXT,            -- when the DEVICE made it (may be offline-old)
+  received_at   TEXT NOT NULL,   -- when NEURO first saw it
+  settled_at    TEXT,
+  status        TEXT NOT NULL,
+  canonical_id  TEXT,
+  detail        TEXT,
+  UNIQUE(device_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_sync_status ON mobile_sync_operations(status);
+CREATE INDEX IF NOT EXISTS idx_mobile_sync_device ON mobile_sync_operations(device_id, received_at);

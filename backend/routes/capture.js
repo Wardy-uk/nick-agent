@@ -6,25 +6,14 @@ const path = require('path');
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
-function getImportsDir() {
-  return path.join(process.env.OBSIDIAN_VAULT_PATH || '', 'Imports');
-}
-
-function getFilesDir() {
-  return path.join(getImportsDir(), 'Files');
-}
-
-function ensureDirs() {
-  const imports = getImportsDir();
-  const files = getFilesDir();
-  if (!fs.existsSync(imports)) fs.mkdirSync(imports, { recursive: true });
-  if (!fs.existsSync(files)) fs.mkdirSync(files, { recursive: true });
-}
-
-function timestamp() {
-  const d = new Date();
-  return d.toISOString().replace(/[T:]/g, '-').replace(/\..+/, '');
-}
+// The note writer lives in a service now — the mobile outbox is a second front
+// door onto the same act, and two copies of "how a capture is written" is how
+// one of them quietly stops matching the other.
+const captureStore = require('../services/capture-store');
+const getImportsDir = captureStore.importsDir;
+const getFilesDir = captureStore.filesDir;
+const ensureDirs = captureStore.ensureDirs;
+const timestamp = captureStore.timestamp;
 
 function frontmatter(title) {
   const now = new Date().toISOString();
@@ -40,35 +29,7 @@ const upload = multer({
   limits: { fileSize: MAX_FILE_SIZE }
 });
 
-function slugifyTitle(title) {
-  return (title || 'note')
-    .replace(/[^a-zA-Z0-9-_ ]/g, '')
-    .substring(0, 40)
-    .trim()
-    .replace(/\s+/g, '-');
-}
-
-function writeCapturedNote({ title, content, source = 'neuro-capture' }) {
-  ensureDirs();
-  const slug = slugifyTitle(title);
-  const filename = `${timestamp()}-${slug}.md`;
-  const filePath = path.join(getImportsDir(), filename);
-
-  const fmTitle = title ? `title: "${title.replace(/"/g, '\\"')}"\n` : '';
-  const now = new Date().toISOString();
-  const body = title
-    ? `---\ndate: ${now}\nsource: ${source}\nstatus: unprocessed\n${fmTitle}---\n\n# ${title}\n\n${content.trim()}\n`
-    : `---\ndate: ${now}\nsource: ${source}\nstatus: unprocessed\n---\n\n${content.trim()}\n`;
-
-  fs.writeFileSync(filePath, body, 'utf-8');
-
-  if (!fs.existsSync(filePath)) {
-    throw new Error('File write verification failed');
-  }
-
-  const written = fs.readFileSync(filePath, 'utf-8');
-  return { filePath, filename, written };
-}
+const writeCapturedNote = captureStore.writeNote;
 
 // POST /api/capture/note — quick text capture
 router.post('/note', (req, res) => {

@@ -1,0 +1,51 @@
+.fresh {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  margin: 0 0 0.85rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.fresh strong { font-weight: 600; }
+
+/* Cached: amber-ish, readable, not alarming. Stale is normal on a phone. */
+.fresh--cached {
+  background: rgba(200, 145, 40, 0.10);
+  border-color: rgba(200, 145, 40, 0.45);
+  color: #f0d6a6;
+}
+
+/* No cache at all: this IS the state that must not be mistaken for calm. */
+.fresh--none {
+  background: rgba(200, 70, 70, 0.10);
+  border-color: rgba(200, 70, 70, 0.45);
+  color: #f2b8b8;
+}
+
+.fresh--quiet {
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.fresh__why {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  word-break: break-word;
+}
+
+.fresh__retry {
+  display: inline-block;
+  margin-top: 0.5rem;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.fresh__retry:disabled { opacity: 0.5; }

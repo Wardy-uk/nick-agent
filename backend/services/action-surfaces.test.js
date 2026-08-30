@@ -36,12 +36,18 @@ function tabIdsFromApp() {
   // The vault and this repo are Windows-authored and mixed CRLF/LF; `.` does not
   // match \r, so normalise before any line-anchored matching.
   const src = fs.readFileSync(APP_JSX, 'utf8').replace(/\r\n/g, '\n');
-  const start = src.indexOf('const TABS = [');
-  assert.ok(start !== -1, 'could not find the TABS array in App.jsx');
-  const end = src.indexOf('\n];', start);
-  assert.ok(end !== -1, 'could not find the end of the TABS array in App.jsx');
-  const block = src.slice(start, end);
-  const ids = [...block.matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]);
+  // Phase 2 split the single TABS literal into PRIMARY (the three modes always
+  // on screen) and SECONDARY (everything else, behind "More"). Both are read:
+  // a notification routes to either, so an id missing from SARA_LITE_TABS is
+  // just as silent in one as in the other.
+  const ids = [];
+  for (const name of ['const PRIMARY = [', 'const SECONDARY = [']) {
+    const start = src.indexOf(name);
+    assert.ok(start !== -1, `could not find ${name.trim()} in App.jsx`);
+    const end = src.indexOf('\n];', start);
+    assert.ok(end !== -1, `could not find the end of ${name.trim()} in App.jsx`);
+    ids.push(...[...src.slice(start, end).matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]));
+  }
   assert.ok(ids.length >= 8, `expected the full tab list, parsed ${ids.length}`);
   return ids;
 }
