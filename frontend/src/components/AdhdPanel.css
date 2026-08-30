@@ -355,3 +355,29 @@
 /* The count carries the block, so it is sized like a headline rather than a
    stat in a row of stats. */
 .adhd__solo .adhd__big { font-size: 3.2rem; line-height: 1; }
+
+/* Gate 3 — the session's next step and the "make it smaller" box. */
+.adhd__session-next {
+  margin: 0.2rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text, #e6edf3);
+}
+.adhd__session-shrink { margin-top: 0.6rem; }
+.adhd__session-shrinkl {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted, #8b98a8);
+  margin-bottom: 0.3rem;
+}
+.adhd__session-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg, #0b0f14);
+  border: 1px solid var(--border, #26313f);
+  color: var(--text, #e6edf3);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}

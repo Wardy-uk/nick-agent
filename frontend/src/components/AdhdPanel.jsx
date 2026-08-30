@@ -37,6 +37,9 @@ export default function AdhdPanel({ onNavigate }) {
     }
   }, []);
 
+  // The "make it smaller" box. Null when closed; a string while being typed.
+  const [smaller, setSmaller] = useState(null);
+
   useEffect(() => { load(); }, [load]);
 
   // A running session has a clock on it, so the card has to move. One minute is
@@ -141,13 +144,50 @@ export default function AdhdPanel({ onNavigate }) {
       {recovery && (
         <section className={`adhd__recovery adhd__recovery--${recovery.kind}`}>
           <div className="adhd__recovery-label">
-            {recovery.kind === 'resume' ? 'Where you were' : 'Left open'}
+            {recovery.kind === 'resume' ? 'Where you were'
+              : recovery.kind === 'shrink' ? 'Too big to start'
+                : 'Left open'}
           </div>
           <p className="adhd__recovery-prompt">{recovery.prompt}</p>
           <p className="adhd__recovery-question">{recovery.question}</p>
+          {/* The next step he left himself, if any. The whole reason the return
+              prompt works: "the task" is a wall, a named action is a decision. */}
+          {recovery.nextStep && <p className="adhd__session-next">Next: {recovery.nextStep}</p>}
+
+          {/* ⚠ The shrink box has to live HERE as well as on the session card.
+              Recovery renders INSTEAD of the card, so a "make it smaller"
+              button that only opened the card's input would do nothing at all
+              at the exact moment the option is offered. */}
+          {smaller !== null ? (
+            <div className="adhd__session-shrink">
+              <label className="adhd__session-shrinkl" htmlFor="adhd-smaller-rec">
+                What is the smallest next bit of it?
+              </label>
+              <input
+                id="adhd-smaller-rec"
+                className="adhd__session-input"
+                value={smaller}
+                onChange={(e) => setSmaller(e.target.value)}
+                placeholder="e.g. open the doc and write the first heading"
+                autoFocus
+              />
+              <div className="adhd__recovery-actions">
+                <button
+                  className="adhd__do"
+                  type="button"
+                  disabled={!smaller.trim()}
+                  onClick={() => { sessionPost('shrink', { step: smaller.trim() }); setSmaller(null); }}
+                >That is the step</button>
+                <button className="adhd__later" type="button" onClick={() => setSmaller(null)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
           <div className="adhd__recovery-actions">
             {recovery.options.includes('resume') && (
               <button className="adhd__do" type="button" onClick={() => sessionPost('resume')}>Back to it</button>
+            )}
+            {recovery.options.includes('shrink') && (
+              <button className="adhd__do" type="button" onClick={() => setSmaller('')}>Make it smaller</button>
             )}
             {recovery.options.includes('restart') && (
               <button className="adhd__do" type="button" onClick={() => sessionPost('start', { text: recovery.session.text, force: true })}>Start it again</button>
@@ -157,6 +197,7 @@ export default function AdhdPanel({ onNavigate }) {
                 the difference between a prompt and a nag. */}
             <button className="adhd__later" type="button" onClick={() => sessionPost('abandon')}>Let it go</button>
           </div>
+          )}
         </section>
       )}
 
@@ -165,10 +206,18 @@ export default function AdhdPanel({ onNavigate }) {
           thing; this holds the thing you actually picked. */}
       {session && !recovery && (
         <section className={`adhd__session${session.overrun ? ' adhd__session--over' : ''}`}>
+          {/* Four states, named. The old label collapsed every non-active one
+              into "Paused" — but "I was pulled off this" and "I'm stuck on how
+              big it is" are different problems needing different next moves. */}
           <div className="adhd__session-label">
-            {session.status === 'active' ? 'In progress' : 'Paused'} · started {session.startedTime}
+            {session.status === 'active' ? 'In progress'
+              : session.status === 'needs-smaller' ? 'Too big to start'
+                : session.status === 'interrupted' ? 'You were pulled off this'
+                  : 'Paused'} · started {session.startedTime}
           </div>
           <h2 className="adhd__session-title">{session.text}</h2>
+          {/* The concrete physical step. Coming back to "the task" is a wall. */}
+          {session.nextStep && <p className="adhd__session-next">Next: {session.nextStep}</p>}
           <div className="adhd__session-bar" role="img" aria-label={`${session.elapsedMinutes} of about ${session.plannedMinutes} minutes`}>
             <div
               className="adhd__session-fill"
@@ -190,13 +239,56 @@ export default function AdhdPanel({ onNavigate }) {
               {session.lastInterruption?.detail ? ` — last: ${session.lastInterruption.detail}` : ''}
             </p>
           )}
-          <div className="adhd__session-actions">
-            {session.status === 'active'
-              ? <button className="adhd__later" type="button" onClick={() => sessionPost('pause')}>Pause</button>
-              : <button className="adhd__do" type="button" onClick={() => sessionPost('resume')}>Resume</button>}
-            <button className="adhd__do" type="button" onClick={() => sessionPost('finish', { completeTask: true })}>Done</button>
-            <button className="adhd__later" type="button" onClick={() => sessionPost('abandon')}>Stop</button>
-          </div>
+          {/* Stated, never scored. A task made smaller three times is a finding
+              about the work, not a mark against you. */}
+          {session.shrinks > 0 && (
+            <p className="adhd__session-int">Made smaller {session.shrinks}× so far</p>
+          )}
+          {/* The private body-double. Only when it is actually due, and only on
+              a running session — and it is a PULL: nothing pushed this. */}
+          {session.dueCheckIn && smaller === null && (
+            <p className="adhd__session-int">
+              Still on this one?{' '}
+              <button className="adhd__do" type="button" onClick={() => sessionPost('check-in')}>Still here</button>
+            </p>
+          )}
+          {smaller !== null ? (
+            <div className="adhd__session-shrink">
+              <label className="adhd__session-shrinkl" htmlFor="adhd-smaller">
+                {session.status === 'needs-smaller'
+                  ? 'What is the smallest next bit of it?'
+                  : 'What is the smaller version?'}
+              </label>
+              <input
+                id="adhd-smaller"
+                className="adhd__session-input"
+                value={smaller}
+                onChange={(e) => setSmaller(e.target.value)}
+                placeholder="e.g. open the doc and write the first heading"
+                autoFocus
+              />
+              <div className="adhd__session-actions">
+                <button
+                  className="adhd__do"
+                  type="button"
+                  disabled={!smaller.trim()}
+                  onClick={() => { sessionPost('shrink', { step: smaller.trim() }); setSmaller(null); }}
+                >That is the step</button>
+                <button className="adhd__later" type="button" onClick={() => setSmaller(null)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div className="adhd__session-actions">
+              {/* First, and first on purpose: every other control here answers
+                  WHEN, and only this one lowers the barrier to starting. */}
+              <button className="adhd__do" type="button" onClick={() => setSmaller('')}>Make it smaller</button>
+              {session.status === 'active'
+                ? <button className="adhd__later" type="button" onClick={() => sessionPost('pause')}>Pause</button>
+                : <button className="adhd__do" type="button" onClick={() => sessionPost('resume')}>Resume</button>}
+              <button className="adhd__do" type="button" onClick={() => sessionPost('finish', { completeTask: true })}>Done</button>
+              <button className="adhd__later" type="button" onClick={() => sessionPost('abandon')}>Stop</button>
+            </div>
+          )}
         </section>
       )}
 
