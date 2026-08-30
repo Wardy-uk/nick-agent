@@ -67,6 +67,10 @@ router.get('/', async (_req, res) => {
   }
 });
 
+// The LEGACY suppression path, kept for one job only: a card the kiosk cannot
+// resolve to a canonical attention record. `saraState` tries the record first
+// and says out loud when it has fallen back here, because the engine's
+// suppression is a TIMER and cannot express "seen it" or "this is finished".
 router.post('/focus/dismiss', async (req, res) => {
   const itemId = String(req.body?.itemId || '').trim();
   if (!itemId) return res.status(400).json({ ok: false, error: 'itemId is required' });
@@ -83,23 +87,18 @@ router.post('/focus/dismiss', async (req, res) => {
   }
 });
 
-router.post('/focus/done', async (req, res) => {
-  const detail = String(req.body?.detail || '').trim();
-  if (!detail) return res.status(400).json({ ok: false, error: 'detail is required' });
-
-  try {
-    const result = await postJson('/api/focus/action-done', {
-      actionType: req.body?.actionType || 'manual',
-      detail,
-      itemId: req.body?.itemId || null,
-      itemType: req.body?.itemType || null,
-    });
-    if (!result.ok) return res.status(result.status).json({ ok: false, error: result.error });
-    return res.json({ ok: true });
-  } catch (error) {
-    return res.status(502).json({ ok: false, error: error.message });
-  }
-});
+// ⚠ `POST /focus/done` USED TO LIVE HERE and proxied `/api/focus/action-done`.
+//
+// That route calls `nextActionEngine.logOutcome()` AND `engine.dismiss()`, so
+// the kiosk's "Done" button recorded work as a completed outcome and hid the
+// card — and it never closed the underlying task, so the work stayed open with
+// its only reminder suppressed. It is the same bug the desktop carried, one
+// surface along, and it is gone rather than fixed in place: completion belongs
+// to the attention lifecycle, which knows what a card is about and can say
+// whether a task was actually closed.
+//
+// The replacement is `POST /api/attention/records/:id/act` with
+// `action: 'complete'` — see `src/routes/attention.js`.
 
 router.post('/:id/approve', async (req, res) => {
   try {

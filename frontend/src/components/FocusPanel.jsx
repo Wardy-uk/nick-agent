@@ -1,50 +1,37 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import useCachedFetch from '../useCachedFetch';
-import { apiUrl } from '../api';
-import actionSurfaces from '../../../shared/action-surfaces.cjs';
+import useAttention from '../useAttention';
+import AttentionCard from './AttentionCard';
 import './FocusPanel.css';
 
-const TYPE_ICONS = {
-  escalation: '!!',
-  jira_ticket: '#',
-  meeting: '@',
-  todo: '[ ]',
-  nudge: '~',
-  imports: '>',
-  email: '\u2709',
-  nova_flag: '!!',
-};
-
-const DEFER_MESSAGES = [
-  "Moved to tomorrow morning.",
-  "That\u2019s twice. When are you actually doing this?",
-  "You\u2019re avoiding this. What\u2019s blocking you?",
-];
-const { resolveNueroNavigation } = actionSurfaces;
-
-function getDeferCount(itemId) {
-  try {
-    const stored = JSON.parse(localStorage.getItem('sara-defers') || '{}');
-    return stored[itemId] || 0;
-  } catch { return 0; }
-}
-
-function incrementDefer(itemId) {
-  try {
-    const stored = JSON.parse(localStorage.getItem('sara-defers') || '{}');
-    stored[itemId] = (stored[itemId] || 0) + 1;
-    localStorage.setItem('sara-defers', JSON.stringify(stored));
-    return stored[itemId];
-  } catch { return 1; }
-}
-
-function clearDefer(itemId) {
-  try {
-    const stored = JSON.parse(localStorage.getItem('sara-defers') || '{}');
-    delete stored[itemId];
-    localStorage.setItem('sara-defers', JSON.stringify(stored));
-  } catch {}
-}
+/**
+ * Focus — the one-at-a-time deck.
+ *
+ * A SUPPORTING view now: `Now` is the execution surface and the default screen,
+ * and this is the place to page through the pool one card at a time when the
+ * top of it is not the thing you want.
+ *
+ * ── What changed, and why each was wrong ────────────────────────────────────
+ *
+ * **"Done" POSTed `/api/focus/action-done`.** That logs an outcome through
+ * `nextActionEngine.logOutcome()` and dismisses the item — but it never
+ * completed the underlying task, so ticking a card here left the task open and
+ * hid the reminder about it. It now goes through the canonical `complete`
+ * action, which resolves the record AND closes the task where one can be found,
+ * and says which of the two actually happened.
+ *
+ * **"Defer" POSTed `/api/focus/dismiss`.** So "not now" and "not mine"
+ * collapsed into one gesture, and the difference — the thing the friction read
+ * is built on — was thrown away at the moment Nick expressed it. The escalating
+ * DEFER_MESSAGES that went with it ("You're avoiding this") are gone: they were
+ * counted in `localStorage`, so the number was per-browser rather than a fact
+ * about the work, and the wording was a claim about Nick that no evidence
+ * supported. Deferrals are recorded server-side with a reason now, and
+ * `FrictionSection` says what they add up to, neutrally.
+ *
+ * The card itself is `AttentionCard`, shared with Now and Briefing, so the
+ * actions cannot come to mean three different things on three screens.
+ */
 
 function timeAgo(dateStr) {
   if (!dateStr) return '';
@@ -54,145 +41,22 @@ function timeAgo(dateStr) {
   return `${Math.round(diff / 3600)}h ago`;
 }
 
-// The backend has already dropped the values that mean nothing here (an "Unset"
-// priority, "Open", Nick's own name) — anything that arrives is worth a badge.
-function EscalationBadges({ item }) {
-  if (!item.status && !item.priority && !item.assignee) return null;
-  return (
-    <>
-      {item.priority && (
-        <span className={`focus-card-list-badge focus-card-list-priority-${item.priority.toLowerCase()}`}>
-          {item.priority}
-        </span>
-      )}
-      {item.status && <span className="focus-card-list-badge">{item.status}</span>}
-      {item.assignee && <span className="focus-card-list-badge">{item.assignee}</span>}
-    </>
-  );
-}
-
 export default function FocusPanel({ onNavigate }) {
-  const { data, status, refresh } = useCachedFetch('/api/focus', { interval: 30000 });
+  // Read-only: SARA's line and the tone are not in the attention contract.
+  const { data: focusData, status } = useCachedFetch('/api/focus', { interval: 30000 });
+  const attention = useAttention({ interval: 30000 });
 
-  const items = (data?.items || []).slice(0, 5);
-  const sara = data?.sara || null;
-  const tone = data?.tone || 'focused';
+  const sara = focusData?.sara || null;
+  const tone = focusData?.tone || 'focused';
 
+  const cards = attention.cards;
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [deferFeedback, setDeferFeedback] = useState(null);
-  const [doneAnimation, setDoneAnimation] = useState(false);
 
   useEffect(() => {
-    if (currentIndex >= items.length && items.length > 0) {
-      setCurrentIndex(items.length - 1);
-    }
-  }, [items.length, currentIndex]);
+    if (currentIndex >= cards.length && cards.length > 0) setCurrentIndex(cards.length - 1);
+  }, [cards.length, currentIndex]);
 
-  const current = items[currentIndex] || null;
-  const guidance = current && sara?.items
-    ? sara.items.find(ai => ai.id === current.id) || null
-    : null;
-
-  const handleDone = useCallback(async () => {
-    if (!current || actionLoading) return;
-    setActionLoading(true);
-    setDoneAnimation(true);
-
-    try {
-      await fetch(apiUrl('/api/focus/action-done'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          actionType: current.type,
-          detail: current.title,
-          itemId: current.id,
-          itemType: current.type,
-        }),
-      });
-      clearDefer(current.id);
-    } catch {}
-
-    setTimeout(() => {
-      setDoneAnimation(false);
-      setActionLoading(false);
-      refresh();
-    }, 400);
-  }, [current, actionLoading, refresh]);
-
-  const handleDefer = useCallback(async () => {
-    if (!current || actionLoading) return;
-    setActionLoading(true);
-
-    const count = incrementDefer(current.id);
-    const msgIndex = Math.min(count - 1, DEFER_MESSAGES.length - 1);
-    setDeferFeedback(DEFER_MESSAGES[msgIndex]);
-
-    try {
-      await fetch(apiUrl('/api/focus/dismiss'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemId: current.id, itemType: current.type }),
-      });
-    } catch {}
-
-    setTimeout(() => {
-      setDeferFeedback(null);
-      setActionLoading(false);
-      refresh();
-    }, count >= 3 ? 3000 : 1800);
-  }, [current, actionLoading, refresh]);
-
-  const handleSnooze = useCallback(async () => {
-    if (!current || actionLoading) return;
-    setActionLoading(true);
-    setDeferFeedback('Snoozed for 1 hour.');
-
-    try {
-      await fetch(apiUrl('/api/focus/snooze'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemId: current.id, itemType: current.type, durationMinutes: 60 }),
-      });
-    } catch {}
-
-    setTimeout(() => {
-      setDeferFeedback(null);
-      setActionLoading(false);
-      refresh();
-    }, 1400);
-  }, [current, actionLoading, refresh]);
-
-  const handleHideToday = useCallback(async () => {
-    if (!current || actionLoading) return;
-    setActionLoading(true);
-    setDeferFeedback('Hidden until tomorrow.');
-
-    try {
-      await fetch(apiUrl('/api/focus/hide-today'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemId: current.id, itemType: current.type }),
-      });
-    } catch {}
-
-    setTimeout(() => {
-      setDeferFeedback(null);
-      setActionLoading(false);
-      refresh();
-    }, 1400);
-  }, [current, actionLoading, refresh]);
-
-  const handleNavigate = (item) => {
-    if (!item) return;
-    const ctx = { fromFocus: true, focusItem: item };
-    const destination = resolveNueroNavigation(item);
-    if (!destination) return;
-    onNavigate?.(destination.view, { ...ctx, ...(destination.context || {}) });
-  };
-
-  const deferCount = current ? getDeferCount(current.id) : 0;
-  const isNovaFlag = current?.type === 'nova_flag';
+  const current = cards[currentIndex] || null;
 
   return (
     <div className="focus-panel">
@@ -207,163 +71,71 @@ export default function FocusPanel({ onNavigate }) {
         </div>
       )}
 
-      {/* Defer feedback overlay */}
-      {deferFeedback && (
-        <div className={`focus-defer-feedback ${deferCount >= 3 ? 'focus-defer-hard' : deferCount >= 2 ? 'focus-defer-medium' : ''}`}>
-          <span className="focus-defer-feedback-text">{deferFeedback}</span>
+      {/* ⚠ Four states, kept apart. An unreadable pool must never render as the
+          clear one — that is the false all-clear the attention contract exists
+          to prevent, and a big green tick over it is the worst possible way to
+          get it wrong. */}
+      {attention.poolAvailable === false ? (
+        <div className="focus-clear focus-clear-warn">
+          <div className="focus-clear-text">I can&rsquo;t see your work right now.</div>
+          <div className="focus-clear-sub">This is not an all-clear &mdash; the pool could not be read.</div>
         </div>
-      )}
-
-      {/* Main card area */}
-      {items.length === 0 ? (
+      ) : attention.contextCard && cards.length === 0 ? (
         <div className="focus-clear">
-          <div className="focus-clear-check">\u2713</div>
-          <div className="focus-clear-text">Nothing needs you right now.</div>
-          <div className="focus-clear-sub">Queue, calendar, and todos are clear.</div>
+          <div className="focus-clear-text">{attention.contextCard.title}</div>
+          <div className="focus-clear-sub">{attention.contextCard.reason}</div>
         </div>
+      ) : cards.length === 0 ? (
+        attention.loading ? (
+          <div className="focus-clear"><div className="focus-clear-text">Looking&hellip;</div></div>
+        ) : (
+          <div className="focus-clear">
+            <div className="focus-clear-check">&#x2713;</div>
+            <div className="focus-clear-text">Nothing needs you right now.</div>
+            <div className="focus-clear-sub">Calendar and tasks are clear.</div>
+          </div>
+        )
       ) : current ? (
-        <div className={`focus-card focus-card-${current.urgency || 'low'} ${doneAnimation ? 'focus-card-done' : ''}`}>
-          <div className="focus-card-type">
-            <span className="focus-card-icon">{TYPE_ICONS[current.type] || '\u00b7'}</span>
-            <span className="focus-card-type-label">{current.type?.replace('_', ' ')}</span>
-            {current.urgency && (
-              <span className={`focus-card-urgency focus-card-urgency-${current.urgency}`}>
-                {current.urgency === 'critical' ? 'NOW' : current.urgency === 'high' ? 'SOON' : current.urgency === 'medium' ? 'TODAY' : 'LATER'}
-              </span>
-            )}
-          </div>
-
-          <h2 className="focus-card-title">{current.title}</h2>
-
-          <p className="focus-card-reason">
-            {guidance?.why || current.reason}
-          </p>
-
-          {/* Escalations name themselves — a count alone isn't actionable.
-              The list used to render only at 2+, so a SINGLE escalation had no
-              anchor anywhere on the card: the title becomes the ticket, and
-              "Open →" goes to the in-app dashboard, not Jira. One row is still
-              a list. Its summary is dropped in that case because the title is
-              already carrying it. */}
-          {current.meta?.escalations?.length >= 1 && (
-            <ul className="focus-card-list">
-              {current.meta.escalations.map(e => (
-                <li key={e.key} className="focus-card-list-item">
-                  {e.url ? (
-                    <a
-                      className="focus-card-list-link"
-                      href={e.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <span className="focus-card-list-key">{e.key}</span>
-                      {current.meta.escalations.length > 1 && (
-                        <span className="focus-card-list-text">{e.summary}</span>
-                      )}
-                    </a>
-                  ) : (
-                    <>
-                      <span className="focus-card-list-key">{e.key}</span>
-                      {current.meta.escalations.length > 1 && (
-                        <span className="focus-card-list-text">{e.summary}</span>
-                      )}
-                    </>
-                  )}
-                  <EscalationBadges item={e} />
-                  {e.ageDays != null && (
-                    <span className="focus-card-list-age">{e.ageDays === 0 ? 'today' : `${e.ageDays}d`}</span>
-                  )}
-                </li>
-              ))}
-              {current.meta.overflow > 0 && (
-                <li className="focus-card-list-more">+{current.meta.overflow} more</li>
-              )}
-            </ul>
-          )}
-
-          {guidance?.action && (
-            <div className="focus-card-action">{guidance.action}</div>
-          )}
-
-          {current.meta?.time && (
-            <div className="focus-card-time">{current.meta.time}</div>
-          )}
-
-          {deferCount > 0 && !deferFeedback && (
-            <div className={`focus-card-defer-count ${deferCount >= 2 ? 'focus-card-defer-warn' : ''}`}>
-              Deferred {deferCount}x
-            </div>
-          )}
-
-          {/* Action buttons */}
-          <div className="focus-card-actions">
-            <button
-              className="focus-btn-done"
-              onClick={handleDone}
-              disabled={actionLoading}
-            >
-              Done
-            </button>
-            {isNovaFlag ? (
-              <>
-                <button
-                  className="focus-btn-defer"
-                  onClick={handleSnooze}
-                  disabled={actionLoading}
-                >
-                  Snooze
-                </button>
-                <button
-                  className="focus-btn-hide"
-                  onClick={handleHideToday}
-                  disabled={actionLoading}
-                >
-                  Hide today
-                </button>
-              </>
-            ) : (
-              <button
-                className={`focus-btn-defer ${deferCount >= 2 ? 'focus-btn-defer-warn' : ''}`}
-                onClick={handleDefer}
-                disabled={actionLoading}
-              >
-                Defer
-              </button>
-            )}
-            <button
-              className="focus-btn-open"
-              onClick={() => handleNavigate(current)}
-            >
-              Open \u2192
-            </button>
-          </div>
-        </div>
+        <AttentionCard
+          card={current}
+          onNavigate={onNavigate}
+          onAct={attention.act}
+        />
       ) : null}
 
       {/* Navigation dots */}
-      {items.length > 1 && (
+      {cards.length > 1 && (
         <div className="focus-nav">
-          {items.map((item, i) => (
+          {cards.map((card, i) => (
             <button
-              key={item.id || i}
-              className={`focus-nav-dot ${i === currentIndex ? 'focus-nav-active' : ''} ${item.urgency === 'critical' ? 'focus-nav-critical' : ''}`}
-              onClick={() => { setCurrentIndex(i); setDeferFeedback(null); }}
-              title={item.title}
+              key={card.recordId || card.id || i}
+              className={`focus-nav-dot ${i === currentIndex ? 'focus-nav-active' : ''} ${card.urgency === 'critical' ? 'focus-nav-critical' : ''}`}
+              onClick={() => setCurrentIndex(i)}
+              title={card.title}
             />
           ))}
-          <span className="focus-nav-count">{currentIndex + 1}/{items.length}</span>
+          <span className="focus-nav-count">{currentIndex + 1}/{cards.length}</span>
         </div>
+      )}
+
+      {/* Held back, and inputs that could not be read. Never swallowed. */}
+      {(attention.dropped.length > 0 || attention.gaps.length > 0) && (
+        <p className="focus-held">
+          {attention.dropped.length > 0 && `${attention.dropped.length} held back`}
+          {attention.dropped.length > 0 && attention.gaps.length > 0 && ' · '}
+          {attention.gaps.length > 0 && `${attention.gaps.length} couldn't be read`}
+        </p>
       )}
 
       {/* Footer */}
       <div className="focus-footer">
-        {data?.generatedAt && (
+        {attention.data?.generatedAt && (
           <span className="focus-footer-time">
-            Updated {timeAgo(data.generatedAt)}
-            {status === 'cached' && ' \u00b7 cached'}
+            Updated {timeAgo(attention.data.generatedAt)}
+            {status === 'cached' && ' · cached'}
           </span>
         )}
-        <button className="focus-footer-refresh" onClick={refresh}>↻</button>
+        <button className="focus-footer-refresh" onClick={attention.refresh}>↻</button>
       </div>
     </div>
   );

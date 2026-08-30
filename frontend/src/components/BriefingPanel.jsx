@@ -1,20 +1,31 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useRef, useEffect } from 'react';
 import useCachedFetch from '../useCachedFetch';
-import { apiUrl } from '../api';
+import useAttention from '../useAttention';
+import AttentionCard from './AttentionCard';
 import { speakIfEnabled } from '../voiceUtils';
-import actionSurfaces from '../../../shared/action-surfaces.cjs';
 import './BriefingPanel.css';
 
-const SOURCE_ICONS = {
-  escalation: '!!',
-  jira_ticket: 'JIRA',
-  meeting: 'CAL',
-  todo: 'TODO',
-  nudge: 'SARA',
-  imports: 'IMP',
-  email: 'MAIL',
-};
-const { resolveNueroNavigation } = actionSurfaces;
+/**
+ * Briefing — the morning read.
+ *
+ * A SUPPORTING view now, not a second "what should I do?" surface: `Now` is
+ * where work gets started, and this is where the day gets framed. It still owns
+ * SARA's opening line, the tone and the day's context, because none of those
+ * are in the attention contract.
+ *
+ * ⚠ THE BUG THIS FILE CARRIED. Clicking "Do it" POSTed
+ * `/api/focus/action-done`, which calls `nextActionEngine.logOutcome()` AND
+ * dismisses the item — so pressing the button that merely OPENS a thing
+ * recorded it as a completed outcome and hid it, before any work had been done.
+ * Both halves were wrong and both were invisible: the card vanished, which
+ * looks exactly like the button having worked. There is no state of the world
+ * in which "I am starting this" should log a completion.
+ *
+ * The cards are canonical attention now, rendered by the shared `AttentionCard`,
+ * so Open context navigates and calls nothing, Start this starts a session and
+ * moves no state, and only an explicit Done resolves anything. Nothing on this
+ * screen writes to `/api/focus` any more.
+ */
 
 function timeAgo(dateStr) {
   if (!dateStr) return '';
@@ -24,47 +35,26 @@ function timeAgo(dateStr) {
   return `${Math.round(diff / 3600)}h ago`;
 }
 
-function formatSlaMinutes(mins) {
-  if (!mins && mins !== 0) return '';
-  if (mins < 0) return 'BREACHED';
-  if (mins < 60) return `${Math.round(mins)}m`;
-  return `${Math.round(mins / 60)}h`;
-}
-
-// The backend has already dropped the values that mean nothing here (an "Unset"
-// priority, "Open", Nick's own name) — anything that arrives is worth a badge.
-function EscalationBadges({ item }) {
-  if (!item.status && !item.priority && !item.assignee) return null;
-  return (
-    <>
-      {item.priority && (
-        <span className={`briefing-card-list-badge briefing-card-list-priority-${item.priority.toLowerCase()}`}>
-          {item.priority}
-        </span>
-      )}
-      {item.status && <span className="briefing-card-list-badge">{item.status}</span>}
-      {item.assignee && <span className="briefing-card-list-badge">{item.assignee}</span>}
-    </>
-  );
-}
-
 export default function BriefingPanel({ onNavigate }) {
+  // Read-only, and only for what the attention contract does not carry: SARA's
+  // briefing prose, the tone, and whether the rituals are done.
   const focusFetch = useCachedFetch('/api/focus', { interval: 30000 });
   const todoFetch = useCachedFetch('/api/todos', { interval: 60000 });
   const qaFetch = useCachedFetch('/api/qa/summary', { interval: 300000 });
+  const attention = useAttention({ interval: 30000 });
 
-  const items = focusFetch.data?.items || [];
   const sara = focusFetch.data?.sara || null;
   const tone = focusFetch.data?.tone || 'focused';
-  const nextAction = focusFetch.data?.nextAction || null;
   const context = focusFetch.data?.context || {};
 
   const todos = todoFetch.data?.todos || [];
-  const overdueTodos = todos.filter(t => !t.done && t.due_date && t.due_date < new Date().toISOString().split('T')[0]).length;
+  const overdueTodos = todos.filter(
+    t => !t.done && t.due_date && t.due_date < new Date().toISOString().split('T')[0]
+  ).length;
 
-  const qaAvg = qaFetch.data?.average != null ? `${Math.round(qaFetch.data.average)}%` : (qaFetch.data?.teamAverage != null ? `${Math.round(qaFetch.data.teamAverage)}%` : '-');
-
-  const [actionLoading, setActionLoading] = useState(null);
+  const qaAvg = qaFetch.data?.average != null
+    ? `${Math.round(qaFetch.data.average)}%`
+    : (qaFetch.data?.teamAverage != null ? `${Math.round(qaFetch.data.teamAverage)}%` : '-');
 
   // Speak SARA's opening line once per briefing visit
   const spokenRef = useRef(null);
@@ -74,53 +64,6 @@ export default function BriefingPanel({ onNavigate }) {
     spokenRef.current = msg;
     speakIfEnabled(msg);
   }, [sara?.primary?.message]);
-
-  const handleCardClick = (item) => {
-    const ctx = { fromBriefing: true, focusItem: item };
-    const destination = resolveNueroNavigation(item);
-    if (!destination) return;
-    onNavigate?.(destination.view, { ...ctx, ...(destination.context || {}) });
-  };
-
-  const handleAction = async (action) => {
-    setActionLoading(action.focusItemId);
-    try {
-      if (action.url) window.open(action.url, '_blank');
-      if (action.target && onNavigate) {
-        onNavigate(action.target, action.targetContext || { fromBriefing: true });
-      }
-      await fetch(apiUrl('/api/focus/action-done'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ actionType: action.type, detail: action.label }),
-      }).catch(() => {});
-      setTimeout(() => focusFetch.refresh(), 500);
-    } catch {}
-    setActionLoading(null);
-  };
-
-  const handleDismiss = async (e, item) => {
-    e.stopPropagation();
-    try {
-      await fetch(apiUrl('/api/focus/dismiss'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemId: item.id, itemType: item.type }),
-      });
-      focusFetch.refresh();
-    } catch {}
-  };
-
-  const getItemGuidance = (item) => {
-    if (!sara?.items) return null;
-    return sara.items.find(ai => ai.id === item.id) || null;
-  };
-
-  // nextAction is built FROM one of these items, so rendering both showed the
-  // same thing twice — as the SOON band and again as a card underneath it.
-  const topItems = items
-    .filter(item => !nextAction || item.id !== nextAction.focusItemId)
-    .slice(0, 6);
 
   return (
     <div className="briefing">
@@ -137,112 +80,47 @@ export default function BriefingPanel({ onNavigate }) {
         )}
       </div>
 
-      {/* Primary action — the one thing to do right now */}
-      {nextAction && (
-        <div
-          className={`briefing-next briefing-next-${nextAction.urgency || 'medium'}`}
-          onClick={() => handleAction(nextAction)}
-        >
-          <div className="briefing-next-body">
-            <span className="briefing-next-badge">
-              {nextAction.urgency === 'critical' ? 'NOW' : nextAction.urgency === 'high' ? 'SOON' : 'NEXT'}
-            </span>
-            <span className="briefing-next-label">{nextAction.label}</span>
-            <span className="briefing-next-reason">{nextAction.reason}</span>
+      {/* Canonical attention. The wording, the destination and the permitted
+          actions all come off the record — nothing is composed here. */}
+      {attention.poolAvailable === false ? (
+        <div className="briefing-empty briefing-empty-warn">
+          <div className="briefing-empty-line">
+            I can&rsquo;t see your work right now &mdash; this is not an all-clear.
           </div>
-          <button
-            className="briefing-next-btn"
-            disabled={actionLoading === nextAction.focusItemId}
-            onClick={(e) => { e.stopPropagation(); handleAction(nextAction); }}
-          >
-            {actionLoading === nextAction.focusItemId ? '...' : 'Do it'}
-          </button>
         </div>
-      )}
-
-      {/* Action cards */}
-      {topItems.length > 0 ? (
+      ) : attention.cards.length > 0 ? (
         <div className="briefing-cards">
-          {topItems.map((item, i) => {
-            const guidance = getItemGuidance(item);
-            return (
-              <div
-                key={item.id || i}
-                className={`briefing-card briefing-card-${item.urgency || 'low'}`}
-                onClick={() => handleCardClick(item)}
-              >
-                <div className="briefing-card-head">
-                  <span className="briefing-card-source">{SOURCE_ICONS[item.type] || '·'}</span>
-                  {item.meta?.ticket_key && (
-                    <span className="briefing-card-key">{item.meta.ticket_key}</span>
-                  )}
-                  {item.meta?.sla_remaining_minutes != null && (
-                    <span className={`briefing-card-sla ${item.meta.sla_remaining_minutes < 0 ? 'sla-breached' : item.meta.sla_remaining_minutes < 120 ? 'sla-danger' : ''}`}>
-                      {formatSlaMinutes(item.meta.sla_remaining_minutes)}
-                    </span>
-                  )}
-                  <button
-                    className="briefing-card-dismiss"
-                    onClick={(e) => handleDismiss(e, item)}
-                    title="Dismiss"
-                  >&times;</button>
-                </div>
-                <div className="briefing-card-title">{item.title}</div>
-                <div className="briefing-card-take">
-                  {guidance?.why || item.reason}
-                </div>
-                {/* One escalation is still a list — rendering only at 2+ left the
-                    single case with no Jira anchor at all, since the card click
-                    goes to the in-app dashboard. Its summary is dropped there
-                    because the card title is already carrying it. */}
-                {item.meta?.escalations?.length >= 1 && (
-                  <ul className="briefing-card-list">
-                    {item.meta.escalations.map(e => (
-                      <li key={e.key}>
-                        {e.url ? (
-                          /* the card itself navigates in-app — don't let that swallow the link */
-                          <a
-                            className="briefing-card-list-link"
-                            href={e.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(ev) => ev.stopPropagation()}
-                          >
-                            <span className="briefing-card-list-key">{e.key}</span>
-                            {item.meta.escalations.length > 1 && (
-                              <span className="briefing-card-list-text">{e.summary}</span>
-                            )}
-                          </a>
-                        ) : (
-                          <>
-                            <span className="briefing-card-list-key">{e.key}</span>
-                            {item.meta.escalations.length > 1 && (
-                              <span className="briefing-card-list-text">{e.summary}</span>
-                            )}
-                          </>
-                        )}
-                        <EscalationBadges item={e} />
-                        {e.ageDays != null && (
-                          <span className="briefing-card-list-age">{e.ageDays === 0 ? 'today' : `${e.ageDays}d`}</span>
-                        )}
-                      </li>
-                    ))}
-                    {item.meta.overflow > 0 && (
-                      <li className="briefing-card-list-more">+{item.meta.overflow} more</li>
-                    )}
-                  </ul>
-                )}
-                {guidance?.action && (
-                  <div className="briefing-card-cta">{guidance.action}</div>
-                )}
-              </div>
-            );
-          })}
+          {attention.cards.slice(0, 6).map((card) => (
+            <AttentionCard
+              key={card.recordId || card.id}
+              card={card}
+              onNavigate={onNavigate}
+              onAct={attention.act}
+            />
+          ))}
+        </div>
+      ) : attention.contextCard ? (
+        <div className="briefing-empty">
+          <div className="briefing-empty-line">{attention.contextCard.title}</div>
+          <div className="briefing-empty-sub">{attention.contextCard.reason}</div>
+        </div>
+      ) : attention.loading ? (
+        <div className="briefing-empty">
+          <div className="briefing-empty-line">Looking&hellip;</div>
         </div>
       ) : (
         <div className="briefing-empty">
           <div className="briefing-empty-line">Nothing on fire. Rare. Use it well.</div>
         </div>
+      )}
+
+      {/* Held back, and inputs that could not be read. Never swallowed. */}
+      {(attention.dropped.length > 0 || attention.gaps.length > 0) && (
+        <p className="briefing-held">
+          {attention.dropped.length > 0 && `${attention.dropped.length} held back`}
+          {attention.dropped.length > 0 && attention.gaps.length > 0 && ' · '}
+          {attention.gaps.length > 0 && `${attention.gaps.length} couldn't be read`}
+        </p>
       )}
 
       {/* Quick stats bar */}
@@ -266,10 +144,10 @@ export default function BriefingPanel({ onNavigate }) {
 
       {/* Footer */}
       <div className="briefing-footer">
-        {focusFetch.data?.generatedAt && (
-          <span>Updated {timeAgo(focusFetch.data.generatedAt)}</span>
+        {attention.data?.generatedAt && (
+          <span>Updated {timeAgo(attention.data.generatedAt)}</span>
         )}
-        <button className="briefing-refresh" onClick={focusFetch.refresh}>Refresh</button>
+        <button className="briefing-refresh" onClick={() => { attention.refresh(); focusFetch.refresh(); }}>Refresh</button>
       </div>
     </div>
   );

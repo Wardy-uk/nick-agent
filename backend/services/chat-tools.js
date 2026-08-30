@@ -71,6 +71,13 @@ const TOOLS = [
       properties: {
         query: { type: 'string', description: 'What to look for.' },
         limit: { type: 'integer', description: 'Max notes to return (default 5, max 10).' },
+        // Narrowing is offered because the guarantee is now real: scope is
+        // enforced after every source AND after fusion, so a scoped search
+        // cannot hand back a note from outside it.
+        scope: {
+          type: 'string',
+          description: 'Optional. "folder:Meetings/2026" or "person:Naomi Wentworth". A scope that is not one of those two forms matches nothing rather than being ignored.',
+        },
       },
       required: ['query'],
     },
@@ -276,19 +283,44 @@ const HANDLERS = {
     };
   },
 
-  async search_vault({ query, limit = 5 }) {
+  /**
+   * ⚠ Returns the index HEALTH alongside the results, and says so in words.
+   *
+   * An empty result set has two completely different causes — nothing in the
+   * vault matches, or the search could only run half its arms — and they look
+   * identical from the outside. A tool reporting the first when the second is
+   * true is how "I couldn't find anything about that" becomes a confident
+   * statement about a vault nobody actually searched.
+   *
+   * `scope` is accepted and enforced end to end (`folder:` / `person:`). An
+   * unrecognised scope admits NOTHING rather than quietly widening to the whole
+   * vault, so a model's typo cannot return unscoped results labelled as scoped.
+   */
+  async search_vault({ query, limit = 5, scope = null }) {
     if (!query || !String(query).trim()) return { ok: false, error: 'query is required' };
-    const results = await require('./retrieval').search(String(query), {
+    const { results, health } = await require('./retrieval').searchWithHealth(String(query), {
       maxResults: Math.min(Math.max(Number(limit) || 5, 1), 10),
+      scope: scope ? String(scope) : undefined,
     });
-    return {
+    const out = {
       ok: true,
       results: (results || []).map(r => ({
         name: r.name,
         path: r.path,
         excerpt: (r.excerpts?.[0] || '').slice(0, 400),
+        // Present only when true, so its absence means "indexed in full" rather
+        // than "nobody checked".
+        ...(r.indexIncomplete ? { indexIncomplete: true } : {}),
       })),
     };
+    if (health && health.semanticAvailable === false) {
+      out.incomplete = true;
+      out.note = 'Semantic search was unavailable — this is keyword matching only. A thin or empty result here is incomplete, not an absence.';
+    }
+    if (scope && health && health.scope && health.scope.kind === 'unknown') {
+      out.note = `Scope "${scope}" was not recognised, so nothing could match it. Use folder:<path> or person:<Full Name>.`;
+    }
+    return out;
   },
 
   read_note({ path: notePath }) {

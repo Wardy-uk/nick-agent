@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../api';
+import useAttention from '../useAttention';
+import AttentionCard from './AttentionCard';
+import FrictionSection from './FrictionSection';
 import './AdhdPanel.css';
 
 // apiFetch hands back a raw Response and sets no Content-Type, so every JSON
@@ -14,7 +17,24 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-// The "help me actually function today" view.
+// `Now` — the execution surface, and the desktop's default view.
+//
+// This was the ADHD "Today" dashboard, sitting four clicks deep under MORE. It
+// is promoted rather than rebuilt because it already owns every control that
+// lowers the barrier to STARTING — the session container, the return prompt,
+// "make it smaller", quick wins — and a thin new screen composing them would
+// have been a second "what should I do?" surface, which is the one thing this
+// phase exists to remove.
+//
+// ⚠ One thing changed rather than being added: "Right now" no longer renders
+// `decision-engine` output straight out of `/api/adhd`. It renders the
+// CANONICAL attention card, so acknowledging something here means what it means
+// on the phone, and the five actions mean exactly what they say.
+//
+// The order on the page is the argument. Session and return prompt come FIRST,
+// above any general suggestion: the cost of an interruption is not the
+// interruption, it is the failure to return, and a page that opens with fresh
+// work stacked on top of an unfinished thing is how the thread gets lost.
 //
 // The layout is the argument. One thing at the top, big, with a button. Evidence
 // of progress immediately under it — ADHD memory drops finished work, so the day
@@ -25,6 +45,11 @@ async function api(path, options = {}) {
 
 export default function AdhdPanel({ onNavigate }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
+  // The canonical feed. Everything on this page that proposes WORK comes from
+  // here. `/api/adhd` keeps the session, momentum, quick wins and the wins
+  // ledger — none of which the attention contract covers, and none of which is
+  // a second opinion about what matters.
+  const attention = useAttention({ interval: 30000 });
   const [busy, setBusy] = useState({});
   const [win, setWin] = useState('');
 
@@ -77,12 +102,12 @@ export default function AdhdPanel({ onNavigate }) {
     return undefined;
   }
 
-  function startOnThing(title) {
-    // Text only. A decision-engine item's `id` is a slug (`todo-overdue-top`),
-    // never a task row, so the link back to the task is made server-side on the
-    // normalised text — and left unmade when it genuinely isn't a task.
-    return sessionPost('start', { text: title });
-  }
+  // `startOnThing` lived here and started a session from the old "Right now"
+  // block. That block now renders a canonical `AttentionCard`, which owns the
+  // start (text only, for the same reason: a decision-engine item's `id` is a
+  // slug like `todo-overdue-top`, never a task row, so the link back to the
+  // task is made server-side on the normalised text and left unmade when the
+  // card genuinely is not a task).
 
   async function completeQuickWin(item, index) {
     if (busy[index]) return;
@@ -127,7 +152,7 @@ export default function AdhdPanel({ onNavigate }) {
   if (error) return <div className="adhd"><div className="adhd__card adhd__card--err">{error}</div></div>;
   if (!data) return null;
 
-  const { shape, rightNow, momentum, winsToday, avoidance, quickWins, session, recovery } = data;
+  const { shape, momentum, winsToday, avoidance, quickWins, session, recovery } = data;
 
   return (
     <div className="adhd">
@@ -292,43 +317,77 @@ export default function AdhdPanel({ onNavigate }) {
         </section>
       )}
 
-      {/* ── The one thing ── */}
-      <section className={`adhd__now adhd__now--${rightNow.item?.urgency || 'none'}`}>
-        <div className="adhd__now-label">Right now</div>
-        {rightNow.item ? (
+      {/* ── The one thing ──
+          Canonical attention, rendered by the shared card so the five actions
+          mean exactly what they mean on every other surface. Nothing here
+          reranks, rewords or decides urgency. */}
+      <section className="adhd__now adhd__now--canonical">
+        <div className="adhd__now-label">
+          Right now
+          {attention.error && <span className="adhd__now-warn"> · couldn&rsquo;t refresh</span>}
+        </div>
+
+        {/* ⚠ Three silences, and they must stay apart. A blank card is
+            otherwise three different facts wearing one face, and only the last
+            of them is good news. */}
+        {attention.poolAvailable === false ? (
+          <h2 className="adhd__now-title adhd__now-title--warn">
+            I can&rsquo;t see your work right now. This is not an all-clear.
+          </h2>
+        ) : attention.contextCard ? (
           <>
-            <h2 className="adhd__now-title">{rightNow.item.title}</h2>
-            {rightNow.item.reason && <p className="adhd__now-reason">{rightNow.item.reason}</p>}
-            <div className="adhd__now-actions">
-              {/* The scaffolded start (#88), next to the navigate-there button.
-                  Hidden while a session is live — offering to start a second
-                  "one thing" is how you end up with none. */}
-              {!session && !recovery && (
-                <button className="adhd__do" type="button" onClick={() => startOnThing(rightNow.item.title)}>
-                  Start on this
-                </button>
-              )}
-              {rightNow.action && (
-                <button
-                  className="adhd__do"
-                  type="button"
-                  onClick={() => onNavigate?.(rightNow.action.target, rightNow.action.targetContext)}
-                >{rightNow.action.label || 'Do it'}</button>
-              )}
-              <button className="adhd__later" type="button" onClick={() => onNavigate?.('focus')}>
-                Something else
-              </button>
-            </div>
-            {rightNow.waiting > 0 && (
-              // Named, not listed. Knowing the rest is tracked is reassuring;
-              // seeing it is the overwhelm this page exists to avoid.
-              <p className="adhd__waiting">{rightNow.waiting} other thing{rightNow.waiting === 1 ? '' : 's'} tracked. They can wait.</p>
-            )}
+            <h2 className="adhd__now-title">{attention.contextCard.title}</h2>
+            <p className="adhd__now-reason">{attention.contextCard.reason}</p>
           </>
+        ) : attention.primary ? (
+          <AttentionCard
+            card={attention.primary}
+            onNavigate={onNavigate}
+            onAct={attention.act}
+            onStarted={load}
+          />
+        ) : attention.loading ? (
+          <h2 className="adhd__now-title">Looking&hellip;</h2>
         ) : (
-          <h2 className="adhd__now-title adhd__now-title--clear">Nothing pressing. You're clear.</h2>
+          <h2 className="adhd__now-title adhd__now-title--clear">Nothing pressing. You&rsquo;re clear.</h2>
+        )}
+
+        {attention.secondary.length > 0 && (
+          // Named, not listed in full. Knowing the rest is tracked is
+          // reassuring; seeing all of it is the overwhelm this page avoids.
+          <details className="adhd__now-more">
+            <summary>
+              {attention.secondary.length} other thing{attention.secondary.length === 1 ? '' : 's'} tracked. They can wait.
+            </summary>
+            {attention.secondary.map((card) => (
+              <AttentionCard
+                key={card.recordId || card.id}
+                card={card}
+                compact
+                showEvidence={false}
+                onNavigate={onNavigate}
+                onAct={attention.act}
+                onStarted={load}
+              />
+            ))}
+          </details>
+        )}
+
+        {/* Held back by the gate, and inputs that could not be read. Neither is
+            swallowed: held is not gone, and "couldn't look" is not "nothing
+            there". */}
+        {(attention.dropped.length > 0 || attention.gaps.length > 0) && (
+          <p className="adhd__waiting">
+            {attention.dropped.length > 0 && `${attention.dropped.length} held back`}
+            {attention.dropped.length > 0 && attention.gaps.length > 0 && ' · '}
+            {attention.gaps.length > 0 && `${attention.gaps.length} couldn't be read`}
+          </p>
         )}
       </section>
+
+      {/* ── Friction noticed ──
+          Evidence only, and BELOW the work rather than above it. */}
+      <FrictionSection />
 
       {/*
         Momentum is full width and alone. It used to share a two-column grid

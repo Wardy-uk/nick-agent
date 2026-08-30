@@ -3,14 +3,25 @@ import { apiUrl } from '../api';
 import './Sidebar.css';
 
 const PRIMARY_ITEMS = [
+  // ── Now / Capture / Ask, in that order, and first ──────────────────────────
+  //
+  // `Now` is the execution surface and the default screen. It was the ADHD
+  // "Today" dashboard sitting under a collapsed MORE section — the one view
+  // built for the moment Nick cannot start, four clicks from the moment he
+  // cannot start. Capture and Ask sit beside it because those are the other two
+  // things done from a standing start.
+  //
+  // Briefing and Focus moved DOWN rather than away: they are supporting views
+  // now, and having three primary answers to "what should I do?" is what made
+  // them drift apart in the first place.
+  { id: 'today',      label: 'Now',       icon: '◐' },
+  { id: 'capture',    label: 'Capture',   icon: '+' },
+  { id: 'chat',       label: 'Ask',       icon: '›' },
   // Above Briefing on purpose. Briefing answers "what about today"; this answers
   // "what shape is everything in" — including the things no other screen looks
   // at, like a Jira cache that had been stale for six weeks while every panel
   // reading it rendered happily.
   { id: 'state',      label: 'State of Play', icon: '◈' },
-  { id: 'briefing',   label: 'Briefing',  icon: '◉' },
-  { id: 'chat',       label: 'Ask',       icon: '›' },
-  { id: 'capture',    label: 'Capture',   icon: '+' },
   // Primary, not under MORE: MORE is collapsed by default, so a badge there is
   // invisible until you already know to look — and this is the queue holding
   // outbound email waiting on a second approval. An approval surface nobody can
@@ -19,9 +30,11 @@ const PRIMARY_ITEMS = [
 ];
 
 const SECONDARY_ITEMS = [
-  // "Today" is the ADHD dashboard — one thing, momentum, avoidance, quick wins.
-  // Sits above Focus because it's the one to open when you don't know where to start.
-  { id: 'today',      label: 'Today',     icon: '◐' },
+  // Both are SUPPORTING views now and both consume the canonical attention
+  // feed: Briefing frames the day, Focus pages through the pool one card at a
+  // time. Neither is a second opinion about what matters — that decision is
+  // made once, by the brain, and rendered identically on all three.
+  { id: 'briefing',   label: 'Briefing',  icon: '◉' },
   { id: 'focus',      label: 'Focus',     icon: '◎' },
   // TodoPanel has always been routable via App.jsx but had no menu entry, so the
   // one consolidated task view was only reachable if a nudge banner sent you there.
@@ -58,6 +71,10 @@ const SECONDARY_ITEMS = [
   // is Nick's, and both are "how is this thing running" rather than work.
   { id: 'health',     label: 'My Health', icon: '♥' },
   { id: 'pi-health',  label: 'Pi Health', icon: '▚' },
+  // Configuration, but it writes to an external workspace, so it gets its own
+  // entry rather than hiding inside Settings — the mapping table is the whole
+  // safety model and needs to be somewhere Nick can actually find it.
+  { id: 'notion-sync', label: 'Notion Sync', icon: '⇄' },
   { id: 'admin',      label: 'Settings',  icon: '>' },
 ];
 

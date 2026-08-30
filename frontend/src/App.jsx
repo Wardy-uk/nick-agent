@@ -1,49 +1,70 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
 import { apiUrl, getPin, setPin, clearPin } from './api';
 import Topbar from './components/Topbar';
 import Sidebar from './components/Sidebar';
-import Dashboard from './components/Dashboard';
-import PeopleBoard from './components/PeopleBoard';
-import StandupEditor from './components/StandupEditor';
-import NinetyDayPlan from './components/NinetyDayPlan';
-import TodoPanel from './components/TodoPanel';
-import CalendarView from './components/CalendarView';
-import InboxPanel from './components/InboxPanel';
-import AdminPanel from './components/AdminPanel';
 import NudgeBanner from './components/NudgeBanner';
-import ChatPanel from './components/ChatPanel';
-import QATab from './components/QATab';
-import EscalationPanel from './components/EscalationPanel';
-import ActionsPanel from './components/ActionsPanel';
-import DecisionsPanel from './components/DecisionsPanel';
-import WeeklyRiskPanel from './components/WeeklyRiskPanel';
-import ImportsPanel from './components/ImportsPanel';
-import CapturePanel from './components/CapturePanel';
-import RecentPanel from './components/RecentPanel';
-import VaultBrowser from './components/VaultBrowser';
-import StravaPanel from './components/StravaPanel';
-import InsightsPanel from './components/InsightsPanel';
-import StandupsPanel from './components/StandupsPanel';
-import JournalPanel from './components/JournalPanel';
-import FocusPanel from './components/FocusPanel';
-import AdhdPanel from './components/AdhdPanel';
-import BriefingPanel from './components/BriefingPanel';
-import StateOfPlay from './components/StateOfPlay';
 import ErrorBoundary from './components/ErrorBoundary';
-import PiHealthPanel from './components/PiHealthPanel';
-import HealthPanel from './components/HealthPanel';
-import MeetingPrep from './components/MeetingPrep';
 import InstallBanner from './components/InstallBanner';
 import usePushNotifications from './usePushNotifications';
 import useCachedFetch from './useCachedFetch';
 import CacheIndicator from './components/CacheIndicator';
 import './App.css';
 
+// ── Eager: the surfaces used from a standing start ───────────────────────────
+//
+// `Now` is the default view, Capture is where a thought lands before it is
+// lost, and Ask is one keystroke from anywhere. Putting any of those behind a
+// chunk fetch would mean a spinner at the exact moment the barrier to acting
+// needs to be lowest — and Capture behind a network round trip is a capture
+// that fails when the network does. The auth screen and the offline queue live
+// in this bundle too, for the same reason.
+import AdhdPanel from './components/AdhdPanel';
+import CapturePanel from './components/CapturePanel';
+import ChatPanel from './components/ChatPanel';
+import StateOfPlay from './components/StateOfPlay';
+
+// ── Lazy: everything else ────────────────────────────────────────────────────
+//
+// The production build was emitting a single chunk over Vite's 500 kB warning
+// threshold, because all ~35 panels were imported eagerly to render one. These
+// are all specialist screens reached deliberately from the menu, where a short
+// load is unremarkable — and each one is inside the SAME `ErrorBoundary`, so a
+// chunk that fails to load is caught and named exactly like a panel that throws.
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const PeopleBoard = lazy(() => import('./components/PeopleBoard'));
+const StandupEditor = lazy(() => import('./components/StandupEditor'));
+const NinetyDayPlan = lazy(() => import('./components/NinetyDayPlan'));
+const TodoPanel = lazy(() => import('./components/TodoPanel'));
+const CalendarView = lazy(() => import('./components/CalendarView'));
+const InboxPanel = lazy(() => import('./components/InboxPanel'));
+const AdminPanel = lazy(() => import('./components/AdminPanel'));
+const QATab = lazy(() => import('./components/QATab'));
+const EscalationPanel = lazy(() => import('./components/EscalationPanel'));
+const ActionsPanel = lazy(() => import('./components/ActionsPanel'));
+const DecisionsPanel = lazy(() => import('./components/DecisionsPanel'));
+const WeeklyRiskPanel = lazy(() => import('./components/WeeklyRiskPanel'));
+const ImportsPanel = lazy(() => import('./components/ImportsPanel'));
+const RecentPanel = lazy(() => import('./components/RecentPanel'));
+const VaultBrowser = lazy(() => import('./components/VaultBrowser'));
+const StravaPanel = lazy(() => import('./components/StravaPanel'));
+const InsightsPanel = lazy(() => import('./components/InsightsPanel'));
+const StandupsPanel = lazy(() => import('./components/StandupsPanel'));
+const JournalPanel = lazy(() => import('./components/JournalPanel'));
+const FocusPanel = lazy(() => import('./components/FocusPanel'));
+const BriefingPanel = lazy(() => import('./components/BriefingPanel'));
+const PiHealthPanel = lazy(() => import('./components/PiHealthPanel'));
+const NotionSyncPanel = lazy(() => import('./components/NotionSyncPanel'));
+const HealthPanel = lazy(() => import('./components/HealthPanel'));
+const MeetingPrep = lazy(() => import('./components/MeetingPrep'));
+
 function readNueroLaunchIntent() {
   const params = new URLSearchParams(window.location.search);
   const view = params.get('view');
   const filter = params.get('filter');
-  if (!view) return { view: 'briefing', context: null };
+  // `today` is the `Now` execution surface — the default landing view. A launch
+  // intent from a notification still wins, so tapping a card lands on the thing
+  // that pinged him rather than on the general screen.
+  if (!view) return { view: 'today', context: null };
   return {
     view,
     context: filter ? { filter } : null,
@@ -299,8 +320,10 @@ function AuthenticatedApp() {
       case 'insights': return <InsightsPanel onNavigate={handleNavigate} />;
       case 'health': return <HealthPanel />;
       case 'pi-health': return <PiHealthPanel />;
+      case 'notion-sync': return <NotionSyncPanel />;
       case 'admin': return <AdminPanel pushState={pushState} />;
-      default: return <BriefingPanel onNavigate={handleNavigate} />;
+      // An unknown view lands on the execution surface, not on the briefing.
+      default: return <AdhdPanel onNavigate={handleNavigate} />;
     }
   };
 
@@ -320,7 +343,13 @@ function AuthenticatedApp() {
               to open". `viewKey` clears the boundary on navigation, so a bad
               screen never latches the good ones shut. */}
           <ErrorBoundary viewKey={activeView}>
-            {renderView()}
+            {/* Suspense INSIDE the boundary, so a chunk that fails to download
+                is caught and named by the same mechanism that catches a panel
+                throwing — a lazy panel must not be able to take the shell down
+                any more than an eager one can. */}
+            <Suspense fallback={<div className="app-view-loading">Loading&hellip;</div>}>
+              {renderView()}
+            </Suspense>
           </ErrorBoundary>
         </main>
         <aside className={`chat-panel ${chatOpen ? 'chat-open' : ''}`}>
@@ -331,9 +360,12 @@ function AuthenticatedApp() {
       <InstallBanner />
       {/* Mobile bottom nav */}
       <nav className={`mobile-bottom-nav ${chatOpen ? 'chat-active-hide' : ''}`}>
-        <button className={activeView === 'briefing' ? 'active' : ''} onClick={() => handleNavigate('briefing')}>
-          <span className="bottom-nav-icon">&#x25C9;</span>
-          <span>Briefing</span>
+        {/* Matches the sidebar's primary group: Now first, on both. Two navs
+            disagreeing about what the main screen is was how "Today" ended up
+            being the view nobody opened. */}
+        <button className={activeView === 'today' ? 'active' : ''} onClick={() => handleNavigate('today')}>
+          <span className="bottom-nav-icon">&#x25D0;</span>
+          <span>Now</span>
         </button>
         <button className={chatOpen ? 'active' : ''} onClick={() => handleNavigate('chat')}>
           <span className="bottom-nav-icon">&#x203A;</span>

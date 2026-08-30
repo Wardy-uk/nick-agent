@@ -94,7 +94,64 @@ function getEmbeddingHealth() {
   else if (_health.calls === 0) status = 'unprobed';
   else if (_health.lastFailure && (!_health.lastOk || _health.lastFailure > _health.lastOk)) status = 'degraded';
   else status = 'ok';
-  return { status, configured, ...(_health) };
+  const truncated = truncatedDetail();
+  return {
+    status,
+    configured,
+    ...(_health),
+    // Not folded into `status`: the index being partly short on a handful of very
+    // long notes is a different fact from Voyage being down, and merging them
+    // would make one of the two unactionable.
+    truncatedCount: truncated.length,
+    truncated,
+  };
+}
+
+
+// ── Index health: notes the cap could only partly index ─────────────────────
+//
+// Persisted rather than held in memory: the backend restarts several times a
+// day on deploys, and an in-memory list would report a clean index every time —
+// the `ai-routing` budget lesson, one service along.
+
+const TRUNCATED_KEY = 'embeddings_truncated';
+
+function _readTruncated() {
+  try {
+    const raw = db.getState(TRUNCATED_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function _writeTruncated(map) {
+  try { db.setState(TRUNCATED_KEY, JSON.stringify(map)); } catch { /* health is bookkeeping */ }
+}
+
+function _noteTruncated(relativePath, totalChunks) {
+  const map = _readTruncated();
+  map[relativePath] = { totalChunks, indexed: MAX_CHUNKS_PER_FILE, at: new Date().toISOString() };
+  _writeTruncated(map);
+}
+
+function _clearTruncated(relativePath) {
+  const map = _readTruncated();
+  if (!Object.prototype.hasOwnProperty.call(map, relativePath)) return;
+  delete map[relativePath];
+  _writeTruncated(map);
+}
+
+/** Vault-relative paths the index holds only part of. */
+function truncatedFiles() {
+  return Object.keys(_readTruncated());
+}
+
+/** The same, with how much of each note was reachable. */
+function truncatedDetail() {
+  const map = _readTruncated();
+  return Object.entries(map).map(([relativePath, v]) => ({ relativePath, ...v }));
 }
 
 function contentHash(text) {
@@ -326,7 +383,20 @@ function prepareFile(relativePath, fullPath) {
   if (chunks.length === 0) return null;
   if (chunks.length > MAX_CHUNKS_PER_FILE) {
     console.warn(`[Embeddings] ${relativePath}: ${chunks.length} chunks, indexing first ${MAX_CHUNKS_PER_FILE}`);
+    // ⚠ RECORDED, not merely logged. A note whose tail was never embedded looks
+    // exactly as searchable as one indexed in full — the search returns three
+    // good hits from its first half and nothing says the rest is unreachable.
+    // Retrieval reads this back and marks such a result `indexIncomplete`, so
+    // "partly indexed" stays distinguishable from "fully indexed and this is
+    // all there is". Recorded BEFORE the slice, so the number is the note's
+    // real size and not the cap.
+    _noteTruncated(relativePath, chunks.length);
     chunks = chunks.slice(0, MAX_CHUNKS_PER_FILE);
+  } else {
+    // A note that has SHRUNK below the cap is no longer incomplete, and leaving
+    // a stale entry would keep flagging a note that is now fully indexed —
+    // exactly the kind of permanent false warning nobody reads by week two.
+    _clearTruncated(relativePath);
   }
   if (existing && existing.content_hash === hash
       && db.getEmbeddingChunkCount(relativePath) === chunks.length
@@ -573,6 +643,8 @@ module.exports = {
   getEmbeddingHealth,
   rebuildEmbeddings,
   semanticSearch,
+  truncatedFiles,
+  truncatedDetail,
   embedVaultFile,
   listVaultFiles,
   // exported for tests — the chunker is the thing that was silently discarding

@@ -381,3 +381,25 @@
   font-size: 0.9rem;
   margin-bottom: 0.5rem;
 }
+
+/* ── Now: the canonical attention block ──────────────────────────────────────
+   The urgency stripe moved onto the card itself (`.att-card`), because the card
+   is what carries the record — the section around it is just a heading. */
+.adhd__now--canonical { border-left-color: var(--border, #262a33); }
+
+/* An unreadable pool is a WARNING, never the clear state. Rendering it green
+   would be the false all-clear the whole attention contract exists to avoid. */
+.adhd__now-title--warn { color: var(--warning, #f5a524); }
+
+.adhd__now-warn { color: var(--warning, #f5a524); font-weight: 400; }
+
+.adhd__now-more { margin-top: 0.6rem; }
+
+.adhd__now-more > summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--muted, #8a90a0);
+  padding: 0.3rem 0;
+}
+
+.adhd__now-more[open] > summary { margin-bottom: 0.5rem; }

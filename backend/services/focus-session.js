@@ -149,6 +149,7 @@ function _archive(session, now) {
     finalStep: session.nextStep || null,
     originalText: session.originalText || null,
     checkIns: (session.checkIns || []).length,
+    steppedAway: (session.stepAways || []).length,
     // Optional, always. An empty reflection is a perfectly good outcome and
     // must never block finishing — a box you have to fill to close a session is
     // a reason not to close sessions.
@@ -222,6 +223,10 @@ function _decorate(session, now) {
     overrunMinutes: Math.max(0, elapsedMinutes - planned),
     interruptions: (session.interruptions || []).length,
     lastInterruption: (session.interruptions || [])[0] || null,
+    // Only the times he SAID he stepped away — see `stepAway`. The friction
+    // read reports on this and never on `interruptions`.
+    steppedAway: (session.stepAways || []).length,
+    lastStepAway: (session.stepAways || [])[0] || null,
     // Gate 3. The next concrete step is what makes starting possible at all, so
     // it rides on every read rather than needing a second call.
     nextStep: session.nextStep || null,
@@ -620,6 +625,17 @@ function stepAway({ source = 'manual', detail = null } = {}, now = Date.now()) {
 
   _pause(session, { source, detail }, now);
   session.status = 'interrupted';
+  // ⚠ Counted SEPARATELY from `interruptions`. That array also holds pauses and
+  // arrivals; this one holds only the times Nick SAID he was pulled off it, and
+  // the friction read is allowed to use nothing else. Folding the two would let
+  // other people's timing become a claim about his attention.
+  session.stepAways = session.stepAways || [];
+  session.stepAways.unshift({
+    at: new Date(now).toISOString(),
+    source: VALID_SOURCES.includes(source) ? source : 'unknown',
+    detail,
+    atMinutes: Math.round(session.elapsedMs / 60000),
+  });
   _write(session);
   try {
     db.logActivity('focus_session_interrupted', {

@@ -113,13 +113,48 @@ router.post('/siri-note', (req, res) => {
 });
 
 // POST /api/capture/todo — quick todo capture. Routes 1 (Watch/Siri) and 2 (NEURO
-// direct) both land here. Writes to the tasks table, which NEURO owns; the vault
-// export note is regenerated shortly after. Previously this appended markdown to
-// Master Todo.md — and threw, because `obsidian` was never required in this file.
+// direct) both land here.
+//
+// ── Obsidian first (Phase 4) ────────────────────────────────────────────────
+// This used to be DB-first: a task row, and no durable vault record until the
+// hourly export regenerated `Tasks/NEURO Tasks (export).md` — a read-only
+// projection nothing reads back. So for up to an hour the only copy of the
+// thought lived in a SQLite file the vault knows nothing about.
+//
+// Now the vault record is written FIRST and the task row second, and the
+// response says which halves landed. The order matters in one direction only:
+// a crash between the two must lose the task row (recoverable — the words are
+// on disk in Obsidian) and never the words.
+//
+// ⚠ A vault miss does NOT fail the capture, and that is deliberate. A dev box
+// with no `OBSIDIAN_VAULT_PATH`, or a Syncthing mount that has gone away, would
+// otherwise refuse every capture — and refusing a capture is the one failure
+// this whole area exists to prevent. What it must never do is claim a vault
+// record it does not have, so `vault.written` is reported honestly and the
+// client says so in words. The only 500 is when NEITHER half landed.
 router.post('/todo', (req, res) => {
   const { text, priority, moscow, due, source } = req.body;
   if (!text || !text.trim()) {
     return res.status(400).json({ error: 'text is required' });
+  }
+
+  // Generated before either write, so the vault line and the task row can be
+  // tied together afterwards without matching on text — two captures of the
+  // same words are two captures.
+  const captureId = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+
+  let vault = { written: false, why: 'not attempted' };
+  let vaultRecord = null;
+  try {
+    vaultRecord = captureStore.appendTaskCapture({
+      text: text.trim(),
+      source: source || 'capture',
+      captureId,
+    });
+    vault = { written: true, path: vaultRecord.relativePath };
+  } catch (e) {
+    console.error('[Capture] Todo vault record FAILED:', e.message);
+    vault = { written: false, why: e.message };
   }
 
   try {
@@ -130,13 +165,45 @@ router.post('/todo', (req, res) => {
       moscow,
       due_date: due || null,
       source: source || 'capture',
+      // Provenance the other way: the task points back at the line in the vault.
+      origin_path: vaultRecord ? vaultRecord.relativePath : null,
     });
-    console.log(`[Capture] Todo ${created ? 'created' : 'folded into'} task #${id}: ${task.text}`);
-    res.json({ success: true, taskId: id, created, text: task.text });
+    if (vaultRecord) captureStore.stampTaskCaptureId(vaultRecord.relativePath, captureId, id);
+    console.log(`[Capture] Todo ${created ? 'created' : 'folded into'} task #${id} (vault: ${vault.written ? 'yes' : 'no'})`);
+    res.json({
+      success: true,
+      taskId: id,
+      created,
+      text: task.text,
+      captureId,
+      vault,
+      // What the UI is allowed to SAY happened, per step, rather than one word
+      // covering two writes that can fail independently.
+      steps: {
+        vault: vault.written ? 'saved' : 'failed',
+        task: created ? 'created' : 'folded-into-existing',
+      },
+    });
     try { require('../services/activity').trackCapture('todo'); } catch {}
+    if (vaultRecord) {
+      try { require('../services/vault-hooks').onVaultWrite(vaultRecord.filePath, 'capture-todo'); } catch {}
+    }
   } catch (e) {
     console.error('[Capture] Todo error:', e);
-    res.status(500).json({ error: e.message });
+    // The vault half may still have landed. Saying "failed" over a thought that
+    // IS on disk sends Nick to retype something already saved, so the honest
+    // answer is a partial one — and only a total miss is a 500.
+    if (vault.written) {
+      return res.status(207).json({
+        success: false,
+        partial: true,
+        captureId,
+        vault,
+        steps: { vault: 'saved', task: 'failed' },
+        error: e.message,
+      });
+    }
+    res.status(500).json({ success: false, vault, steps: { vault: 'failed', task: 'failed' }, error: e.message });
   }
 });
 

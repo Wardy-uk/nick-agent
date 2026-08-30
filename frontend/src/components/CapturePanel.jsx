@@ -200,7 +200,18 @@ export default function CapturePanel() {
       }
 
       const data = await res.json();
-      if (!res.ok) {
+      // ⚠ 207 is a PARTIAL, not a failure: the vault record landed and the task
+      // row did not. Treating it as an error would tell Nick to retype a thought
+      // that is already safely on disk.
+      if (res.status === 207) {
+        setResult({
+          partial: true,
+          type: 'todo',
+          vault: data.vault,
+          error: data.error,
+        });
+        try { navigator.vibrate?.([100, 60, 100]); } catch {}
+      } else if (!res.ok) {
         const errorMsg = res.status === 401
           ? 'Not logged in — open Settings and re-enter your PIN'
           : data.error || `Capture failed (${res.status})`;
@@ -212,7 +223,11 @@ export default function CapturePanel() {
         setResult({
           success: true,
           type: feature ? 'feature' : isTodo ? 'todo' : file ? 'file' : 'note',
-          number: data.number
+          number: data.number,
+          // Reported, never assumed. The two halves of a todo capture fail
+          // independently and the banner says which one did.
+          vault: data.vault,
+          created: data.created,
         });
         // Haptic success
         try { navigator.vibrate?.(100); } catch {}
@@ -267,19 +282,49 @@ export default function CapturePanel() {
 
   return (
     <div className="capture-panel">
+      {/* ⚠ "I'll route it" was a promise about work that had not happened.
+          Classification, entity extraction and action-candidate detection all
+          run AFTER the write and can all fail, and a note landing on disk says
+          nothing about whether any of them did. The line now claims only the
+          thing that is actually guaranteed — it reaches the vault — and the
+          result banner reports each step it can genuinely observe. */}
       <div className="capture-sara">
         <span className="capture-sara-label">SARA</span>
-        <span className="capture-sara-line">Get it out of your head. I'll route it.</span>
+        <span className="capture-sara-line">Get it out of your head. It goes to the vault.</span>
       </div>
 
+      {/* Honest progress, per step. A capture is two or three writes that can
+          fail independently — the vault record, the task row, and whatever
+          processing runs afterwards — and one word covering all of them is how
+          "captured" comes to mean "we tried". */}
       {result && (
-        <div className={`capture-result-banner ${result.error ? 'capture-result-error' : result.queued ? 'capture-result-queued' : 'capture-result-ok'}`}>
-          <span className="capture-result-icon">{result.error ? '✗' : result.queued ? '⏳' : '✓'}</span>
+        <div className={`capture-result-banner ${result.error ? 'capture-result-error' : result.partial ? 'capture-result-partial' : result.queued ? 'capture-result-queued' : 'capture-result-ok'}`}>
+          <span className="capture-result-icon">{result.error ? '✗' : result.partial ? '!' : result.queued ? '⏳' : '✓'}</span>
           <span className="capture-result-text">
-            {result.error || (result.queued ? 'Queued. Will sync when online.'
-              : result.type === 'todo' ? 'Added to todos.'
+            {result.error || (result.queued ? 'Queued on this device. It has NOT reached the vault yet — it will send when you are back online.'
+              : result.type === 'todo' ? (
+                result.vault?.written
+                  ? `Saved to the vault${result.created === false ? ' · folded into a task already on your list' : ' · task created'}.`
+                  // ⚠ Never presented as a plain success. The task exists in the
+                  // DB, which is the projection; the durable half did not land.
+                  : `Task created, but NOT written to the vault — ${result.vault?.why || 'reason unknown'}.`
+                )
               : result.type === 'feature' ? `Added to the feature tracker${result.number ? ` as #${result.number}` : ''}.`
-              : 'Captured.')}
+              : result.type === 'note' ? 'Saved to the vault. Indexing and entity extraction run after this and are not confirmed here.'
+              : 'Saved to the vault.')}
+          </span>
+        </div>
+      )}
+
+      {/* A partial: the words are safe, the projection is not. Said plainly,
+          because "failed" over a thought that IS on disk sends Nick to retype
+          something already saved. */}
+      {result?.partial && (
+        <div className="capture-result-banner capture-result-partial">
+          <span className="capture-result-icon">!</span>
+          <span className="capture-result-text">
+            Saved to the vault at {result.vault?.path || 'the capture log'}, but the task row failed
+            {result.error ? ` — ${result.error}` : ''}. The words are safe; it just is not on your task list yet.
           </span>
         </div>
       )}
@@ -288,7 +333,7 @@ export default function CapturePanel() {
         <textarea
           ref={textRef}
           className="capture-textarea"
-          placeholder="Type it. I'll sort it."
+          placeholder="Type it. Plain text is fine."
           value={content}
           onChange={e => setContent(e.target.value)}
           rows={4}
@@ -300,7 +345,8 @@ export default function CapturePanel() {
         {content.trim() && !file && (
           <div className="capture-type-hint">
             {detectedType === 'feature' ? `Will go to the feature tracker (${detectedFeature.system})`
-              : detectedType === 'todo' ? 'Will save as todo' : 'Will save as note'}
+              : detectedType === 'todo' ? 'Will go to the vault capture log, then onto your task list'
+                : 'Will save as a note in the vault'}
           </div>
         )}
 

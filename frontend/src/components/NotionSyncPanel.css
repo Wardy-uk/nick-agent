@@ -1,0 +1,135 @@
+.notion-sync {
+  padding: 20px;
+  max-width: 1120px;
+  margin: 0 auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.ns-head h2 { margin: 0 0 4px; font-size: 18px; }
+.ns-head p { margin: 0 0 18px; }
+.ns-muted { color: var(--text-muted); }
+
+.ns-warn {
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+.ns-warn ul { margin: 6px 0 0; padding-left: 18px; }
+.ns-warn code { background: var(--bg-secondary); padding: 1px 4px; border-radius: 3px; }
+
+/* ------------------------------------------------------------- mappings */
+
+.ns-rows { display: flex; flex-direction: column; gap: 12px; }
+
+.ns-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  background: var(--bg-card);
+}
+/* A disabled mapping stays legible — it is a row Nick turned off, not an error. */
+.ns-row--off { opacity: 0.55; }
+
+.ns-row-main {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ns-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 260px; min-width: 0; }
+.ns-field > span { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.ns-field input {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: inherit;
+  font: inherit;
+  padding: 7px 9px;
+  min-width: 0;
+}
+
+.ns-arrow { color: var(--text-muted); padding-bottom: 9px; flex: 0 0 auto; }
+
+.ns-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.ns-row-controls select {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: inherit;
+  font: inherit;
+  padding: 6px 8px;
+}
+
+.ns-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.ns-hint { display: block; margin-top: 8px; color: var(--text-muted); }
+
+/* ------------------------------------------------------------- actions */
+
+.ns-actions { display: flex; gap: 10px; margin: 16px 0; flex-wrap: wrap; }
+
+.ns-actions button,
+.ns-remove,
+.ns-pages button {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: inherit;
+  font: inherit;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.ns-actions button:hover:not(:disabled),
+.ns-remove:hover,
+.ns-pages button:hover { border-color: var(--text-muted); }
+.ns-actions button:disabled { opacity: 0.45; cursor: default; }
+
+.ns-primary { border-color: var(--accent, var(--success)) !important; }
+.ns-remove { padding: 5px 10px; color: var(--text-muted); }
+
+/* --------------------------------------------------------- page browser */
+
+.ns-pages { margin: 16px 0; }
+.ns-pages h3 { font-size: 13px; margin: 0 0 8px; }
+.ns-pages ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ------------------------------------------------------------- the run */
+
+.ns-run { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 6px; }
+
+.ns-report {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--success);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  margin-top: 12px;
+  background: var(--bg-card);
+}
+.ns-report--bad { border-left-color: var(--danger); }
+.ns-report-map h4 { font-size: 12px; margin: 12px 0 4px; color: var(--text-muted); }
+.ns-report ul { list-style: none; margin: 0; padding: 0; }
+.ns-report li { padding: 3px 0; }
+.ns-report code { background: var(--bg-secondary); padding: 1px 4px; border-radius: 3px; }
+.ns-gaps { margin-top: 6px !important; color: var(--danger); }
+
+/* A conflict is the one outcome Nick must actually read, so it is the one that
+   is coloured. Everything else is informational. */
+.ns-act--conflict { color: var(--warning); }
+.ns-act--error { color: var(--danger); }
+
+/* Wide report rows scroll inside the card rather than the page. */
+.ns-report-map ul { overflow-x: auto; }
+
+@media (max-width: 640px) {
+  .ns-row-main { flex-direction: column; align-items: stretch; }
+  .ns-arrow { display: none; }
+}

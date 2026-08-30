@@ -176,6 +176,35 @@ function applyCaptureNote(payload) {
 
 function applyCaptureTodo(payload) {
   const taskStore = require('./task-store');
+  const captureStore = require('./capture-store');
+
+  // Obsidian first, same order and same reasoning as `POST /api/capture/todo`:
+  // the words go to the vault before the row exists, so a crash between the two
+  // loses the projection and never the thought.
+  //
+  // ⚠ Exactly-once is the LEDGER's job, not this function's. `applyOperation`
+  // is synchronous from the ledger read to the ledger write, so a replayed
+  // operation never reaches here — which is what stops a drained offline queue
+  // appending the same line twice.
+  //
+  // A vault miss does not fail the operation. The device is replaying a capture
+  // it may no longer hold; refusing it because the vault is unreachable would
+  // put the queue into a retry loop over the one thing that must not be lost.
+  let vault = { written: false, why: 'not attempted' };
+  let vaultRecord = null;
+  const captureId = `${Date.now().toString(36)}-${String(payload.text || '').length.toString(36)}`;
+  try {
+    vaultRecord = captureStore.appendTaskCapture({
+      text: payload.text,
+      source: 'neuro-mobile',
+      captureId,
+    });
+    vault = { written: true, path: vaultRecord.relativePath };
+  } catch (e) {
+    console.warn('[MobileSync] Todo vault record failed:', e.message);
+    vault = { written: false, why: e.message };
+  }
+
   const { id, created } = taskStore.createTask({
     text: payload.text,
     priority: payload.priority || undefined,
@@ -183,8 +212,13 @@ function applyCaptureTodo(payload) {
     due_date: payload.due || null,
     domain: payload.domain || undefined,
     source: 'neuro-mobile',
+    origin_path: vaultRecord ? vaultRecord.relativePath : null,
   });
+  if (vaultRecord) captureStore.stampTaskCaptureId(vaultRecord.relativePath, captureId, id);
   try { require('./activity').trackCapture('todo'); } catch {}
+  if (vaultRecord) {
+    try { require('./vault-hooks').onVaultWrite(vaultRecord.filePath, 'mobile-capture-todo'); } catch {}
+  }
 
   // `created:false` means the text folded into an existing task — task-store's
   // dedupe. That is a SUCCESS, not a duplicate operation: a different intent
@@ -192,7 +226,7 @@ function applyCaptureTodo(payload) {
   // device can say "already on your list" rather than claiming a new task.
   return {
     canonicalId: `task:${id}`,
-    detail: JSON.stringify({ created: !!created }),
+    detail: JSON.stringify({ created: !!created, vault }),
   };
 }
 

@@ -56,15 +56,47 @@ export default function Focus({ onNavigate, onActionIntent }) {
     return () => document.removeEventListener('pointerdown', onGesture);
   }, [state.data?.sara?.briefing]);
 
+  /**
+   * Dismiss a card, through its RECORD wherever one can be found.
+   *
+   * ⚠ This screen renders `/api/focus`, so an item carries the decision-engine's
+   * item id and nothing else — and that id is not the identity of anything
+   * (`todo-overdue-top` becomes `todo-overdue-summary` the moment a second task
+   * goes overdue, so a dismissal recorded against one silently stops applying).
+   * `present().engineId` exists for exactly this lookup: find the record, then
+   * act on the record.
+   *
+   * The Surface already works this way. Doing it here too is what stops one
+   * screen teaching suppression while the other records a lifecycle, on the
+   * same phone, about the same card.
+   *
+   * ⚠ The old route stays as the fallback and ONLY as the fallback — a phone
+   * running this bundle against a backend without the records route must not
+   * lose the ability to clear a card.
+   */
   async function dismiss(item) {
     setDismissing((d) => ({ ...d, [item.id]: true }));
     try {
-      await apiFetch('/api/focus/dismiss', {
-        method: 'POST',
-        body: JSON.stringify({ itemId: item.id, itemType: item.type }),
-      });
+      let record = null;
+      try {
+        const open = await apiFetch('/api/attention/records');
+        record = (open?.records || []).find((r) => r.engineId === item.id) || null;
+      } catch { /* no records route, or NEURO is mid-restart — fall through */ }
+
+      if (record) {
+        await apiFetch(`/api/attention/records/${record.recordId}/act`, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'dismiss' }),
+        });
+      } else {
+        await apiFetch('/api/focus/dismiss', {
+          method: 'POST',
+          body: JSON.stringify({ itemId: item.id, itemType: item.type }),
+        });
+      }
       setState((s) => ({ ...s, data: { ...s.data, items: s.data.items.filter((i) => i.id !== item.id) } }));
-    } catch { /* leave it in place if dismiss fails */ }
+    } catch { /* leave it in place if dismiss fails — a card that vanishes on an
+                 error is a card Nick believes he has dealt with */ }
     finally { setDismissing((d) => ({ ...d, [item.id]: false })); }
   }
 

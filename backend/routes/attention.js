@@ -115,18 +115,41 @@ router.patch('/settings', (req, res) => {
 });
 
 /**
- * POST /api/attention/records/:id/act — acknowledge | defer | dismiss | resolve.
+ * POST /api/attention/records/:id/act
+ *   start | acknowledge | defer | dismiss | complete | resolve
  *
  * Clients submit ACTIONS, never states. A refusal answers 4xx with the reason in
  * words, rather than a success the surface would render as a change that did not
  * happen (`action-presenter`'s blockers rule).
+ *
+ * ⚠ The action semantics are the product here, and each one exists because the
+ * legacy `/api/focus` surface conflated it with another:
+ *   `start`      — a focus session began. Changes NO state. The old Briefing
+ *                  "Do it" button POSTed an outcome at this moment, recording
+ *                  work as finished when it had only just been picked up.
+ *   `complete`   — Nick's explicit confirmation. The ONLY path that resolves,
+ *                  and the only one that may close a task.
+ *   `defer`      — "not now" / "waiting on someone", with the reason recorded,
+ *                  because a thing deferred three times for `too-big` is a
+ *                  different problem from one deferred for `not-now`.
+ *   `dismiss`    — "not relevant". Teaches suppression, touches no work.
+ * Navigating to an item is deliberately NOT here: opening something is not an
+ * action on it, and giving it a route is how it acquires a side effect later.
  */
 router.post('/records/:id/act', (req, res) => {
   try {
     const { action, minutes, reason, note } = req.body || {};
     const result = lifecycle.act(req.params.id, action, { minutes, reason, note });
     if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
-    res.json({ ok: true, record: lifecycle.present(result.record) });
+    res.json({
+      ok: true,
+      record: lifecycle.present(result.record),
+      // Only meaningful for `complete`, and always stated rather than implied:
+      // resolving the card and closing the task are two outcomes, and a tick
+      // held by the outcome-note rule must not read as a completion.
+      taskCompleted: result.taskCompleted ?? null,
+      taskWhy: result.taskWhy ?? null,
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }

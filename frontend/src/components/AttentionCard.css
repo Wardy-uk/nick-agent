@@ -1,0 +1,134 @@
+/* One canonical attention card. Rendered by Now, Focus and Briefing, so the
+   five buttons look the same wherever they are — the visual half of "the record
+   is the only source of wording and permitted actions". */
+
+.att-card {
+  background: var(--panel, #16181d);
+  border: 1px solid var(--border, #262a33);
+  border-left: 3px solid var(--border, #262a33);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.att-card--critical { border-left-color: #e5484d; }
+.att-card--high     { border-left-color: #f5a524; }
+.att-card--medium   { border-left-color: #4a8fe7; }
+.att-card--low      { border-left-color: #3a3f4b; }
+
+.att-card--compact { padding: 10px 12px; margin-bottom: 8px; }
+
+.att-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.att-card__type {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted, #8a90a0);
+}
+
+.att-card__state {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #23272f;
+  color: #9aa1b1;
+}
+
+.att-card__state--acknowledged { background: #1e2a33; color: #7fb2d8; }
+.att-card__state--deferred     { background: #2a2519; color: #d8b06a; }
+/* Deliberately unobtrusive. It says the actions fall back to the legacy
+   suppression timer; it is not an error and must not read as one. */
+.att-card__state--nolifecycle  { background: #23272f; color: #6b7280; }
+
+.att-card__title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text, #e6e8ee);
+}
+
+.att-card__say {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted, #99a0b0);
+}
+
+/* The evidence. Small, always present when there is any, and never
+   summarised — the point is that a claim can be checked. */
+.att-card__evidence {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  font-size: 11px;
+  color: #6f7686;
+}
+
+.att-card__evidence li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.att-card__evsrc {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 9px;
+  color: #565d6c;
+  min-width: 54px;
+}
+
+.att-card__evref { color: #8a90a0; }
+.att-card__evdetail { color: #6f7686; }
+
+.att-card__outcome {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+
+.att-card__outcome--ok    { background: #14251c; color: #7fce9f; }
+.att-card__outcome--error { background: #2a1719; color: #e8878b; }
+
+.att-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.att-card__btn {
+  background: #20242c;
+  border: 1px solid #2d323c;
+  color: #c8cddb;
+  border-radius: 5px;
+  padding: 6px 11px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.att-card__btn:hover:not(:disabled) { background: #272c36; }
+.att-card__btn:disabled { opacity: 0.5; cursor: default; }
+
+/* The two that move work forward read as the primary ones. Everything else is
+   a way of putting it down honestly, and should not compete with them. */
+.att-card__btn--do {
+  background: #1d3448;
+  border-color: #2b4d69;
+  color: #cfe4f5;
+}
+
+.att-card__btn--do:hover:not(:disabled) { background: #234159; }
+
+.att-card__btn--quiet { color: #7c8394; }

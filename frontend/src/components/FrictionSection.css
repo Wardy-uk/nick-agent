@@ -1,0 +1,78 @@
+/* Deliberately quiet. This sits under the thing Nick is trying to start, and
+   nothing on it should compete with that for weight. */
+
+.friction {
+  background: var(--panel, #16181d);
+  border: 1px solid var(--border, #262a33);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.friction__h {
+  margin: 0 0 10px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted, #8a90a0);
+  font-weight: 600;
+}
+
+.friction__list { list-style: none; margin: 0; padding: 0; }
+
+.friction__item + .friction__item {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #22262e;
+}
+
+.friction__text {
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text, #dfe3ec);
+}
+
+.friction__because {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: #6f7686;
+}
+
+.friction__ev {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  color: #6f7686;
+}
+
+.friction__ev li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 1px 0;
+}
+
+.friction__evsrc {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 9px;
+  color: #565d6c;
+  min-width: 76px;
+}
+
+.friction__evat { color: #565d6c; margin-left: auto; }
+
+.friction__gap {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #b08a5a;
+}
+
+.friction__note {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #5f6674;
+}

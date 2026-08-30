@@ -80,49 +80,62 @@ router.get('/list', (req, res) => {
   res.json({ dir: req.query.dir || '', files });
 });
 
-// GET /api/vault/search?query=term&dir=optional/subdir
-router.get('/search', (req, res) => {
+/**
+ * GET /api/vault/search?query=term&dir=optional/subdir
+ *
+ * ⚠ This used to be a THIRD substring walker with its own copy of every bug
+ * `services/retrieval.js` had: depth capped at 4 (so `Meetings/YYYY/MM/` was
+ * the deepest thing reachable), an early stop at 20 results in filesystem
+ * order, no ranking, and no semantic arm at all. It is what the MCP
+ * `search_vault` tool calls, so every external Claude Code session searching
+ * this vault was getting the crudest of the three answers — and could not tell,
+ * because a substring walk always returns something.
+ *
+ * It is the unified retrieval now. `dir` becomes a `folder:` scope, which is
+ * enforced after every source and again after fusion.
+ *
+ * The response keeps `matches` alongside `excerpts`: `VaultBrowser` renders
+ * `matches[].text` and the MCP tool reads either, so changing the shape would
+ * have emptied a working screen to tidy a payload.
+ */
+router.get('/search', async (req, res) => {
   const { query, dir } = req.query;
   if (!query) return res.status(400).json({ error: 'query required' });
 
+  // Still resolved, purely to refuse a traversal attempt before it becomes a
+  // scope. The walk itself no longer takes a directory.
   const searchDir = safePath(dir || '');
   if (!searchDir) return res.status(400).json({ error: 'Invalid path' });
 
-  const results = [];
-  const maxResults = 20;
+  try {
+    const scopeDir = String(dir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const { results, health } = await require('../services/retrieval').searchWithHealth(String(query), {
+      maxResults: 20,
+      scope: scopeDir ? `folder:${scopeDir}` : undefined,
+    });
 
-  function searchRecursive(dirPath, depth) {
-    if (depth > 4 || results.length >= maxResults) return;
-    if (!fs.existsSync(dirPath)) return;
-
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-    for (const entry of entries) {
-      if (results.length >= maxResults) break;
-      if (entry.name.startsWith('.')) continue;
-
-      const fullPath = path.join(dirPath, entry.name);
-      if (entry.isDirectory()) {
-        searchRecursive(fullPath, depth + 1);
-      } else if (entry.name.endsWith('.md')) {
-        const content = fs.readFileSync(fullPath, 'utf-8');
-        if (content.toLowerCase().includes(query.toLowerCase())) {
-          const relPath = path.relative(VAULT_PATH, fullPath).replace(/\\/g, '/');
-          // Find matching lines for context
-          const lines = content.split('\n');
-          const matches = [];
-          for (let i = 0; i < lines.length && matches.length < 3; i++) {
-            if (lines[i].toLowerCase().includes(query.toLowerCase())) {
-              matches.push({ line: i + 1, text: lines[i].substring(0, 200) });
-            }
-          }
-          results.push({ path: relPath, name: entry.name.replace('.md', ''), matches });
-        }
-      }
-    }
+    res.json({
+      query,
+      results: results.map(r => ({
+        path: r.path,
+        name: r.name,
+        // `line` is null rather than invented: the unified search scores whole
+        // notes and reports the passages it matched, and a fabricated line
+        // number is worse than none on a screen that offers to jump to it.
+        matches: (r.excerpts || []).slice(0, 3).map(text => ({ line: null, text })),
+        excerpts: r.excerpts || [],
+        score: r.score,
+        ...(r.indexIncomplete ? { indexIncomplete: true } : {}),
+      })),
+      // Carried so no caller has to guess why a result set is thin. "Nothing
+      // matched" and "half the search was unavailable" are different facts.
+      health,
+    });
+  } catch (e) {
+    console.error('[Vault] search failed:', e.message);
+    // An error is NOT an empty vault.
+    res.status(500).json({ error: e.message });
   }
-
-  searchRecursive(searchDir, 0);
-  res.json({ query, results });
 });
 
 // GET /api/vault/search/temporal?query=X&from=YYYY-MM-DD&to=YYYY-MM-DD

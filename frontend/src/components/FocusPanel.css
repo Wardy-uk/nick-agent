@@ -506,3 +506,13 @@
     text-align: center;
   }
 }
+
+/* An unreadable pool is a warning, never the clear state — no green tick. */
+.focus-clear-warn { border-left: 3px solid var(--warning, #f5a524); }
+
+.focus-held {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted, #8a90a0);
+  text-align: center;
+}

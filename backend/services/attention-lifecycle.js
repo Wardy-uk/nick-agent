@@ -239,9 +239,39 @@ function evidenceFor(card, now = new Date()) {
  * worse than not offering it (`action-presenter`'s blockers rule).
  */
 function actionsFor(card) {
-  const base = ['acknowledge', 'defer', 'open'];
-  if (card && card.unsuppressable === true) return base;
-  return [...base, 'dismiss'];
+  const out = ['acknowledge', 'defer', 'open'];
+  // Starting is offered only where a focus session makes sense. A session about
+  // "you have a meeting in 10 minutes" is not a session, and a button that
+  // cannot mean anything is worse than no button (`action-presenter`'s rule).
+  if (isStartable(card)) out.push('start');
+  // "Done" always exists on a card Nick can act on. Whether it also closes a
+  // TASK is a separate question, answered by `completionTargetFor` — see below.
+  out.push('complete');
+  if (card && card.unsuppressable === true) return out;
+  return [...out, 'dismiss'];
+}
+
+/** May a focus session be started on this card? PURE. */
+function isStartable(card) {
+  return !!card && card.type === 'todo' && !!card.title;
+}
+
+/**
+ * What "Done" would close, beyond the record itself. PURE.
+ *
+ * ⚠ Returns a LOOKUP, not an id, and that is forced: `collectOverdueTodos`
+ * emits a slug (`todo-overdue-top`) and carries no task id in `meta`, so the
+ * only handle on the real row is the task's own text — the same normalised key
+ * `focus-session.start` matches on, deliberately reused rather than invented
+ * again here.
+ *
+ * `null` means "resolving this record closes nothing else", which is the
+ * correct answer for a meeting, an email pile or a nudge. Guessing a completion
+ * for one of those would put work in the ledger nobody did.
+ */
+function completionTargetFor(card) {
+  if (!card || card.type !== 'todo' || !card.title) return null;
+  return { kind: 'task', by: 'text', text: String(card.title) };
 }
 
 // ── Pure: when may this interrupt ────────────────────────────────────────────
@@ -524,6 +554,57 @@ function act(recordId, action, opts = {}) {
   }
 
   switch (action) {
+    // ⚠ Starting changes NOTHING about the record. A focus session is Nick
+    // picking the thing up, not finishing it, and the whole reason the old
+    // "Do it" button was wrong is that it recorded an outcome at the moment the
+    // work BEGAN. The event is kept as evidence (Work Package C reads it); the
+    // state is left exactly where it was.
+    case 'start':
+      _event(recordId, 'started', at, opts.note || null);
+      return { ok: true, record: row };
+
+    // Explicit confirmation from Nick, and the ONLY path that resolves. The
+    // underlying task is closed too where one can be found — never guessed, and
+    // never silently skipped: `taskCompleted` and `taskWhy` ride back so the
+    // surface can say what actually happened rather than implying both.
+    case 'complete': {
+      let taskCompleted = false;
+      let taskWhy = 'nothing to complete';
+      const target = completionTargetFor({
+        type: row.type,
+        title: row.title,
+      });
+      if (target) {
+        try {
+          const taskStore = require('./task-store');
+          const match = db.getTaskByDedupeKey(taskStore.dedupeKey(target.text));
+          if (!match) {
+            taskWhy = 'no matching task in the store';
+          } else if (match.status === 'done') {
+            taskWhy = 'task was already done';
+          } else {
+            // ⚠ `task-store.setStatus` owns the outcome-note hold
+            // (`task-blocks`), so a held tick comes back held rather than being
+            // forced through here. Its refusal is reported, not swallowed.
+            const updated = taskStore.setStatus(match.id, 'done');
+            taskCompleted = !(updated && updated.held);
+            taskWhy = taskCompleted
+              ? `task #${match.id} completed`
+              : `task #${match.id} is held — ${(updated && updated.held && updated.held.reason) || 'awaiting a write-up'}`;
+          }
+        } catch (e) {
+          taskWhy = e.message;
+        }
+      }
+      _event(recordId, 'resolved', at, taskCompleted ? `done — ${taskWhy}` : `done — ${taskWhy}`);
+      return {
+        ok: true,
+        taskCompleted,
+        taskWhy,
+        record: db.setAttentionState(recordId, STATES.RESOLVED, at, { resolution: 'completed' }),
+      };
+    }
+
     case 'acknowledge':
       _event(recordId, 'acknowledged', at, opts.note || null);
       return { ok: true, record: db.setAttentionState(recordId, STATES.ACKNOWLEDGED, at, {}) };
@@ -589,6 +670,16 @@ function present(row) {
   return {
     recordId: row.id,
     dedupeKey: row.dedupe_key,
+    // The decision-engine item id this record was last seen as.
+    //
+    // ⚠ UNSTABLE by construction — `collectOverdueTodos` emits
+    // `todo-overdue-top` for one overdue task and `todo-overdue-summary` for
+    // two — which is exactly why `dedupe_key` and not this is the identity.
+    // It is exposed for ONE job: a legacy surface still reading `/api/focus`
+    // holds an engine id and nothing else, and this is the only way it can find
+    // the canonical record to act on. Anything with a `recordId` in hand must
+    // use that; anything storing this is storing something that changes.
+    engineId: _parse(row.meta, {})._engineId || null,
     type: row.type,
     state: row.state,
     title: row.title,
@@ -618,6 +709,8 @@ module.exports = {
   dedupeKeyForPush,
   evidenceFor,
   actionsFor,
+  isStartable,
+  completionTargetFor,
   notifySignature,
   shouldNotify,
   expiryFor,

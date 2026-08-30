@@ -216,11 +216,16 @@ app.use('/api/task-dedupe', require('./routes/task-dedupe'));
 // Same reason, same trap.
 app.use('/api/task-blocks', require('./routes/task-blocks'));
 app.use('/api/day-plan', require('./routes/day-planner'));
+app.use('/api/notion-sync', require('./routes/notion-sync'));
 // The Neuro Mobile contract (Phase 2) — versioned in the path, because the
 // phone caches responses and replays operations across app upgrades.
 app.use('/api/mobile', require('./routes/mobile'));
 app.use('/api/calendar', require('./routes/calendar'));
 app.use('/api/adhd', require('./routes/adhd'));
+// Friction — what has actually got in the way, read from explicit evidence.
+// Sits beside /api/adhd because it is rendered on the same surface; it is a
+// separate route because it is READ-ONLY and /api/adhd is not.
+app.use('/api/friction', require('./routes/friction'));
 app.use('/api/wins', require('./routes/wins'));
 app.use('/api/weekly-target', require('./routes/weekly-target'));
 app.use('/api/standup-session', require('./routes/standup-session'));

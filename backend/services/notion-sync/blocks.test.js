@@ -1,0 +1,191 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const {
+  blocksToMarkdown, markdownToBlocks, richTextToMarkdown, markdownToRichText,
+} = require('./blocks');
+
+// Shorthand for a Notion rich_text span.
+const rt = (content, annotations = {}, href = null) => ({
+  type: 'text',
+  text: { content, link: href ? { url: href } : null },
+  annotations: {
+    bold: false, italic: false, strikethrough: false,
+    underline: false, code: false, color: 'default', ...annotations,
+  },
+  plain_text: content,
+  href,
+});
+
+const block = (type, payload) => ({ object: 'block', type, [type]: payload });
+const para = (...spans) => block('paragraph', { rich_text: spans });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Round-trip stability — the property the sync stands on.
+//
+// Not "the markdown looks right" but "converting twice changes nothing". If this
+// fails, a note with no real edits still hashes differently every pass and churns
+// between the two systems forever.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function assertStable(blocks, label) {
+  const first = blocksToMarkdown(blocks);
+  const reparsed = markdownToBlocks(first.markdown, { keep: first.keep });
+  const second = blocksToMarkdown(reparsed);
+  assert.equal(second.markdown, first.markdown, `${label}: markdown is not stable across a round trip`);
+}
+
+test('round trip is stable for every supported block type', () => {
+  const cases = {
+    paragraph: [para(rt('Plain sentence.'))],
+    headings: [
+      block('heading_1', { rich_text: [rt('One')] }),
+      block('heading_2', { rich_text: [rt('Two')] }),
+      block('heading_3', { rich_text: [rt('Three')] }),
+    ],
+    bullets: [
+      block('bulleted_list_item', { rich_text: [rt('First')] }),
+      block('bulleted_list_item', { rich_text: [rt('Second')] }),
+    ],
+    numbered: [
+      block('numbered_list_item', { rich_text: [rt('Step one')] }),
+      block('numbered_list_item', { rich_text: [rt('Step two')] }),
+    ],
+    todo: [
+      block('to_do', { rich_text: [rt('Done thing')], checked: true }),
+      block('to_do', { rich_text: [rt('Open thing')], checked: false }),
+    ],
+    quote: [block('quote', { rich_text: [rt('Something said')] })],
+    code: [block('code', { rich_text: [rt('const x = 1;')], language: 'javascript' })],
+    divider: [block('divider', {})],
+    mixed: [
+      block('heading_2', { rich_text: [rt('Notes')] }),
+      para(rt('Intro line.')),
+      block('bulleted_list_item', { rich_text: [rt('a point')] }),
+      block('divider', {}),
+      para(rt('After.')),
+    ],
+  };
+  for (const [label, blocks] of Object.entries(cases)) assertStable(blocks, label);
+});
+
+test('round trip is stable for every inline annotation', () => {
+  assertStable([para(rt('bold', { bold: true }))], 'bold');
+  assertStable([para(rt('italic', { italic: true }))], 'italic');
+  assertStable([para(rt('struck', { strikethrough: true }))], 'strikethrough');
+  assertStable([para(rt('under', { underline: true }))], 'underline');
+  assertStable([para(rt('code()', { code: true }))], 'code');
+  assertStable([para(rt('NEURO', {}, 'https://example.com'))], 'link');
+  assertStable([para(rt('both', { bold: true, italic: true }))], 'bold+italic');
+  assertStable([para(rt('Read '), rt('the docs', { bold: true }, 'https://x.dev'), rt(' first.'))], 'mixed spans');
+});
+
+test('a nested list survives the round trip at its own depth', () => {
+  const blocks = [
+    { ...block('bulleted_list_item', { rich_text: [rt('parent')] }),
+      has_children: true,
+      children: [block('bulleted_list_item', { rich_text: [rt('child')] })] },
+  ];
+  const { markdown } = blocksToMarkdown(blocks);
+  assert.match(markdown, /^- parent\n {2}- child\n$/);
+
+  const reparsed = markdownToBlocks(markdown);
+  assert.equal(reparsed.length, 1);
+  assert.equal(reparsed[0].bulleted_list_item.children.length, 1);
+  assert.equal(reparsed[0].bulleted_list_item.children[0].bulleted_list_item.rich_text[0].plain_text, 'child');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Escaping. The round trip is what these protect, so each is asserted as a
+// property (parses back to the same TEXT), not as an exact output string.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('markup characters in plain prose survive rather than becoming markup', () => {
+  for (const text of [
+    'a * b * c', 'use the [brackets] here', '2 ~ 3', 'file_name_with_underscores.md',
+    'literal `backtick`? no', 'a\\b', '<u> not underline',
+  ]) {
+    const { markdown, keep } = blocksToMarkdown([para(rt(text))]);
+    const back = markdownToBlocks(markdown, { keep });
+    assert.equal(back[0].paragraph.rich_text.map((s) => s.plain_text).join(''), text,
+      `plain text was mangled: ${text}`);
+  }
+});
+
+test('snake_case is not italicised — the underscore rule is word-boundary aware', () => {
+  const { markdown } = blocksToMarkdown([para(rt('call parse_leading_json now'))]);
+  const back = markdownToBlocks(markdown);
+  assert.equal(back[0].paragraph.rich_text.map((s) => s.plain_text).join(''), 'call parse_leading_json now');
+});
+
+test('a paragraph that starts with a list marker does not become a list', () => {
+  const { markdown, keep } = blocksToMarkdown([para(rt('- not a bullet'))]);
+  const back = markdownToBlocks(markdown, { keep });
+  assert.equal(back[0].type, 'paragraph');
+  assert.equal(back[0].paragraph.rich_text[0].plain_text, '- not a bullet');
+});
+
+test('markdown inside a code fence is not parsed as markup', () => {
+  const blocks = [block('code', { rich_text: [rt('# not a heading\n- not a bullet')], language: 'markdown' })];
+  const { markdown } = blocksToMarkdown(blocks);
+  const back = markdownToBlocks(markdown);
+  assert.equal(back.length, 1);
+  assert.equal(back[0].type, 'code');
+  assert.equal(back[0].code.rich_text[0].plain_text, '# not a heading\n- not a bullet');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unsupported blocks — the preservation mechanism.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('an unsupported block is preserved verbatim, not rendered and not dropped', () => {
+  const embed = { object: 'block', id: 'abc', type: 'embed', embed: { url: 'https://figma.com/x' } };
+  const blocks = [para(rt('Before.')), embed, para(rt('After.'))];
+
+  const { markdown, keep } = blocksToMarkdown(blocks);
+  assert.match(markdown, /<!-- notion:keep:0 -->/);
+  assert.equal(keep.length, 1);
+  assert.equal(keep[0], embed, 'the raw block itself must be stashed');
+
+  const back = markdownToBlocks(markdown, { keep });
+  assert.deepEqual(back[1], embed, 'the embed must come back byte-identical');
+});
+
+test('an unresolvable keep marker REFUSES the push rather than dropping the block', () => {
+  assert.throws(
+    () => markdownToBlocks('Text\n\n<!-- notion:keep:7 -->\n', { keep: [] }),
+    /Refusing to push/,
+    'a lost stash must fail closed — silently dropping is the damage this prevents',
+  );
+});
+
+test('several unsupported blocks keep their document order', () => {
+  const a = { object: 'block', type: 'embed', embed: { url: 'a' } };
+  const b = { object: 'block', type: 'table_of_contents', table_of_contents: {} };
+  const { markdown, keep } = blocksToMarkdown([a, para(rt('mid')), b]);
+  const back = markdownToBlocks(markdown, { keep });
+  assert.deepEqual([back[0], back[2]], [a, b]);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rich text unit level.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('rich text renders and parses annotations symmetrically', () => {
+  assert.equal(richTextToMarkdown([rt('x', { bold: true })]), '**x**');
+  assert.equal(richTextToMarkdown([rt('x', { code: true })]), '`x`');
+  assert.equal(richTextToMarkdown([rt('x', {}, 'https://a.b')]), '[x](https://a.b)');
+
+  const parsed = markdownToRichText('**bold** and `code`');
+  assert.equal(parsed[0].plain_text, 'bold');
+  assert.equal(parsed[0].annotations.bold, true);
+  assert.equal(parsed.at(-1).annotations.code, true);
+});
+
+test('a code span drops competing annotations rather than nesting them illegibly', () => {
+  // Markdown cannot express bold-inside-code. Whatever we choose must be STABLE,
+  // which is the only property that matters here.
+  assertStable([para(rt('x', { code: true, bold: true }))], 'code+bold');
+});

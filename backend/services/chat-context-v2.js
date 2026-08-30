@@ -89,15 +89,31 @@ async function buildChatContext(userMessage, options = {}) {
   }
 
   // ── 4. Vault retrieval (API mode only, bounded) ──
+  //
+  // ⚠ `searchWithHealth`, not `search`, and the health reaches the model. A
+  // degraded index answers with FEWER notes, not with none, and the difference
+  // is invisible in the results themselves: three keyword hits look exactly
+  // like three hits from a healthy hybrid search. Left unsaid, the model reads
+  // a thin retrieval as "the vault has little on this" and answers confidently
+  // from nothing — the same false all-clear the attention pool refuses, one
+  // layer down.
   if (isApi && userMessage.length > 3) {
     try {
       const retrieval = require('./retrieval');
-      const results = await retrieval.search(userMessage, { maxResults: 3 });
+      const { results, health } = await retrieval.searchWithHealth(userMessage, { maxResults: 3 });
       if (results.length > 0) {
         const snippets = results.map(r =>
-          `[${r.name}]: ${(r.excerpts?.[0] || '').substring(0, 150)}`
+          // A note the index holds only PART of is marked, because the model
+          // must not treat a truncated transcript as the whole of what was said.
+          `[${r.name}]${r.indexIncomplete ? ' (only partly indexed)' : ''}: ${(r.excerpts?.[0] || '').substring(0, 150)}`
         );
         parts.push(`Relevant vault notes:\n${snippets.join('\n')}`);
+      }
+      if (health && health.semanticAvailable === false) {
+        // Said even when results came back, and said even when none did:
+        // "nothing matched" and "I could only search half the ways I normally
+        // do" are different facts about the same empty list.
+        parts.push('Vault search note: semantic search was unavailable, so this used keyword matching only. Treat a thin or empty result as incomplete, not as an absence.');
       }
     } catch {}
   }

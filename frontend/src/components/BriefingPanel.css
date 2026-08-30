@@ -484,3 +484,19 @@
     opacity: 1;
   }
 }
+
+/* An unreadable pool is a warning, never the calm state. */
+.briefing-empty-warn { border-left: 3px solid var(--warning, #f5a524); }
+
+.briefing-empty-sub {
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted, #8a90a0);
+}
+
+/* Held is not gone, and "couldn't look" is not "nothing there". */
+.briefing-held {
+  margin: 0.4rem 0 0.8rem;
+  font-size: 0.75rem;
+  color: var(--muted, #8a90a0);
+}

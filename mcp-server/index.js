@@ -318,22 +318,45 @@ server.tool('approve_action', 'Approve a SARA suggested action', { actionId: z.n
 // Tools: Vault / Knowledge  (NEURO-first, local-vault fallback)
 // ═══════════════════════════════════════════════════════
 
-server.tool('search_vault', 'Search the Obsidian vault for notes (keyword)', {
-  query: z.string().describe('Search query'),
-  maxResults: z.number().optional().describe('Max results (default 5)'),
-}, async ({ query, maxResults }) => {
-  const limit = maxResults || 5;
-  const { data, source } = await vaultDispatch(
-    () => neuroApi(`${VAULT_API_BASE}/search?query=${encodeURIComponent(query)}&limit=${limit}`, { timeout: 8000 }),
-    () => localVault.search(query),
-  );
-  const results = (data.results || []).slice(0, limit).map(r => {
-    const title = r.name || r.path?.split('/').pop()?.replace('.md', '') || 'Untitled';
-    const excerpt = r.excerpt || r.preview || (r.matches || []).map(m => m.text).join('\n') || (r.excerpts || []).join('\n') || '';
-    return `### ${title}\nPath: ${r.path || '?'}\n${excerpt}`;
-  }).join('\n\n');
-  return { content: [{ type: 'text', text: offlineBanner(source) + (results || 'No results found.') }] };
-});
+server.tool('search_vault',
+  'Search the Obsidian vault by meaning and keyword. Optionally scope to a folder.',
+  {
+    query: z.string().describe('Search query'),
+    maxResults: z.number().optional().describe('Max results (default 5)'),
+    // Scope is offered because the guarantee is real now: NEURO enforces it
+    // after every retrieval source AND after fusion, so a scoped search cannot
+    // return a note from outside the folder.
+    dir: z.string().optional().describe('Optional vault-relative folder to search within, e.g. "Meetings/2026".'),
+  },
+  async ({ query, maxResults, dir }) => {
+    const limit = maxResults || 5;
+    const scope = dir ? `&dir=${encodeURIComponent(dir)}` : '';
+    const { data, source } = await vaultDispatch(
+      () => neuroApi(`${VAULT_API_BASE}/search?query=${encodeURIComponent(query)}&limit=${limit}${scope}`, { timeout: 8000 }),
+      () => localVault.search(query),
+    );
+    const results = (data.results || []).slice(0, limit).map(r => {
+      const title = r.name || r.path?.split('/').pop()?.replace('.md', '') || 'Untitled';
+      const excerpt = r.excerpt || r.preview || (r.matches || []).map(m => m.text).join('\n') || (r.excerpts || []).join('\n') || '';
+      // ⚠ A note the index holds only PART of is marked. A long transcript
+      // whose tail was never embedded returns three good passages and looks
+      // exactly like a note read in full, so a caller answering "that is all it
+      // says" would be wrong and have no way to know.
+      const partial = r.indexIncomplete ? '\n_(this note is only partly indexed — the tail was not searched)_' : '';
+      return `### ${title}\nPath: ${r.path || '?'}\n${excerpt}${partial}`;
+    }).join('\n\n');
+
+    // ⚠ "Nothing matched" and "half the search was unavailable" produce the
+    // same empty list, and only one of them means the vault has nothing to say.
+    // Reporting the first when the second is true is how "I couldn't find
+    // anything about that" becomes a confident claim about a vault nobody
+    // actually searched.
+    const degraded = data.health && data.health.semanticAvailable === false
+      ? '⚠ Semantic search was unavailable — this is keyword matching only. A thin or empty result here is INCOMPLETE, not an absence.\n\n'
+      : '';
+
+    return { content: [{ type: 'text', text: offlineBanner(source) + degraded + (results || 'No results found.') }] };
+  });
 
 server.tool('read_note', 'Read a specific vault note by path', {
   path: z.string().describe('Relative path in vault, e.g. "People/Stephen Mitchell.md"'),

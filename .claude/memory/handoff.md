@@ -1,3 +1,367 @@
+# Handoff — Phase 4: Obsidian-First ADHD Chief of Staff
+
+**All six workstreams built, plus a follow-up pass closing the three items the
+first pass flagged** (see "Follow-up pass" below). Backend **1534** pass / 0 fail
+(was 1480 — 54 new), sara/backend **96** / 0 fail. All three frontends build and
+the 500 kB chunk warning is gone. `git diff --check` clean.
+
+⚠ **The uncommitted Notion-sync work rode along in the deploy commit.** It was
+not modified or reverted, but `frontend/src/App.jsx` and
+`frontend/src/components/Sidebar.jsx` carry BOTH sessions' changes, and
+committing Phase 4's half of those without the Notion panel would have shipped a
+menu entry pointing at a component that is not in the repo — a broken build on
+the Pi. `NOTION_SYNC_ENABLED` defaults false and the mapping table is empty, so
+it ships inert.
+
+⚠ **Deployed to the Pi, but not yet used through a real day.** Everything below
+is verified by tests and by real-HTTP routing checks, not by Nick's own work.
+
+---
+
+## The canonical execution flow
+
+```
+Capture ──► vault record (Tasks/Captured/…) ──► task row (projection)
+                                                     │
+decision-engine  ──►  attention.gate()  ──►  attention_records (lifecycle)
+   (what is worth surfacing)   (what fits now)      (durable identity)
+                                                     │
+                    ┌────────────────────────────────┴────────────────────┐
+                    ▼                ▼                ▼                   ▼
+                Now (default)     Focus          Briefing            phone / kiosk / widget
+                    │
+              Start this ──► focus session ──► shrink / step away / check in
+                    │
+              Done ──► resolve record + close task ──► wins ledger
+                    │
+              Not now / Waiting on ──► deferred (reason) ──► friction read
+```
+
+One decision, made once, rendered identically everywhere. The five actions mean
+the same thing on every surface because all three desktop panels render the
+same `AttentionCard`.
+
+---
+
+## WS1 — one canonical attention contract
+
+`/api/attention` is now the user-facing decision and lifecycle contract on the
+desktop too. `frontend/src/useAttention.js` is the one hook; `AttentionCard.jsx`
+is the one renderer. React reranks nothing, rewords nothing and derives no
+urgency — `title`, `say`, `reason`, `tab`, `urgency`, `evidence` and the bounded
+`actions` all come off the record.
+
+### The bug that was fixed
+
+⚠ **`BriefingPanel`'s "Do it" POSTed `/api/focus/action-done`.** That route
+calls `nextActionEngine.logOutcome()` **and** `engine.dismiss()` — so the button
+that merely OPENED a thing recorded it as a completed outcome and hid the card.
+It survived because the card vanishing looks exactly like the button having
+worked. `FocusPanel`'s "Done" did the same and **never closed the task**, so
+ticking a card left the work open and hid the reminder about it; and its "Defer"
+POSTed `/api/focus/dismiss`, so "not now" and "not mine" were one gesture and
+the difference was destroyed at the moment Nick expressed it.
+
+The escalating `DEFER_MESSAGES` ("You're avoiding this") went with it: the count
+lived in `localStorage`, so it was a fact about a browser rather than about the
+work, and the wording was a claim about Nick no evidence supported.
+
+### Exactly which actions can change lifecycle state
+
+| Action | Route | State change | Touches work |
+|---|---|---|---|
+| **Open context** | *none — navigation only* | none | no |
+| **Start this** | `POST /api/session/start` + `act:start` | **none** | starts a focus session |
+| **Done** | `act:complete` | → `resolved` | closes the task **where one is resolvable**, and says which |
+| **Not now** | `act:defer` reason `not-now` | → `deferred` (2h) | no |
+| **Waiting on someone** | `act:defer` reason `waiting-on-someone` | → `deferred` (24h) | no |
+| **Not relevant** | `act:dismiss` | → `suppressed` | no — teaches suppression only |
+| *(existing)* | `act:acknowledge` | → `acknowledged` (stays visible) | no |
+
+Nothing auto-completes, auto-defers, auto-dismisses, auto-starts or sends
+anything. Every one of those is a click Nick made.
+
+**Done never claims more than it did.** `completionTargetFor` is pure and
+returns a LOOKUP, not an id — `collectOverdueTodos` emits a slug
+(`todo-overdue-top`) and carries no task id, so the only handle is the task's
+normalised text, the same key `focus-session.start` already matches on. A
+meeting, an email pile or a nudge returns `null`, and the response says
+"card cleared, no task was closed" rather than implying both. A tick held by
+`task-blocks`' outcome-note rule comes back **held**, not completed.
+
+### Remaining `/api/focus` consumers, and why
+
+`/api/focus` and its four POSTs are **unchanged and still mounted**. Consumers:
+
+| Consumer | What it uses | Why it stays |
+|---|---|---|
+| `frontend` Briefing | `GET` — `sara.briefing`, `tone`, `context.standupDone` | none of that is in the attention contract. **Read-only; it writes nothing.** |
+| `frontend` Focus | `GET` — `sara.primary`, `tone` | same. **Read-only.** |
+| `sara/app` `views/Focus.jsx` | `GET`, `POST /dismiss` | the phone's Focus tab; Phase 2 migrated the Surface, not this. Next to move. |
+| `sara/app` `views/Surface.jsx` | `POST /dismiss` | its own documented fallback |
+| `sara/app` `LockScreen.jsx` | `GET` | PIN check side effect |
+| `sara/frontend` `saraState.jsx` | `GET` ×2 | kiosk; still reads through `sara/backend` |
+| `sara/backend` `routes/focus.js`, `routes/actions.js` | `GET`, `POST /dismiss`, `POST /action-done` | the kiosk passthrough. ⚠ **`action-done` is still reachable from the kiosk** — same wrong semantics, one surface along. Not migrated this phase because the kiosk cannot yet reach `/api/attention` at all (no route in `sara/backend`), which is the prerequisite. |
+| `sara/backend` `neuroSnapshot.js` | `GET` | health probe |
+| `HANDOFF-nova-look-at-this.md` | a curl example | docs |
+
+⚠ **The kiosk `action-done` path is the one piece of this bug still live.**
+Closing it means giving `sara/backend` a proxy to `/api/attention` — the same
+work the "full convergence" note in `CLAUDE.md` already describes.
+
+**Fallback:** `useAttention.act()` uses `/api/focus/{dismiss,snooze}` **only**
+when a card has no `recordId`, and says so on the card ("no record", "legacy
+snooze"). `complete` and `acknowledge` have **no** legacy equivalent and are
+refused with a reason rather than quietly mapped onto a dismissal.
+`action-done` is not in the fallback map at all.
+
+---
+
+## WS2 — the execution surface
+
+`Now` is the ADHD "Today" view, **promoted rather than rebuilt** — it already
+owned every control that lowers the barrier to starting, and a thin new screen
+composing them would have been a third "what should I do?" surface. It is
+primary nav (desktop sidebar and mobile bottom nav) and the **default launch
+view**; a notification's launch intent still wins.
+
+The view id is still **`today`**, deliberately: every existing deep link,
+notification route and `?view=` param keeps working. Only the label changed.
+
+Order on the page, and the order is the argument: shape → **return prompt** →
+**session** → Right now → friction → momentum → quick wins → wins → avoidance.
+Session and recovery sit above any general suggestion, because the cost of an
+interruption is the failure to return. Every session control is unchanged:
+start/resume, **make it smaller (first, always)**, named next step, step away,
+check-in, optional reflection, Done, Let it go. `paused` / `interrupted` /
+`stale` / `needs-smaller` remain four distinct labels.
+
+Briefing and Focus moved to MORE as supporting views. **Nothing was deleted.**
+
+---
+
+## WS3 — friction without shame
+
+`services/friction.js` (`assess()` is pure) + `GET /api/friction` +
+`FrictionSection` on `Now`.
+
+**Signals, and the evidence each needs:**
+
+| Insight | Evidence required |
+|---|---|
+| "put off twice because it needs context" | ≥2 attention `deferred` events **with a reason**, same `dedupe_key`, inside 21 days; the reason is named only when it **dominates** |
+| "made smaller 3×, may need a different shape" | ≥2 recorded `shrink`s on the same task (live session or archived history) |
+| "parked because it is too big as it stands" | the live session's `needs-smaller` state |
+| "you were pulled away twice" | `stepAway` calls **only** |
+| "waiting on Naomi — noted 30 days ago" | an open `waiting_on` row **with a `source_path`**, ≥7 days old |
+
+**What NEURO explicitly refuses to infer:**
+
+* ⚠ **Nothing from a missed check-in.** Being heads-down is exactly why one gets
+  skipped; four hours of silence reads identically to four check-ins (pinned).
+* ⚠ **Nothing from `interruptions`.** That array holds pauses and things that
+  merely ARRIVED. `noteInterruption` deliberately leaves the clock running
+  because NEURO cannot know whether Nick switched, so reading it here would
+  build a claim about his attention out of other people's timing.
+  `session.stepAways` is a **new, separate** array for exactly this.
+* ⚠ **Nothing from an unattributed waiting-on row.** The backfill produced
+  misparses, and `meeting-prep`'s rule — never imply a person failed without
+  evidence — applies word for word.
+* **No streaks, no scores, no diagnoses, no "avoidance" language.** Pinned by a
+  forbidden-wording test over every generated line.
+* **No insight without evidence**, and no consolation line in its place: with
+  nothing recorded and nothing unreadable, the section renders **nothing at all**.
+* A failed source is a **named gap**, never "nothing in your way" — `complete`
+  keeps the two apart.
+
+The existing "What you're pushing away" card is untouched and still separate:
+it reasons about things NOT done (an absence, always open to a second reading);
+this reasons only about things Nick DID.
+
+---
+
+## WS4 — the task/vault durability model
+
+```
+capture ──► Tasks/Captured/Task Captures YYYY-MM.md   ← THE DURABLE RECORD
+                        │  (append-only, one line, carries <!--neuro-task:ID-->)
+                        ▼
+              tasks table                              ← the operational projection
+                        │  (status, MoSCoW, due, MS links; origin_path points back)
+                        ▼
+       Tasks/NEURO Tasks (export).md                   ← a read-only VIEW of that
+```
+
+**Vault first, task row second.** A crash between the two loses the projection,
+which is rebuildable, and never the words. The old order wrote a task row and
+nothing else — the vault only heard about it when `task-export` next ran, up to
+an hour later, into a file nothing parses back.
+
+* ⚠ **Append-only, and never into the generated export.** That file is rewritten
+  wholesale on every task change, so editing it destroys the record on the next
+  export.
+* ⚠ **A vault miss does NOT fail the capture** — refusing a capture is the one
+  failure this area exists to prevent. It reports `vault.written: false` with a
+  reason and the UI says so in words. Only a total miss is a 500; vault-saved
+  with a failed task row is a **207 partial**, rendered as "the words are safe,
+  it just is not on your task list yet".
+* **Exactly-once offline** is the mobile ledger's job (`applyOperation` is
+  synchronous from ledger read to ledger write), so a replayed capture appends
+  no second line — pinned.
+* `Tasks/Captured/` is under `Tasks/`, which `action-candidates.shouldSkipPath`
+  already skips — otherwise every captured task would come back as a candidate
+  to capture again. Pinned.
+* It is **not** in `vault-exclusions`, so the durable record stays searchable.
+* The export header now explains the three-layer relationship above.
+
+Capture UI: "I'll route it" is gone — it promised classification and entity
+extraction that run after the write and can fail. It now claims only what is
+guaranteed (it reaches the vault) and reports each observable step.
+
+---
+
+## WS5 — retrieval scope guarantees and limits
+
+**Guaranteed:** a result outside the requested scope is never returned. Enforced
+three times, deliberately redundantly — inside each source, on each source's
+output, and again after fusion. The last is the guarantee: a source added later
+cannot leak past it by forgetting.
+
+* `folder:<path>` — segment-aware (`Meetings` is not `Meetings archive/`), and
+  the reverse containment the old code allowed is gone. The walk **prunes** to
+  the folder rather than filtering afterwards.
+* `person:<Full Name>` — the person's own note, or a **whole-word full-name**
+  match in the body (`entities.js`'s rule: "Liam" must not match "William").
+  Unreadable is **not** a match.
+* An **unrecognised** scope admits nothing — fails closed, so a typo cannot hand
+  back the whole vault labelled as scoped.
+* Date bounds unchanged.
+
+**Ranking:** the filesystem-order early stop is gone. Every permitted file is
+scored, then sorted, then cut. Depth 4 → 12, and hitting either that or the
+5,000-file cap is **reported** (`truncated`), never swallowed.
+
+**Honest degradation:** `embeddings.semanticSearch` returning `null` means
+"could not answer" and yields `semanticAvailable: false` with a reason —
+keyword and temporal still answer, so an outage never renders as an empty vault.
+An empty semantic result set is a different fact and is reported as available.
+
+**Index health:** a note over `MAX_CHUNKS_PER_FILE` (60) is now recorded in
+`agent_state.embeddings_truncated` and comes back marked `indexIncomplete: true`,
+with `getEmbeddingHealth().truncated` listing them. Previously a transcript whose
+tail was never embedded looked exactly as searchable as one indexed in full. A
+note that shrinks below the cap clears its entry.
+
+**Known limitations:** `person:` reads note bodies, so a scoped search over a
+large vault is I/O-bound (cached per search, capped at 2,000 entries).
+`search()` still returns a bare array for every existing caller;
+`searchWithHealth()` is the new shape and nothing consumes it yet except the
+tests — **wiring it into chat RAG and the MCP tools is the obvious next step.**
+
+---
+
+## WS6 — navigation and build
+
+Primary: **Now · Capture · Ask · State of Play · Actions**. Briefing and Focus
+are under MORE. Mobile bottom nav leads with Now, matching the sidebar — two
+navs disagreeing about the main screen is how "Today" became the view nobody
+opened.
+
+Lazy-loaded: 27 specialist panels. **Eager:** `Now`, Capture, Ask, State of
+Play, auth and the offline queue — a spinner at the moment the barrier to acting
+needs to be lowest is the wrong trade, and Capture behind a network round trip
+is a capture that fails when the network does. `Suspense` sits **inside**
+`ErrorBoundary`, so a chunk that fails to download is caught and named exactly
+like a panel that throws. Main chunk 359 kB (was over the 500 kB warning).
+
+---
+
+## Files
+
+**New:** `backend/services/friction.js`, `backend/routes/friction.js`,
+`frontend/src/useAttention.js`, `frontend/src/components/AttentionCard.{jsx,css}`,
+`frontend/src/components/FrictionSection.{jsx,css}`, and six test files.
+
+**Changed:** `attention-lifecycle.js` (+`start`/`complete`, `isStartable`,
+`completionTargetFor`), `routes/attention.js`, `routes/capture.js`,
+`capture-store.js`, `mobile-sync.js`, `task-export.js`, `retrieval.js`
+(rewritten), `embeddings.js`, `focus-session.js` (+`stepAways`), `server.js`,
+`App.jsx`, `Sidebar.jsx`, `AdhdPanel`, `BriefingPanel`, `FocusPanel`,
+`CapturePanel`.
+
+## Follow-up pass — the three flagged items, closed
+
+**1. The kiosk `action-done` bug is gone.** `sara/backend/routes/actions.js` no
+longer has a `/focus/done` route at all. `sara/backend/src/routes/attention.js`
+gained `GET /records` and `POST /records/:id/act` — a PASSTHROUGH: the action is
+forwarded verbatim and NEURO decides what it means, with the body **bounded to
+the contract fields** (`action`, `minutes`, `reason`, `note`) so a proxy cannot
+one day carry a field NEURO trusts and the kiosk should not set. A write reports
+a refusal as a refusal, never the feed's `200 + available:false` — that shape is
+right for a POLL and wrong for a button press.
+
+⚠ **My earlier claim that the kiosk "cannot reach `/api/attention` at all" was
+wrong** — the read passthrough already existed from the "one surface, two
+shells" commit. Only the write half was missing.
+
+`lifecycle.present()` now exposes **`engineId`** for one job: a legacy screen
+holding a decision-engine item id and nothing else (the kiosk's `FocusView`, the
+phone's `Focus` tab) can find the canonical record and act on THAT. It is
+unstable by construction — `todo-overdue-top` becomes `todo-overdue-summary` the
+moment a second task goes overdue — so it is a lookup key and must never be
+stored.
+
+The kiosk's Presence surface now passes `onAct`. The old objection was that
+acting needs a credential the kiosk does not hold; that was true of the BROWSER
+and never of `sara/backend`, which already holds it and already proxies the
+feed. ⚠ **`done-focus` has NO fallback**: a dismissal is not a completion, and
+substituting one for the other is the bug being removed, so an unresolvable card
+says so and records nothing. Deferring falls back to the suppression timer and
+**says so on the screen**.
+
+**2. `sara/app` `views/Focus.jsx`** resolves the record and dismisses through it,
+falling back to `/api/focus/dismiss` only when there is none — so one screen on
+the phone can no longer teach suppression while the other records a lifecycle,
+about the same card.
+
+**3. `searchWithHealth` is wired in.** Three consumers:
+* **chat RAG** (`chat-context-v2`) — tells the model in words when semantic was
+  unavailable and marks a partly-indexed note. Three keyword hits look exactly
+  like three hits from a healthy hybrid search, and a model reading a thin
+  retrieval as "the vault has little on this" answers confidently from nothing.
+* **the `search_vault` chat tool** — reports `incomplete`, marks
+  `indexIncomplete` per note, and gained a `scope` argument.
+* ⚠ **`GET /api/vault/search`** — which turned out to be a **THIRD substring
+  walker**, with its own copy of every bug the retrieval rewrite fixed: depth
+  capped at 4, an early stop at 20 results in filesystem order, no ranking, no
+  semantic arm. **It is what the MCP `search_vault` tool calls**, so every
+  external Claude Code session searching this vault was getting the crudest of
+  the three answers and could not tell, because a substring walk always returns
+  something. It runs on the unified retrieval now, `dir` is a real `folder:`
+  scope, and the response keeps `matches[].text` (which `VaultBrowser` renders)
+  alongside `excerpts` — with `matches[].line` **null rather than invented**.
+  The MCP tool gained `dir` and prints a banner when semantic was unavailable.
+
+**Not fixed, because it is not a bug:** a vault miss on capture still returns
+success with `vault.written:false` and a reason. Refusing a capture is the one
+failure that area exists to prevent.
+
+**Tests:** backend **1534** / 0 fail, sara/backend **96** / 0 fail. All three
+frontends build.
+
+## Open ends
+
+1. **`adhd-dashboard._rightNow()`** is now unused by the panel but still in the
+   `/api/adhd` payload. Left in place deliberately; remove once nothing reads it.
+2. **The kiosk's legacy `FocusView`** still renders `/api/focus` data and only
+   reaches the lifecycle through the `engineId` lookup. Presence is the screen
+   that renders the canonical feed directly; FocusView is a candidate for
+   retirement rather than further repair.
+3. **Not yet used on the real box by Nick.** Deployed, but the day has not been
+   run through it.
+
+---
+
 # Handoff — 30 Aug 2026: Phase 3, all four gates
 
 **All four Phase 3 gates are closed, deployed and verified against the live box.**

@@ -688,6 +688,52 @@ export function SaraStateProvider({ children }) {
     return { ok: true, data: body };
   }
 
+  /**
+   * Find the canonical attention record for a decision-engine item id.
+   *
+   * ⚠ The Focus screen is legacy: it renders `/api/focus` data, so the only
+   * handle it holds on a card is the engine's item id — which is not the
+   * identity of anything (`todo-overdue-top` becomes `todo-overdue-summary` the
+   * moment a second task goes overdue). NEURO exposes `engineId` on an open
+   * record for exactly this lookup, and once the record is found the kiosk acts
+   * on the RECORD, never on the item.
+   *
+   * Returns null when it cannot be resolved — an unreachable NEURO, or a card
+   * the gate held back. The caller must say so rather than falling through to
+   * something that merely looks similar.
+   */
+  async function resolveAttentionRecord(itemId) {
+    const wanted = String(itemId || '').trim();
+    if (!wanted) return null;
+    try {
+      const res = await fetch('/api/attention/records');
+      if (!res.ok) return null;
+      const body = await res.json().catch(() => ({}));
+      if (body.available === false || !Array.isArray(body.records)) return null;
+      return body.records.find((r) => r.engineId === wanted) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Submit a canonical action, and report honestly which door it went through.
+   *
+   * `canonical:false` means the record could not be found and the caller has
+   * fallen back to the engine's suppression TIMER, which cannot express "seen
+   * it" or "this is finished". That difference reaches the screen.
+   */
+  async function actOnAttention(record, action, opts = {}) {
+    const res = await fetch(`/api/attention/records/${record.recordId}/act`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action, ...opts }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: body.error || `HTTP ${res.status}` };
+    return { ok: true, canonical: true, ...body };
+  }
+
   async function runQuickAction(actionId, payload = {}) {
     const action = String(actionId || '').trim();
     if (!action) return { ok: false, error: 'action is required' };
@@ -710,7 +756,21 @@ export function SaraStateProvider({ children }) {
       setActionFeedback('Standup opened');
       return { ok: true };
     }
+    // "Not now" — a DEFERRAL with a stated reason, which is a different fact
+    // from a dismissal. It used to POST `/focus/dismiss`, so "not now" and "not
+    // mine" were one gesture and the difference was destroyed at the moment
+    // Nick expressed it.
     if (action === 'defer-focus') {
+      const record = await resolveAttentionRecord(payload.itemId);
+      if (record) {
+        const result = await actOnAttention(record, 'defer', { minutes: 120, reason: 'not-now' });
+        if (!result.ok) { setActionFeedback(result.error); return result; }
+        await refreshModel();
+        setActionFeedback('Put off for now');
+        return result;
+      }
+      // No record — the engine's suppression timer is all that is left, and the
+      // feedback says so rather than presenting it as the same thing.
       const res = await fetch('/api/actions/focus/dismiss', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -726,39 +786,35 @@ export function SaraStateProvider({ children }) {
         return { ok: false, error };
       }
       await refreshModel();
-      setActionFeedback('Focus deferred');
-      return { ok: true };
+      setActionFeedback('Hidden for now — no attention record for this card');
+      return { ok: true, canonical: false };
     }
+
+    // ⚠ "Done" used to POST `/api/actions/focus/done`, which proxied
+    // `/api/focus/action-done` — a route that logs a COMPLETED OUTCOME and
+    // dismisses the item without ever closing the task. So the button recorded
+    // work as finished, hid the card, and left the work open with its only
+    // reminder suppressed. It goes through the lifecycle now, which knows what
+    // the card is about and can say whether a task was actually closed.
+    //
+    // ⚠ With no record there is NO fallback. A dismissal is not a completion,
+    // and quietly substituting one for the other is the bug this replaces.
     if (action === 'done-focus') {
-      const res = await fetch('/api/actions/focus/done', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          actionType: 'manual',
-          detail: payload.detail || 'Completed focus item',
-          itemId: payload.itemId || null,
-          itemType: payload.itemType || null,
-        }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const error = body.error || `HTTP ${res.status}`;
+      const record = await resolveAttentionRecord(payload.itemId);
+      if (!record) {
+        const error = "Couldn't find this in the attention feed — nothing recorded.";
         setActionFeedback(error);
         return { ok: false, error };
       }
-      if (payload.itemId && !body.dismissed) {
-        await fetch('/api/actions/focus/dismiss', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            itemId: payload.itemId,
-            itemType: payload.itemType || null,
-          }),
-        }).catch(() => {});
-      }
+      const result = await actOnAttention(record, 'complete');
+      if (!result.ok) { setActionFeedback(result.error); return result; }
       await refreshModel();
-      setActionFeedback('Focus retired');
-      return { ok: true };
+      // Both outcomes are stated. "Done" that quietly left a task open is the
+      // half-failure this whole change exists to remove.
+      setActionFeedback(result.taskCompleted === true
+        ? `Done — ${result.taskWhy || 'task closed too'}`
+        : `Done — card cleared. ${result.taskWhy || 'No task was closed.'}`);
+      return result;
     }
 
     const error = `Unknown action: ${action}`;

@@ -189,6 +189,32 @@ function start() {
   // 9:10am weekdays — check 1-2-1 due dates
   cron.schedule('10 9 * * 1-5', () => { nudges.check121Nudges(); });
 
+  // Every 15 min — keep the mapped Notion folders and the vault in step.
+  //
+  // Deliberately NOT a TRACKED_JOBS catch-up job: the sync compares live state on
+  // both sides every pass, so a missed run self-corrects on the next one and
+  // there is nothing to replay (the `wins` and `bank-holidays` call). Gated on
+  // NOTION_SYNC_ENABLED, which defaults FALSE — this writes to a real external
+  // workspace, so switching it on is a decision, not a default.
+  if (process.env.NOTION_SYNC_ENABLED === 'true') {
+    cron.schedule('*/15 * * * *', async () => {
+      try {
+        const r = await require('./notion-sync').run({ dryRun: false });
+        const c = r.counts;
+        if (c.pulled || c.pushed || c.created || c.conflicts) {
+          console.log(`[Scheduler] Notion sync: ${c.pulled} pulled, ${c.pushed} pushed, `
+            + `${c.created} created, ${c.conflicts} conflict(s)`);
+        }
+        // A gap is logged loudly whatever else happened — a sync reporting zero
+        // because it could not read a side is the bug, not a quiet day.
+        for (const gap of r.gaps) console.warn(`[Scheduler] Notion sync gap: ${gap}`);
+      } catch (e) {
+        console.error(`[Scheduler] Notion sync failed: ${e.message}`);
+      }
+    });
+    console.log('[Scheduler] Notion sync scheduled (every 15 min)');
+  }
+
   // Every 20 min in working hours — offer NOVA any 1-2-1 transcript that has landed in
   // the vault. Frequent because Nick processes a recording and then goes looking for it
   // in NOVA; a nightly sweep would mean the test he just ran shows nothing for hours.

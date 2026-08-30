@@ -98,8 +98,14 @@ test('each escalation in the pile is cited separately', () => {
 // ── The bounded action set ───────────────────────────────────────────────────
 
 test('an unsuppressable item is not offered a dismiss button it cannot honour', () => {
-  assert.deepEqual(lifecycle.actionsFor({ unsuppressable: true }), ['acknowledge', 'defer', 'open']);
+  // An unsuppressable card keeps every action EXCEPT dismiss — the engine will
+  // refuse to honour that one, and offering a button it refuses is worse than
+  // not offering it.
+  assert.deepEqual(lifecycle.actionsFor({ unsuppressable: true }), ['acknowledge', 'defer', 'open', 'complete']);
   assert.ok(lifecycle.actionsFor({ unsuppressable: false }).includes('dismiss'));
+  // `start` only where a focus session could mean something.
+  assert.ok(lifecycle.actionsFor({ type: 'todo', title: 'Write the thing' }).includes('start'));
+  assert.ok(!lifecycle.actionsFor({ type: 'meeting', title: 'Standup' }).includes('start'));
 });
 
 // ── The notification gate (pure) ─────────────────────────────────────────────

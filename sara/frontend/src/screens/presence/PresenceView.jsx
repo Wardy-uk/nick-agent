@@ -58,6 +58,7 @@ export function fieldStateFor(provenanceState) {
 export default function PresenceView() {
   const { provenance, status } = useSaraState();
   const [feed, setFeed] = useState(null);
+  const [actError, setActError] = useState(null);
 
   const loadFeed = useCallback(async () => {
     try {
@@ -68,6 +69,37 @@ export default function PresenceView() {
       setFeed({ available: false, reason: 'unreachable', detail: e.message });
     }
   }, []);
+
+  /**
+   * Act on the card's RECORD, through `sara/backend`'s passthrough.
+   *
+   * The action is submitted and NEURO decides the state — clients never write
+   * state directly. ⚠ There is no legacy fallback here on purpose: the engine's
+   * suppression is a TIMER and cannot express "seen it" or "this is finished",
+   * so substituting it for a completion is exactly the bug being removed. A
+   * card with no record simply cannot be acted on, and it says so.
+   */
+  const act = useCallback(async (card, action, opts = {}) => {
+    setActError(null);
+    if (!card || card.kind !== 'item') return;
+    if (!card.recordId) {
+      setActError("No attention record for that card yet — nothing recorded.");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/attention/records/${card.recordId}/act`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action, ...opts }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { setActError(body.error || `HTTP ${res.status}`); return; }
+      await loadFeed();
+    } catch (e) {
+      // Left on screen deliberately — see the note on the render below.
+      setActError(e.message);
+    }
+  }, [loadFeed]);
 
   useEffect(() => {
     loadFeed();
@@ -111,19 +143,30 @@ export default function PresenceView() {
     );
   }
 
-  // The feed is good — render the same surface the phone renders.
+  // The feed is good — render the same surface the phone renders, with the same
+  // actions.
   //
-  // ⚠ No `onAct`. Acting on a record needs a credential this kiosk does not
-  // hold, and a button that silently fails is worse than no button: the shared
-  // component omits the action row entirely when `onAct` is absent, rather than
-  // showing controls the surface cannot honour.
+  // ⚠ `onAct` was withheld here on the grounds that acting needs a credential
+  // the kiosk does not hold. That was true of the BROWSER and never of SARA:
+  // `sara/backend` already holds the credential and already proxies the feed,
+  // so the act passthrough (`POST /api/attention/records/:id/act`) closes the
+  // gap without putting a NEURO token on an always-on desk screen. The
+  // alternative was leaving the kiosk with `/api/focus/action-done`, which
+  // recorded work as finished the moment it was opened.
+  //
+  // A failure leaves the card ON SCREEN. A card that vanishes on an error is a
+  // card Nick believes he has dealt with.
   return (
     <AttentionSurface
       data={feed}
       rootClassName="presence"
-      footAside={state === 'neuro-stale'
-        ? <p className="presence__note">Last good read — not live.</p>
-        : null}
+      onAct={act}
+      footAside={
+        <>
+          {state === 'neuro-stale' && <p className="presence__note">Last good read — not live.</p>}
+          {actError && <p className="presence__note">{actError}</p>}
+        </>
+      }
     />
   );
 }

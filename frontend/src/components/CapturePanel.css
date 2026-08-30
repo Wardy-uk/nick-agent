@@ -552,3 +552,11 @@
   padding: 0 4px;
 }
 .capture-location-place-del:hover { color: #ef4444; }
+
+/* A partial is neither a success nor a failure: the words are safe, some
+   downstream half is not. It gets its own colour so it cannot be read as either. */
+.capture-result-partial {
+  background: #2a2519;
+  color: #d8b06a;
+  border-left: 3px solid #b0873f;
+}
