@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api';
-import { enqueue, flush, discard, retry, pending as pendingOps, subscribe } from '../mobile/outbox';
+import { enqueue, flush, discard, retry, outcomeFor, pending as pendingOps, subscribe } from '../mobile/outbox';
 import './Capture.css';
 
 // CAPTURE — get it out of Nick's head immediately, and never lose it.
@@ -116,12 +116,16 @@ export default function Capture({ autoRecord = false }) {
 
     try {
       const result = await flush();
-      const stillThere = (await pendingOps()).some((o) => o.operationId === queued.operationId);
-      if (!stillThere) {
+      // ⚠ THIS operation's receipt, never flush()'s aggregate counts. The queue
+      // is drained whole, so `needsAttention >= 1` can be an older stuck item
+      // while this capture merely failed on the network — which would tell Nick
+      // NEURO refused something it never saw.
+      const outcome = outcomeFor(result.receipts[queued.operationId]);
+      if (outcome.state === 'confirmed') {
         setFlash({ ok: true, msg: mode === 'note' ? 'Saved to NEURO.' : 'Saved to NEURO — on your list.' });
         loadRecent();
-      } else if (result.needsAttention) {
-        setFlash({ ok: false, msg: 'NEURO refused that — see Waiting below.' });
+      } else if (outcome.state === 'refused') {
+        setFlash({ ok: false, msg: `${outcome.message} See Waiting below.` });
       } else {
         setFlash({ ok: true, msg: 'Queued on this device — I’ll send it when there’s signal.' });
       }

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNickNow, stampFor } from '../mobile/useNickNow';
-import { flush, pending as pendingOps, subscribe } from '../mobile/outbox';
-import { enqueue } from '../mobile/outbox';
+import { enqueue, flush, outcomeFor, pending as pendingOps, subscribe } from '../mobile/outbox';
 import Freshness from '../components/Freshness';
 import './Now.css';
 
@@ -62,18 +61,27 @@ export default function Now({ onNavigate }) {
   // Ticking a task offline is the one WRITE on this screen, and it goes through
   // the outbox like everything else — never straight to the API. Two code paths
   // for one act is what Phase 2 exists to remove.
+  //
+  // ⚠ The outcome is read from THIS operation's receipt, never from flush()'s
+  // aggregate counts. `flush()` drains the whole queue, so `confirmed >= 1` is
+  // true whenever any older capture happens to land in the same round trip —
+  // which would print "Done" over a completion NEURO rejected, or over one it
+  // HELD pending a write-up. That is the silent half-failure shape, on the one
+  // screen Nick uses to find what he owes.
   async function tick(task) {
     if (ticking) return;
     setTicking(task.id);
     setFlash(null);
     try {
-      await enqueue('todo.complete', { taskId: task.taskId });
+      const op = await enqueue('todo.complete', { taskId: task.taskId });
       const result = await flush();
-      // Only NEURO's acknowledgement makes this "done". Anything else is
-      // "queued on this device", in those words.
-      setFlash(result.confirmed
-        ? { ok: true, msg: `Done — ${task.text.slice(0, 40)}` }
-        : { ok: false, msg: 'Queued on this device — not in NEURO yet.' });
+      const outcome = outcomeFor(result.receipts[op.operationId]);
+      setFlash({
+        ok: outcome.state === 'confirmed',
+        msg: outcome.state === 'confirmed'
+          ? `Done — ${task.text.slice(0, 40)}`
+          : outcome.message,
+      });
     } catch (e) {
       setFlash({ ok: false, msg: `Couldn't queue that: ${e.message}` });
     } finally {

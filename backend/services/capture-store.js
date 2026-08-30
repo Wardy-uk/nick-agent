@@ -44,6 +44,11 @@ function slugifyTitle(title) {
     .replace(/\s+/g, '-');
 }
 
+// How many suffixed names to try before giving up. A capture is worth a hundred
+// attempts; a thousand would mean something else is wrong and the honest move is
+// to refuse loudly rather than spin.
+const MAX_NAME_ATTEMPTS = 100;
+
 /**
  * Write a captured note. Synchronous by design: the mobile sync applier relies
  * on there being no await between checking the idempotency ledger and doing the
@@ -52,6 +57,21 @@ function slugifyTitle(title) {
  *
  * Throws if the file did not land — a capture that reports success over a failed
  * write is the failure this whole area exists to prevent.
+ *
+ * ⚠ THE FILENAME IS ONLY UNIQUE TO THE SECOND, so two captures made inside one
+ * second collided and the second SILENTLY OVERWROTE the first. Both were then
+ * reported saved, and the ledger acknowledged both as applied against the same
+ * canonical id — a destroyed capture, indistinguishable from a saved one. It was
+ * always reachable from the web route (two quick captures), and the outbox made
+ * it ordinary: a queue drained after a train journey replays several notes into
+ * the same tick of the clock.
+ *
+ * The guard is the `wx` flag — O_CREAT|O_EXCL, refused by the OS if the path
+ * exists — NOT an `existsSync` check followed by a write, which is a race with a
+ * gap in the middle. On EEXIST it suffixes and tries again, so a collision costs
+ * a `-2` on the filename and never a note. Suffixing only on an actual collision
+ * keeps the ordinary filename clean, which matters because these are read by a
+ * human in Obsidian.
  */
 function writeNote({ title, content, source = 'neuro-capture' }) {
   const text = String(content || '').trim();
@@ -59,8 +79,7 @@ function writeNote({ title, content, source = 'neuro-capture' }) {
 
   ensureDirs();
   const slug = slugifyTitle(title);
-  const filename = `${timestamp()}-${slug}.md`;
-  const filePath = path.join(importsDir(), filename);
+  const stamp = timestamp();
 
   const now = new Date().toISOString();
   const fmTitle = title ? `title: "${String(title).replace(/"/g, '\\"')}"\n` : '';
@@ -68,7 +87,27 @@ function writeNote({ title, content, source = 'neuro-capture' }) {
     ? `---\ndate: ${now}\nsource: ${source}\nstatus: unprocessed\n${fmTitle}---\n\n# ${title}\n\n${text}\n`
     : `---\ndate: ${now}\nsource: ${source}\nstatus: unprocessed\n---\n\n${text}\n`;
 
-  fs.writeFileSync(filePath, body, 'utf-8');
+  let filename = null;
+  let filePath = null;
+  for (let attempt = 1; attempt <= MAX_NAME_ATTEMPTS; attempt += 1) {
+    const candidate = attempt === 1 ? `${stamp}-${slug}.md` : `${stamp}-${slug}-${attempt}.md`;
+    const candidatePath = path.join(importsDir(), candidate);
+    try {
+      fs.writeFileSync(candidatePath, body, { encoding: 'utf-8', flag: 'wx' });
+      filename = candidate;
+      filePath = candidatePath;
+      break;
+    } catch (e) {
+      // Only a name clash is retryable. A permissions error or a missing vault
+      // must surface as itself rather than being retried a hundred times and
+      // reported as "could not find a free name".
+      if (e.code !== 'EEXIST') throw e;
+    }
+  }
+
+  if (!filePath) {
+    throw new Error(`Could not find a free filename for this capture after ${MAX_NAME_ATTEMPTS} attempts`);
+  }
 
   if (!fs.existsSync(filePath)) {
     throw new Error('File write verification failed');

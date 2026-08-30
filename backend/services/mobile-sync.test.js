@@ -245,3 +245,77 @@ test('the ledger itself holds no capture text', () => {
   assert.ok(rows.length >= 1);
   assert.ok(!JSON.stringify(rows).includes(secret));
 });
+
+// ── Two distinct notes in the same second ────────────────────────────────────
+//
+// The filename is only unique to the SECOND, so two notes written inside one
+// tick collided and the second SILENTLY OVERWROTE the first — while both ledger
+// operations were acknowledged `applied`, against the same canonical id. A
+// destroyed capture, indistinguishable from a saved one. Ordinary once there is
+// an outbox: a queue drained after a journey replays several notes at once.
+
+test('two DIFFERENT notes applied in the same second both survive', () => {
+  const dir = path.join(process.env.OBSIDIAN_VAULT_PATH, 'Imports');
+  const before = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).length;
+
+  const first = mobileSync.applyOperation('device-collide', {
+    operationId: opId('c'), kind: 'capture.note',
+    payload: { content: 'FIRST distinct thought, must survive' },
+  });
+  const second = mobileSync.applyOperation('device-collide', {
+    operationId: opId('c'), kind: 'capture.note',
+    payload: { content: 'SECOND distinct thought, also must survive' },
+  });
+
+  assert.equal(first.status, 'applied');
+  assert.equal(second.status, 'applied');
+  assert.notEqual(second.canonicalId, first.canonicalId,
+    'two distinct captures must not be acknowledged against the same record');
+
+  const after = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).length;
+  assert.equal(after, before + 2, 'two captures, two files');
+
+  const vault = process.env.OBSIDIAN_VAULT_PATH;
+  const read = (canonicalId) => fs.readFileSync(path.join(vault, canonicalId.replace(/^capture:/, '')), 'utf-8');
+  assert.match(read(first.canonicalId), /FIRST distinct thought/);
+  assert.match(read(second.canonicalId), /SECOND distinct thought/);
+});
+
+test('two same-TITLED notes in the same second both survive', () => {
+  // The title is what the filename is built from, so identical titles are the
+  // worst case — and exactly what a queue of "Meeting note" captures looks like.
+  const vault = process.env.OBSIDIAN_VAULT_PATH;
+  const a = mobileSync.applyOperation('device-collide', {
+    operationId: opId('t'), kind: 'capture.note',
+    payload: { title: 'Standup', content: 'Monday body text' },
+  });
+  const b = mobileSync.applyOperation('device-collide', {
+    operationId: opId('t'), kind: 'capture.note',
+    payload: { title: 'Standup', content: 'Tuesday body text' },
+  });
+  assert.notEqual(a.canonicalId, b.canonicalId);
+  const read = (id) => fs.readFileSync(path.join(vault, id.replace(/^capture:/, '')), 'utf-8');
+  assert.match(read(a.canonicalId), /Monday body text/);
+  assert.match(read(b.canonicalId), /Tuesday body text/);
+});
+
+test('a whole offline batch of untitled notes lands as one file each', () => {
+  // The real shape of the bug: a queue drained in a single flush, every note
+  // hitting the same second.
+  const dir = path.join(process.env.OBSIDIAN_VAULT_PATH, 'Imports');
+  const before = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).length;
+
+  const result = mobileSync.applyBatch({
+    deviceId: 'device-batch-collide',
+    operations: Array.from({ length: 5 }, (_, i) => ({
+      operationId: opId('batch'), kind: 'capture.note',
+      payload: { content: `Queued thought number ${i}` },
+    })),
+  });
+
+  assert.equal(result.counts.applied, 5);
+  const ids = new Set(result.receipts.map((r) => r.canonicalId));
+  assert.equal(ids.size, 5, 'five captures must name five distinct records');
+  const after = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).length;
+  assert.equal(after, before + 5);
+});

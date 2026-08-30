@@ -40,6 +40,53 @@ const SYNC_PATH = '/api/mobile/v1/sync/operations';
 // permanently broken item is a queue that never drains and never says so.
 const MAX_ATTEMPTS = 8;
 
+/**
+ * What ONE operation's receipt actually means, phrased once.
+ *
+ * ⚠ A caller must NEVER read a per-operation outcome off flush()'s aggregate
+ * counts. `flush()` drains the WHOLE queue, so `confirmed >= 1` can easily be an
+ * older capture landing while the thing the user just did was rejected — which
+ * is how a screen comes to say "Done" over a completion NEURO refused. Match the
+ * receipt by operationId and ask this.
+ *
+ * `held` is its own outcome and not a success: `task-blocks` holds a completion
+ * until the outcome note is written, so the tick was recorded and the task is
+ * NOT done. Rendering that as "Done" is the silent half-failure shape.
+ *
+ * @param {object|null|undefined} receipt  the server receipt for ONE operation
+ * @returns {{state: string, done: boolean, message: string}}
+ *   state is one of: confirmed | held | refused | pending
+ */
+export function outcomeFor(receipt) {
+  if (!receipt) {
+    // No receipt means it never got an answer — it is still on the device.
+    return { state: 'pending', done: false, message: 'Queued on this device — not in NEURO yet.' };
+  }
+
+  if (receipt.status === 'applied' || receipt.status === 'duplicate') {
+    let detail = null;
+    try { detail = receipt.detail ? JSON.parse(receipt.detail) : null; } catch { detail = null; }
+    if (detail && detail.held) {
+      return {
+        state: 'held',
+        done: false,
+        message: `Ticked, but NEURO is holding it — ${detail.heldReason || 'awaiting the write-up'}.`,
+      };
+    }
+    return { state: 'confirmed', done: true, message: 'Saved to NEURO.' };
+  }
+
+  if (receipt.status === 'rejected' || receipt.status === 'needs-attention') {
+    return {
+      state: 'refused',
+      done: false,
+      message: `NOT saved — ${receipt.detail || 'NEURO could not apply it'}.`,
+    };
+  }
+
+  return { state: 'pending', done: false, message: 'Queued on this device — not in NEURO yet.' };
+}
+
 const listeners = new Set();
 
 export function subscribe(fn) {
@@ -90,12 +137,22 @@ let flushing = false;
  * triggers at once — a second call while one is in flight is a no-op rather than
  * a second delivery of the same operations.
  *
+ * ⚠ The counts are an aggregate over the WHOLE queue and must never be used to
+ * decide what happened to ONE operation — `receipts[operationId]` is for that,
+ * read through `outcomeFor()`. A caller that reads `confirmed >= 1` after
+ * queueing a completion will say "Done" whenever any older capture happened to
+ * land in the same flush.
+ *
  * @returns {{ ran: boolean, reason?: string, sent?: number, confirmed?: number,
- *             failed?: number, needsAttention?: number }}
+ *             failed?: number, needsAttention?: number,
+ *             receipts: Record<string, object> }}
  */
 export async function flush({ force = false } = {}) {
-  if (flushing) return { ran: false, reason: 'already-running' };
-  if (!force && !isOnline()) return { ran: false, reason: 'offline' };
+  // Every return below carries `receipts`, empty or not, so a caller can index
+  // it without guarding — an undefined map read as `receipts[id]` would throw in
+  // exactly the branch where the app is offline and least able to report it.
+  if (flushing) return { ran: false, reason: 'already-running', receipts: {} };
+  if (!force && !isOnline()) return { ran: false, reason: 'offline', receipts: {} };
 
   flushing = true;
   try {
@@ -104,7 +161,7 @@ export async function flush({ force = false } = {}) {
       (o) => (o.status === OP_STATUS.QUEUED || o.status === OP_STATUS.FAILED || o.status === OP_STATUS.SENDING)
         && (o.attempts || 0) < MAX_ATTEMPTS
     );
-    if (!pending.length) return { ran: true, sent: 0, confirmed: 0, failed: 0, needsAttention: 0 };
+    if (!pending.length) return { ran: true, sent: 0, confirmed: 0, failed: 0, needsAttention: 0, receipts: {} };
 
     for (const op of pending) {
       await putOperation({ ...op, status: OP_STATUS.SENDING });
@@ -139,10 +196,16 @@ export async function flush({ force = false } = {}) {
         });
       }
       notify();
-      return { ran: true, sent: pending.length, confirmed: 0, failed: pending.length, needsAttention: 0, error: e.message };
+      // No receipts: NEURO never answered, so there is nothing to report per
+      // operation. `outcomeFor(undefined)` is 'pending', which is the truth.
+      return { ran: true, sent: pending.length, confirmed: 0, failed: pending.length, needsAttention: 0, error: e.message, receipts: {} };
     }
 
     const receipts = new Map((response.receipts || []).map((r) => [r.operationId, r]));
+    // Keyed by operationId and handed back, so a caller can ask what happened to
+    // the one thing it queued rather than reading the aggregate counts.
+    const byId = {};
+    for (const [id, r] of receipts) byId[id] = r;
     let confirmed = 0;
     let failed = 0;
     let needsAttention = 0;
@@ -195,7 +258,7 @@ export async function flush({ force = false } = {}) {
     }
 
     notify();
-    return { ran: true, sent: pending.length, confirmed, failed, needsAttention };
+    return { ran: true, sent: pending.length, confirmed, failed, needsAttention, receipts: byId };
   } finally {
     flushing = false;
   }

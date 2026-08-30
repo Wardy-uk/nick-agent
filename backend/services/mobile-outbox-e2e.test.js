@@ -234,3 +234,114 @@ test('flush is a no-op while offline unless forced, so nothing burns attempts in
     if (saved) Object.defineProperty(globalThis, 'navigator', saved);
   }
 });
+
+// ── Per-operation outcomes ───────────────────────────────────────────────────
+//
+// `flush()` drains the WHOLE queue, so its aggregate counts describe the round
+// trip, not any one operation. A screen that read `confirmed >= 1` after queueing
+// a completion would say "Done" whenever ANY older capture happened to land in
+// the same flush — including when this completion was rejected, or held pending
+// a write-up. `receipts[operationId]` + `outcomeFor()` is the answer.
+
+test('flush returns a receipt per operationId, keyed so a caller can find its own', async () => {
+  const good = await outbox.enqueue('capture.todo', { text: 'E2E receipt keying task' });
+  const bad = await outbox.enqueue('vault.delete', { path: 'nope' });
+
+  const result = await outbox.flush();
+  assert.ok(result.receipts, 'flush must hand back receipts');
+  assert.equal(result.receipts[good.operationId].status, 'applied');
+  assert.equal(result.receipts[bad.operationId].status, 'rejected');
+});
+
+test('a REJECTED operation is not reported as done just because a sibling succeeded', async () => {
+  // This is the bug shape exactly: one older capture lands, the thing the user
+  // just did does not, and the aggregate says confirmed >= 1.
+  const older = await outbox.enqueue('capture.todo', { text: 'E2E older capture that will land' });
+  const mine = await outbox.enqueue('vault.delete', { path: 'refused' });
+
+  const result = await outbox.flush();
+  assert.ok(result.confirmed >= 1, 'the aggregate genuinely does say something was confirmed');
+  assert.equal(outbox.outcomeFor(result.receipts[older.operationId]).state, 'confirmed');
+
+  const outcome = outbox.outcomeFor(result.receipts[mine.operationId]);
+  assert.equal(outcome.state, 'refused', 'and the caller must still be told THIS one was refused');
+  assert.equal(outcome.done, false);
+  assert.match(outcome.message, /NOT saved/);
+});
+
+test('every early return from flush still carries a receipts map', async () => {
+  // A caller indexes `result.receipts[id]` unconditionally; an undefined map
+  // would throw in exactly the branch where the app is offline and least able
+  // to report it.
+  const empty = await outbox.flush();
+  assert.deepEqual(empty.receipts, {});
+
+  await outbox.enqueue('capture.todo', { text: 'E2E offline receipts-map task' });
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', { value: { onLine: false }, configurable: true });
+    const offline = await outbox.flush();
+    assert.deepEqual(offline.receipts, {});
+    assert.equal(outbox.outcomeFor(offline.receipts.anything).state, 'pending');
+  } finally {
+    if (saved) Object.defineProperty(globalThis, 'navigator', saved);
+  }
+});
+
+test('a completion NEURO HELD is reported as held, never as done', async () => {
+  // task-blocks holds a completion until the outcome note is written: the tick
+  // was recorded and the task is NOT done. Rendering that as "Done" is the
+  // silent half-failure this whole layer exists to avoid.
+  const outcome = outbox.outcomeFor({
+    operationId: 'x',
+    status: 'applied',
+    canonicalId: 'task:1',
+    detail: JSON.stringify({ held: true, heldReason: 'no write-up yet', status: 'in-progress' }),
+  });
+  assert.equal(outcome.state, 'held');
+  assert.equal(outcome.done, false, 'held is not done');
+  assert.match(outcome.message, /no write-up yet/, 'and it must say WHY, or the task refuses mysteriously');
+});
+
+test('a duplicate is a success — the record exists, which is what the user asked for', async () => {
+  const outcome = outbox.outcomeFor({ operationId: 'x', status: 'duplicate', canonicalId: 'task:1', detail: null });
+  assert.equal(outcome.state, 'confirmed');
+  assert.equal(outcome.done, true);
+});
+
+test('unparseable detail degrades to confirmed rather than throwing on the screen', async () => {
+  const outcome = outbox.outcomeFor({ operationId: 'x', status: 'applied', canonicalId: 'task:1', detail: 'not json' });
+  assert.equal(outcome.state, 'confirmed');
+});
+
+// ── The views must not read the aggregate ────────────────────────────────────
+//
+// Weaker than driving the components, and pinned anyway because this failure is
+// invisible: the screen says "Done" and the task is not done. `push-types.test.js`
+// is the precedent for a source scan, positive control included so a broken scan
+// cannot pass by finding nothing.
+
+const VIEWS = ['Now.jsx', 'Capture.jsx'];
+
+test('no view decides a per-operation outcome from flush()\'s aggregate counts', () => {
+  for (const name of VIEWS) {
+    const file = path.join(APP_SRC, 'views', name);
+    const src = fs.readFileSync(file, 'utf-8').replace(/\r\n/g, '\n');
+    // Line comments first — a block-comment-first strip opens a false comment on
+    // any "/*" inside a line comment and silently swallows the rest of the file,
+    // turning every assertion below into a pass-by-absence (16 Aug).
+    const code = src
+      .replace(/(^|[^:])\/\/[^\n]*/gm, '$1')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+
+    assert.ok(code.includes('outcomeFor('), `positive control: ${name} must consult outcomeFor`);
+    assert.ok(
+      !/result\.confirmed|result\.needsAttention|result\.failed/.test(code),
+      `${name} reads flush()'s aggregate counts to describe ONE operation — that says "Done" whenever any older capture happens to land in the same flush`
+    );
+    assert.ok(
+      code.includes('result.receipts['),
+      `${name} must match its own receipt by operationId`
+    );
+  }
+});

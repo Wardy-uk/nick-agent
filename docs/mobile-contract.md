@@ -63,7 +63,7 @@ The compact mobile working set. Three rules run through the whole payload:
 | Prefix | Example | Notes |
 |---|---|---|
 | `task:` | `task:412` | A NEURO-owned task row. |
-| `capture:` | `capture:Imports/2026-08-30-…md` | Vault-relative path. |
+| `capture:` | `capture:Imports/2026-08-30-…md` | Vault-relative path. ⚠ The filename is unique to the SECOND; `capture-store.writeNote` writes with the `wx` flag (O_CREAT\|O_EXCL, atomic) and suffixes `-2`, `-3` on EEXIST, so two captures inside one tick get two files. Before that, the second silently overwrote the first and BOTH were acknowledged `applied` against the same id. |
 | `attention:` | `attention:todo-overdue-top` | A decision-engine card. |
 | `event:derived:` | `event:derived:2026-08-30T14:00:00:1-2-1 Hope` | ⚠ Derived from start + subject, because `agendaFor` carries no Graph id. Deterministic and stable across refreshes; **not** a Graph id and must never be used to PATCH. |
 | `person:` | `person:Hope Goodall` | Full name only. |
@@ -149,6 +149,17 @@ recorded hours ago can name a different row by the time it replays. That is the
 
 A batch containing rejections still answers **200**. A non-2xx would make the
 client discard receipts it needs in order to stop retrying.
+
+⚠ **A receipt is per operation, and so is the outcome.** `flush()` drains the
+whole queue, so its aggregate counts (`confirmed`, `failed`, `needsAttention`)
+describe the round trip and **never** any one operation — reading
+`confirmed >= 1` after queueing a completion says "Done" whenever any older
+capture happened to land in the same flush. `flush()` returns
+`receipts[operationId]`; `outcomeFor(receipt)` turns one into
+`{state, done, message}` with four states — `confirmed` / `held` / `refused` /
+`pending`. **`held` is not `done`**: `task-blocks` holds a completion until the
+outcome note is written, so the tick was recorded and the task is still open. A
+source test pins that no view reads the aggregate counts.
 
 ### Idempotency, and why it holds
 
@@ -283,7 +294,8 @@ NEURO. NEURO's own canonical data is covered by the existing arrangement:
 
 | File | Covers |
 |---|---|
-| `backend/services/mobile-sync.test.js` | validation, idempotency, replay, conflict rule, batch isolation, no-secrets-in-diagnostics (18) |
+| `backend/services/mobile-sync.test.js` | validation, idempotency, replay, conflict rule, batch isolation, no-secrets-in-diagnostics, same-second filename collisions (21) |
 | `backend/services/mobile-snapshot.test.js` | the three payload rules, section states, null-not-zero (16) |
 | `backend/routes/mobile.test.js` | real HTTP: routing, replay over the wire, 200-with-rejections, auth exemption (8) |
 | `backend/services/mobile-store.test.js` | the device store against fake-indexeddb: persistence across reopen, migration invariant, clear refusal (14) |
+| `backend/services/mobile-outbox-e2e.test.js` | the real outbox against real HTTP: offline capture → reload → exactly once, per-operation receipts, held vs done, and a source pin against reading the aggregate (14) |
