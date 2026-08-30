@@ -11,11 +11,12 @@
 const neuroConfig = require('./neuroConfig');
 const neuro = require('./neuroSnapshot');
 
-const DEFAULT_BASE_URL = 'https://nuero.nickward.co.uk';
-
+// ⚠ No default base URL — this module was the fourth copy of a hardcoded
+// `https://nuero.nickward.co.uk`, and it was the one that kept POLLING it every 90
+// seconds on a SARA with no NEURO configured at all. See neuroConfig.js.
 function config(env = process.env) {
   return {
-    baseUrl: String(env.NEURO_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ''),
+    baseUrl: neuroConfig.getBaseUrl(env),
     pin: neuroConfig.getPin(env),
     vaultKey: String(env.NEURO_VAULT_KEY || ''), // /api/vault/* needs X-Api-Key (not the PIN)
     timeoutMs: Number(env.SARA_NEURO_TIMEOUT_MS) || 6000,
@@ -112,6 +113,13 @@ let timer = null;
 function start() {
   if (timer) return true;
   const cfg = config();
+  // Idle rather than poll a host we were never told about. It also keeps the log
+  // honest: a line saying we are polling NEURO when nothing is configured is how the
+  // implicit dependency stayed invisible.
+  if (!neuroConfig.readiness().ready) {
+    console.log('[SARA NEURO] vault cognition-graph idle — NEURO connection is not configured.');
+    return false;
+  }
   refresh().catch(() => {});
   timer = setInterval(() => refresh().catch(() => {}), cfg.pollMs);
   if (timer.unref) timer.unref();

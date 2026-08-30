@@ -16,10 +16,12 @@ export default function CaptureView() {
       <header className="product__hero">
         <p className="product__eyebrow">Capture</p>
         <h2 className="product__title">Catch it before it disappears</h2>
-        <p className="product__summary">Writes now go through the real NEURO capture endpoints, and recent captures come back through shared state.</p>
+        <p className="product__summary">Captures are forwarded to NEURO, which owns them. Nothing is stored in SARA — if NEURO does not take it, SARA says so and leaves your words in the box.</p>
         <div className="product__meta">
           <span className="product__pill">{presentation.capture.source}</span>
-          {feedback && <span className="product__pill">{feedback}</span>}
+          {feedback && (
+            <span className={`product__pill${feedback.ok ? '' : ' product__pill--danger'}`}>{feedback.text}</span>
+          )}
         </div>
       </header>
 
@@ -38,8 +40,15 @@ export default function CaptureView() {
               className="product__button"
               onClick={async () => {
                 const result = await captureNote(draft);
-                setFeedback(result.ok ? 'Saved note' : result.error);
-                if (result.ok) setDraft('');
+                setFeedback(
+                  result.saved
+                    ? { ok: true, text: 'Saved to NEURO' }
+                    : { ok: false, text: `NOT saved — ${result.error}` }
+                );
+                // ⚠ The box is cleared ONLY on an acknowledged save. Clearing it on a
+                // failure destroys the one copy of the thought that still exists,
+                // which is the whole thing capture is for.
+                if (result.saved) setDraft('');
               }}
             >
               Save to inbox
@@ -49,8 +58,12 @@ export default function CaptureView() {
               className="product__button"
               onClick={async () => {
                 const result = await captureTodo(draft);
-                setFeedback(result.ok ? 'Created todo' : result.error);
-                if (result.ok) setDraft('');
+                setFeedback(
+                  result.saved
+                    ? { ok: true, text: 'Task created in NEURO' }
+                    : { ok: false, text: `NOT saved — ${result.error}` }
+                );
+                if (result.saved) setDraft('');
               }}
             >
               Turn into todo

@@ -7,6 +7,7 @@ import ViewRouter from './components/ViewRouter';
 import ExitButton from './components/ExitButton';
 import LockScreen from './components/LockScreen';
 import LockCountdown from './components/LockCountdown';
+import ConnectionStatus from './components/ConnectionStatus';
 
 // SARA app shell (WS2-WP1; inference strip WS5-WP1; Exit + auto-lock WS2-WP2/WP3).
 //
@@ -63,6 +64,11 @@ function AppShell() {
       <div className="app app--bleed">
         {/* JARVIS view fills everything and owns its own nav/header/footer. The shell
             still provides the global lock/power controls (fixed) and the lock overlay. */}
+        {/* Even a full-bleed view that owns its own chrome must carry the provenance
+            banner: "this is demo data" and "nothing here is current" are not chrome. */}
+        <div className="app__connstatus app__connstatus--pinned">
+          <ConnectionStatus />
+        </div>
         <main className="app__bleed-view">
           <ViewRouter />
         </main>
@@ -81,6 +87,9 @@ function AppShell() {
           {sysControls}
         </div>
         <main className="app__view">
+          <div className="app__connstatus">
+            <ConnectionStatus />
+          </div>
           <ViewRouter />
         </main>
       </div>

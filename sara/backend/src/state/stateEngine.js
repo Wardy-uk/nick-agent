@@ -1,16 +1,16 @@
 // SARA State Engine — v1 (WS1-WP1).
 //
-// Protected principle: there is ONE SARA and ONE shared state model. This module
-// is the single source of truth for runtime state. WS0 returned a placeholder
-// literal; WS1 makes this a real engine: it assembles the one shared model from
-// named domain inputs, derives SARA's briefing from that model, validates the
-// result against the v1 contract, and exposes it over the existing /api path.
+// Protected principle: there is ONE SARA and ONE shared state model, and NEURO is the
+// canonical brain behind it. This module assembles that one model from NEURO's data,
+// derives SARA's briefing from it, validates the result against the v1 contract, and
+// exposes it over /api/state.
 //
-// Inputs are still seeded (hardcoded) — the engine and the contract are real;
-// only the data source is not yet live, and that is surfaced honestly
-// (`dataSource: 'seed'` at the root, `source: 'seed'` on every domain). Swapping
-// seed.js providers for live readers later changes neither this engine nor the
-// contract — that is the seam.
+// ⚠ It used to fall back to `seed.js` — hardcoded, invented content — whenever NEURO
+// was unreachable, which made an outage look identical to a working day. It no longer
+// does. A domain SARA could not read is rendered `unavailable`: contract-shaped,
+// structurally empty, and carrying a sentence saying what could not be seen. Seeded
+// content is reachable ONLY under SARA_DEMO_MODE, is stamped `demo` end to end, and is
+// refused outright under NODE_ENV=production. See state/provenance.js.
 //
 // CommonJS only (NEURO backend convention — no ESM).
 
@@ -19,15 +19,16 @@ const seed = require('./seed');
 const ha = require('../telemetry/homeAssistant');
 const stations = require('./stations');
 const neuro = require('../integrations/neuroSnapshot');
+const neuroConfig = require('../integrations/neuroConfig');
 const nova = require('../integrations/novaSnapshot');
+const provenance = require('./provenance');
 const { deriveInference } = require('./inference');
 
 const RUNTIME_LABEL = 'WS5-WP2';
 
-// Current location is a situational input (not a domain). The seed reader is the
-// honest fallback; WS3 lets the Home Assistant telemetry bridge feed it live when a
-// location signal is present. The contract is unchanged — location stays the same
-// shape whether it comes from HA or seed (that is the seam).
+// Current location is a situational input (not a domain). Live it comes from the Home
+// Assistant telemetry bridge; with no HA signal it is UNKNOWN, not a seeded office.
+// The seeded reader survives for demo mode only.
 const LOCATION_PROVIDER = seed.location;
 
 function isObject(v) {
@@ -56,13 +57,43 @@ function deriveConfidence(domains, dataSource) {
       basis: ['domain-structure-incomplete'],
     };
   }
-  if (dataSource !== 'neuro') {
+  // ⚠ Confidence is capped by PROVENANCE, not just by shape. A model assembled
+  // entirely out of "we could not read this" is perfectly contract-shaped, and calling
+  // that high confidence is precisely how an outage came to look like a calm day.
+  if (dataSource === provenance.SOURCE.DEMO) {
+    return {
+      source: 'derived',
+      score: 0.1,
+      level: 'low',
+      rationale: 'Demo mode — every domain is invented content, not Nick\'s real state.',
+      basis: ['demo-mode'],
+    };
+  }
+  if (dataSource === provenance.SOURCE.UNAVAILABLE) {
+    return {
+      source: 'derived',
+      score: 0.1,
+      level: 'low',
+      rationale: 'No domain could be read from NEURO. Nothing on screen is current.',
+      basis: ['inputs-unavailable'],
+    };
+  }
+  if (dataSource === provenance.SOURCE.STALE) {
+    return {
+      source: 'derived',
+      score: 0.5,
+      level: 'moderate',
+      rationale: 'Domains are NEURO data, but from an earlier poll — NEURO is not answering now.',
+      basis: ['contract-valid', 'inputs-stale'],
+    };
+  }
+  if (dataSource !== provenance.SOURCE.LIVE) {
     return {
       source: 'derived',
       score: 0.6,
       level: 'moderate',
-      rationale: 'All domains are contract-shaped, but inputs are seeded (hardcoded), not live.',
-      basis: ['contract-valid', 'inputs-seeded'],
+      rationale: 'Some domains are live from NEURO and some could not be read at all.',
+      basis: ['contract-valid', 'inputs-partial'],
     };
   }
   return {
@@ -74,8 +105,14 @@ function deriveConfidence(domains, dataSource) {
   };
 }
 
-function sourceFor(raw) {
-  return raw ? neuro.NEURO_SOURCE : 'seed';
+/**
+ * The provenance stamp for a domain that DID get data. `stale` is carried through
+ * from the snapshot rather than re-derived, so the domain and the connection banner
+ * can never disagree about whether what is on screen is current.
+ */
+function sourceFor(raw, ctx) {
+  if (!raw) return provenance.SOURCE.UNAVAILABLE;
+  return ctx?.stale ? provenance.SOURCE.STALE : neuro.NEURO_SOURCE;
 }
 
 function trimText(value, max = 160) {
@@ -111,32 +148,24 @@ function mapQueueTicket(ticket) {
   };
 }
 
-function buildQueue(neuroData) {
+function buildQueue(neuroData, ctx = {}) {
   const raw = neuroData?.queue;
 
-  // No NEURO at all → seed, whole. This used to keep the seed's summary STRING
-  // while hardcoding open/breaching to 0 and the sections to empty, so the queue
-  // domain contradicted itself: "4 open, 2 breaching SLA" alongside breaching: 0
-  // and no tickets. Everything downstream reads the structured fields, so the
-  // briefing silently dropped its SLA line and the queue view rendered empty.
-  // buildFocus below has always done this correctly — `return seed.focus()`.
-  if (!neuroData) return seed.queue();
+  // No NEURO at all. This used to return `seed.queue()` — two invented breaching
+  // tickets, named against real colleagues, on the exact day the feed died.
+  if (!neuroData) {
+    if (ctx.demoMode) return { ...seed.queue(), source: provenance.SOURCE.DEMO };
+    return provenance.unavailableQueue(ctx.detail);
+  }
 
-  // NEURO answered but the queue payload is unusable — that is a genuine outage
-  // and must NOT be dressed up in seed data, or a dead feed looks like a calm
-  // queue. Empty is the honest answer here.
+  // NEURO answered but the queue payload is unusable. ⚠ NEURO DELETED its Jira queue
+  // feature in July 2026, so this is now the NORMAL path, not an exception — and it
+  // must stay `unavailable` rather than a confident zero, because a screen reading
+  // "0 breaching" from a feed that no longer exists is the same lie as the seed was.
   if (!raw || !Array.isArray(raw.tickets)) {
-    return {
-      source: neuro.NEURO_SOURCE,
-      summary: 'Live queue feed is currently unavailable from NEURO.',
-      open: 0,
-      breaching: 0,
-      sections: {
-        act_now: [],
-        today: [],
-        watch: [],
-      },
-    };
+    return provenance.unavailableQueue(
+      'NEURO served no queue feed. NEURO retired its Jira queue in July 2026 — escalations are tracked live instead.'
+    );
   }
 
   const allTickets = raw.tickets.map(mapQueueTicket);
@@ -155,7 +184,7 @@ function buildQueue(neuroData) {
   }
 
   return {
-    source: sourceFor(raw),
+    source: sourceFor(raw, ctx),
     summary: `${raw.total || allTickets.length} open, ${raw.at_risk_count || actNow.length} at risk, ${raw.open_p1s || 0} P1s.`,
     open: raw.total || allTickets.length,
     breaching: raw.at_risk_count || actNow.length,
@@ -167,9 +196,12 @@ function buildQueue(neuroData) {
   };
 }
 
-function buildFocus(neuroData) {
+function buildFocus(neuroData, ctx = {}) {
   const raw = neuroData?.focus;
-  if (!raw) return seed.focus();
+  if (!raw) {
+    if (ctx.demoMode) return { ...seed.focus(), source: provenance.SOURCE.DEMO };
+    return provenance.unavailableFocus(ctx.detail);
+  }
 
   const current = raw.nextAction || raw.primaryItem || raw.items?.[0] || null;
   const title = titleFromItem(current, 'No current action');
@@ -185,7 +217,7 @@ function buildFocus(neuroData) {
   );
 
   return {
-    source: sourceFor(raw),
+    source: sourceFor(raw, ctx),
     summary: reason || title,
     current: current
       ? {
@@ -215,9 +247,15 @@ function severityToStatus(severity) {
   return 'solid';
 }
 
-function buildPeople(neuroData) {
+function buildPeople(neuroData, ctx = {}) {
   const raw = neuroData?.team;
-  if (!raw || !Array.isArray(raw.perPerson)) return seed.people();
+  if (!raw || !Array.isArray(raw.perPerson)) {
+    // ⚠ The seeded people block named four real reports and asserted one of them was
+    // "going quiet". Inventing a performance concern about a named colleague is the
+    // single worst thing this fallback could do, and it did it on every outage.
+    if (ctx.demoMode) return { ...seed.people(), source: provenance.SOURCE.DEMO };
+    return provenance.unavailablePeople(ctx.detail);
+  }
 
   const members = raw.perPerson.map((person) => {
     const issue = person.issues?.[0] || null;
@@ -233,7 +271,7 @@ function buildPeople(neuroData) {
 
   const needAttention = members.filter((member) => member.status !== 'solid').length;
   return {
-    source: sourceFor(raw),
+    source: sourceFor(raw, ctx),
     summary:
       raw.filteredCount > 0
         ? `${raw.filteredCount} live team issue${raw.filteredCount === 1 ? '' : 's'} across ${raw.perPerson.length} people.`
@@ -248,10 +286,13 @@ function buildPeople(neuroData) {
   };
 }
 
-function buildVault(neuroData) {
+function buildVault(neuroData, ctx = {}) {
   const capture = neuroData?.capture;
   const context = neuroData?.context;
-  if (!capture && !context) return seed.vault();
+  if (!capture && !context) {
+    if (ctx.demoMode) return { ...seed.vault(), source: provenance.SOURCE.DEMO };
+    return provenance.unavailableVault(ctx.detail);
+  }
 
   const picks = [];
   if (context?.dailyNote?.path || context?.dailyNote?.title || context?.date) {
@@ -271,50 +312,63 @@ function buildVault(neuroData) {
     });
   }
 
-  if (!picks.length) return seed.vault();
+  // NEURO answered and there was genuinely nothing to surface. That is a real,
+  // different fact from "we could not look", so it says so rather than borrowing the
+  // seed's two invented notes.
+  if (!picks.length) {
+    return {
+      source: sourceFor(capture || context, ctx),
+      summary: 'NEURO surfaced no vault items worth showing right now.',
+      picks: [],
+    };
+  }
   return {
-    source: sourceFor(capture || context),
+    source: sourceFor(capture || context, ctx),
     summary: `${picks.length} live vault item${picks.length === 1 ? '' : 's'} surfaced from NEURO.`,
     picks,
   };
 }
 
-function buildPresentation(neuroData, domains) {
-  const fallback = {
-    source: 'placeholder',
-    whatMattersNow: [
-      {
-        id: 'wmn-fallback-focus',
-        title: domains.focus?.current?.title || 'Current focus unavailable',
-        detail: domains.focus?.summary || 'SARA is using fallback focus context.',
-        tone: 'attention',
-      },
-    ],
-    upNext: [
-      {
-        id: 'next-fallback',
-        time: 'Pending',
-        label: domains.focus?.summary || 'No live runway available.',
-      },
-    ],
-    quickActions: [
-      { id: 'qa-capture', label: 'Capture', action: 'capture', icon: '✎' },
-      { id: 'qa-queue', label: 'Open Queue', action: 'open-queue', icon: '▤' },
-      { id: 'qa-focus', label: 'Start Focus', action: 'start-focus', icon: '◎' },
-      { id: 'qa-brief', label: 'Daily Brief', action: 'daily-brief', icon: '☼' },
-    ],
-    standup: {
-      source: 'placeholder',
-      yesterday: [],
-      carryForward: [],
-      prompts: [
-        'What changed since the last standup?',
-        'What will move the queue or the team most today?',
-        'What needs a direct follow-up from you?',
-      ],
+// Quick Actions are UI AFFORDANCES, not data: four buttons that do real things in
+// this app. They are the one part of `presentation` that is legitimately static, and
+// they stay available even with NEURO down — Capture in particular, which is the whole
+// point of a kiosk you can talk at when the rest is broken.
+const QUICK_ACTIONS = [
+  { id: 'qa-capture', label: 'Capture', action: 'capture', icon: '✎' },
+  { id: 'qa-queue', label: 'Open Queue', action: 'open-queue', icon: '▤' },
+  { id: 'qa-focus', label: 'Start Focus', action: 'start-focus', icon: '◎' },
+  { id: 'qa-brief', label: 'Daily Brief', action: 'daily-brief', icon: '☼' },
+];
+
+const CAPTURE_SHORTCUTS = [
+  { id: 'cap-note', label: 'Quick note', detail: 'Writes to NEURO\'s capture inbox.' },
+  { id: 'cap-todo', label: 'Todo', detail: 'Creates a real task through NEURO capture.' },
+];
+
+function buildPresentation(neuroData, domains, ctx = {}) {
+  // The honest empty presentation. ⚠ Every list here is EMPTY and carries a notice.
+  // The old version manufactured a "What Matters Now" card and an "Up Next" row out of
+  // whatever fallback focus text was lying around, so a dead feed rendered as a
+  // populated dashboard. A screen with nothing in it and a reason why is the product.
+  const unavailable = {
+    source: provenance.SOURCE.UNAVAILABLE,
+    available: false,
+    notice: ctx.detail || 'SARA could not read anything from NEURO. This is not an all-clear.',
+    whatMattersNow: [],
+    upNext: [],
+    quickActions: QUICK_ACTIONS,
+    standup: { source: provenance.SOURCE.UNAVAILABLE, yesterday: [], carryForward: [], prompts: [] },
+    email: {
+      source: provenance.SOURCE.UNAVAILABLE,
+      available: false,
+      detail: null,
+      urgentCount: null,
+      replyCount: null,
+      urgent: [],
+      reply: [],
     },
-    todos: { source: 'placeholder', items: [], candidates: [], todayLane: [] },
-    capture: { source: 'placeholder', shortcuts: [], recent: [] },
+    todos: { source: provenance.SOURCE.UNAVAILABLE, items: [], candidates: [], todayLane: [] },
+    capture: { source: provenance.SOURCE.UNAVAILABLE, shortcuts: CAPTURE_SHORTCUTS, recent: [] },
   };
 
   const queue = neuroData?.queue;
@@ -325,7 +379,10 @@ function buildPresentation(neuroData, domains) {
   const email = neuroData?.email;
   const team = neuroData?.team;
 
-  if (!queue && !focus && !todos && !context && !capture && !team && !email) return fallback;
+  if (!queue && !focus && !todos && !context && !capture && !team && !email) {
+    if (ctx.demoMode) return { ...unavailable, source: provenance.SOURCE.DEMO, available: false, notice: 'DEMO DATA — invented content.' };
+    return unavailable;
+  }
 
   const whatMattersNow = [];
   for (const ticket of queue?.at_risk_tickets || []) {
@@ -400,8 +457,11 @@ function buildPresentation(neuroData, domains) {
     });
   }
 
+  // The prompts are SARA's own questions, not data about Nick, so they stand whatever
+  // NEURO says. `source` still tells the truth about the yesterday/carry-forward lists
+  // underneath them.
   const standupSections = {
-    source: context?.standup ? neuro.NEURO_SOURCE : 'placeholder',
+    source: context?.standup ? sourceFor(context, ctx) : provenance.SOURCE.UNAVAILABLE,
     yesterday: [],
     carryForward: [],
     prompts: [
@@ -454,13 +514,18 @@ function buildPresentation(neuroData, domains) {
   }));
 
   return {
-    source: neuro.NEURO_SOURCE,
-    whatMattersNow: whatMattersNow.length ? whatMattersNow : fallback.whatMattersNow,
-    upNext: upNext.length ? upNext : fallback.upNext,
-    quickActions: fallback.quickActions,
+    source: sourceFor(neuroData, ctx),
+    available: true,
+    // ⚠ An empty live list stays EMPTY. It used to fall back to the manufactured
+    // card above, so "NEURO says nothing is pressing" and "SARA has no idea" rendered
+    // as the same populated row — the exact conflation this whole pass removes.
+    notice: whatMattersNow.length ? null : 'NEURO surfaced nothing pressing right now.',
+    whatMattersNow,
+    upNext,
+    quickActions: QUICK_ACTIONS,
     standup: standupSections,
     email: {
-      source: email ? neuro.NEURO_SOURCE : 'placeholder',
+      source: email ? sourceFor(email, ctx) : provenance.SOURCE.UNAVAILABLE,
       available: email ? email.available !== false : false,
       detail: email?.detail || null,
       urgentCount: urgentEmails.length,
@@ -481,17 +546,16 @@ function buildPresentation(neuroData, domains) {
       })),
     },
     todos: {
-      source: todoItems.length || todoCandidates.length || todayLane.length ? neuro.NEURO_SOURCE : 'placeholder',
-      items: todoItems.length ? todoItems : fallback.todos.items,
+      // `todos` answered, so the source is NEURO whether or not it had rows — an
+      // empty task list is a real answer and must not read as a missing feed.
+      source: todos ? sourceFor(todos, ctx) : provenance.SOURCE.UNAVAILABLE,
+      items: todoItems,
       candidates: todoCandidates,
       todayLane,
     },
     capture: {
-      source: recentCapture.length ? neuro.NEURO_SOURCE : 'placeholder',
-      shortcuts: [
-        { id: 'cap-note', label: 'Quick note', detail: 'Writes to NEURO capture inbox.' },
-        { id: 'cap-todo', label: 'Todo', detail: 'Creates a real task through NEURO capture.' },
-      ],
+      source: capture ? sourceFor(capture, ctx) : provenance.SOURCE.UNAVAILABLE,
+      shortcuts: CAPTURE_SHORTCUTS,
       recent: recentCapture,
     },
   };
@@ -511,13 +575,35 @@ function buildBriefing(domains) {
     const n = domains.queue.breaching;
     parts.push(`${n} ${n === 1 ? 'ticket is' : 'tickets are'} breaching SLA.`);
   }
-  const slipping = domains.people.members.find((m) => m.status === 'slipping');
+  const slipping = (domains.people.members || []).find((m) => m.status === 'slipping');
   if (slipping) parts.push(`${slipping.name} is slipping — ${slipping.flag}.`);
   if (domains.focus.current) parts.push(`Start with: ${domains.focus.current.title}.`);
-  const line = parts.length
-    ? parts.join(' ')
-    : 'Queue is calm. Pick the highest-leverage thing and start.';
-  return { line, derivedFrom: ['queue', 'people', 'focus'] };
+  if (parts.length) return { line: parts.join(' '), derivedFrom: ['queue', 'people', 'focus'] };
+
+  // ⚠ Nothing to say is TWO different facts and the old code collapsed them into
+  // one reassuring sentence. "Queue is calm" said while SARA cannot see the queue is
+  // the single most misleading line the system could produce, and during an outage it
+  // was the only line it produced.
+  const unread = DOMAINS.filter((name) => domains[name]?.source === provenance.SOURCE.UNAVAILABLE);
+  if (unread.length === DOMAINS.length) {
+    return {
+      line: 'SARA cannot read anything from NEURO right now, so it cannot tell you what matters. This is not an all-clear.',
+      derivedFrom: [],
+      unread,
+    };
+  }
+  if (unread.length) {
+    return {
+      line: `Nothing pressing in what SARA can see — but ${unread.join(', ')} could not be read, so this is a partial picture.`,
+      derivedFrom: DOMAINS.filter((name) => !unread.includes(name)),
+      unread,
+    };
+  }
+  return {
+    line: 'Nothing is pressing. Pick the highest-leverage thing and start.',
+    derivedFrom: ['queue', 'people', 'focus'],
+    unread: [],
+  };
 }
 
 // Work zones — HA zone names (the iPhone person/device_tracker reports its zone as the
@@ -550,10 +636,12 @@ function locationContext(zone) {
  * room screen"), else fall back to the GPS zone, else the seed. HA/station being absent
  * can never break a consumer; it only changes which tier supplies the headline.
  */
-function buildLocation(telemetry) {
+function buildLocation(telemetry, ctx = {}) {
   const loc = telemetry.available ? telemetry.signals.location : null;
 
-  // Tier 1 — zone (GPS via HA, else seeded fallback).
+  // Tier 1 — zone (GPS via HA). ⚠ With no HA signal the answer is UNKNOWN, not a
+  // seeded office: "On-site at the Little Eaton office since 08:40" is a specific,
+  // checkable claim about where Nick is, and SARA was making it from a literal.
   let zone;
   if (loc && loc.label) {
     zone = {
@@ -563,14 +651,22 @@ function buildLocation(telemetry) {
       since: telemetry.polledAt,
       entityId: loc.entityId,
     };
-  } else {
+  } else if (ctx.demoMode) {
     const seeded = LOCATION_PROVIDER();
     zone = {
-      source: seeded.source || 'seed',
+      source: provenance.SOURCE.DEMO,
       label: seeded.label,
       context: seeded.context || 'elsewhere',
       since: seeded.since || null,
-      telemetry: 'fallback',
+      telemetry: 'demo',
+    };
+  } else {
+    zone = {
+      source: provenance.SOURCE.UNAVAILABLE,
+      label: 'Location unknown',
+      context: 'unknown',
+      since: null,
+      telemetry: 'unavailable',
     };
   }
 
@@ -730,14 +826,32 @@ function buildNova(snapshot) {
  * briefing, fold in Home Assistant telemetry, and self-validate against the contract.
  * @returns {object} the assembled model (carries meta.valid / meta.errors)
  */
-function buildModel() {
+function buildModel(options = {}) {
+  const env = options.env || process.env;
+  const readiness = neuroConfig.readiness(env);
   const neuroSnapshot = neuro.getSnapshot();
   const neuroData = neuroSnapshot.available ? neuroSnapshot.data : null;
+
+  // ONE context object carries provenance into every builder, so a domain, the
+  // presentation block and the connection banner cannot disagree about whether what
+  // is on screen is live, stale, missing or invented.
+  const ctx = {
+    demoMode: readiness.demoMode,
+    stale: Boolean(neuroSnapshot.stale),
+    detail: neuroData
+      ? null
+      : readiness.demoMode
+        ? 'Demo mode — invented content.'
+        : !readiness.ready
+          ? readiness.problems.join(' ')
+          : neuroSnapshot.detail || 'NEURO is not answering.',
+  };
+
   const domains = {
-    queue: buildQueue(neuroData),
-    focus: buildFocus(neuroData),
-    people: buildPeople(neuroData),
-    vault: buildVault(neuroData),
+    queue: buildQueue(neuroData, ctx),
+    focus: buildFocus(neuroData, ctx),
+    people: buildPeople(neuroData, ctx),
+    vault: buildVault(neuroData, ctx),
   };
 
   // Read the latest cached HA telemetry snapshot. This is synchronous and never
@@ -745,8 +859,46 @@ function buildModel() {
   // so model assembly is never blocked or broken by telemetry.
   const telemetry = ha.getTelemetry();
 
-  const seedCount = DOMAINS.filter((name) => domains[name]?.source === 'seed').length;
-  const dataSource = seedCount === DOMAINS.length ? 'seed' : seedCount > 0 ? 'mixed' : 'neuro';
+  const domainSources = DOMAINS.reduce((acc, name) => ({ ...acc, [name]: domains[name]?.source }), {});
+  const dataSource = provenance.rollUp(domainSources);
+  const neuroAge = provenance.ageLabel(neuroSnapshot.ageMs);
+  const provenanceBlock = {
+    // One word for the whole model, and it is the word the UI banner renders.
+    // ⚠ A stale CONNECTION outranks the domain roll-up. Staleness is a fact about the
+    // link to NEURO, not about which domains happened to answer — and with the queue
+    // endpoint permanently retired the roll-up is "mixed" on a good day, so letting it
+    // win would hide "NEURO stopped answering four minutes ago" behind "partly live".
+    state: readiness.demoMode
+      ? provenance.SOURCE.DEMO
+      : neuroSnapshot.stale
+        ? provenance.SOURCE.STALE
+        : dataSource,
+    demoMode: readiness.demoMode,
+    domains: domainSources,
+    neuro: {
+      configured: readiness.baseUrlConfigured,
+      ready: readiness.ready,
+      // Non-sensitive throughout: WHERE and WHETHER, never the credential itself.
+      baseUrl: readiness.baseUrl,
+      credentialConfigured: readiness.credentialConfigured,
+      credentialKind: readiness.credentialKind,
+      problems: readiness.problems,
+      snapshotState: neuroSnapshot.state,
+      available: neuroSnapshot.available,
+      stale: Boolean(neuroSnapshot.stale),
+      reason: neuroSnapshot.reason,
+      detail: neuroSnapshot.detail,
+      polledAt: neuroSnapshot.polledAt,
+      ageMs: neuroSnapshot.ageMs ?? null,
+      ageLabel: neuroAge,
+    },
+  };
+  provenanceBlock.message = provenance.describe({
+    state: provenanceBlock.state,
+    demoMode: readiness.demoMode,
+    neuro: { configured: readiness.baseUrlConfigured, ageLabel: neuroAge },
+  });
+
   const model = {
     contract: CONTRACT,
     schemaVersion: SCHEMA_VERSION,
@@ -754,12 +906,13 @@ function buildModel() {
     dataSource,
     generatedAt: new Date().toISOString(),
     startedAt,
+    provenance: provenanceBlock,
     sara: {
       name: 'SARA',
       status: 'online',
-      note: 'State Engine contract is live. SARA prefers real NUERO-backed runtime data, falls back honestly when an upstream source is unavailable, and never lets screens own their own truth.',
+      note: 'NEURO is the canonical brain; SARA renders and submits to it. Anything SARA cannot read from NEURO is shown as unavailable, never filled in.',
     },
-    location: buildLocation(telemetry),
+    location: buildLocation(telemetry, ctx),
     telemetry: buildTelemetry(telemetry),
     neuro: {
       source: neuroSnapshot.source,
@@ -774,7 +927,7 @@ function buildModel() {
     briefing: buildBriefing(domains),
     domains,
   };
-  model.presentation = buildPresentation(neuroData, domains);
+  model.presentation = buildPresentation(neuroData, domains, ctx);
 
   // Context inference (WS5-WP1). Derived AFTER the rest of the model is assembled, from
   // the same inputs the model already carries — so inference extends the one shared
@@ -794,8 +947,8 @@ function buildModel() {
 /**
  * Return the current shared state model (assembled fresh, validated, stamped).
  */
-function getState() {
-  return { ...buildModel(), servedAt: new Date().toISOString() };
+function getState(options = {}) {
+  return { ...buildModel(options), servedAt: new Date().toISOString() };
 }
 
 /**
@@ -803,8 +956,8 @@ function getState() {
  * about whether SARA is up or whether the model is contract-valid. Reports
  * `degraded` if the engine produced a model that fails its own contract.
  */
-function getHealth() {
-  const model = buildModel();
+function getHealth(options = {}) {
+  const model = buildModel(options);
   return {
     status: model.meta.valid ? 'ok' : 'degraded',
     sara: model.sara.status,
@@ -824,10 +977,27 @@ function getHealth() {
       reason: model.telemetry.reason,
       polledAt: model.telemetry.polledAt,
     },
+    // Readiness for the NEURO dependency — the operator-facing answer to "is SARA
+    // wired to the brain, and is what it is showing current?". Non-sensitive by
+    // construction: it names the base URL and WHETHER a credential is set, never the
+    // credential. This is the signal to watch in PM2 / a probe.
     neuro: {
+      configured: model.provenance.neuro.configured,
+      ready: model.provenance.neuro.ready,
+      baseUrl: model.provenance.neuro.baseUrl,
+      credentialConfigured: model.provenance.neuro.credentialConfigured,
+      credentialKind: model.provenance.neuro.credentialKind,
+      problems: model.provenance.neuro.problems,
       available: model.neuro.available,
+      stale: model.provenance.neuro.stale,
       reason: model.neuro.reason,
       polledAt: model.neuro.polledAt,
+      ageMs: model.provenance.neuro.ageMs,
+    },
+    provenance: {
+      state: model.provenance.state,
+      demoMode: model.provenance.demoMode,
+      message: model.provenance.message,
     },
     // Same inference verdict the state model carries (WS5-WP1) — advisory only. Health
     // reports the inferred activity, the recommended view, and confidence so operators

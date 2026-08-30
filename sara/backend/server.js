@@ -42,9 +42,11 @@ const kioskRoute = require('./src/routes/kiosk');
 const presenceRoute = require('./src/routes/presence');
 const locationRoute = require('./src/routes/location');
 const cognitionGraphRoute = require('./src/routes/cognitionGraph');
+const captureRoute = require('./src/routes/capture');
 const { RUNTIME_LABEL } = require('./src/state/stateEngine');
 const ha = require('./src/telemetry/homeAssistant');
 const neuro = require('./src/integrations/neuroSnapshot');
+const neuroConfig = require('./src/integrations/neuroConfig');
 const nova = require('./src/integrations/novaSnapshot');
 const vaultGraph = require('./src/integrations/vaultGraph');
 
@@ -68,6 +70,10 @@ app.use('/api/kiosk', kioskRoute);
 app.use('/api/presence', presenceRoute);
 app.use('/api/location', locationRoute);
 app.use('/api/cognition/graph', cognitionGraphRoute);
+// The capture bridge. SARA's frontend has always POSTed here; nothing was mounted, so
+// every capture made at the kiosk 404'd. It forwards to NEURO's canonical capture
+// routes and stores nothing of its own — see src/integrations/neuroCapture.js.
+app.use('/api/capture', captureRoute);
 
 // --- Static frontend (production) ---
 // Vite builds to ../frontend/dist. If it exists, serve it with SPA fallback so
@@ -93,6 +99,12 @@ if (fs.existsSync(distDir)) {
 
 app.listen(PORT, () => {
   console.log(`[SARA ${RUNTIME_LABEL}] backend listening on http://0.0.0.0:${PORT}`);
+  // Validate the NEURO dependency FIRST and say so out loud. SARA is a manifestation
+  // layer over NEURO: an unconfigured connection is not a detail, it is the whole
+  // runtime being unable to do its job. It never exits on failure — the kiosk is also
+  // where a PIN gets entered, so a SARA that refuses to boot cannot be repaired from
+  // the device in front of you.
+  neuroConfig.logStartupValidation();
   // Start the Home Assistant telemetry poller. No-op (and logs why) when HA is not
   // configured — the runtime stays up and screens fall back honestly.
   ha.start();

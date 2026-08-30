@@ -288,7 +288,9 @@ export default function MissionControl() {
         ) : (
           <>
             <div className="jv__li"><span className="jv__li-k">Open</span><span className="jv__li-v">{queue.open ?? '—'}</span></div>
-            <div className="jv__li"><span className="jv__li-k">Breaching SLA</span><span className={`jv__li-v jv__li-v--${queue.breaching ? 'a' : 'g'}`}>{queue.breaching ?? 0}</span></div>
+            {/* ⚠ Not `?? 0`, and not green when null. An unread queue rendered as a
+                green "0 breaching" is the exact all-clear SARA has not earned. */}
+            <div className="jv__li"><span className="jv__li-k">Breaching SLA</span><span className={`jv__li-v jv__li-v--${queue.breaching == null ? 'w' : queue.breaching ? 'a' : 'g'}`}>{queue.breaching ?? '—'}</span></div>
             <div className="jv__li"><span className="jv__li-k">Team flags</span><span className={`jv__li-v jv__li-v--${needAttention ? 'w' : 'g'}`}>{needAttention ? `${needAttention} need attention` : 'all steady'}</span></div>
           </>
         )}

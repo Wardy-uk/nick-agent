@@ -408,6 +408,17 @@ body {
   letter-spacing: 0.14em;
 }
 
+/* A capture that did NOT reach NEURO. It must not look like the neutral status pill
+ * beside it — "NOT saved" in the same dim grey as "neuro" reads as a label, not a
+ * failure, and the whole point is that Nick notices and keeps his words. */
+.product__pill--danger {
+  border-color: rgba(224, 114, 106, 0.5);
+  background: rgba(224, 114, 106, 0.16);
+  color: var(--danger);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
 .product__grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));

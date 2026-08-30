@@ -1,0 +1,79 @@
+/* Connection banner — compact, and deliberately not dismissible.
+ *
+ * It renders only when something is wrong, so a dismiss control would just be a way
+ * to hide the fact that the screen is not current. It sits above the view rather than
+ * floating over it: the point is that it is read on the way to the content, not that
+ * it demands a tap. */
+
+.connstatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.75rem;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.connstatus__label {
+  flex: none;
+  font-weight: 700;
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.connstatus__message {
+  color: var(--ink);
+}
+
+.connstatus__detail {
+  flex-basis: 100%;
+  color: var(--ink-dim);
+  font-size: 0.76rem;
+}
+
+.connstatus--warn {
+  border-color: rgba(224, 168, 80, 0.4);
+  background: var(--warning-soft);
+}
+
+.connstatus--warn .connstatus__label {
+  color: var(--warning-ink);
+}
+
+/* Demo and unreachable both land here. Demo is fiction and unreachable means nothing
+ * on screen is current — in both cases believing the screen is the actual harm, so
+ * neither gets a quiet treatment. */
+.connstatus--danger {
+  border-color: rgba(224, 114, 106, 0.5);
+  background: rgba(224, 114, 106, 0.14);
+}
+
+.connstatus--danger .connstatus__label {
+  color: var(--danger);
+}
+
+/* Placement. The wrapper collapses to nothing when the banner renders null (the live
+ * case), so a healthy screen keeps its full height and no spacing shifts on recovery. */
+.app__connstatus:empty {
+  display: none;
+}
+
+.app__connstatus {
+  margin-bottom: 0.75rem;
+}
+
+/* Full-bleed views (Briefing, Cognition) draw edge to edge and own their own layout,
+ * so the banner floats above rather than taking part in it. */
+.app__connstatus--pinned {
+  position: fixed;
+  top: 0.6rem;
+  left: 0.6rem;
+  right: 0.6rem;
+  z-index: 40;
+  margin-bottom: 0;
+  pointer-events: none;
+}

@@ -579,18 +579,34 @@ export function SaraStateProvider({ children }) {
     }
   }
 
-  async function captureNote(content, title = '') {
-    const trimmed = String(content || '').trim();
-    if (!trimmed) return { ok: false, error: 'Note content is required.' };
+  // Capture. ⚠ The ONE rule: a capture is reported saved only when NEURO acknowledged
+  // it. The SARA backend answers `{ ok, saved, error }` and `saved` is the field that
+  // decides — not `res.ok`, and not the absence of an exception. A capture that says
+  // "Saved" without reaching NEURO loses the thought AND convinces Nick it is safe,
+  // which is worse than any error message.
+  async function submitCapture(path, payload) {
+    let res;
+    let body = {};
+    try {
+      res = await fetch(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      body = await res.json().catch(() => ({}));
+    } catch (e) {
+      // The SARA backend itself is unreachable — the phone/kiosk is offline, or the
+      // process is down. Not saved, and there is no queue to fall back on by design.
+      return { ok: false, saved: false, error: `SARA is offline — the capture was NOT saved (${e.message}).` };
+    }
 
-    const res = await fetch('/api/capture/note', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title, content: trimmed }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return { ok: false, error: body.error || `HTTP ${res.status}` };
+    if (!res.ok || body.saved !== true) {
+      return {
+        ok: false,
+        saved: false,
+        reason: body.reason || null,
+        error: body.error || body.detail || `Not saved — HTTP ${res.status}.`,
+      };
     }
 
     try {
@@ -599,30 +615,19 @@ export function SaraStateProvider({ children }) {
     } catch {
       // keep the successful capture result even if the follow-up refresh fails
     }
-    return { ok: true, data: body };
+    return { ok: true, saved: true, data: body.data || null };
+  }
+
+  async function captureNote(content, title = '') {
+    const trimmed = String(content || '').trim();
+    if (!trimmed) return { ok: false, saved: false, error: 'Note content is required.' };
+    return submitCapture('/api/capture/note', { title, content: trimmed });
   }
 
   async function captureTodo(text) {
     const trimmed = String(text || '').trim();
-    if (!trimmed) return { ok: false, error: 'Todo text is required.' };
-
-    const res = await fetch('/api/capture/todo', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: trimmed }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return { ok: false, error: body.error || `HTTP ${res.status}` };
-    }
-
-    try {
-      const state = await fetch('/api/state');
-      if (state.ok) applyIncomingModel(await state.json());
-    } catch {
-      // keep the successful capture result even if the follow-up refresh fails
-    }
-    return { ok: true, data: body };
+    if (!trimmed) return { ok: false, saved: false, error: 'Todo text is required.' };
+    return submitCapture('/api/capture/todo', { text: trimmed });
   }
 
   async function setNeuroPin(pin) {
@@ -760,11 +765,26 @@ export function SaraStateProvider({ children }) {
     return { ok: false, error };
   }
 
+  // Provenance is a first-class part of shared state, not a detail buried in `model`:
+  // every screen that renders a number should be able to say where it came from, and
+  // the connection banner reads exactly this. When the SARA backend itself has not
+  // answered, the honest answer is that we do not know — NOT that NEURO is down.
+  const provenance = model?.provenance || {
+    state: status === 'disconnected' ? 'unavailable' : 'unknown',
+    demoMode: false,
+    message:
+      status === 'disconnected'
+        ? `SARA's own backend is unreachable${error ? ` — ${error}` : ''}. Nothing on screen is current.`
+        : 'Connecting to SARA…',
+    neuro: null,
+  };
+
   const value = {
     status,
     error,
     model,
     now,
+    provenance,
     presentation: model?.presentation || SHARED_PRESENTATION,
     currentView,
     currentViewContext,

@@ -19,35 +19,124 @@ test('getState exposes the v1 contract over the shared model', () => {
   const s = getState();
   assert.equal(s.contract, CONTRACT);
   assert.equal(s.schemaVersion, SCHEMA_VERSION);
-  assert.equal(s.dataSource, 'seed');
+  // ⚠ This assertion used to read 'seed'. With NEURO unreachable the model is now
+  // UNAVAILABLE, not filled in from a literal — that swap is the whole point of the
+  // provenance pass, and the contract still has to hold across it.
+  assert.equal(s.dataSource, 'unavailable');
   assert.ok(s.servedAt, 'servedAt stamp missing');
   for (const name of DOMAINS) {
     assert.ok(s.domains[name], `missing domain ${name}`);
-    assert.equal(s.domains[name].source, 'seed', `${name} not flagged as seed`);
+    assert.equal(s.domains[name].source, 'unavailable', `${name} must be flagged unavailable, not filled in`);
   }
 });
 
-test('briefing is derived from domain data, not a fixed string', () => {
+test('an unreadable domain is EMPTY, and never a confident zero', () => {
   neuro._setSnapshotForTest(null);
   const s = getState();
-  // seed has 2 breaching tickets and Nathan slipping -> both must surface
+  // null, not 0. A screen rendering "0 breaching" from a feed it could not read has
+  // silently turned "no reading" into "nothing wrong".
+  assert.equal(s.domains.queue.open, null);
+  assert.equal(s.domains.queue.breaching, null);
+  assert.deepEqual(s.domains.queue.sections.act_now, []);
+  assert.equal(s.domains.focus.current, null);
+  assert.deepEqual(s.domains.people.members, []);
+  assert.deepEqual(s.domains.vault.picks, []);
+  // and every one of them says so in words
+  for (const name of DOMAINS) {
+    assert.match(s.domains[name].summary, /cannot see/i, `${name} must say what it could not see`);
+    assert.match(s.domains[name].summary, /not an all-clear/i, `${name} must not read as reassurance`);
+  }
+});
+
+test('NO seeded person, ticket or meeting can reach a screen in production', () => {
+  neuro._setSnapshotForTest(null);
+  const blob = JSON.stringify(getState());
+  // Names and specifics straight out of seed.js. If any of these ever appear again
+  // with NEURO down, SARA is inventing Nick's day during an outage.
+  for (const invented of ['TECH-4412', 'TECH-4398', 'Willem', 'probation review', 'Little Eaton', 'QA 82%']) {
+    assert.ok(!blob.includes(invented), `seeded content leaked into live state: ${invented}`);
+  }
+});
+
+test('demo mode is the ONLY door to seeded content, and it stamps every domain', () => {
+  neuro._setSnapshotForTest(null);
+  const demoEnv = { ...process.env, SARA_DEMO_MODE: 'true', NODE_ENV: 'development' };
+  const s = getState({ env: demoEnv });
+  assert.equal(s.dataSource, 'demo');
+  assert.equal(s.provenance.state, 'demo');
+  assert.equal(s.provenance.demoMode, true);
+  assert.match(s.provenance.message, /DEMO/);
+  for (const name of DOMAINS) {
+    assert.equal(s.domains[name].source, 'demo', `${name} must be stamped demo, never neuro`);
+  }
+  // Confidence must not survive demo mode — invented data is not data.
+  assert.equal(s.confidence.level, 'low');
+});
+
+test('demo mode is REFUSED under NODE_ENV=production', () => {
+  neuro._setSnapshotForTest(null);
+  const s = getState({ env: { ...process.env, SARA_DEMO_MODE: 'true', NODE_ENV: 'production' } });
+  assert.equal(s.provenance.demoMode, false);
+  assert.equal(s.dataSource, 'unavailable', 'production must fall to unavailable, never to seed');
+  assert.ok(!JSON.stringify(s).includes('Willem'), 'seeded content must not reach a production screen');
+});
+
+test('briefing is derived from domain data, not a fixed string', () => {
+  neuro._setSnapshotForTest({
+    source: 'neuro',
+    state: 'live',
+    available: true,
+    stale: false,
+    reason: null,
+    detail: null,
+    polledAt: '2026-08-30T09:00:00.000Z',
+    errors: {},
+    data: {
+      queue: {
+        total: 2,
+        at_risk_count: 2,
+        tickets: [
+          { ticket_key: 'SUP-1', summary: 'Portal down', sla_remaining_minutes: 30 },
+          { ticket_key: 'SUP-2', summary: 'Export failing', sla_remaining_minutes: 60 },
+        ],
+        at_risk_tickets: [{ ticket_key: 'SUP-1' }, { ticket_key: 'SUP-2' }],
+      },
+      team: {
+        filteredCount: 1,
+        perPerson: [{ name: 'Adele Norman-Swift', team: '1st Line', issues: [{ severity: 'high', title: 'no response logged since Wednesday' }] }],
+      },
+    },
+  });
+  const s = getState();
   assert.match(s.briefing.line, /breaching SLA/);
-  assert.match(s.briefing.line, /Nathan is slipping/);
+  assert.match(s.briefing.line, /Adele Norman-Swift is slipping/);
+  neuro._setSnapshotForTest(null);
+});
+
+test('the briefing NEVER says the queue is calm when it could not read the queue', () => {
+  neuro._setSnapshotForTest(null);
+  const s = getState();
+  assert.ok(!/calm/i.test(s.briefing.line), 'a reassuring line over an unread queue is the worst possible output');
+  assert.match(s.briefing.line, /cannot read anything from NEURO/i);
+  assert.match(s.briefing.line, /not an all-clear/i);
+  assert.deepEqual(s.briefing.unread, [...DOMAINS]);
 });
 
 test('state exposes current location and confidence (WS1 criterion 2)', () => {
   neuro._setSnapshotForTest(null);
   const s = getState();
-  // location: seeded input, honestly flagged, carries a human label
+  // location: still present and still contract-shaped, but UNKNOWN rather than the
+  // seeded "Office — Little Eaton", which was a specific checkable claim about where
+  // Nick physically was, made up from a literal.
   assert.ok(s.location, 'location missing from state');
-  assert.equal(s.location.source, 'seed', 'location not flagged as seed');
-  assert.equal(typeof s.location.label, 'string');
-  assert.ok(s.location.label.length, 'location.label is empty');
-  // confidence: derived by the engine, moderate while inputs are seeded
+  assert.equal(s.location.source, 'unavailable');
+  assert.equal(s.location.label, 'Location unknown');
+  assert.equal(s.location.context, 'unknown');
+  // confidence: derived by the engine, and LOW when nothing could be read
   assert.ok(s.confidence, 'confidence missing from state');
   assert.equal(s.confidence.source, 'derived', 'confidence should be derived, not seeded');
   assert.equal(typeof s.confidence.score, 'number');
-  assert.equal(s.confidence.level, 'moderate', 'seed inputs should yield moderate confidence');
+  assert.equal(s.confidence.level, 'low', 'unreadable inputs must not yield confident state');
 });
 
 test('assembled model with location and confidence is contract-valid', () => {
@@ -65,8 +154,29 @@ test('health derives from the same model and reports valid', () => {
   // location + confidence exposed consistently on the health surface too
   assert.equal(typeof h.location, 'string');
   assert.ok(h.location.length, 'health.location is empty');
-  assert.equal(h.confidence.level, 'moderate');
+  assert.equal(h.confidence.level, 'low');
   assert.equal(typeof h.confidence.score, 'number');
+});
+
+test('health exposes NEURO readiness and never a credential', () => {
+  neuro._setSnapshotForTest(null);
+  const h = getHealth({ env: { NEURO_BASE_URL: 'http://example.test:3001', NEURO_PIN: 'super-secret-pin' } });
+  assert.equal(h.neuro.configured, true);
+  assert.equal(h.neuro.ready, true);
+  assert.equal(h.neuro.baseUrl, 'http://example.test:3001');
+  assert.equal(h.neuro.credentialConfigured, true);
+  assert.equal(h.neuro.credentialKind, 'pin');
+  // ⚠ The readiness signal says WHETHER a credential is set, never what it is.
+  assert.ok(!JSON.stringify(h).includes('super-secret-pin'), 'health must never carry the PIN');
+});
+
+test('an unconfigured NEURO names the missing settings rather than looking like an outage', () => {
+  neuro._setSnapshotForTest(null);
+  const h = getHealth({ env: {} });
+  assert.equal(h.neuro.configured, false);
+  assert.equal(h.neuro.ready, false);
+  assert.ok(h.neuro.problems.some((p) => /NEURO_BASE_URL/.test(p)));
+  assert.match(h.provenance.message, /not configured/i);
 });
 
 test('validate rejects a model missing a domain (degrades honestly)', () => {
@@ -91,11 +201,12 @@ test('model carries a telemetry block and stays contract-valid when HA is absent
   assert.equal(valid, true, `contract errors: ${errors.join('; ')}`);
 });
 
-test('location falls back to seed honestly when HA telemetry is unavailable', () => {
+test('location is UNKNOWN, not a seeded office, when HA telemetry is unavailable', () => {
   neuro._setSnapshotForTest(null);
   ha._setSnapshotForTest(null);
   const s = getState();
-  assert.equal(s.location.source, 'seed', 'absent HA must leave location on the seed reader');
+  assert.equal(s.location.source, 'unavailable', 'absent HA must leave location unknown, never seeded');
+  assert.ok(!s.location.label.includes('Little Eaton'));
   assert.equal(s.telemetry.signals.location, null);
 });
 
@@ -247,4 +358,93 @@ test('live NEURO snapshot replaces seeded domains and presentation honestly', ()
   assert.equal(s.presentation.todos.candidates[0].title, 'Follow up with Adele on outage notes');
   assert.equal(s.presentation.todos.todayLane[0].title, 'Reply to customer on breached queue item');
   neuro._setSnapshotForTest(null);
+});
+
+// --- Provenance: live vs stale vs unavailable ------------------------------
+//
+// Three states that a screen must be able to tell apart. Collapsing "stale" into
+// "live" is how a kiosk shows a four-minute-old queue as the current one; collapsing
+// it into "unavailable" throws away data that is still worth seeing. Both are wrong
+// in different directions, so both are pinned.
+
+function liveSnapshot(overrides = {}) {
+  return {
+    source: 'neuro',
+    state: 'live',
+    available: true,
+    stale: false,
+    reason: null,
+    detail: null,
+    polledAt: '2026-08-30T09:00:00.000Z',
+    ageMs: 0,
+    errors: {},
+    data: {
+      queue: null,
+      focus: { nextAction: { id: 'f1', label: 'Triage the portal outage', reason: 'Customer impact is live.' } },
+      todos: { todos: [], suggested: [], todayLane: [] },
+      context: { date: '2026-08-30', dailyNote: { title: 'Daily Note', path: 'Daily/2026-08-30.md' } },
+      team: { filteredCount: 0, perPerson: [] },
+      capture: { items: [] },
+      email: null,
+    },
+    ...overrides,
+  };
+}
+
+test('stale NEURO data is marked stale everywhere, and is never presented as live', () => {
+  neuro._setSnapshotForTest(liveSnapshot({
+    state: 'stale',
+    stale: true,
+    reason: 'unreachable',
+    detail: 'NEURO is not answering.',
+    ageMs: 4 * 60 * 1000,
+  }));
+  const s = getState();
+  assert.equal(s.provenance.state, 'neuro-stale');
+  assert.equal(s.provenance.neuro.stale, true);
+  assert.match(s.provenance.message, /last known state/i);
+  assert.match(s.provenance.message, /not answering/i);
+  assert.equal(s.domains.focus.source, 'neuro-stale', 'a domain built from stale data must say so');
+  // Stale data is real data, so confidence is moderate — not high, and not low.
+  assert.equal(s.confidence.level, 'moderate');
+  neuro._setSnapshotForTest(null);
+});
+
+test('a partly-read NEURO leaves the unread domains blank rather than guessing', () => {
+  // context/capture answered; team did not, and focus answered with nothing pressing.
+  neuro._setSnapshotForTest(liveSnapshot({ data: { ...liveSnapshot().data, team: null, focus: {} } }));
+  const s = getState();
+  assert.equal(s.domains.focus.source, 'neuro');
+  assert.equal(s.domains.people.source, 'unavailable');
+  assert.deepEqual(s.domains.people.members, []);
+  assert.equal(s.dataSource, 'mixed');
+  assert.match(s.provenance.message, /Partly live/i);
+  // and the briefing admits which half it could not see
+  assert.match(s.briefing.line, /partial picture/i);
+  neuro._setSnapshotForTest(null);
+});
+
+test('an empty live list stays empty — it does not fall back to invented cards', () => {
+  neuro._setSnapshotForTest(liveSnapshot());
+  const s = getState();
+  assert.equal(s.presentation.source, 'neuro');
+  // focus answered, so there IS one card; nothing is manufactured beyond it.
+  assert.ok(Array.isArray(s.presentation.upNext));
+  assert.deepEqual(s.presentation.upNext, [], 'no runway in the data means no runway on screen');
+  assert.deepEqual(s.presentation.todos.items, []);
+  assert.equal(s.presentation.todos.source, 'neuro', 'an empty task list is a real answer, not a missing feed');
+  neuro._setSnapshotForTest(null);
+});
+
+test('with nothing readable the presentation block is empty and says why', () => {
+  neuro._setSnapshotForTest(null);
+  const s = getState();
+  assert.equal(s.presentation.source, 'unavailable');
+  assert.equal(s.presentation.available, false);
+  assert.deepEqual(s.presentation.whatMattersNow, []);
+  assert.deepEqual(s.presentation.upNext, []);
+  assert.ok(s.presentation.notice, 'an empty dashboard with no reason is indistinguishable from a calm day');
+  // Capture must stay reachable with the brain down — it is the one thing a kiosk
+  // can still usefully offer, even if the save itself then fails honestly.
+  assert.ok(s.presentation.quickActions.some((a) => a.action === 'capture'));
 });

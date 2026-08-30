@@ -38,7 +38,11 @@ export default function ContextView() {
                 <p className="product__row-title">Queue</p>
                 <p className="product__row-detail">{queue?.summary || 'Queue summary unavailable.'}</p>
               </div>
-              <span className="product__row-right">{queue?.open ?? 0} open</span>
+              {/* ⚠ Not `?? 0`. An unread queue is null, and rendering it as "0 open"
+                  turns "SARA could not look" into "there is nothing there". */}
+              <span className="product__row-right">
+                {queue?.open == null ? 'not readable' : `${queue.open} open`}
+              </span>
             </div>
             <div className="product__row">
               <div>

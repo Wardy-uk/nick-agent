@@ -56,12 +56,28 @@ export default function SettingsView() {
               </div>
               <span className="product__row-right">{model.telemetry?.available ? 'live' : 'fallback'}</span>
             </div>
+            {/* ⚠ "fallback" used to be the right word here and no longer is — there
+                IS no fallback. What is on screen is live, stale, or absent, and this
+                row names which, using the same provenance string the banner reads. */}
             <div className="product__row">
               <div>
-                <p className="product__row-title">NEURO snapshot</p>
-                <p className="product__row-detail">{model.neuro?.detail || model.neuro?.reason || 'Real NEURO data available.'}</p>
+                <p className="product__row-title">NEURO data</p>
+                <p className="product__row-detail">{model.provenance?.message}</p>
               </div>
-              <span className="product__row-right">{model.neuro?.available ? 'live' : 'fallback'}</span>
+              <span className="product__row-right">{model.provenance?.state}</span>
+            </div>
+            <div className="product__row">
+              <div>
+                <p className="product__row-title">NEURO connection</p>
+                {/* Non-sensitive: where NEURO is and WHETHER a credential is set.
+                    Never the credential. */}
+                <p className="product__row-detail">
+                  {model.provenance?.neuro?.problems?.length
+                    ? model.provenance.neuro.problems.join(' ')
+                    : `${model.provenance?.neuro?.baseUrl} · auth: ${model.provenance?.neuro?.credentialKind}`}
+                </p>
+              </div>
+              <span className="product__row-right">{model.provenance?.neuro?.ready ? 'configured' : 'not configured'}</span>
             </div>
             <div className="product__row">
               <div>

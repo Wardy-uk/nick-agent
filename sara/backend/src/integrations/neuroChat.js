@@ -11,13 +11,11 @@ const DEFAULT_CHAT_PATH = '/api/chat';
 const DEFAULT_NUDGE_PATH = '/api/nudges/stream';
 const neuroConfig = require('./neuroConfig');
 
-function trimSlash(value) {
-  return String(value || '').replace(/\/+$/, '');
-}
-
 function getConfig(env = process.env) {
   return {
-    baseUrl: trimSlash(env.NEURO_BASE_URL || 'https://nuero.nickward.co.uk'),
+    // No default base URL. See neuroConfig — an implicit remote dependency is how
+    // an unconfigured SARA came to be silently talking to a public host.
+    baseUrl: neuroConfig.getBaseUrl(env),
     pin: neuroConfig.getPin(env),
     chatPath: env.NEURO_CHAT_PATH || DEFAULT_CHAT_PATH,
     nudgesPath: env.NEURO_NUDGES_PATH || DEFAULT_NUDGE_PATH,
@@ -26,19 +24,12 @@ function getConfig(env = process.env) {
 
 function getAvailability(env = process.env) {
   const cfg = getConfig(env);
-  if (!cfg.baseUrl) {
+  const readiness = neuroConfig.readiness(env);
+  if (!readiness.ready) {
     return {
       available: false,
       reason: 'not-configured',
-      detail: 'NEURO_BASE_URL is not set.',
-      config: cfg,
-    };
-  }
-  if (!cfg.pin) {
-    return {
-      available: false,
-      reason: 'not-configured',
-      detail: 'NEURO_PIN is not set.',
+      detail: readiness.problems.join(' '),
       config: cfg,
     };
   }
@@ -69,7 +60,7 @@ async function proxyChat(body, options = {}) {
     headers: {
       'content-type': 'application/json',
       accept: 'text/event-stream, application/json',
-      'x-neuro-pin': config.pin,
+      ...neuroConfig.authHeaders(options.env || process.env),
     },
     body: JSON.stringify(body || {}),
     signal: options.signal,

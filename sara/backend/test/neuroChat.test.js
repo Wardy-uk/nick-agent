@@ -3,19 +3,31 @@ const assert = require('node:assert/strict');
 
 const neuroChat = require('../src/integrations/neuroChat');
 
-test('availability uses the default NEURO base URL when only a PIN is supplied', () => {
+// ⚠ NEGATIVE, and it replaces a test that asserted the opposite. There used to be a
+// hardcoded default base URL (`https://nuero.nickward.co.uk`) in this module and in
+// neuroSnapshot, so a SARA with nothing but a PIN reported itself AVAILABLE and
+// silently reached a public host over the open internet. A PIN alone is not a
+// destination, and an implicit remote dependency is not configuration.
+test('a PIN with no base URL is NOT available — there is no default host any more', () => {
   const a = neuroChat.getAvailability({ NEURO_PIN: '1234' });
-  assert.equal(a.available, true);
-  assert.equal(a.reason, null);
-  assert.equal(a.detail, null);
-  assert.equal(a.config.baseUrl, 'https://nuero.nickward.co.uk');
+  assert.equal(a.available, false);
+  assert.equal(a.reason, 'not-configured');
+  assert.match(a.detail, /NEURO_BASE_URL/);
+  assert.equal(a.config.baseUrl, '');
 });
 
-test('availability is honest when NEURO_PIN is missing', () => {
+test('availability is honest when no credential is set', () => {
   const a = neuroChat.getAvailability({ NEURO_BASE_URL: 'http://example.test:3001' });
   assert.equal(a.available, false);
   assert.equal(a.reason, 'not-configured');
   assert.match(a.detail, /NEURO_PIN/);
+});
+
+test('a base URL and a credential together are available', () => {
+  const a = neuroChat.getAvailability({ NEURO_BASE_URL: 'http://example.test:3001', NEURO_PIN: '1234' });
+  assert.equal(a.available, true);
+  assert.equal(a.reason, null);
+  assert.equal(a.config.baseUrl, 'http://example.test:3001');
 });
 
 test('buildUrl keeps the upstream path stable', () => {
