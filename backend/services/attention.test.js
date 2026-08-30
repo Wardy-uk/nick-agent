@@ -535,3 +535,19 @@ test('flip is the opposite of the brain, resolved on the SERVER', () => {
       'the stack would show the same card twice');
   }
 });
+
+test('the lookahead reaches a full week, so a weekly rhythm is not missed', () => {
+  // Nick hikes every Saturday. A Sunday looking five days forward stopped at
+  // Thursday and missed next weekend entirely — leaving the personal card blank
+  // on the day he is most likely to be looking at it.
+  const sunday = new Date('2026-08-30T09:00:00');
+  const nextSaturday = [{
+    start: '2026-09-05T00:00:00', end: '2026-09-06T00:00:00',
+    subject: 'hiking', showAs: 'free', isAllDay: true, source: 'apple',
+  }];
+
+  const a = agendaFor({ known: true, events: [] }, sunday, 4, nextSaturday, { personal: true });
+  assert.equal(a.events.length, 1, 'next Saturday must be reachable from Sunday');
+  assert.equal(a.events[0].subject, 'hiking');
+  assert.equal(a.scope, 'saturday', 'and it must be named, not called tomorrow');
+});

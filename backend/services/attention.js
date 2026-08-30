@@ -522,7 +522,19 @@ function _dayStartMs(now) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 }
 
-function _tomorrowEvents(days = 5) {
+// A full week ahead, not five days.
+//
+// ⚠ Five was too short for the half of this that matters most. Nick's personal
+// diary runs on a WEEKLY rhythm — he hikes every Saturday — so a Sunday looking
+// five days forward stopped at Thursday and missed next weekend entirely,
+// leaving the personal card blank on the one day he is most likely to look at
+// it. Seven reaches the same weekday it is standing on.
+//
+// It only ever changes what is shown once TODAY is spent, so a longer reach
+// costs nothing on a busy day and fills the gap on a quiet one.
+const LOOKAHEAD_DAYS = 7;
+
+function _tomorrowEvents(days = LOOKAHEAD_DAYS) {
   try {
     const db = require('../db/database');
     const from = new Date();
