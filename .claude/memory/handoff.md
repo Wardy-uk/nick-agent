@@ -29,6 +29,37 @@ refused / pending. **`held` is not `done`** and says why.
 Both guards were proved by reintroducing the bug and watching them fail: three
 collision tests, and a source pin that stops either view drifting back to the
 aggregate counts.
+## DEPLOYED — 30 Aug 2026, verified live
+
+Pi 5 on `3e36e17`, `neuro-backend` online, no new core dumps. Netlify bundle
+`index-BOsZnG2Q.js` confirmed to be the FIXED build (post-fix strings present,
+the pre-fix string absent — a negative control, not just a positive one).
+
+Verified against the RUNNING server, not the suite:
+- `/v1/readiness` → `ready:true`, vault reachable, 152 open tasks, outbox table live
+- `/v1/nick-now` → all 7 sources `live`, 152 tasks / 12 shown, agenda scope
+  `saturday`, `poolAvailable:true`, `gaps:[presence]` (the known stale HA feed,
+  correctly named rather than swallowed)
+- `/v1/sync/operations` probed with a payload **harmless on success** (an unknown
+  kind) — rejected identically twice, and **zero ledger rows**, because
+  validation answers before the ledger is touched. Nothing was written to the
+  real vault to test a write path.
+- Pi suite: 1356 pass / 0 fail, gated on the EXIT CODE. All five mobile suites
+  confirmed present by distinctive test name.
+
+⚠ **Two things found on the Pi that are NOT mine and are still open:**
+
+1. **63 core dumps, ~7.9 GB, in `/mnt/data/nuero/backend/`** — all inside one
+   minute, 28 Aug 20:04–20:05. Not recurring, nothing since, backend stable. No
+   segfault/abort signature in the error log (grep run with a positive control).
+   Untracked, so they do not block a pull, but they are 7.9 GB of the disk and
+   nobody has looked at them. **Not deleted — that is your call**, they may still
+   be diagnosable.
+2. **The Pi runs 50 FEWER tests than the dev box** (1356 vs 1406), both green,
+   0 skipped on both. Pre-existing — the gap is the same size with my 73 tests
+   removed from each side. It means the deploy gate is weaker than it looks, and
+   it is worth knowing WHICH 50 before trusting a green Pi run as equivalent.
+
 **Full contract doc:** `docs/mobile-contract.md`.
 
 ## What was built
