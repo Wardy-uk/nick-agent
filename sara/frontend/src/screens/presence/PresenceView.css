@@ -67,3 +67,12 @@
   font-size: 0.85rem;
   color: #8b98a8;
 }
+
+/* The card's second line — the brain's own `say`, one step quieter than the
+   title it explains. */
+.presence__sub {
+  margin: 0;
+  font-size: clamp(0.95rem, 1.5vw, 1.25rem);
+  line-height: 1.4;
+  color: #b7c2d0;
+}

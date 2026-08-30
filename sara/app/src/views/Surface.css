@@ -179,6 +179,18 @@
 .surface__btn--go { background: rgba(43, 61, 87, 0.92); border-color: rgba(76, 154, 255, 0.55); }
 .surface__btn:disabled { opacity: 0.5; }
 
+/* The deferral row. Quieter and tighter than the two buttons above it: this is
+   a second-level choice Nick has already opted into, and giving it the same
+   weight would make four things compete with the one thing — the failure this
+   whole screen exists to fix. Still 40px tall, because it is a phone. */
+.surface__acts--defer { margin-top: 0.4rem; gap: 0.35rem; }
+.surface__btn--small {
+  padding: 0.42rem 0.7rem;
+  font-size: 0.78rem;
+  background: rgba(20, 27, 36, 0.6);
+  min-height: 40px;
+}
+
 /* ── Everything else, quieter ──────────────────────────────────────────────
  * Hairlines rather than filled cards. Boxes here would make three more things
  * compete with the one thing, which is the whole failure being fixed. */

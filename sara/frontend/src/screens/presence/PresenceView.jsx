@@ -1,6 +1,11 @@
+import { useCallback, useEffect, useState } from 'react';
 import { useSaraState } from '../../state/saraState';
 import Field from '../../../../shared-ui/Field';
 import './PresenceView.css';
+
+// How often the kiosk re-reads the feed. Matches the phone's Surface, so the two
+// cannot drift into showing different vintages of the same decision.
+const POLL_MS = 60_000;
 
 // Presence — SARA on the desk, and the screen the kiosk opens on.
 //
@@ -63,10 +68,40 @@ export default function PresenceView() {
   const state = provenance?.state || 'unavailable';
   const { confidenceLevel, degraded, partial } = fieldStateFor(state);
 
-  // SARA's own line, taken verbatim from the backend. It is NOT rebuilt here:
-  // three surfaces phrasing the same fact differently is how they drift, and
-  // the phone already renders the brain's pre-composed wording.
-  const line = model?.briefing?.headline || model?.summary || null;
+  // ── The attention feed ─────────────────────────────────────────────────────
+  // Read straight from NEURO through the backend passthrough, and rendered
+  // VERBATIM. `title`, `say` and the decision behind them are all composed
+  // server-side, so the kiosk, the phone, the widget and the notification for
+  // one thing cannot phrase it four ways.
+  const [feed, setFeed] = useState(null);
+
+  const loadFeed = useCallback(async () => {
+    try {
+      const res = await fetch('/api/attention');
+      setFeed(await res.json());
+    } catch (e) {
+      // "I couldn't ask" is its own fact and must not read as "nothing to say".
+      setFeed({ available: false, reason: 'unreachable', detail: e.message });
+    }
+  }, []);
+
+  useEffect(() => {
+    loadFeed();
+    const t = setInterval(loadFeed, POLL_MS);
+    return () => clearInterval(t);
+  }, [loadFeed]);
+
+  const feedOk = feed?.available === true;
+  const primary = feedOk ? feed.primary : null;
+  // ⚠ `poolAvailable:false` means NEURO could not see his work. It must never
+  // render as a calm day — the same three-way distinction the phone's Surface
+  // keeps: unavailable / quiet / genuinely nothing.
+  const poolBlind = feedOk && feed.poolAvailable === false;
+
+  // SARA's own line, taken verbatim. The attention feed leads when it has
+  // something; the shared model's headline is the fallback.
+  const line = primary?.title || model?.briefing?.headline || model?.summary || null;
+  const sub = primary?.say || null;
 
   return (
     <section className="presence">
@@ -93,8 +128,15 @@ export default function PresenceView() {
           <p className="presence__line presence__line--degraded">
             I can’t see the brain right now — this isn’t an all-clear.
           </p>
+        ) : poolBlind ? (
+          <p className="presence__line presence__line--degraded">
+            I can’t see your work right now — don’t read this as an all-clear.
+          </p>
         ) : line ? (
-          <p className="presence__line">{line}</p>
+          <>
+            <p className="presence__line">{line}</p>
+            {sub && <p className="presence__sub">{sub}</p>}
+          </>
         ) : partial ? (
           <p className="presence__line">Partly live. What I couldn’t read is blank, not guessed.</p>
         ) : (

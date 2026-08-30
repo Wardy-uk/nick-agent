@@ -43,6 +43,7 @@ const presenceRoute = require('./src/routes/presence');
 const locationRoute = require('./src/routes/location');
 const cognitionGraphRoute = require('./src/routes/cognitionGraph');
 const captureRoute = require('./src/routes/capture');
+const attentionRoute = require('./src/routes/attention');
 const { RUNTIME_LABEL } = require('./src/state/stateEngine');
 const ha = require('./src/telemetry/homeAssistant');
 const neuro = require('./src/integrations/neuroSnapshot');
@@ -74,6 +75,9 @@ app.use('/api/cognition/graph', cognitionGraphRoute);
 // every capture made at the kiosk 404'd. It forwards to NEURO's canonical capture
 // routes and stores nothing of its own — see src/integrations/neuroCapture.js.
 app.use('/api/capture', captureRoute);
+// Gate 2 — a read-only passthrough to NEURO's attention feed. It stores nothing
+// and ranks nothing; NEURO owns the attention decision (docs/attention-contract.md).
+app.use('/api/attention', attentionRoute);
 
 // --- Static frontend (production) ---
 // Vite builds to ../frontend/dist. If it exists, serve it with SPA fallback so

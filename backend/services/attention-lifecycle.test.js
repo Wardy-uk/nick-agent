@@ -316,3 +316,40 @@ test('quiet hours fall back to the server setting rather than a second guess', (
   assert.equal(fresh.quietHoursSource, 'server');
   assert.equal(fresh.quietHours, process.env.PUSH_QUIET_HOURS || '22:00-07:00');
 });
+
+// ── Gate 2: the notification names its own record ────────────────────────────
+
+test('a notification carries its record id and a resolved destination', () => {
+  const webpush = require('./webpush');
+  const record = { id: 'att_x1', tab: 'tasks' };
+
+  const enriched = webpush._enrichData({ type: 'todo', url: '/todos' }, record);
+  assert.equal(enriched.attentionRecordId, 'att_x1');
+  // Without this the tap lands on a tab and Nick has to find the thing again —
+  // "every notification opens Neuro Mobile directly to the relevant item".
+  assert.equal(enriched.tab, 'tasks');
+  assert.equal(enriched.type, 'todo', 'the caller\'s own data survives');
+});
+
+test('a caller\'s explicit tab is never overridden, and no record stamps nothing', () => {
+  const webpush = require('./webpush');
+  const pinned = webpush._enrichData({ type: 'todo', tab: 'capture' }, { id: 'att_x2', tab: 'tasks' });
+  assert.equal(pinned.tab, 'capture');
+
+  // The fail-open path: rather than stamping a null id a client might try to
+  // POST against, the data passes through untouched.
+  const bare = webpush._enrichData({ type: 'todo' }, null);
+  assert.equal(bare.attentionRecordId, undefined);
+  assert.equal(bare.tab, undefined);
+});
+
+test('a record with no tab falls back to the SHARED resolver, not a guess', () => {
+  const webpush = require('./webpush');
+  const { resolveSaraLiteTab } = require('../../shared/action-surfaces.cjs');
+  // An operational record may carry no tab. The fallback must agree with the one
+  // resolver every other surface uses, or a card and its notification land on
+  // different screens — the invariant that rule exists to protect.
+  const out = webpush._enrichData({ type: 'standup' }, { id: 'att_x3', tab: null });
+  assert.equal(out.tab, resolveSaraLiteTab({ type: 'standup' }));
+  assert.equal(out.tab, 'standup');
+});

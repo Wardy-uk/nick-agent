@@ -43,6 +43,19 @@ import './Surface.css';
 //   * "COULDN'T LOOK" IS NOT "NOTHING THERE" — hence `context.cannotSee`, which
 //     the brain now filters to gaps that could actually have changed the answer.
 const POLL_MS = 60_000;
+
+// How long "not now" means, said in Nick's words rather than in minutes.
+//
+// The REASON travels with each one because a thing pushed back three times for
+// `too-big` is a different problem from one pushed back for `not-now`, and that
+// distinction is what Work Package C is built on. It costs nothing to record it
+// at the moment the gesture is made and cannot be recovered afterwards.
+const DEFERRALS = [
+  { label: 'An hour', minutes: 60, reason: 'not-now' },
+  { label: 'This afternoon', minutes: 240, reason: 'not-now' },
+  { label: 'Tomorrow', minutes: 60 * 20, reason: 'no-context' },
+  { label: 'Too big', minutes: 60 * 20, reason: 'too-big' },
+];
 const { resolveSaraLiteTab } = actionSurfaces;
 
 // Straight from Chat.jsx — iOS fails dictation in specific, explicable ways and
@@ -65,6 +78,7 @@ function tabFor(card) {
 export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArrival }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [busy, setBusy] = useState(false);
+  const [deferring, setDeferring] = useState(false);
   const [showWhy, setShowWhy] = useState(false);
   const [voiceOut, setVoiceOut] = useState(() => isVoiceOutEnabled());
 
@@ -190,16 +204,41 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
     load({ quiet: true });
   }
 
-  async function dismiss(card) {
+  /**
+   * Act on the card's RECORD.
+   *
+   * ⚠ This used to POST `/api/focus/dismiss` — the engine's per-item
+   * suppression, which is a TIMER. It could not tell "I have seen this" from
+   * "hide it for 30 minutes" from "this is finished", so every gesture here
+   * collapsed into the same one and nothing Nick did was recoverable later.
+   *
+   * The record is the one place that distinction lives, so this submits an
+   * ACTION and lets NEURO decide the state — the contract's rule that clients
+   * never write state directly.
+   *
+   * It FALLS BACK to the old route when a card has no `recordId`, which is the
+   * case against a backend that has not been deployed yet. A phone in Nick's
+   * pocket running an older bundle must not lose the ability to clear a card.
+   */
+  async function act(card, action, opts = {}) {
     if (!card || card.kind !== 'item') return;
     setBusy(true);
     try {
-      await apiFetch('/api/focus/dismiss', {
-        method: 'POST',
-        body: JSON.stringify({ itemId: card.id, itemType: card.type }),
-      });
+      if (card.recordId) {
+        await apiFetch(`/api/attention/records/${card.recordId}/act`, {
+          method: 'POST',
+          body: JSON.stringify({ action, ...opts }),
+        });
+      } else {
+        await apiFetch('/api/focus/dismiss', {
+          method: 'POST',
+          body: JSON.stringify({ itemId: card.id, itemType: card.type }),
+        });
+      }
+      setDeferring(false);
       await load({ quiet: true });
-    } catch { /* leave it on screen if the dismiss failed */ }
+    } catch { /* leave it on screen if it failed — a card that vanishes on an
+                 error is a card Nick believes he has dealt with */ }
     finally { setBusy(false); }
   }
 
@@ -310,14 +349,65 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
               <p className="surface__saylead">{primary.title}</p>
               {primary.say && <p className="surface__saysub">{primary.say}</p>}
               {primary.kind === 'item' && (
-                <div className="surface__acts">
-                  <button type="button" className="surface__btn surface__btn--go" onClick={() => open(primary)}>
-                    {primary.actionHint || 'Open it'}
-                  </button>
-                  <button type="button" className="surface__btn" disabled={busy} onClick={() => dismiss(primary)}>
-                    Not now
-                  </button>
-                </div>
+                <>
+                  <div className="surface__acts">
+                    <button type="button" className="surface__btn surface__btn--go" onClick={() => open(primary)}>
+                      {primary.actionHint || 'Open it'}
+                    </button>
+                    {/* ⚠ "Not now" opens the durations rather than deferring on
+                        a guess. A snooze whose length SARA picked is one Nick
+                        has no reason to trust, and the length is most of what
+                        the gesture means. */}
+                    <button
+                      type="button"
+                      className="surface__btn"
+                      disabled={busy}
+                      onClick={() => setDeferring((v) => !v)}
+                    >
+                      Not now
+                    </button>
+                  </div>
+
+                  {deferring && (
+                    <div className="surface__acts surface__acts--defer">
+                      {DEFERRALS.map((d) => (
+                        <button
+                          key={d.label}
+                          type="button"
+                          className="surface__btn surface__btn--small"
+                          disabled={busy}
+                          onClick={() => act(primary, 'defer', { minutes: d.minutes, reason: d.reason })}
+                        >
+                          {d.label}
+                        </button>
+                      ))}
+                      {/* Seen is NOT a snooze. It stops SARA asking again while
+                          leaving the card exactly where it is — the one state
+                          the old suppression timer could not express. */}
+                      <button
+                        type="button"
+                        className="surface__btn surface__btn--small"
+                        disabled={busy}
+                        onClick={() => act(primary, 'acknowledge')}
+                      >
+                        Seen it
+                      </button>
+                      {/* Only offered when the record says so: an escalation or
+                          an imminent meeting is deliberately not dismissable,
+                          and a button NEURO will refuse is worse than none. */}
+                      {(primary.actions || []).includes('dismiss') && (
+                        <button
+                          type="button"
+                          className="surface__btn surface__btn--small"
+                          disabled={busy}
+                          onClick={() => act(primary, 'dismiss')}
+                        >
+                          Not mine
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </>
           ) : (

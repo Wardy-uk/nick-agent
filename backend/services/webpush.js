@@ -1,5 +1,6 @@
 const webpush = require('web-push');
 const db = require('../db/database');
+const { resolveSaraLiteTab } = require('../../shared/action-surfaces.cjs');
 
 function isConfigured() {
   return !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
@@ -201,6 +202,9 @@ function _attentionFor(title, body, data) {
         dedupeKey,
         id: `push:${type}`,
         type,
+        // Resolved through the shared resolver, never guessed here, so an
+        // operational alert routes exactly like a pool card of the same kind.
+        tab: resolveSaraLiteTab({ type, url: data?.url }),
         title,
         reason: String(body || '').slice(0, 200) || null,
         urgency: ALWAYS_DELIVER.has(type) ? 'critical' : 'medium',
@@ -213,6 +217,33 @@ function _attentionFor(title, body, data) {
   } catch (e) {
     return { lifecycle: null, row: null, why: e.message };
   }
+}
+
+/**
+ * Put the attention record on the notification. PURE.
+ *
+ * "Every notification opens Neuro Mobile directly to the relevant item." The
+ * service worker forwards `data` wholesale, so this IS the mechanism — the
+ * client can act on the exact thing that pinged him (acknowledge, defer,
+ * dismiss) rather than landing on a tab and having to find it again.
+ *
+ * ⚠ A caller's own `tab` is never overridden, and the fallback goes through the
+ * SAME shared resolver every other surface uses. A client working out its own
+ * destination would be a second copy of the routing, and a card and the
+ * notification for one thing landing on different tabs is exactly the invariant
+ * that rule exists to protect.
+ *
+ * No record (the fail-open path) means the data is passed through untouched
+ * rather than stamped with a null id a client might try to POST against.
+ */
+function _enrichData(data, record) {
+  const out = { ...(data || {}) };
+  if (!record) return out;
+  out.attentionRecordId = record.id;
+  if (!out.tab) {
+    out.tab = record.tab || resolveSaraLiteTab({ type: out.type, url: out.url });
+  }
+  return out;
 }
 
 async function sendToAll(title, body, data = {}) {
@@ -262,10 +293,22 @@ async function sendToAll(title, body, data = {}) {
     return;
   }
 
+  // ── Gate 2: the notification names its own record ──────────────────────────
+  //
+  // "Every notification opens Neuro Mobile directly to the relevant item." The
+  // service worker forwards `data` wholesale, so putting the record id and the
+  // destination on it is the whole mechanism — the client can then act on the
+  // exact thing that pinged him (acknowledge, defer, dismiss) rather than
+  // landing on a tab and having to find it again.
+  //
+  // ⚠ `tab` is resolved HERE, through the SAME shared resolver every other
+  // surface uses. A client working out its own destination is a second copy of
+  // the routing, and a card and the notification for one thing landing on
+  // different tabs is precisely the invariant that rule exists to protect.
   const payload = JSON.stringify({
     title,
     body,
-    data,
+    data: _enrichData(data, record),
     icon: '/favicon.svg',
     badge: '/favicon.svg'
   });
@@ -311,4 +354,4 @@ async function sendToAll(title, body, data = {}) {
   );
 }
 
-module.exports = { isConfigured, init, sendToAll, _governor, _isQuietNow, ALWAYS_DELIVER, HOURLY_CAP };
+module.exports = { isConfigured, init, sendToAll, _governor, _isQuietNow, _enrichData, ALWAYS_DELIVER, HOURLY_CAP };
