@@ -14,13 +14,26 @@ async function checkPin(baseUrl, pin) {
   return res.json();
 }
 
+// ⚠ This answers the SAME question as the capture bridge and the snapshot poller —
+// "can SARA talk to NEURO?" — so it must answer it from the SAME place. It used to
+// key `configured` on the PIN alone (`Boolean(neuroConfig.getPin())`), which meant a
+// SARA authenticated with NEURO_API_TOKEN reported itself UNCONFIGURED and asked for
+// a PIN it did not need, while capture and the snapshot were working perfectly. Three
+// surfaces disagreeing about one fact is the drift this whole pass exists to remove,
+// so readiness() is the single source and nothing here re-derives it.
 router.get('/', (_req, res) => {
-  const availability = neuroChat.getAvailability();
+  const readiness = neuroConfig.readiness();
   res.json({
-    available: availability.available,
-    source: neuroConfig.hasOverride() ? 'session' : process.env.NEURO_PIN ? 'env' : 'none',
-    configured: Boolean(neuroConfig.getPin()),
-    detail: availability.detail,
+    available: readiness.ready,
+    // A credential is a credential: the machine token counts, and is preferred.
+    configured: readiness.credentialConfigured,
+    credentialKind: readiness.credentialKind,
+    source:
+      readiness.credentialKind === 'api-token' ? 'api-token' : readiness.pinSource,
+    baseUrlConfigured: readiness.baseUrlConfigured,
+    // Non-sensitive throughout — whether, never what.
+    problems: readiness.problems,
+    detail: readiness.problems.join(' ') || null,
   });
 });
 

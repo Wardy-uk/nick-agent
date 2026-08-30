@@ -283,3 +283,74 @@ test('over HTTP, a NEURO outage answers 504 and never a 200', async () => {
     assert.match(body.error, /Could not reach NEURO/);
   });
 });
+
+// --- auth/settings agreement -----------------------------------------------
+//
+// ⚠ `/api/neuro-auth` answers the SAME question as the capture bridge — "can SARA
+// talk to NEURO?" — and used to answer it differently, keying `configured` on the PIN
+// alone. A SARA authenticated with NEURO_API_TOKEN therefore reported itself
+// unconfigured and asked for a PIN it did not need, while capture worked fine. Three
+// surfaces disagreeing about one fact is the drift this pass removes.
+
+const neuroAuthRouter = require('../src/routes/neuroAuth');
+const neuroConfig = require('../src/integrations/neuroConfig');
+
+async function withAuthServer(env, fn) {
+  const saved = { ...process.env };
+  // The route reads process.env (it is a live status surface, not a pure function).
+  for (const k of ['NEURO_BASE_URL', 'NEURO_PIN', 'NEURO_API_TOKEN']) delete process.env[k];
+  Object.assign(process.env, env);
+  neuroConfig.clearPin();
+
+  const app = express();
+  app.use(express.json());
+  app.use('/api/neuro-auth', neuroAuthRouter);
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    return await fn(`http://127.0.0.1:${server.address().port}`);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    for (const k of ['NEURO_BASE_URL', 'NEURO_PIN', 'NEURO_API_TOKEN']) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
+}
+
+test('an API token alone reports NEURO as CONFIGURED — no PIN prompt', async () => {
+  await withAuthServer({ NEURO_BASE_URL: 'http://neuro.test:3001', NEURO_API_TOKEN: 'machine-token' }, async (base) => {
+    const body = await (await fetch(`${base}/api/neuro-auth`)).json();
+    assert.equal(body.configured, true, 'a machine token IS a credential');
+    assert.equal(body.available, true);
+    assert.equal(body.credentialKind, 'api-token');
+    assert.equal(body.source, 'api-token');
+    assert.deepEqual(body.problems, []);
+    // whether, never what
+    assert.ok(!JSON.stringify(body).includes('machine-token'));
+  });
+});
+
+test('auth status and the capture bridge cannot disagree about readiness', async () => {
+  const env = { NEURO_BASE_URL: 'http://neuro.test:3001', NEURO_API_TOKEN: 'tok' };
+  await withAuthServer(env, async (base) => {
+    const body = await (await fetch(`${base}/api/neuro-auth`)).json();
+    const capture = await neuroCapture.forward('note', { content: 'x' }, {
+      env,
+      fetchImpl: fakeNeuro({ status: 200, body: { success: true } }).fetchImpl,
+    });
+    assert.equal(body.available, true);
+    assert.equal(capture.saved, true, 'if capture works, auth status must not say unconfigured');
+  });
+});
+
+test('a missing base URL is reported by auth status too, by name', async () => {
+  await withAuthServer({ NEURO_PIN: '1234' }, async (base) => {
+    const body = await (await fetch(`${base}/api/neuro-auth`)).json();
+    // The credential is set but SARA still does not know where NEURO is. Those are
+    // two separate facts and the settings screen has to be able to show which is
+    // missing — "enter a PIN" is the wrong instruction when the PIN is already there.
+    assert.equal(body.configured, true, 'the PIN is set');
+    assert.equal(body.baseUrlConfigured, false);
+    assert.equal(body.available, false, 'a credential with no destination is not usable');
+    assert.match(body.detail, /NEURO_BASE_URL/);
+  });
+});

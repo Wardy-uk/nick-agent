@@ -417,6 +417,7 @@ export function SaraStateProvider({ children }) {
         setNeuroAuth({
           status: res.ok ? 'ready' : 'error',
           configured: Boolean(data.configured),
+          credentialKind: data.credentialKind || null,
           source: data.source || 'none',
           detail: data.detail || null,
         });

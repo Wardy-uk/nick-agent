@@ -101,6 +101,14 @@ export default function SettingsView() {
               <span className="product__row-right">{model.confidence?.score}</span>
             </div>
           </div>
+          {/* The PIN prompt is for an UNCONFIGURED SARA only. Asking for a PIN when a
+              machine token is already working reads as "this is broken" on a screen
+              whose whole job is to say whether it is. */}
+          {neuroAuth.configured ? (
+            <p className="product__row-detail">
+              NEURO credential configured ({neuroAuth.credentialKind || neuroAuth.source}) — no PIN needed.
+            </p>
+          ) : (
           <div className="product__actions">
             <input
               type="password"
@@ -122,6 +130,7 @@ export default function SettingsView() {
             </button>
             {pinStatus && <span className="product__pill">{pinStatus}</span>}
           </div>
+          )}
         </section>
       </div>
     </section>
