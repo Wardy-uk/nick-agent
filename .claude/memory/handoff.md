@@ -333,11 +333,18 @@ Driven live: check-in recorded with the clock untouched; step-away surfaced as
 `session-resume` on the attention feed with the right words; finish wrote
 `reflection`, `checkIns` and `shrinks` into history; session cleaned up.
 
-### ⚠ The one Gate 3 item left
+### The desktop panel caught up (`137f7ff`)
 
-**The desktop `AdhdPanel` still has the OLD controls** and knows nothing about
-shrink, check-ins or reflection. Not wrong, just behind — the phone is the
-surface that matters for returning to work, which is why it went first.
+`AdhdPanel` had the pre-Gate-3 controls and collapsed every non-active state
+into "Paused". It now names all four states, shows the next step, offers **Make
+it smaller** first, surfaces the check-in when due, and reports the shrink count
+with no verdict attached.
+
+⚠ **The shrink box had to go in the RECOVERY block as well as the session card.**
+Recovery renders INSTEAD of the card, so a button that only opened the card's
+input would have been dead at the exact moment the option is offered. Verified
+through `/api/adhd`: `needs-smaller` → `recovery.kind: 'shrink'` with
+`options: ['shrink','resume','abandon']`.
 
 ## Gate 4 — prep that shows its evidence (done, deployed, verified on real data)
 
@@ -383,9 +390,22 @@ oldest is an April note, and no way to check.
 | 3 — Supported execution | done (`14df208`, `34fe8d2`, `c134663`, `6ed0773`) |
 | 4 — Relationship support | done (`9bcad4b`) |
 
-## Next
+## Next — all four gates are closed, so these are the open ends
 
-- Gate 2 (ambient SARA): wire the canonical record into the widget and kiosk
-  payloads, verify dedupe and deep-linking across surfaces.
-- Ask Nick where the standup "says it's done" so bug 2 can be pinned to a screen.
-- Decide route 1 vs 2 for kiosk convergence above.
+1. **The iPhone acceptance test (Phase 2) is STILL not done.** Aeroplane mode →
+   capture → swipe away → reopen → reconnect → lands exactly once. Nick's to run.
+2. **Nobody has used any of this on the phone in anger.** The Surface's defer
+   row, the Controls screen, the session card's four buttons and the prep
+   evidence lines are all proven in a build and against the API, never on a
+   390px screen in a pocket. The 15 Aug lesson stands: *proven means proven on
+   the target platform.*
+3. **Where does the standup "say it's done"?** Measured and it is NOT claiming
+   that (no `standup_done` row; it was a Sunday). The screen that words a weekend
+   as "done" was never found — ask Nick when he next sees it.
+4. **The widget still reads the pre-Gate-2 payload.** It works, but it does not
+   yet carry `recordId`, so a card tapped there cannot be acknowledged.
+5. **Kiosk convergence is half done.** Shared Field + the attention feed, but it
+   is still not a direct NEURO client — see the two routes above.
+6. **`sara/frontend` has no test suite at all.** The kiosk bugs on 30 Aug were
+   caught by screenshotting the panel, which is not a repeatable gate.
+7. The other session's **notion-sync** work is still uncommitted in this tree.
