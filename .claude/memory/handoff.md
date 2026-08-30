@@ -297,20 +297,47 @@ asks *"What is the smallest next bit of it?"* with `shrink` first → naming it
 returns to `active` with `shrinks: 2` → step away → *"You had just started … when
 you were pulled away — NT-99 landed."* → abandoned cleanly.
 
-### ⚠ Gate 3 is NOT finished. Still to build:
+## Gate 3 parts TWO and THREE (also done, deployed, driven live)
 
-1. **Transition prompts.** *"Next meeting in 10 — leave now or open prep"*,
-   *"you just finished a meeting, capture follow-ups"*, *"you paused this
-   earlier — resume, shrink, defer, or let it go"*. Must use calendar/context
-   only when it is **live and reliable** (`attendeesOther`, `calendarKnown`), and
-   must never auto-start a timer, change a calendar or complete a task.
-2. **Body-doubling / check-ins.** Optional timed *"I'm starting now"* / *"still
-   here"*, and an optional reflection at session end. ⚠ The brief is explicit
-   that this stays PRIVATE — no external people, no messaging, no public
-   accountability without a separate product decision.
-3. **The desktop `AdhdPanel` still has the OLD controls** and knows nothing about
-   shrink. It is not wrong, just behind; the phone is the surface that matters
-   for this, which is why it went first.
+`c134663` (transitions) + `6ed0773` (check-ins).
+
+**Transitions — `services/transitions.js`, PURE, 10 tests.** The three seams
+where an intention evaporates: before a meeting, straight after one, and
+returning to something put down. Composed on `/api/attention` so all four
+surfaces render one decision.
+- It **proposes and never acts** — every option opens a screen. No timer, no
+  calendar write, no completion. (52-blocks-where-27-were-wanted is the reason.)
+- ⚠ **An unreadable diary yields NO transition**, rather than falling through to
+  "nothing coming up".
+- ⚠ **A meeting is `context-state.isRealMeeting`, now EXPORTED rather than
+  re-derived.** Half the diary is solo blocks and Graph lists the organiser
+  inconsistently, so `attendeesOther` must be exactly `true`; undecidable fails
+  closed. "You just finished a meeting" after an hour of writing alone is the
+  kind of wrong that gets a feature switched off.
+- Being IN a meeting is silence. Precedence: leave-now > post-meeting > session.
+- The session prompt is carried **verbatim** from `recovery()`.
+
+**Check-ins + reflection.** "Still on this one?" on a running session, and an
+optional note at the end.
+- ⚠ **A PULL, never a push.** Nothing here notifies; the prompt is there because
+  Nick already opened the screen. Body-doubling is precisely the feature that
+  would justify a timer to itself.
+- ⚠ **A check-in touches the clock in NO way** — presence, not time.
+- **Nothing is inferred from a MISSED check-in.** Being heads-down is why one
+  gets skipped; reading that as a signal would punish the good case. No target,
+  no streak.
+- **Finishing never depends on the reflection box.** A field you must fill to
+  close a session is a reason not to close sessions.
+
+Driven live: check-in recorded with the clock untouched; step-away surfaced as
+`session-resume` on the attention feed with the right words; finish wrote
+`reflection`, `checkIns` and `shrinks` into history; session cleaned up.
+
+### ⚠ The one Gate 3 item left
+
+**The desktop `AdhdPanel` still has the OLD controls** and knows nothing about
+shrink, check-ins or reflection. Not wrong, just behind — the phone is the
+surface that matters for returning to work, which is why it went first.
 
 ## Next
 
