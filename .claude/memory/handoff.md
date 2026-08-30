@@ -219,6 +219,50 @@ between them will hit this.
    components/NotionSyncPanel.*}`). I staged around it throughout — my
    `frontend/src/App.jsx` commit contains **only** the ErrorBoundary hunks.
 
+## Gate 2 — one decision, four surfaces (DONE, deployed, verified on the panel)
+
+`fcf6648`. Three parts:
+
+1. **The notification names its record.** `_enrichData` puts
+   `attentionRecordId` + a resolved `tab` on the push payload, which `sw.js`
+   already forwards wholesale. A tap now opens Neuro Mobile on the exact thing
+   that pinged him and the client can act on that record.
+2. **The Surface acts on the RECORD, not a timer.** It used to POST
+   `/api/focus/dismiss`, so "seen it" / "not now" / "not mine" all collapsed into
+   one gesture. "Not now" opens real durations, each carrying a **reason**.
+   Dismiss is only offered when the record allows it. Falls back to the old route
+   when a card has no `recordId`, so an older bundle keeps working.
+3. **The kiosk can see the feed.** `sara/backend` gains a read-only passthrough
+   (`src/routes/attention.js`, injectable `fetchImpl`/`env`, 5 tests). ⚠
+   Deliberately **NOT** folded into `neuroSnapshot`'s poll set — that feeds the
+   State Engine, and putting attention in the shared model would make the
+   kiosk's own state a competing account. That is the seam where
+   `state/inference.js` grew a second brain.
+
+Verified live: passthrough returns `available:true` with the real payload, and
+the panel renders **"Not a working day / It's the weekend."** — NEURO's own
+card, verbatim, the same wording the phone gets.
+
+## ⚠ Gate 2 is NOT fully closed: the kiosk still shows a SECOND opinion
+
+The bottom strip (`components/RecommendedView.jsx`) renders `model.inference` —
+the **retired** inference layer. On the screenshot it reads *"You're set up for
+focused work: Start top task. High · 0.75 — Suggested view: Focus"* directly
+below NEURO saying *"Not a working day. It's the weekend."*
+
+Two accounts of Nick's state on one screen, disagreeing. That is precisely what
+the Core Rule forbids: consumers "do not independently rerank work, invent
+urgency, or phrase the same state differently". CLAUDE.md already names
+`sara/backend/src/state/inference.js` as *"the thing to retire"* and says its
+decision half was ported to `context-state`; the **frontend strip was missed**.
+
+Two options, both small, and it needs Nick's call because it removes something
+visible:
+- **Drive the strip from the attention payload** (`context.label` / `say`), so it
+  agrees with everything else by construction; or
+- **Remove it.** The Presence screen now says the same thing better, and an
+  advisory "suggested view" is a menu — which is the thing SARA is not.
+
 ## Next
 
 - Gate 2 (ambient SARA): wire the canonical record into the widget and kiosk
