@@ -1,9 +1,34 @@
 # Handoff — 30 Aug 2026: Phase 2, the Neuro Mobile contract
 
-**Commits:** `c0e66a3` (the build) + `bf6d341` (CLAUDE.md). **Not pushed** — you
-said commits, not pushes. Not deployed to the Pi either.
-**Tests:** backend 1396 pass / 0 fail (63 new). sara/backend 82 pass / 0 fail.
+**Commits:** `c0e66a3` (the build), `bf6d341` (CLAUDE.md), `c46e70b` (the two
+review fixes), `2c1ff11` (mistakes log). **Not pushed** — you said commits, not
+pushes. Not deployed to the Pi either.
+**Tests:** backend 1406 pass / 0 fail (73 new). sara/backend 82 pass / 0 fail.
 Both frontends build.
+
+## Review round 1 — both findings fixed (`c46e70b`)
+
+**P0, and it was worse than a mobile bug.** `capture-store.writeNote` named
+files from a SECOND-precision timestamp, so two notes written in one tick got
+the same path and the second silently overwrote the first — with the ledger
+acknowledging BOTH as `applied` against the same canonical id. Reachable from
+the web route all along; the outbox made it ordinary, because a drained queue
+replays several notes into the same tick. Fixed with the `wx` flag
+(O_CREAT|O_EXCL, atomic) plus a bounded `-2`/`-3` suffix retry — not
+`existsSync`-then-write, which is a race with a gap in the middle. Only EEXIST
+retries; a permissions error surfaces as itself.
+
+**P1.** `Now.tick` read `flush().confirmed`, an aggregate over the whole queue,
+to describe ONE completion — so any older capture landing in the same round trip
+printed "Done" over a rejected or HELD completion. `Capture.submit` had the
+milder version. `flush()` now returns `receipts` keyed by operationId (every
+early return included, so callers can index without guarding) and
+`outcomeFor(receipt)` gives `{state, done, message}` — confirmed / held /
+refused / pending. **`held` is not `done`** and says why.
+
+Both guards were proved by reintroducing the bug and watching them fail: three
+collision tests, and a source pin that stops either view drifting back to the
+aggregate counts.
 **Full contract doc:** `docs/mobile-contract.md`.
 
 ## What was built
