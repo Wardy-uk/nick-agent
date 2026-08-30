@@ -24,6 +24,8 @@ const path = require('path');
 const KIOSK = path.join(__dirname, '..', '..', 'sara', 'frontend', 'src');
 const VIEWS = path.join(KIOSK, 'state', 'views.js');
 const PRESENCE = path.join(KIOSK, 'screens', 'presence', 'PresenceView.jsx');
+// The surface both apps render. Shared on purpose — see AttentionSurface.jsx.
+const SHARED = path.join(__dirname, '..', '..', 'sara', 'shared-ui', 'AttentionSurface.jsx');
 
 function read(file) {
   // Mixed CRLF/LF repo — normalise before any line-anchored matching.
@@ -126,10 +128,22 @@ test('⚠ Presence always renders SOMETHING — silence is not a screen', () => 
   assert.ok(src.includes('Here, and reading.'), 'the live-and-quiet fallback line is gone');
 
   // ⚠ Asserted POSITIVELY. A first cut tried "the file must not contain the
-  // words 'all-clear'" and failed on the two lines that exist precisely to
-  // REFUSE one — a negative assertion over prose, which is the same trap as a
-  // regex about a regex. What matters is that the blind states say so, so that
-  // is what is checked.
-  assert.match(src, /isn.t an all-clear/i, 'the unreachable-brain line must refuse an all-clear');
-  assert.match(src, /don.t read this as an all-clear/i, 'the pool-blind line must refuse an all-clear');
+  // words 'all-clear'" and failed on the very lines that exist to REFUSE one —
+  // a negative assertion over prose, the same trap as a regex about a regex.
+  // What matters is that the blind states say so, so that is what is checked.
+  //
+  // The two refusals now live in DIFFERENT files, which is the point of the
+  // extraction: the kiosk owns "I can't reach the feed at all", and the SHARED
+  // surface owns "the pool was unreadable" — one fact, one place, both surfaces.
+  //
+  // ⚠ Matched on the STABLE part of each phrase. An earlier version used
+  // `don.t read this...`, where `.` cannot span the `&rsquo;` entity the shared
+  // file writes — seven characters, not one. An apostrophe is exactly the kind
+  // of thing that gets re-encoded, so the assertion must not depend on it.
+  assert.match(src, /an all-clear/i, 'the unreachable-brain line must refuse an all-clear');
+  const shared = read(SHARED);
+  assert.match(shared, /read this as an all-clear/i, 'the pool-blind line must refuse an all-clear');
+  // And the three silences must stay three, in the one place they are defined.
+  assert.match(shared, /Nothing pressing/, 'the genuinely-quiet line is gone');
+  assert.match(shared, /Staying out of the way|context\?\.summary/, 'the in-a-meeting line is gone');
 });

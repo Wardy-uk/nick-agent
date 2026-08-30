@@ -9,6 +9,7 @@ import { speakIfEnabled, isAudioUnlocked, unlockAudio, isVoiceOutEnabled, setVoi
 // node count — so the same file reads correctly on a 390px phone and a 1280px
 // desk panel without re-tuning.
 import Field from '../../../shared-ui/Field';
+import AttentionSurface from '../../../shared-ui/AttentionSurface';
 import './Surface.css';
 
 // Surface — SARA without a menu.
@@ -50,12 +51,6 @@ const POLL_MS = 60_000;
 // `too-big` is a different problem from one pushed back for `not-now`, and that
 // distinction is what Work Package C is built on. It costs nothing to record it
 // at the moment the gesture is made and cannot be recovered afterwards.
-const DEFERRALS = [
-  { label: 'An hour', minutes: 60, reason: 'not-now' },
-  { label: 'This afternoon', minutes: 240, reason: 'not-now' },
-  { label: 'Tomorrow', minutes: 60 * 20, reason: 'no-context' },
-  { label: 'Too big', minutes: 60 * 20, reason: 'too-big' },
-];
 const { resolveSaraLiteTab } = actionSurfaces;
 
 // Straight from Chat.jsx — iOS fails dictation in specific, explicable ways and
@@ -78,13 +73,6 @@ function tabFor(card) {
 export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArrival }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [busy, setBusy] = useState(false);
-  const [deferring, setDeferring] = useState(false);
-  // ⚠ Keyed on the PROMPT, not a boolean. "Not now" dismisses THIS transition,
-  // and the next one — a different meeting, a different seam — must appear on
-  // its own. A boolean would silence every transition for the rest of the
-  // session, which is how a useful prompt becomes one nobody ever sees again.
-  const [dismissedTransition, setDismissedTransition] = useState(null);
-  const [showWhy, setShowWhy] = useState(false);
   const [voiceOut, setVoiceOut] = useState(() => isVoiceOutEnabled());
 
   // The passing question. Null most of the time — this is an ambient screen
@@ -240,7 +228,6 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
           body: JSON.stringify({ itemId: card.id, itemType: card.type }),
         });
       }
-      setDeferring(false);
       await load({ quiet: true });
     } catch { /* leave it on screen if it failed — a card that vanishes on an
                  error is a card Nick believes he has dealt with */ }
@@ -253,7 +240,8 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
   }
 
   const { loading, error, data } = state;
-
+  // The bare states keep their own words — a cold start and an unreachable
+  // brain are not the same fact, and neither is the shared component's job.
   if (loading && !data) {
     return (
       <div className="surface surface--bare">
@@ -274,244 +262,69 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
     );
   }
 
-  const { context, primary, secondary = [], dropped = [], quiet, rationale, poolAvailable, gaps = [], transition = null } = data;
-
+  // ⚠ Everything the feed MEANS now lives in `sara/shared-ui/AttentionSurface`,
+  // shared file-for-file with the Pi kiosk: the three distinct silences, the
+  // transition, the defer row with its reasons, what is held back. This file
+  // keeps only what is genuinely the PHONE's — fetching, speech, the mic, the
+  // passing question and the notification arrival — and passes them in as slots.
+  //
+  // The rules are shared so the two surfaces cannot drift; the chrome is not,
+  // because a kiosk carrying a mic it cannot use is worse than one without.
   return (
-    <div className="surface">
-      <Field
-        activity={context?.activity}
-        confidenceLevel={context?.confidence?.level}
-        quiet={quiet}
-        degraded={!poolAvailable}
-      />
-
-      <div className="surface__content">
-        {/* Chrome, deliberately small and wordless about its own certainty.
-            The state is one lowercase word; the reasoning is behind a tap. */}
-        <div className="surface__crown">
-          <span className="surface__mark">SARA</span>
-          <button
-            type="button"
-            className="surface__state"
-            onClick={() => setShowWhy((v) => !v)}
-            aria-expanded={showWhy}
-            aria-label="Why SARA is showing this"
-          >
-            {context?.label ? context.label.toLowerCase() : 'unsure'}
-          </button>
-          <button
-            type="button"
-            className={`surface__ear${voiceOut ? ' surface__ear--on' : ''}`}
-            onClick={() => { unlockAudio(); const next = !voiceOut; setVoiceOutEnabled(next); setVoiceOut(next); }}
-            aria-pressed={voiceOut}
-            aria-label={voiceOut ? 'Stop SARA speaking' : 'Let SARA speak'}
-          >{voiceOut ? '🔊' : '🔇'}</button>
-        </div>
-
-        {showWhy && (
-          <div className="surface__why">
-            {context?.summary && <p className="surface__whyline surface__whyline--lead">{context.summary}</p>}
-            {(context?.reasons || []).map((r, i) => <p key={i} className="surface__whyline">{r}</p>)}
-            {(context?.contradictions || []).map((c, i) => (
-              <p key={`c${i}`} className="surface__whyline surface__whyline--warn">{c}</p>
-            ))}
-            {rationale && <p className="surface__whyline">{rationale}</p>}
-            {gaps.length > 0 && (
-              <p className="surface__whyline">Couldn't read: {gaps.map((g) => g.input).join(', ')}.</p>
-            )}
-            <p className="surface__whyline">
-              Confidence {context?.confidence?.level} — {context?.confidence?.rationale}
-            </p>
-          </div>
-        )}
-
-        {/* Why he's here, when he arrived by tapping a notification. Without it
-            the push and the screen are two unconnected events. */}
-        {arrivedFrom?.body && !exchange && (
-          <button type="button" className="surface__arrival" onClick={() => onClearArrival?.()}>
-            <span className="surface__arrivallabel">you tapped</span>
-            <span className="surface__arrivalbody">{arrivedFrom.body}</span>
-          </button>
-        )}
-
-        {/* The one thing — or the passing question, which takes precedence
-            because he just asked it. */}
-        <div className="surface__say">
-          {/* ── The seam of the day ────────────────────────────────────
-              A transition is time-critical and leads when there is one:
-              "leave now" is worthless five minutes late, and the follow-ups
-              from a meeting are in his head for about a minute.
-
-              ⚠ It PROPOSES. Every option here opens a screen; none of them
-              starts a timer, writes the calendar or completes anything. The
-              wording is the brain's, taken verbatim — this is the fourth
-              renderer of one decision, not a fourth opinion. */}
-          {!exchange && transition && dismissedTransition !== transition.prompt && (
-            <div className="surface__transition">
-              <p className="surface__saylead">{transition.prompt}</p>
-              <p className="surface__saysub">{transition.question}</p>
-              <div className="surface__acts">
-                {transition.tab && (
-                  <button
-                    type="button"
-                    className="surface__btn surface__btn--go"
-                    onClick={() => onNavigate?.(transition.tab)}
-                  >
-                    {transition.kind === 'leave-now' ? 'Open prep'
-                      : transition.kind === 'post-meeting' ? 'Capture it'
-                        : 'Pick it up'}
-                  </button>
-                )}
-                <button type="button" className="surface__btn" onClick={() => setDismissedTransition(transition.prompt)}>
-                  Not now
-                </button>
-              </div>
-            </div>
-          )}
-
-          {exchange ? (
-            <>
-              <p className="surface__asked">“{exchange.question}”</p>
-              {exchange.error ? (
-                <p className="surface__saysub surface__saysub--warn">{exchange.error}</p>
-              ) : (
-                <p className="surface__saylead">{exchange.answer || (exchange.thinking ? '…' : '')}</p>
-              )}
-              <div className="surface__acts">
-                <button type="button" className="surface__btn" onClick={endExchange}>Done</button>
-              </div>
-            </>
-          ) : primary ? (
-            <>
-              <p className="surface__saylead">{primary.title}</p>
-              {primary.say && <p className="surface__saysub">{primary.say}</p>}
-              {primary.kind === 'item' && (
-                <>
-                  <div className="surface__acts">
-                    <button type="button" className="surface__btn surface__btn--go" onClick={() => open(primary)}>
-                      {primary.actionHint || 'Open it'}
-                    </button>
-                    {/* ⚠ "Not now" opens the durations rather than deferring on
-                        a guess. A snooze whose length SARA picked is one Nick
-                        has no reason to trust, and the length is most of what
-                        the gesture means. */}
-                    <button
-                      type="button"
-                      className="surface__btn"
-                      disabled={busy}
-                      onClick={() => setDeferring((v) => !v)}
-                    >
-                      Not now
-                    </button>
-                  </div>
-
-                  {deferring && (
-                    <div className="surface__acts surface__acts--defer">
-                      {DEFERRALS.map((d) => (
-                        <button
-                          key={d.label}
-                          type="button"
-                          className="surface__btn surface__btn--small"
-                          disabled={busy}
-                          onClick={() => act(primary, 'defer', { minutes: d.minutes, reason: d.reason })}
-                        >
-                          {d.label}
-                        </button>
-                      ))}
-                      {/* Seen is NOT a snooze. It stops SARA asking again while
-                          leaving the card exactly where it is — the one state
-                          the old suppression timer could not express. */}
-                      <button
-                        type="button"
-                        className="surface__btn surface__btn--small"
-                        disabled={busy}
-                        onClick={() => act(primary, 'acknowledge')}
-                      >
-                        Seen it
-                      </button>
-                      {/* Only offered when the record says so: an escalation or
-                          an imminent meeting is deliberately not dismissable,
-                          and a button NEURO will refuse is worse than none. */}
-                      {(primary.actions || []).includes('dismiss') && (
-                        <button
-                          type="button"
-                          className="surface__btn surface__btn--small"
-                          disabled={busy}
-                          onClick={() => act(primary, 'dismiss')}
-                        >
-                          Not mine
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-            </>
+    <AttentionSurface
+      data={data}
+      error={error}
+      busy={busy}
+      rootClassName="surface"
+      onOpen={open}
+      onAct={act}
+      onNavigate={(tab) => onNavigate?.(tab)}
+      hideSecondary={Boolean(exchange)}
+      crownExtra={(
+        <button
+          type="button"
+          className={`surface__ear${voiceOut ? ' surface__ear--on' : ''}`}
+          onClick={() => { unlockAudio(); const next = !voiceOut; setVoiceOutEnabled(next); setVoiceOut(next); }}
+          aria-pressed={voiceOut}
+          aria-label={voiceOut ? 'Stop SARA speaking' : 'Let SARA speak'}
+        >{voiceOut ? '🔊' : '🔇'}</button>
+      )}
+      beforeSay={arrivedFrom?.body && !exchange ? (
+        // Why he is here, when he arrived by tapping a notification. Without it
+        // the push and the screen are two unconnected events.
+        <button type="button" className="surface__arrival" onClick={() => onClearArrival?.()}>
+          <span className="surface__arrivallabel">you tapped</span>
+          <span className="surface__arrivalbody">{arrivedFrom.body}</span>
+        </button>
+      ) : null}
+      sayOverride={exchange ? (
+        <>
+          <p className="surface__asked">“{exchange.question}”</p>
+          {exchange.error ? (
+            <p className="surface__saysub surface__saysub--warn">{exchange.error}</p>
           ) : (
-            // Three genuinely different facts. Conflating them is how a broken
-            // feed comes to look like a good day.
-            <>
-              {!poolAvailable ? (
-                <>
-                  <p className="surface__saylead">I can't see your work right now.</p>
-                  <p className="surface__saysub">So don't read this as an all-clear.</p>
-                </>
-              ) : quiet ? (
-                <>
-                  <p className="surface__saylead">{context?.summary || 'Staying out of the way.'}</p>
-                  <p className="surface__saysub">Nothing here needs you.</p>
-                </>
-              ) : (
-                <>
-                  <p className="surface__saylead">Nothing pressing.</p>
-                  <p className="surface__saysub">Everything's where it should be.</p>
-                </>
-              )}
-            </>
+            <p className="surface__saylead">{exchange.answer || (exchange.thinking ? '…' : '')}</p>
           )}
-        </div>
-
-        {/* Everything else, deliberately quieter. Hidden mid-exchange — he asked
-            a question, not for a list. */}
-        {!exchange && secondary.length > 0 && (
-          <ul className="surface__rest">
-            {secondary.map((card) => (
-              <li key={card.id}>
-                <button type="button" className="surface__row" onClick={() => open(card)}>
-                  <span className="surface__rowtitle">{card.title}</span>
-                  {card.say && <span className="surface__rowsay">{card.say}</span>}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <div className="surface__foot">
-          {voiceErr && <p className="surface__aside surface__aside--warn">{voiceErr}</p>}
-          {!exchange && dropped.length > 0 && (
-            <p className="surface__aside">{dropped.length} held — {dropped[0].why}.</p>
-          )}
-          {/* The honesty, in her words rather than as a badge — and only when
-              the gap could have changed the answer. */}
-          {!exchange && context?.cannotSee && (
-            <p className="surface__aside surface__aside--her">{context.cannotSee}</p>
-          )}
-          {error && <p className="surface__aside surface__aside--warn">That last read failed — this is what I had.</p>}
-
-          <div className="surface__footrow">
-            <button
-              type="button"
-              className={`surface__mic${listening ? ' surface__mic--live' : ''}`}
-              onClick={toggleMic}
-              aria-pressed={listening}
-              aria-label={listening ? 'Stop and send' : 'Talk to SARA'}
-            >
-              {listening ? 'Listening — tap to send' : '🎤 Talk to me'}
-            </button>
-            <button type="button" className="surface__all" onClick={() => onShowAll?.()}>Show me everything</button>
+          <div className="surface__acts">
+            <button type="button" className="surface__btn" onClick={endExchange}>Done</button>
           </div>
+        </>
+      ) : null}
+      footAside={voiceErr ? <p className="surface__aside surface__aside--warn">{voiceErr}</p> : null}
+      footExtra={(
+        <div className="surface__footrow">
+          <button
+            type="button"
+            className={`surface__mic${listening ? ' surface__mic--live' : ''}`}
+            onClick={toggleMic}
+            aria-pressed={listening}
+            aria-label={listening ? 'Stop and send' : 'Talk to SARA'}
+          >
+            {listening ? 'Listening — tap to send' : '🎤 Talk to me'}
+          </button>
+          <button type="button" className="surface__all" onClick={() => onShowAll?.()}>Show me everything</button>
         </div>
-      </div>
-    </div>
+      )}
+    />
   );
 }

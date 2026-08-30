@@ -76,3 +76,26 @@
   line-height: 1.4;
   color: #b7c2d0;
 }
+
+/* The kiosk's root box for the shared AttentionSurface. Everything INSIDE it is
+   styled by `sara/shared-ui/AttentionSurface.css`; only this outer box is the
+   kiosk's own, because the phone bleeds to the screen edge while this sits in a
+   panel below a banner and must BOUND its height instead.
+
+   ⚠ Bounded against the MEASURED chrome of the real 1280x720 panel. A first cut
+   copied the phone's `min-height: 100vh`, overflowed the container, grew a
+   scrollbar and pushed SARA's words below the fold — the field drew and not one
+   sentence did. */
+.presence--bare {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  padding: clamp(1.25rem, 3vw, 2.5rem);
+}
+
+/* The shared surface centres its own column; on a desk panel read from a metre
+   away the type wants to be a step larger than it is in the hand. */
+.presence .surface__saylead { font-size: clamp(1.4rem, 2.4vw, 2.1rem); }
+.presence .surface__saysub { font-size: clamp(1rem, 1.5vw, 1.3rem); }
+.presence .surface__content { max-width: min(46rem, 80%); margin: 0; }
