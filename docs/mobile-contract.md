@@ -144,6 +144,12 @@ recorded hours ago can name a different row by the time it replays. That is the
 | `applied` | the canonical record now exists | drop from the outbox, show confirmed |
 | `duplicate` | already applied; `canonicalId` is the SAME record | drop from the outbox, show confirmed |
 | `rejected` | refused; a replay is refused identically | **stop retrying**, surface with the text intact |
+
+⚠ A **validation** rejection (unknown kind, missing field) is answered *before*
+the ledger is touched, so it writes NO row — verified against the live server on
+deploy day: two identical bad operations, two identical rejections, zero rows.
+It is stateless and idempotent by being pure. Only an operation that got as far
+as being *applied* leaves a ledger row.
 | `failed` | nothing was written | retry — safe by construction |
 | `needs-attention` | a conflict, or interrupted mid-apply | **never auto-retry**; keep the text, ask the user |
 
