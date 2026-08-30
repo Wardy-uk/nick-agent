@@ -339,6 +339,50 @@ Driven live: check-in recorded with the clock untouched; step-away surfaced as
 shrink, check-ins or reflection. Not wrong, just behind — the phone is the
 surface that matters for returning to work, which is why it went first.
 
+## Gate 4 — prep that shows its evidence (done, deployed, verified on real data)
+
+`9bcad4b`. Meeting prep already gathered the right material; it did not say
+where any of it came from — seconds before Nick walks into a room with a real
+colleague, on material that is an **automated parse of 232 meeting notes** whose
+own service notes say some rows are misparses.
+
+⚠ **`source_path` had been in `waiting_on` since the feature shipped and the
+prep enrichment was DROPPING it.** The evidence existed and was discarded at the
+one surface where it matters most.
+
+**Verified live against the real diary** (52 meetings in the week, 6 carrying
+commitments), and the first result makes the case better than any argument:
+
+> *Noted as outstanding for Naomi — from `2026-04-30 – 1-2-1 Meeting Naomi
+> Winkworth` (2026-04-30): "Naomi to clear all tickets older than five days…"
+> (+10 more)*
+
+That commitment is **four months old**. The old line read *"11 outstanding from
+Naomi"* — stating as fact that she owes eleven things, with no hint that the
+oldest is an April note, and no way to check.
+
+- Commitments carry `sourcePath`, `sourceDate`, `sightings`. An unattributed row
+  says **"no source recorded — worth checking before raising"** rather than
+  looking identical to a sourced one.
+- **"Owes you" → "Noted as outstanding."** Attributed, not asserted.
+- ⚠ **Five swallowed catches** in `_buildPrep` (two to `console.warn`, three to
+  nothing) now push named `prep.gaps`. An unreachable vault used to render as a
+  prep sheet with no commitments — indistinguishable from a colleague who owes
+  nothing. The phone shows *"Couldn't check … treat the above as incomplete, not
+  clear."*
+- **Sending is untouched and still gated.** Prep drafts nothing outbound; a
+  chase still queues a `sara_action` for approval. Pinned by a test that fails if
+  this file ever acquires `sendMail` / `sendDm` / `graphWrite`.
+
+## All four gates are closed
+
+| Gate | State |
+|---|---|
+| 1 — One attention model | done (`6655ccd`), contract in `docs/attention-contract.md` |
+| 2 — Ambient SARA | done (`fcf6648` + `dcdd7fa`) |
+| 3 — Supported execution | done (`14df208`, `34fe8d2`, `c134663`, `6ed0773`) |
+| 4 — Relationship support | done (`9bcad4b`) |
+
 ## Next
 
 - Gate 2 (ambient SARA): wire the canonical record into the widget and kiosk
