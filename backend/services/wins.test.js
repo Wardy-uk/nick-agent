@@ -277,3 +277,35 @@ test('the feed formats local time itself, so no caller has to', () => {
   const [win] = wins.feed({ dateKey: '2026-08-15' }).wins;
   assert.equal(win.time, '14:37', 'local wall-clock, not the UTC slice');
 });
+
+test('a Microsoft or vault completion is one win however often the box is ticked', () => {
+  // The bug: task-store owns ONE of the three things SARA can complete, and it
+  // was the only one logging `task_done`. The other two now do — and a vault
+  // checkbox can be unticked and ticked again, which keyed on the activity row
+  // would read as two finished tasks.
+  db.getDb().prepare('DELETE FROM wins').run();
+  db.getDb().prepare('DELETE FROM activity_log').run();
+
+  db.logActivity('task_done', { text: 'Succession plan', msId: 'AAMk-123', owner: 'microsoft' }, '2026-08-15');
+  db.logActivity('task_done', { text: 'Book the room', filePath: 'Daily/2026-08-15.md', lineNumber: 12, owner: 'vault' }, '2026-08-15');
+  db.logActivity('task_done', { text: 'Book the room', filePath: 'Daily/2026-08-15.md', lineNumber: 12, owner: 'vault' }, '2026-08-15');
+  wins.sync({ since: '2026-08-01', until: '2026-08-31' });
+
+  const done = wins.feed({ dateKey: '2026-08-15' }).wins.filter(w => w.kind === 'task_done');
+  assert.equal(done.length, 2, 'the re-tick folds; the Microsoft one still counts');
+  assert.ok(done.some(w => w.text === 'Succession plan'));
+});
+
+test("a NEURO task's own completion still keys on the activity row", () => {
+  // NEGATIVE. Thousands of task-store rows are already in the ledger under
+  // `activity:<id>`. Changing that formula would re-insert every one inside the
+  // sync window under a new key — the count silently doubling itself.
+  assert.equal(wins._completionKey({ event_type: 'task_done', id: 9 }, { taskId: 12, text: 'x' }), null);
+  assert.equal(wins._completionKey({ event_type: 'standup_done', id: 9 }, { msId: 'a' }), null);
+  assert.equal(wins._completionKey({ event_type: 'task_done', id: 9 }, { msId: 'a' }), 'task:ms:a');
+  assert.equal(
+    wins._completionKey({ event_type: 'task_done', id: 9 }, { filePath: 'Daily/x.md', lineNumber: 0 }),
+    'task:file:Daily/x.md#0',
+    'line 0 is a real line — not falsy-checked away'
+  );
+});

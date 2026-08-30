@@ -31,6 +31,58 @@ const MS_EDIT_REASONS = {
 // and "Microsoft would not take it" are different problems with different fixes.
 const REFUSED_LOCALLY = new Set(['empty_title', 'bad_due_date', 'nothing_to_change', 'no_task_id']);
 
+/**
+ * Record that a task NEURO does not own was finished.
+ *
+ * ── Why this exists ─────────────────────────────────────────────────────────
+ *
+ * `task-store.updateTask` logs `task_done`, and the whole wins ledger — the
+ * Momentum count, "Done today", the weekly-target ring — is built on that one
+ * event. But task-store only owns ONE of the three things SARA's task list can
+ * complete. The other two, a Microsoft task and a plain vault checkbox, closed
+ * through these routes and logged NOTHING, so finishing them moved no number
+ * anywhere. Measured on the live DB the morning this was found: two NEURO
+ * completions recorded against five-plus ticks in SARA, and the card said 2.
+ *
+ * That is the same failure the ledger was built to remove, one owner along: the
+ * count was not wrong about what it could see, it was blind to two thirds of
+ * what Nick can tick. A number that undercounts on the days he clears the
+ * Microsoft lane is a number he stops believing, and then the surface is dead.
+ *
+ * ── The one thing it must not do ────────────────────────────────────────────
+ *
+ * ⚠ Double-count a LINKED task. `sara/app`'s completeTask calls
+ * `/api/tasks/:id/complete` AND `/api/todos/complete-ms` for a row carrying
+ * both ids (task-dedupe links them, NEURO leading) — so task-store has already
+ * logged that completion by the time this runs. `tasks.ms_id` is the single
+ * answer to "is this linked", so it is what gets asked. Inflating the count is
+ * strictly worse than missing one: a missed win is a visible absence, an
+ * invented one makes every other number suspect.
+ *
+ * Failure is swallowed. The task is closed by the time this runs; a bookkeeping
+ * error must never surface as "that didn't work" and send Nick back to tick it
+ * again — sent-replies' rule, and completeTask's.
+ */
+function _recordCompletion({ text, msId = null, msSource = null, filePath = null, lineNumber = null, owner }) {
+  try {
+    if (msId) {
+      const linked = db.get('SELECT id FROM tasks WHERE ms_id = ? LIMIT 1', [msId]);
+      if (linked) return; // task-store already logged it
+    }
+    db.logActivity('task_done', {
+      text: text || (msId ? 'Microsoft task' : 'Task'),
+      owner,
+      msId,
+      msSource: msSource || null,
+      filePath,
+      lineNumber,
+      source: owner === 'microsoft' ? (msSource || 'Microsoft') : 'vault',
+    });
+  } catch (e) {
+    console.warn('[Todos] Could not record completion:', e.message);
+  }
+}
+
 // GET /api/todos — reads tasks from Obsidian vault + 90-day plan
 router.get('/', (req, res) => {
   try {
@@ -237,7 +289,8 @@ router.post('/toggle', (req, res) => {
     if (!filePath || lineNumber == null) {
       return res.status(400).json({ error: 'filePath and lineNumber required' });
     }
-    const newStatus = obsidian.toggleTask(filePath, lineNumber);
+    const { status: newStatus, text } = obsidian.toggleTask(filePath, lineNumber);
+    if (newStatus === 'done') _recordCompletion({ text, filePath, lineNumber, owner: 'vault' });
     res.json({ status: newStatus });
   } catch (e) {
     console.error('[Todos] Toggle error:', e);
@@ -434,9 +487,18 @@ router.post('/complete-ms', async (req, res) => {
     if (!msId) return res.status(400).json({ error: 'msId required' });
 
     // Toggle in vault first (instant)
+    let mirrorText = null;
     if (filePath && lineNumber != null) {
-      obsidian.toggleTask(filePath, lineNumber);
+      mirrorText = obsidian.toggleTask(filePath, lineNumber).text;
     }
+
+    // ⚠ Recorded BEFORE the Graph push, and deliberately. The task is closed
+    // from Nick's point of view the moment the mirror flips — `complete-ms`
+    // already returns ok:true with `pushed: 'none'` when Graph refuses, because
+    // the vault line is what NEURO reads. A win conditional on Microsoft
+    // answering would go missing on exactly the days Graph auth has expired,
+    // silently, which is the shape of the bug this whole ledger exists to stop.
+    _recordCompletion({ text: mirrorText, msId, msSource: source, filePath, lineNumber, owner: 'microsoft' });
 
     const result = await microsoft.completeMicrosoftTask(msId, source, listId || null);
     if (result.completed) {

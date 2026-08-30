@@ -224,6 +224,31 @@ function readCommits(since) {
 // ── Collection ───────────────────────────────────────────────────────────────
 
 /**
+ * A stable key for a completion NEURO does not own, or null for anything else.
+ *
+ * A Microsoft task and a vault checkbox are completed through routes/todos, and
+ * a checkbox can be UNTICKED and ticked again. Keyed on the activity row id,
+ * that reads as two finished tasks — so the identity is the thing that was
+ * closed, not the event that closed it, and a re-tick folds.
+ *
+ * ⚠ Deliberately NOT applied to task-store's own `task_done` rows, which carry
+ * a taskId and no msId or filePath. They already key on `activity:<id>` and
+ * thousands of them are in the ledger: changing the formula would re-insert
+ * every one inside the sync window under a new key, which is the count silently
+ * doubling itself — the one failure that would make the number worthless.
+ *
+ * Undercounting is the safe direction here. Re-ticking the same line on a later
+ * day is not new work, and a fold that is slightly too eager costs a duplicate
+ * nobody sees, where the other way costs the number its meaning.
+ */
+function _completionKey(row, data) {
+  if (row.event_type !== 'task_done') return null;
+  if (data.msId) return `task:ms:${data.msId}`;
+  if (data.filePath && data.lineNumber != null) return `task:file:${data.filePath}#${data.lineNumber}`;
+  return null;
+}
+
+/**
  * Read every source over [since, until] and return candidate win rows.
  *
  * Pure-ish: it reads, it does not write. `gaps` names each source that could
@@ -275,7 +300,9 @@ function collect({ since, until } = {}) {
       // showed "Standup done" twice on its first afternoon. Counting each is
       // how the number stops being true, which is the only property it has.
       const isRitual = row.event_type === 'standup_done' || row.event_type === 'eod_done';
-      const dedupeKey = isRitual ? `ritual:${row.event_type}:${key}` : `activity:${row.id}`;
+      const dedupeKey = isRitual
+        ? `ritual:${row.event_type}:${key}`
+        : _completionKey(row, data) || `activity:${row.id}`;
 
       rows.push({
         // row.date_key is the DAY OF RECORD and wins follows it, rather than
@@ -718,6 +745,7 @@ module.exports = {
   // exported for tests — pure, no DB, no clock
   foldCommits,
   typicalDay,
+  _completionKey,
   dateKey,
   parseDbTime,
 };

@@ -1071,7 +1071,21 @@ function parseNinetyDayPlan() {
   };
 }
 
-// Toggle a task's checkbox in the vault file
+/**
+ * Toggle a task's checkbox in the vault file.
+ *
+ * Returns `{ status, text }` rather than a bare status string. The text is what
+ * the completion is WORTH RECORDING as — a vault-backed tick was invisible to
+ * the wins ledger because nothing at the completion point knew what had been
+ * ticked, and re-reading the file from the route to find out is two reads of a
+ * line this function already has in its hand.
+ *
+ * ⚠ It deliberately does NOT log the win itself. `suggestion-engine`'s
+ * `complete_task` toggles the mirror line for a task it has ALREADY closed
+ * through task-store, which logs `task_done` on its own — logging here would
+ * count that one twice. The routes own the record because the routes are where
+ * the owner is known.
+ */
 function toggleTask(filePath, lineNumber) {
   if (!fs.existsSync(filePath)) throw new Error('File not found');
 
@@ -1094,7 +1108,14 @@ function toggleTask(filePath, lineNumber) {
   try { require('./vault-cache').invalidate('task-toggle'); } catch {}
   // Also fire the async vault-hooks for embeddings/entities (debounced is fine for these)
   try { require('./vault-hooks').onVaultWrite(filePath, 'task-toggle'); } catch {}
-  return newStatus === 'x' ? 'done' : 'open';
+
+  // Parsed off the ORIGINAL line, before the rewrite — parseTaskLine is the one
+  // place that knows how to strip the id comment, the 📅 date, the (50%) marker
+  // and the wiki links, and a second cleaner here is how two of them drift.
+  let text = null;
+  try { text = parseTaskLine(line)?.text || null; } catch { text = null; }
+
+  return { status: newStatus === 'x' ? 'done' : 'open', text };
 }
 
 /**
