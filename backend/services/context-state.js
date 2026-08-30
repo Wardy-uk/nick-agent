@@ -218,6 +218,23 @@ function toDate(v) {
  * roughly at random. Anything we cannot establish fails CLOSED — a focus block
  * announced as "you're in a meeting" is worse than saying nothing.
  */
+/**
+ * Is this calendar row a MEETING — a thing with other people in it?
+ *
+ * Exported so nothing else has to re-derive it. Half of Nick's diary is time
+ * blocked out for solo work, and Graph lists the organiser among the attendees
+ * on some events and not others, so an attendee COUNT is true for a solo block
+ * roughly at random. `attendeesOther` is three-valued and this requires exactly
+ * `true`: anything undecidable fails CLOSED, because a focus block announced as
+ * "you're in a meeting" is worse than saying nothing at all.
+ */
+function isRealMeeting(ev) {
+  if (!isObject(ev)) return false;
+  if (ev.isAllDay || ev.isCancelled) return false;
+  if (ev.showAs === 'free') return false;
+  return ev.attendeesOther === true;
+}
+
 function readMeetings(calendar, now) {
   const events = Array.isArray(calendar.events) ? calendar.events : [];
   const nowMs = now.getTime();
@@ -501,6 +518,7 @@ function resolveContext(inputs = {}, now = new Date()) {
 
 module.exports = {
   resolveContext,
+  isRealMeeting,
   resolveDuty,
   cannotSee,
   ON_DUTY_START_HOUR,

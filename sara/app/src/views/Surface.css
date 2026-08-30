@@ -298,3 +298,12 @@
   color: var(--muted);
   font-size: 1.05rem;
 }
+
+/* The seam of the day. Set apart from the ambient card below it with a hairline
+   rather than a box: it is time-critical and should read first, but boxing it
+   would make two things compete on a screen whose whole point is one thing. */
+.surface__transition {
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(76, 154, 255, 0.35);
+}

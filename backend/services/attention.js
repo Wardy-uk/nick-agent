@@ -832,11 +832,36 @@ async function build({ now = new Date(), view = null } = {}) {
     readiness = { known: false, why: e.message };
   }
 
+  // The seam of the day, if this is one. PURE, composed server-side like `say`
+  // and `speech`, so the phone, the kiosk and the widget cannot phrase the same
+  // transition three ways — and so the decision about whether NOW is a moment to
+  // prompt is made once, by the brain.
+  //
+  // ⚠ It PROPOSES and never acts: no timer starts, no calendar is written, no
+  // task is completed. And an unreadable diary yields no transition at all
+  // rather than falling through to "nothing coming up".
+  let transition = null;
+  try {
+    let recovery = null;
+    try { recovery = require('./focus-session').recovery(); } catch { recovery = null; }
+    transition = require('./transitions').nextTransition({
+      calendar: inputs.calendar,
+      recovery,
+      now,
+    });
+  } catch (e) {
+    // A transition is a nicety on top of the feed. It must never be the reason
+    // the feed fails.
+    console.warn('[Attention] transition failed:', e.message);
+    transition = null;
+  }
+
   return {
     generatedAt: now.toISOString(),
     context,
     weeklyTarget,
     readiness,
+    transition,
     ...gated,
     // The lifecycle view of the same decision. Additive: every field this
     // payload returned before is unchanged and still means the same thing, which

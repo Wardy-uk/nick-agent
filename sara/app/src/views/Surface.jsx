@@ -79,6 +79,11 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [busy, setBusy] = useState(false);
   const [deferring, setDeferring] = useState(false);
+  // ⚠ Keyed on the PROMPT, not a boolean. "Not now" dismisses THIS transition,
+  // and the next one — a different meeting, a different seam — must appear on
+  // its own. A boolean would silence every transition for the rest of the
+  // session, which is how a useful prompt becomes one nobody ever sees again.
+  const [dismissedTransition, setDismissedTransition] = useState(null);
   const [showWhy, setShowWhy] = useState(false);
   const [voiceOut, setVoiceOut] = useState(() => isVoiceOutEnabled());
 
@@ -269,7 +274,7 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
     );
   }
 
-  const { context, primary, secondary = [], dropped = [], quiet, rationale, poolAvailable, gaps = [] } = data;
+  const { context, primary, secondary = [], dropped = [], quiet, rationale, poolAvailable, gaps = [], transition = null } = data;
 
   return (
     <div className="surface">
@@ -332,6 +337,38 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
         {/* The one thing — or the passing question, which takes precedence
             because he just asked it. */}
         <div className="surface__say">
+          {/* ── The seam of the day ────────────────────────────────────
+              A transition is time-critical and leads when there is one:
+              "leave now" is worthless five minutes late, and the follow-ups
+              from a meeting are in his head for about a minute.
+
+              ⚠ It PROPOSES. Every option here opens a screen; none of them
+              starts a timer, writes the calendar or completes anything. The
+              wording is the brain's, taken verbatim — this is the fourth
+              renderer of one decision, not a fourth opinion. */}
+          {!exchange && transition && dismissedTransition !== transition.prompt && (
+            <div className="surface__transition">
+              <p className="surface__saylead">{transition.prompt}</p>
+              <p className="surface__saysub">{transition.question}</p>
+              <div className="surface__acts">
+                {transition.tab && (
+                  <button
+                    type="button"
+                    className="surface__btn surface__btn--go"
+                    onClick={() => onNavigate?.(transition.tab)}
+                  >
+                    {transition.kind === 'leave-now' ? 'Open prep'
+                      : transition.kind === 'post-meeting' ? 'Capture it'
+                        : 'Pick it up'}
+                  </button>
+                )}
+                <button type="button" className="surface__btn" onClick={() => setDismissedTransition(transition.prompt)}>
+                  Not now
+                </button>
+              </div>
+            </div>
+          )}
+
           {exchange ? (
             <>
               <p className="surface__asked">“{exchange.question}”</p>
