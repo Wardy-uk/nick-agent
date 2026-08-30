@@ -263,6 +263,55 @@ visible:
 - **Remove it.** The Presence screen now says the same thing better, and an
   advisory "suggested view" is a menu — which is the thing SARA is not.
 
+## Gate 3 — supported execution (PART ONE done, deployed, driven live)
+
+`14df208` (backend) + `34fe8d2` (phone). **The kiosk's second-opinion strip was
+removed first** (`dcdd7fa`) — see above.
+
+**What was missing was not a control, it was a KIND of control.** Every existing
+one answers *when* — pause, resume, abandon. Nick's difficulty is INITIATION, and
+his own rule is that anything raising awareness without lowering the barrier is
+the wrong shape. `shrink()` is the only one that lowers it.
+
+- `shrink({step})` names the smaller thing and carries straight on — naming it
+  IS the unblocking, so it does not also demand a second press to restart.
+- `shrink({})` parks the session in **`needs-smaller`**, a real state and NOT a
+  pause: *"not now"* and *"I'm stuck on how big this is"* are different problems.
+- `stepAway()` is Nick saying he was pulled off it. ⚠ Named that way because
+  `/api/session/interrupt` already means `noteInterruption` (something ARRIVED,
+  clock keeps running) and silently redefining it would break every caller.
+- ⚠ `_isStale` now treats `interrupted` and `needs-smaller` as BANKED like
+  `paused`. Without it a 15-minute task stepped away from at 09:00 went stale by
+  10:30 and asked *"did this happen?"* about something he'd pick up after lunch.
+- `shrink` is on **every** return prompt. Looking at a thing you walked away from
+  is exactly when "this is too big" is the true answer; a menu without it pushes
+  you to abandon, which loses the thread and reads as failure. That changed an
+  existing assertion — updated deliberately, not routed around.
+- **Nothing is scored.** Shrinks, the original wording and the final step all
+  survive into history as EVIDENCE. A task shrunk three times is a finding about
+  the work.
+
+**Driven end to end against the live Pi** (checked no real session was running
+first, and cleaned up after): start with a step → `needs-smaller` → the prompt
+asks *"What is the smallest next bit of it?"* with `shrink` first → naming it
+returns to `active` with `shrinks: 2` → step away → *"You had just started … when
+you were pulled away — NT-99 landed."* → abandoned cleanly.
+
+### ⚠ Gate 3 is NOT finished. Still to build:
+
+1. **Transition prompts.** *"Next meeting in 10 — leave now or open prep"*,
+   *"you just finished a meeting, capture follow-ups"*, *"you paused this
+   earlier — resume, shrink, defer, or let it go"*. Must use calendar/context
+   only when it is **live and reliable** (`attendeesOther`, `calendarKnown`), and
+   must never auto-start a timer, change a calendar or complete a task.
+2. **Body-doubling / check-ins.** Optional timed *"I'm starting now"* / *"still
+   here"*, and an optional reflection at session end. ⚠ The brief is explicit
+   that this stays PRIVATE — no external people, no messaging, no public
+   accountability without a separate product decision.
+3. **The desktop `AdhdPanel` still has the OLD controls** and knows nothing about
+   shrink. It is not wrong, just behind; the phone is the surface that matters
+   for this, which is why it went first.
+
 ## Next
 
 - Gate 2 (ambient SARA): wire the canonical record into the widget and kiosk
