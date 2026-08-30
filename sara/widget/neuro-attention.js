@@ -431,6 +431,14 @@ async function fetchPersonal({ base, token }) {
  */
 const OPEN_SHORTCUT = 'Open SARA';
 
+// Where a showing transition sends the tap. Resolved by the BRAIN and passed
+// through untouched: a card and the notification for one thing must not land on
+// different screens, and the widget working out its own destination would be a
+// second copy of the routing.
+function transitionTab(d) {
+  return d && d.transition && d.transition.tab ? d.transition.tab : null;
+}
+
 function tabUrl(tab) {
   const web = `${APP_URL}/?tab=${encodeURIComponent(tab || 'surface')}`;
   if (!OPEN_SHORTCUT) return web;
@@ -1347,6 +1355,20 @@ function accessoryView(family, res, d, wins, target, health) {
   let body;
   if (res.error) { head = "CAN'T REACH NEURO"; body = res.error; }
   else if (d.poolAvailable === false) { head = "CAN'T SEE YOUR WORK"; body = 'This is not an all-clear.'; }
+  // A TRANSITION outranks the ranked card, and only a transition does.
+  //
+  // "Leave now" is worthless five minutes late, and a lock screen is the one
+  // place it can arrive in time. Everything else the widget shows keeps its
+  // meaning for the next twenty minutes; this does not.
+  //
+  // Its wording is the brain's, taken verbatim - the widget composes nothing,
+  // ranks nothing and decides nothing, which is the whole rule for this file.
+  else if (d.transition && !offDuty) {
+    head = d.transition.kind === 'leave-now' ? 'LEAVE NOW'
+      : d.transition.kind === 'post-meeting' ? 'JUST FINISHED'
+      : 'PICK IT UP';
+    body = d.transition.prompt;
+  }
   else if (offDuty && !onFire) {
     const week = wins && Number(wins.doneThisWeek);
     // The reason IS the headline on a day off: "weekend" and "annual leave"
@@ -1367,7 +1389,7 @@ function accessoryView(family, res, d, wins, target, health) {
   if (family === 'accessoryInline') {
     // One line, beside the clock. No room for a label.
     text(w, body, { size: 12, max: 1 });
-    w.url = tabUrl(d.primary ? d.primary.tab : 'surface');
+    w.url = tabUrl(transitionTab(d) || (d.primary ? d.primary.tab : 'surface'));
     return w;
   }
 
@@ -1451,7 +1473,7 @@ function accessoryView(family, res, d, wins, target, health) {
     text(w, `${when} ${e.subject || ''}`.trim(), { size: 11, max: 1 });
   }
 
-  w.url = tabUrl(d.primary && !offDuty ? d.primary.tab : offDuty ? 'today' : 'surface');
+  w.url = tabUrl(transitionTab(d) || (d.primary && !offDuty ? d.primary.tab : offDuty ? 'today' : 'surface'));
   return w;
 }
 
