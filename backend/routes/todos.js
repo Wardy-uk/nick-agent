@@ -6,6 +6,7 @@ const { rankTasks } = require('../services/task-scoring');
 const todoIntelligence = require('../services/todo-intelligence');
 const taskStore = require('../services/task-store');
 const microsoft = require('../services/microsoft');
+const msQueue = require('../services/ms-push-queue');
 
 // How many pending capture_todo suggestions the todos payload will carry. The
 // queue hit 930 in August and collapsed to single figures once #108 made it
@@ -379,6 +380,45 @@ router.post('/wip-ms', async (req, res) => {
  * It is also the freshest read available, which matters on To Do: those PATCHes
  * carry no etag, so what is on screen at save time is what wins.
  */
+/**
+ * Completions Microsoft would not take, and what is being done about them.
+ *
+ * ⚠ `/ms-queue`, NOT `/ms/queue`. Express matches in registration order and
+ * `/ms/:msId` sits directly below — a `/ms/queue` would be read as a task whose
+ * id is the word "queue", which is the trap `/triage/feedback` already fell into
+ * once. A separate segment cannot collide whatever the order.
+ *
+ * GET reports; POST forces a drain now rather than waiting for the ten-minute
+ * pass, which is what Nick wants the moment he has just reconnected 365.
+ * DELETE forgets one — the way back when the task was dealt with in Microsoft
+ * directly and the held push is chasing something that is gone.
+ */
+router.get('/ms-queue', (req, res) => {
+  try {
+    res.json(msQueue.status());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/ms-queue/drain', async (req, res) => {
+  try {
+    res.json({ ...(await msQueue.drain()), ...msQueue.status() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/ms-queue/:msId', (req, res) => {
+  try {
+    const forgotten = msQueue.forget(req.params.msId);
+    if (!forgotten) return res.status(404).json({ error: 'Nothing held for that task' });
+    res.json({ ok: true, ...msQueue.status() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/ms/:msId', async (req, res) => {
   try {
     const { msId } = req.params;
@@ -513,10 +553,29 @@ router.post('/complete-ms', async (req, res) => {
       list_not_found: 'Could not find the task in any To Do list.',
       not_found: 'Task not found in Planner.',
     };
+
+    // Neither route landed. HOLD IT — the mirror is already ticked and is
+    // regenerated from Graph every 30 minutes, so without this the task
+    // reappears as open inside the half hour and the completion is silently
+    // undone. Queued only when the webhook did not fire either: a webhook that
+    // returned OK completed the task through Power Automate, and re-pushing on
+    // top of that is chasing work already done.
+    let held = false;
+    if (!webhookOk) {
+      held = !!msQueue.enqueue({ msId, source, listId: listId || null, text: mirrorText, reason: result.reason });
+    }
+
     res.json({
       ok: true,
       pushed: webhookOk ? 'webhook' : 'none',
-      warning: webhookOk ? null : (reasons[result.reason] || `Microsoft push failed (${result.reason})`),
+      // `held` is the difference between "this didn't reach Microsoft" and
+      // "this didn't reach Microsoft and nothing is going to try again" — the
+      // client says so, because a warning Nick reads as final when it is not
+      // costs him a second tick.
+      held,
+      warning: webhookOk
+        ? null
+        : `${reasons[result.reason] || `Microsoft push failed (${result.reason})`}${held ? ' Held — NEURO will retry.' : ''}`,
     });
   } catch (e) {
     console.error('[Todos] MS complete error:', e);

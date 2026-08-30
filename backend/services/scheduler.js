@@ -846,6 +846,28 @@ function start() {
     });
   }, 30 * 1000);
 
+  // Retry completions Microsoft would not take. Every 10 minutes, ALL the time
+  // rather than in work hours — the thing being waited on is Graph auth coming
+  // back, and that is fixed whenever Nick happens to reconnect 365.
+  //
+  // Deliberately NOT a TRACKED_JOBS catch-up job: the queue is durable and each
+  // pass reads live state, so a missed run self-corrects on the next one and
+  // there is nothing to replay. The `wins` and `bank-holidays` call.
+  //
+  // ⚠ Runs BEFORE the mirror sync on the shared 15/45 minutes purely by being
+  // registered here; order does not matter, because a completion that lands
+  // mid-sync is simply picked up by the next one. What matters is that both read
+  // the same queue.
+  cron.schedule('*/10 * * * *', () => {
+    require('./ms-push-queue').drain()
+      .then(r => {
+        if (r.attempted) {
+          console.log(`[Scheduler] MS push queue: ${r.completed} completed, ${r.stillPending} still held, ${r.failed} given up`);
+        }
+      })
+      .catch(e => console.error('[Scheduler] MS push queue drain failed:', e.message));
+  });
+
   // Escalation queue watcher — check every 5 minutes during work hours
   cron.schedule('*/5 8-18 * * 1-5', () => {
     jira.syncEscalations().catch(e => {

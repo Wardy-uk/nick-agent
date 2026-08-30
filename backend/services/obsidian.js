@@ -1754,6 +1754,18 @@ async function syncMicrosoftTasks() {
 
   const lines = ['# Microsoft Tasks', '', `*Last synced: ${new Date().toLocaleString('en-GB')}*`, ''];
 
+  // Tasks Nick has already ticked whose completion Microsoft would not take.
+  // This file is regenerated wholesale from Graph, so without this a held
+  // completion is handed straight back to him as an open task within half an
+  // hour — the retry lands eventually and he has already ticked it a second
+  // time. Suppression lasts only while the push is `pending`: once the queue
+  // gives up, the task comes BACK, because hiding real work is the worse
+  // failure. Never allowed to throw — an unreadable queue suppresses nothing
+  // rather than taking the whole sync down.
+  let heldIds = new Set();
+  try { heldIds = require('./ms-push-queue').pendingIds(); } catch { heldIds = new Set(); }
+  let heldSkipped = 0;
+
   // --- Planner ---
   try {
     const plannerTasks = await microsoft.fetchPlannerTasks();
@@ -1792,6 +1804,7 @@ async function syncMicrosoftTasks() {
       for (const heading of headings) {
         lines.push(`### ${heading}`, '');
         for (const t of byPlan.get(heading)) {
+          if (heldIds.has(t.id)) { heldSkipped++; continue; }
           const due = t.dueDateTime ? ` 📅 ${t.dueDateTime.split('T')[0]}` : '';
           const pct = t.percentComplete > 0 ? ` (${t.percentComplete}%)` : '';
           lines.push(`- [ ] ${t.title}${pct}${due} <!--id:${t.id}-->`);
@@ -1830,6 +1843,7 @@ async function syncMicrosoftTasks() {
             return (a.title || '').localeCompare(b.title || '');
           });
           for (const t of active) {
+            if (heldIds.has(t.id)) { heldSkipped++; continue; }
             const due = t.dueDateTime?.dateTime ? ` 📅 ${t.dueDateTime.dateTime.split('T')[0]}` : '';
             const imp = t.importance === 'high' ? ' ⚡' : '';
             lines.push(`- [ ] ${t.title}${imp}${due} <!--id:${t.id}-->`);
@@ -1865,8 +1879,14 @@ async function syncMicrosoftTasks() {
   }
 
   fs.writeFileSync(msTasksPath, lines.join('\n'), 'utf-8');
-  console.log(`[Sync] Microsoft Tasks written: ${plannerCount} planner, ${todoCount} todo`);
-  return { ok: true, planner: plannerCount, todo: todoCount };
+  // heldSkipped is logged rather than left silent: a task missing from the
+  // mirror must always have a stated reason, or this becomes indistinguishable
+  // from the sync losing work.
+  console.log(
+    `[Sync] Microsoft Tasks written: ${plannerCount} planner, ${todoCount} todo` +
+    (heldSkipped ? ` (${heldSkipped} held — completion queued for retry)` : '')
+  );
+  return { ok: true, planner: plannerCount, todo: todoCount, held: heldSkipped };
 }
 
 // Auto-link: scan content for known People and Project names, add wiki-links

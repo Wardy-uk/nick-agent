@@ -176,9 +176,21 @@ function snapshot() {
     cached: scalar("SELECT COUNT(*) c FROM calendar_cache"),
   };
 
+  // Completions Microsoft would not take. Read-only, and never allowed to break
+  // the board: an unreadable queue reports zeroes rather than 500ing the panel.
+  let msPush = { pending: 0, failed: 0, oldestHours: null };
+  try {
+    const q = require('./ms-push-queue').status();
+    msPush = {
+      pending: q.pendingCount,
+      failed: q.failedCount,
+      oldestHours: q.pending.reduce((m, i) => Math.max(m, i.ageHours || 0), 0) || null,
+    };
+  } catch { /* zeroes */ }
+
   return {
     generatedAt: new Date().toISOString(),
-    tasks, commitments, approvals, inbox, rituals, vault, jobs, calendar,
+    tasks, commitments, approvals, inbox, rituals, vault, jobs, calendar, msPush,
   };
 }
 
@@ -213,6 +225,20 @@ function assess(s) {
       add('info', `${job.name} has no last-run stamp yet`,
         'Not yet seen since run-tracking was added — it becomes meaningful once its slot has passed once.', 'admin');
     }
+  }
+
+  // A task Nick ticked that Microsoft never accepted. `failed` is CRITICAL and
+  // outranks a merely pending one: the retrying has stopped, so the task is
+  // about to reappear in the mirror as open — work he believes is done, handed
+  // back with no explanation unless this says so.
+  const ms = s.msPush || {};
+  if (ms.failed > 0) {
+    add('critical', `${ms.failed} completion${ms.failed === 1 ? '' : 's'} never reached Microsoft`,
+      'NEURO has stopped retrying, so these tasks will reappear as open. Reconnect 365, then drain the queue.', 'todos');
+  }
+  if (ms.pending > 0) {
+    add('warn', `${ms.pending} completion${ms.pending === 1 ? ' is' : 's are'} held for Microsoft`,
+      `Ticked here, not yet accepted by Graph${ms.oldestHours ? ` (oldest ${ms.oldestHours}h)` : ''}. Retrying every 10 minutes.`, 'todos');
   }
 
   if (s.approvals.pending > 0) {
