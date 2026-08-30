@@ -131,6 +131,14 @@ function _archive(session, now) {
     actualMinutes: Math.round(_elapsedMs(session, now) / 60000),
     endedReason: session.endedReason,
     interruptions: (session.interruptions || []).length,
+    // The outcome that is actually worth reading back. A task shrunk twice
+    // before it moved is the most useful thing this session recorded, and it is
+    // the ONLY place that survives once the live session is archived — so it
+    // travels with the record rather than being left behind as a live-only field.
+    // Kept as evidence, never as a score.
+    shrinks: (session.shrinks || []).length,
+    finalStep: session.nextStep || null,
+    originalText: session.originalText || null,
   });
   db.setState(HISTORY_KEY, JSON.stringify(rows.slice(0, HISTORY_LIMIT)));
 }
@@ -160,7 +168,12 @@ function _staleAfterMinutes(session) {
 function _isStale(session, now) {
   const started = parseTime(session.startedAt);
   if (started != null && dateStr(new Date(started)) !== dateStr(new Date(now))) return true;
-  if (session.status === 'paused') {
+  // ⚠ `interrupted` and `needs-smaller` are banked states too — the clock is
+  // not running in any of them. Testing only for 'paused' would drop the other
+  // two through to the wall-clock branch below, where a session Nick was pulled
+  // out of at 9am goes stale by mid-morning and asks "did this happen?" about
+  // something he is still perfectly likely to come back to after lunch.
+  if (session.status === 'paused' || session.status === 'interrupted' || session.status === 'needs-smaller') {
     const since = parseTime(session.pausedAt);
     return since != null && minutesBetween(since, now) > PAUSE_STALE_MINUTES;
   }
@@ -195,6 +208,17 @@ function _decorate(session, now) {
     overrunMinutes: Math.max(0, elapsedMinutes - planned),
     interruptions: (session.interruptions || []).length,
     lastInterruption: (session.interruptions || [])[0] || null,
+    // Gate 3. The next concrete step is what makes starting possible at all, so
+    // it rides on every read rather than needing a second call.
+    nextStep: session.nextStep || null,
+    // ⚠ Reported as INFORMATION, never as a score. A task shrunk three times is
+    // a task that was never one task — that is a finding about the work, not a
+    // mark against Nick, and nothing downstream may present it as one.
+    shrinks: (session.shrinks || []).length,
+    lastShrink: (session.shrinks || [])[0] || null,
+    // The wording he started with, kept so a shrunk session can still say what
+    // it came from. Null until something is actually shrunk.
+    originalText: session.originalText || null,
   };
 }
 
@@ -237,7 +261,22 @@ function recovery(now = Date.now()) {
     };
   }
 
-  if (session.status === 'paused') {
+  // Stuck on SIZE, not on time. A different question entirely, and answering it
+  // with "back to it?" is how the prompt becomes noise — he already knows he
+  // could go back to it; that is the problem.
+  if (session.status === 'needs-smaller') {
+    return {
+      kind: 'shrink',
+      session: view,
+      prompt: `"${session.text}" was too big to start.`,
+      question: 'What is the smallest next bit of it?',
+      // `shrink` first, because it is the answer. `abandon` is offered without
+      // ceremony — letting something go is a legitimate outcome, not a failure.
+      options: ['shrink', 'resume', 'abandon'],
+    };
+  }
+
+  if (session.status === 'paused' || session.status === 'interrupted') {
     const last = (session.interruptions || [])[0];
     const because = last && last.detail ? ` — ${last.detail}` : '';
     // "0 minutes into" is a real read — start something, get pulled away inside
@@ -245,16 +284,29 @@ function recovery(now = Date.now()) {
     const howFar = view.elapsedMinutes < 1
       ? 'You had just started'
       : `You were ${view.elapsedMinutes} minute${view.elapsedMinutes === 1 ? '' : 's'} into`;
+    // ⚠ "You were pulled away" and "you stopped" are not the same sentence. The
+    // first is not something he did, and saying it back to him as though it
+    // were is the register this whole voice rejects.
+    const opener = session.status === 'interrupted'
+      ? `${howFar} "${session.text}" when you were pulled away${because}.`
+      : `${howFar} "${session.text}"${because}.`;
     return {
       kind: 'resume',
       session: view,
-      prompt: `${howFar} "${session.text}"${because}.`,
+      prompt: opener,
+      // The next step, if he left one. Coming back to "the task" is a wall;
+      // coming back to a named physical action is a decision.
+      nextStep: session.nextStep || null,
       // The number that makes coming back thinkable. Twenty minutes left is a
       // decision; "the task" is a wall.
       question: view.remainingMinutes > 0
         ? `About ${view.remainingMinutes} minutes left${view.plannedAssumed ? ' (assuming half an hour for it)' : ''}. Back to it?`
         : 'Back to it?',
-      options: ['resume', 'done', 'abandon'],
+      // `shrink` is offered on EVERY return prompt, deliberately. The moment he
+      // is looking at a thing he walked away from is exactly the moment "this
+      // is too big" is the true answer, and a menu without that option pushes
+      // him to abandon instead — which loses the thread and reads as failure.
+      options: ['resume', 'shrink', 'done', 'abandon'],
     };
   }
 
@@ -299,7 +351,7 @@ function _plan(taskId, minutes) {
  * caller can ask; with it, the running session is PAUSED and marked interrupted
  * (never discarded), so it is still there to come back to afterwards.
  */
-function start({ taskId = null, text = '', minutes = null, force = false, source = 'manual' } = {}, now = Date.now()) {
+function start({ taskId = null, text = '', minutes = null, force = false, source = 'manual', nextStep = null } = {}, now = Date.now()) {
   const existing = _read();
 
   if (existing && !_isStale(existing, now)) {
@@ -357,6 +409,12 @@ function start({ taskId = null, text = '', minutes = null, force = false, source
     plannedMinutes: plan.plannedMinutes,
     plannedAssumed: plan.plannedAssumed,
     interruptions: [],
+    // The concrete physical step, if he named one at the start. Never invented
+    // by NEURO: a step it made up is a step he has no reason to believe in, and
+    // the whole point is that it is small enough to actually begin.
+    nextStep: String(nextStep || '').trim().slice(0, 200) || null,
+    shrinks: [],
+    originalText: null,
     source: VALID_SOURCES.includes(source) ? source : 'unknown',
     endedAt: null,
     endedReason: null,
@@ -423,6 +481,118 @@ function resume(now = Date.now()) {
   }
   _write(session);
   try { db.logActivity('focus_session_resumed', { sessionId: session.id, text: session.text }); } catch {}
+  return { ok: true, session: _decorate(session, now) };
+}
+
+// ── Gate 3: making it smaller ────────────────────────────────────────────────
+//
+// The one action this whole feature is missing, and the reason it is missing is
+// instructive: every other control here answers "when", and the ADHD-native
+// problem is not WHEN, it is SIZE. Nick's own framing — the difficulty is
+// INITIATION, and "anything that raises awareness without lowering the barrier
+// is the wrong shape". Pause, resume and abandon all raise awareness. Only this
+// lowers the barrier.
+//
+// ⚠ SHRINKING IS NOT FAILURE, and nothing here may record it as one. It is the
+// single most useful signal the session produces: a task shrunk three times is
+// a task that was never one task. So the shrink is kept as HISTORY on the
+// session (`shrinks`), the original wording is preserved (`originalText`), and
+// the outcome is logged as its own event rather than folded into an abandon.
+//
+// Two shapes, and the difference matters:
+//   * `shrink({ step })`   — Nick knows the smaller thing. It becomes the next
+//                            step and the session carries on.
+//   * `shrink({})`         — he knows it is too big and does NOT yet know the
+//                            smaller thing. That is `needs-smaller`: a real,
+//                            honest state, and NOT the same as paused. Paused
+//                            means "not now"; this means "I'm stuck on size",
+//                            which is a different question and needs a
+//                            different prompt.
+
+/** The next concrete, physical step. Freeform, bounded, never invented by NEURO. */
+function setNextStep(step, now = Date.now()) {
+  const session = _read();
+  if (!session) return { ok: false, reason: 'no-session' };
+  const text = String(step || '').trim().slice(0, 200);
+  session.nextStep = text || null;
+  _write(session);
+  return { ok: true, session: _decorate(session, now) };
+}
+
+function shrink({ step = null, note = null } = {}, now = Date.now()) {
+  const session = _read();
+  if (!session) return { ok: false, reason: 'no-session' };
+  if (session.status === 'done' || session.status === 'abandoned') {
+    return { ok: false, reason: 'session-closed' };
+  }
+
+  const smaller = String(step || '').trim().slice(0, 200);
+  session.originalText = session.originalText || session.text;
+  session.shrinks = session.shrinks || [];
+  session.shrinks.unshift({
+    at: new Date(now).toISOString(),
+    atMinutes: Math.round(_elapsedMs(session, now) / 60000),
+    from: session.nextStep || session.text,
+    to: smaller || null,
+    note: note ? String(note).slice(0, 200) : null,
+  });
+
+  if (smaller) {
+    session.nextStep = smaller;
+    // Back to work. If he was stuck on size, naming the smaller thing IS the
+    // unblocking, so the clock starts again rather than making him press a
+    // second button to say what he has just said.
+    if (session.status === 'needs-smaller' || session.status === 'paused' || session.status === 'interrupted') {
+      session.status = 'active';
+      session.resumedAt = new Date(now).toISOString();
+      session.pausedAt = null;
+    }
+  } else {
+    // Stuck on size. Bank the clock — he is not working while deciding — but
+    // keep the session, because the thread is the thing worth not losing.
+    if (session.status === 'active') _pause(session, { source: 'manual', detail: 'too big' }, now);
+    session.status = 'needs-smaller';
+  }
+
+  _write(session);
+  try {
+    db.logActivity('focus_session_shrunk', {
+      sessionId: session.id, taskId: session.taskId,
+      to: smaller || null, shrinks: session.shrinks.length,
+    });
+  } catch { /* the session is the point; the log is bookkeeping */ }
+
+  return { ok: true, session: _decorate(session, now) };
+}
+
+/**
+ * Something pulled him away, and he SAID so.
+ *
+ * ⚠ NOT `noteInterruption`, and the distinction is load-bearing. That one
+ * records that something ARRIVED and deliberately leaves the clock running,
+ * because NEURO cannot know whether he actually switched — guessing there would
+ * corrupt the one number the return prompt rests on. This is Nick saying he
+ * did. It is also not `pause`: "I was pulled away" and "I chose to stop" are
+ * different facts and deserve different words when he comes back, because the
+ * first is not something he did.
+ *
+ * Named `stepAway` rather than `interrupt` on purpose — `/api/session/interrupt`
+ * already means noteInterruption, and quietly changing what that route does
+ * would be a silent behaviour change to every existing caller.
+ */
+function stepAway({ source = 'manual', detail = null } = {}, now = Date.now()) {
+  const session = _read();
+  if (!session) return { ok: false, reason: 'no-session' };
+  if (session.status !== 'active') return { ok: true, session: _decorate(session, now) };
+
+  _pause(session, { source, detail }, now);
+  session.status = 'interrupted';
+  _write(session);
+  try {
+    db.logActivity('focus_session_interrupted', {
+      sessionId: session.id, source, detail, atMinutes: Math.round(session.elapsedMs / 60000),
+    });
+  } catch {}
   return { ok: true, session: _decorate(session, now) };
 }
 
@@ -522,6 +692,9 @@ function abandon(now = Date.now()) {
 }
 
 module.exports = {
+  shrink,
+  setNextStep,
+  stepAway,
   ASSUMED_MINUTES,
   PAUSE_STALE_MINUTES,
   STALE_FLOOR_MINUTES,

@@ -49,6 +49,10 @@ router.post('/start', (req, res) => {
       minutes: req.body?.minutes == null ? null : Number(req.body.minutes),
       force: Boolean(req.body?.force),
       source: req.body?.source || 'manual',
+      // The concrete first move, if he named one. Optional: a session without a
+      // named step is still a session, and demanding one would put a form in
+      // front of the thing that exists to lower the barrier to starting.
+      nextStep: req.body?.nextStep || null,
     });
     // 409 rather than 400: the request was fine, the world had something else
     // in it. The running session comes back so the client can name it in the
@@ -78,6 +82,53 @@ router.post('/resume', (req, res) => {
 router.post('/interrupt', (req, res) => {
   try {
     res.json(session.noteInterruption({ source: req.body?.source || 'unknown', detail: req.body?.detail || null }));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/session/shrink — "make this smaller".
+ *
+ * The one control that lowers the barrier rather than raising awareness. With a
+ * `step` it names the smaller thing and carries on; WITHOUT one it parks the
+ * session in `needs-smaller`, which is an honest state and not the same as
+ * paused: "not now" and "I'm stuck on how big this is" are different problems
+ * and get different prompts.
+ *
+ * ⚠ Never treated as failure anywhere downstream. A task shrunk three times is
+ * a finding about the work, not a mark against Nick.
+ */
+router.post('/shrink', (req, res) => {
+  try {
+    const result = session.shrink({ step: req.body?.step || null, note: req.body?.note || null });
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** POST /api/session/next-step — set or clear the concrete next action. */
+router.post('/next-step', (req, res) => {
+  try {
+    const result = session.setNextStep(req.body?.step || '');
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/session/step-away — Nick says he was pulled off it.
+ *
+ * ⚠ Deliberately NOT `/interrupt`, which already means "something arrived, keep
+ * the clock running" and must keep meaning that: NEURO cannot know whether an
+ * arriving escalation actually took him away, and guessing corrupts the one
+ * number the return prompt rests on. This is him saying it did.
+ */
+router.post('/step-away', (req, res) => {
+  try {
+    res.json(session.stepAway({ source: req.body?.source || 'manual', detail: req.body?.detail || null }));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

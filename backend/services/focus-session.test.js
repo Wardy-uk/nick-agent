@@ -122,7 +122,11 @@ test('a paused session produces the prompt this whole thing exists for', () => {
   // The number that makes coming back thinkable: ten minutes left is a
   // decision, "the task" is a wall.
   assert.match(rec.question, /10 minutes left/);
-  assert.deepEqual(rec.options, ['resume', 'done', 'abandon']);
+  // `shrink` joined this list in Gate 3, deliberately. The moment Nick is
+  // looking at something he walked away from is exactly when "this is too big"
+  // is the true answer, and a menu without that option pushes him to abandon
+  // instead — which loses the thread and reads as failure.
+  assert.deepEqual(rec.options, ['resume', 'shrink', 'done', 'abandon']);
 });
 
 test('the return prompt admits when the remaining figure rests on a guess', () => {
@@ -285,4 +289,111 @@ test('being pulled away inside the first minute does not read as "0 minutes into
   // A real sequence — start something, phone goes.
   fs2.pause({ source: 'escalation' }, T0 + 20000);
   assert.match(fs2.recovery(T0 + 30000).prompt, /had just started/);
+});
+
+// ── Gate 3: making it smaller ────────────────────────────────────────────────
+//
+// The one control that lowers the barrier rather than raising awareness. Every
+// assertion below is really the same one: shrinking must never be recorded,
+// phrased or scored as a failure.
+
+test('shrinking names a smaller step and the session carries straight on', () => {
+  reset();
+  fs2.start({ text: 'Write the Q3 escalation review', minutes: 60 }, T0);
+  const { ok, session } = fs2.shrink({ step: 'Open last quarter\'s review and copy the headings' }, T0 + 5 * MIN);
+
+  assert.equal(ok, true);
+  assert.equal(session.nextStep, 'Open last quarter\'s review and copy the headings');
+  // Naming the smaller thing IS the unblocking. Making him press a second
+  // button to say what he has just said is friction at the exact moment the
+  // feature exists to remove it.
+  assert.equal(session.status, 'active');
+  assert.equal(session.shrinks, 1);
+  // The thread back to what it came from is preserved.
+  assert.equal(session.originalText, 'Write the Q3 escalation review');
+});
+
+test('too big with NO step is its own state, not a pause', () => {
+  reset();
+  fs2.start({ text: 'Restructure the support rota', minutes: 30 }, T0);
+  const { session } = fs2.shrink({}, T0 + 3 * MIN);
+
+  // "Not now" and "I'm stuck on how big this is" are different problems and
+  // need different prompts. Collapsing them loses the only one worth acting on.
+  assert.equal(session.status, 'needs-smaller');
+  // The clock is banked — he is not working while deciding.
+  assert.equal(session.elapsedMinutes, 3);
+
+  const prompt = fs2.recovery(T0 + 10 * MIN);
+  assert.equal(prompt.kind, 'shrink');
+  assert.match(prompt.question, /smallest/i);
+  // The answer is offered first; letting it go is offered without ceremony.
+  assert.equal(prompt.options[0], 'shrink');
+  assert.ok(prompt.options.includes('abandon'));
+});
+
+test('naming the step from needs-smaller starts the clock again', () => {
+  reset();
+  fs2.start({ text: 'Restructure the support rota' }, T0);
+  fs2.shrink({}, T0 + 2 * MIN);
+  const { session } = fs2.shrink({ step: 'List who is on nights this month' }, T0 + 6 * MIN);
+
+  assert.equal(session.status, 'active');
+  assert.equal(session.nextStep, 'List who is on nights this month');
+  assert.equal(session.shrinks, 2, 'both shrinks are kept — the count IS the finding');
+});
+
+test('being pulled away reads differently from choosing to stop', () => {
+  reset();
+  fs2.start({ text: 'Draft the risk summary' }, T0);
+  fs2.stepAway({ source: 'escalation', detail: 'NT-88 came in' }, T0 + 12 * MIN);
+
+  const prompt = fs2.recovery(T0 + 40 * MIN);
+  assert.equal(prompt.kind, 'resume');
+  // "I was pulled away" is not something he did, and saying it back to him as
+  // though it were is the register this voice rejects.
+  assert.match(prompt.prompt, /pulled away/);
+  assert.match(prompt.prompt, /NT-88/);
+  // Shrink is on EVERY return prompt: looking at a thing you walked away from
+  // is exactly when "this is too big" is the true answer.
+  assert.ok(prompt.options.includes('shrink'));
+});
+
+test('a banked state does not go stale on the wall clock', () => {
+  reset();
+  fs2.start({ text: 'Short thing', minutes: 15 }, T0);
+  fs2.stepAway({ source: 'meeting' }, T0 + 5 * MIN);
+
+  // Three hours later, still the same day. A 15-minute task times out on the
+  // wall clock in 90 minutes — but the clock is not RUNNING in a banked state,
+  // so asking "did this happen?" about something he may pick up after lunch is
+  // the wrong question.
+  const prompt = fs2.recovery(T0 + 180 * MIN);
+  assert.equal(prompt.kind, 'resume', 'still a return prompt, not a settle');
+  assert.equal(prompt.session.stale, false);
+});
+
+test('the next step and the shrink count survive into history', () => {
+  reset();
+  fs2.start({ text: 'Big vague thing' }, T0);
+  fs2.shrink({ step: 'Do the first small bit' }, T0 + 2 * MIN);
+  fs2.finish({}, T0 + 20 * MIN);
+
+  const [record] = fs2.history();
+  // Once the live session is archived this is the ONLY place the finding
+  // survives, so it has to travel with the record.
+  assert.equal(record.shrinks, 1);
+  assert.equal(record.finalStep, 'Do the first small bit');
+  assert.equal(record.originalText, 'Big vague thing');
+});
+
+test('a session can be started with its first concrete step already named', () => {
+  reset();
+  const { session } = fs2.start({ text: 'Prep the 1-2-1', nextStep: 'Read last month\'s note' }, T0);
+  assert.equal(session.nextStep, 'Read last month\'s note');
+  // Nothing invents one. A step NEURO made up is a step he has no reason to
+  // believe in, and the point is that it is small enough to actually begin.
+  reset();
+  const bare = fs2.start({ text: 'Prep the 1-2-1' }, T0);
+  assert.equal(bare.session.nextStep, null);
 });
