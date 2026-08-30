@@ -85,7 +85,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v34';
+const VERSION = 'v35';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -442,11 +442,24 @@ function tabUrl(tab) {
     + `&input=text&text=${encodeURIComponent(web)}`;
 }
 
-const INK = Color.dynamic(new Color('#111114'), new Color('#f5f5f7'));
-const MUTED = Color.dynamic(new Color('#8a8a8e'), new Color('#98989d'));
-const HAIRLINE = Color.dynamic(new Color('#e6e6ea'), new Color('#3a3a3c'));
-const CARD = Color.dynamic(new Color('#ffffff'), new Color('#2c2c2e'));
-const TILE_BG = Color.dynamic(new Color('#f4f4f6'), new Color('#3a3a3c'));
+// ── The widget commits to ONE theme, and it is dark ─────────────────────────
+//
+// ⚠ It used to use Color.dynamic throughout, which is right for a stack and
+// impossible for a DrawContext: an image is BAKED, so it cannot carry a colour
+// that resolves later. The ground therefore had to ask
+// `Device.isUsingDarkAppearance()` — and inside a widget that answered LIGHT
+// while Color.dynamic resolved the text for DARK. The result was white text on
+// a white card.
+//
+// Two disagreeing sources of truth about one question is the fault, not either
+// answer. So there is now one: everything here is the dark set, fixed, and
+// nothing detects anything. A widget that paints its own ground has already
+// chosen a theme — pretending otherwise is what broke it.
+const INK = new Color('#f5f5f7');
+const MUTED = new Color('#98989d');
+const HAIRLINE = new Color('#3a3a3c');
+const CARD = new Color('#2c2c2e');
+const TILE_BG = new Color('#3a3a3c');
 
 // Urgency → accent, held as [light, dark] hex so the same pair can produce both
 // a solid ink and a low-alpha wash. `critical` is the only red in the widget, so
@@ -460,12 +473,12 @@ const HEX = {
   positive: ['#1a7f4b', '#4ad07d'],
 };
 
+// Always the dark half of the pair — see the palette note above. The wash is
+// stronger than it would be on white, because the same alpha over a dark ground
+// reads as nearly nothing.
 function dyn(pair, alpha) {
-  const a = alpha === undefined ? 1 : alpha;
-  // Dark mode carries a slightly stronger wash: the same alpha over a dark
-  // ground reads as nearly nothing.
-  const da = alpha === undefined ? 1 : Math.min(1, alpha * 1.8);
-  return Color.dynamic(new Color(pair[0], a), new Color(pair[1], da));
+  const a = alpha === undefined ? 1 : Math.min(1, alpha * 1.8);
+  return new Color(pair[1], a);
 }
 
 const ACCENTS = {
@@ -477,9 +490,16 @@ const POSITIVE = dyn(HEX.positive);
 function pairFor(card) {
   return HEX[String(card && card.urgency)] || HEX.normal;
 }
-/** Whichever half of a [light, dark] pair suits the current appearance. */
+/**
+ * The dark half of a [light, dark] pair.
+ *
+ * ⚠ It used to ask Device.isUsingDarkAppearance(), which inside a widget
+ * answered LIGHT while Color.dynamic resolved the surrounding text for DARK —
+ * a light card under white type. The widget commits to dark, so there is
+ * nothing left to detect.
+ */
 function forTheme(pair) {
-  try { return Device.isUsingDarkAppearance() ? pair[1] : pair[0]; } catch (e) { return pair[0]; }
+  return pair[1];
 }
 
 /**
@@ -679,7 +699,7 @@ const ICONS = {
 // is still legible against the darkest ground.
 // The card itself. Light and dark, resolved once — a DrawContext bakes an
 // image, so it cannot carry a dynamic colour the way a stack can.
-const GROUND = ['#f2f3f7', '#15181f'];
+const GROUND = ['#15181f', '#15181f'];
 
 const EDGE_ALPHA = 0.5;
 const NODE_BASE = 0.18;
@@ -844,9 +864,12 @@ function spark(values, width, height, pair) {
 
 function bg(w) {
   const g = new LinearGradient();
+  // Dark, like everything else — this is only reached when the field could not
+  // be drawn, and a light fallback under dark type would reproduce exactly the
+  // bug it is standing in for.
   g.colors = [
-    Color.dynamic(new Color('#ffffff'), new Color('#232325')),
-    Color.dynamic(new Color('#f1f1f5'), new Color('#151517')),
+    new Color('#232325'),
+    new Color('#151517'),
   ];
   g.locations = [0, 1];
   w.backgroundGradient = g;

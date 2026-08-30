@@ -260,3 +260,33 @@ test('quiet is dimmed, never invisible', () => {
   assert.equal(blind.edge, 0, 'an unreadable pool must still show no coherence');
   assert.ok(blind.node > 0, 'the substrate is still there — noise, not emptiness');
 });
+
+test('the widget detects no theme — it has already chosen one', () => {
+  // It used to use Color.dynamic for text and Device.isUsingDarkAppearance()
+  // for the baked field ground. Inside a widget those DISAGREED: the ground
+  // resolved light while the type resolved dark, and Nick got white text on a
+  // white card.
+  //
+  // A DrawContext bakes an image, so it can never carry a colour that resolves
+  // later — which means a widget that paints its own ground has already
+  // committed to a theme. Two sources of truth about one question was the
+  // fault, not either answer.
+  const code = source()
+    .split('\n')
+    // Strip LINE comments before anything else — the same ordering lesson as
+    // the standup test, where a `/*` inside a line comment swallowed half a file.
+    .filter((l) => {
+      const t = l.trim();
+      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+    })
+    .join('\n');
+
+  assert.ok(!code.includes('Color.dynamic'),
+    'Color.dynamic cannot agree with a baked DrawContext ground — the widget is dark');
+  assert.ok(!code.includes('isUsingDarkAppearance'),
+    'nothing should be asking iOS what theme it is; the widget has committed');
+
+  // Positive control: the strip must not have eaten the file.
+  assert.ok(code.includes('function field('), 'comment strip removed real code');
+  assert.ok(code.includes('const INK'), 'comment strip removed the palette');
+});
