@@ -1,19 +1,29 @@
-# Handoff — 30 Aug 2026: Phase 3 Gate 1, and three live bugs
+# Handoff — 30 Aug 2026: Phase 3, all four gates
 
-**Commits (all pushed, `main`):**
-- `6655ccd` attention lifecycle (Gate 1 backend + contract)
-- `769cae0` **fix:** State of Play was killing every menu
-- `7d7b6d8` SARA is the default screen + the control surface
-- `e1c62a7` one Field, shared by the phone and the Pi
+**All four Phase 3 gates are closed, deployed and verified against the live box.**
+Detail per gate below; this header is just the state of play.
 
-**Deployed:** Pi 5 on `e1c62a7`… **NO — on `7d7b6d8`.** The full deploy
-(backend + frontend + restart) was done at `7d7b6d8` and verified live. `e1c62a7`
-is pushed but **NOT on the Pi**, and the kiosk on pi-dev has **not** been
-deployed at all. See "What still needs deploying".
+| Gate | Commit(s) |
+|---|---|
+| 1 — One attention model | `6655ccd` · contract in `docs/attention-contract.md` |
+| 2 — Ambient SARA | `fcf6648`, `dcdd7fa` |
+| 3 — Supported execution | `14df208`, `34fe8d2`, `c134663`, `6ed0773`, `137f7ff` |
+| 4 — Relationship support | `9bcad4b` |
 
-**Tests:** backend 1438 pass / 0 fail (dev), 1388 on the Pi. sara/backend 82.
+**Bugs Nick reported and their outcome:**
+- `769cae0` menus failing to open — **fixed** (State of Play + no ErrorBoundary)
+- `4e28eb5` "standup already done" — **fixed** (an empty `- [ ]` counted as done)
+- `7d7b6d8` + `e1c62a7` SARA as the default screen — **done**, phone and kiosk
+
+**Also:** `a827840` widget transitions · `1505473` kiosk guards.
+
+**Deployed:** Pi 5 and the kiosk are current. `sara/app` ships via Netlify on
+push to main — **confirm the asset hash CHANGED** before believing a deploy.
+
+**Tests:** backend **1480** pass / 0 fail (dev), 1417 on the Pi. sara/backend 87.
 All three frontends build (`frontend`, `sara/app`, `sara/frontend`).
 
+⚠ **Nothing here has been used on the actual phone yet.** See the open ends.
 ---
 
 ## The three bugs Nick reported mid-session
