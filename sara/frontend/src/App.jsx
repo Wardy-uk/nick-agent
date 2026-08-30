@@ -2,7 +2,6 @@ import { SaraStateProvider, useSaraState } from './state/saraState';
 import { usePresenceLock } from './state/usePresenceLock';
 import { SARA_VIEWS, normalizeViewId } from './state/views';
 import ViewSwitcher from './components/ViewSwitcher';
-import RecommendedView from './components/RecommendedView';
 import ViewRouter from './components/ViewRouter';
 import ExitButton from './components/ExitButton';
 import LockScreen from './components/LockScreen';
@@ -93,7 +92,17 @@ function AppShell() {
           <ViewRouter />
         </main>
       </div>
-      <RecommendedView />
+      {/* ⚠ The "SARA thinks" strip was REMOVED on 30 Aug 2026 (Gate 2).
+          It rendered `model.inference` — the retired inference layer — as a
+          persistent overlay, so the kiosk carried TWO accounts of Nick's state
+          at once. Caught on the panel: it read "You're set up for focused work
+          — Suggested view: Focus, High 0.75" directly beneath NEURO saying
+          "Not a working day. It's the weekend."
+
+          Consumers render NEURO's attention decision; they do not independently
+          rerank work, invent urgency, or phrase the same state differently.
+          An advisory "suggested view" is also a menu, which is the one thing
+          SARA is not. */}
       {pending != null && !locked && <LockCountdown seconds={pending} onStay={dismissCountdown} />}
       {locked && <LockScreen reason={reason} now={now} onUnlock={unlock} />}
     </div>

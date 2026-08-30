@@ -140,14 +140,20 @@ export const VIEW_REGISTRY = [
 ];
 
 // The view SARA opens on. Manual selection (charter: "manual user-selected view")
-// is supported via the view switcher. As of WS5-WP1 the State Engine also derives a
-// *recommended* view (model.inference.recommendedView), surfaced by RecommendedView —
-// but it is ADVISORY ONLY: it never sets DEFAULT_VIEW or currentView on its own. SARA
-// opens on the Cognition Environment and only a user action changes the view.
+// is supported via the view switcher.
+//
 // ⚠ The kiosk opens on SARA's PRESENCE (Nick, 30 Aug 2026), matching the phone,
 // which now opens on the Surface for the same reason: opening on a dashboard
-// makes this a thing you read, when the point is that SARA is present. The
-// advisory `recommendedView` still never sets this on its own.
+// makes this a thing you READ, when the point is that SARA is present.
+//
+// The State Engine still derives a *recommended* view
+// (`model.inference.recommendedView`) and it remains ADVISORY ONLY — it never
+// sets DEFAULT_VIEW or currentView on its own; only a user action changes the
+// view. ⚠ The strip that SURFACED that recommendation was removed on
+// 30 Aug 2026: it put a second, disagreeing account of Nick's state on the same
+// screen as NEURO's ("suggested view: Focus" under "Not a working day").
+// Computing an advisory value is fine; rendering it beside the canonical one is
+// not.
 export const DEFAULT_VIEW = SARA_VIEWS.PRESENCE;
 
 export function normalizeViewId(id) {
