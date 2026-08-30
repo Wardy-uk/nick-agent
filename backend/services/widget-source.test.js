@@ -119,8 +119,13 @@ test('the field is informative, not decorative — its coherence tracks the read
   // frame — and that frame still has to be honest. If the pool is unreadable
   // there must be NO mesh at all, because a confident-looking picture over a
   // failed read is the false all-clear this whole layer exists to prevent.
+  // ⚠ Slice from the ALPHA CONSTANTS, not from `function field(`. They sit
+  // above it, so starting at the function excluded them — field() then threw a
+  // ReferenceError, caught it, and returned null, and the test failed on a
+  // missing property rather than on anything about the widget. An extraction
+  // that silently drops a dependency fails for the wrong reason.
   const src = source();
-  const body = src.slice(src.indexOf('function field('), src.indexOf('function dial('));
+  const body = src.slice(src.indexOf('// ⚠ These are NOT'), src.indexOf('function dial('));
 
   const stub = {
     DrawContext: function () {
@@ -142,10 +147,19 @@ test('the field is informative, not decorative — its coherence tracks the read
   assert.equal(blind.edges, 0, 'an unreadable pool must show no coherence at all');
   assert.ok(blind.dots > 0, 'the substrate is still there — noise, not emptiness');
 
-  const high = run({ poolAvailable: true, context: { confidence: { level: 'high' } } });
-  const low = run({ poolAvailable: true, context: { confidence: { level: 'low' } } });
-  assert.ok(high.edges > low.edges,
-    `a confident read must settle further than an unsure one (${high.edges} vs ${low.edges})`);
+  // ⚠ AVERAGED, because the field seeds itself with Math.random() — each call
+  // is a different layout, so comparing two single renders is a coin toss on
+  // the margins. It flaked exactly that way: green five runs in a row, red on
+  // the sixth. A test that fails one time in ten trains you to ignore it.
+  const meanEdges = (d) => {
+    let total = 0;
+    for (let i = 0; i < 8; i++) total += run(d).edges;
+    return total / 8;
+  };
+  const high = meanEdges({ poolAvailable: true, context: { confidence: { level: 'high' } } });
+  const low = meanEdges({ poolAvailable: true, context: { confidence: { level: 'low' } } });
+  assert.ok(high > low * 1.1,
+    `a confident read must settle further than an unsure one (${high.toFixed(0)} vs ${low.toFixed(0)})`);
 
   // Quiet dims rather than disconnects — she is present and staying out of the way.
   const quiet = fieldDrive({ poolAvailable: true, quiet: true, context: {} }, {});
