@@ -206,6 +206,10 @@ function itemCard(item, now) {
     // works it out itself is a copy free to drift. The home-screen widget is
     // the third renderer of this feed and gets the answer rather than a rule.
     tab: resolveSaraLiteTab({ type: item.type }),
+    // Carried so the lifecycle can BOUND the action set: an unsuppressable item
+    // is exactly what the engine keeps on screen deliberately, and offering a
+    // dismiss button it will refuse to honour is worse than not offering one.
+    unsuppressable: item._unsuppressable === true,
     meta: item.meta || null,
   };
 }
@@ -723,6 +727,60 @@ async function build({ now = new Date(), view = null } = {}) {
 
   const gated = gate(context, items, now);
 
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
+  //
+  // The gated feed is reconciled against durable records so a card can be
+  // acknowledged, deferred and re-surfaced rather than recomputed from nothing
+  // on every poll. Contract: docs/attention-contract.md.
+  //
+  // ⚠ Held items are reconciled TOO. The gate drops work in a meeting or on a
+  // day off, and a dropped item is held, not gone — without refreshing its
+  // sighting a three-hour meeting would age the entire board out from under
+  // Nick, which is the false all-clear this layer exists to prevent.
+  //
+  // ⚠ And it is never allowed to fail the feed. The lifecycle is bookkeeping;
+  // the feed is the product. A DB hiccup must cost the record, not the answer.
+  let attentionBlock = { version: 'v1', available: false, why: 'not reconciled', records: [] };
+  try {
+    const lifecycle = require('./attention-lifecycle');
+    lifecycle.releaseDeferrals(now);
+
+    const surfacedIds = new Set(
+      [gated.primary, ...gated.secondary].filter((c) => c && c.kind === 'item').map((c) => c.id)
+    );
+    const held = items.filter((i) => !surfacedIds.has(i.id)).map((i) => itemCard(i, now));
+
+    const records = lifecycle.reconcile([gated.primary, ...gated.secondary], {
+      now,
+      confidence: context.confidence || null,
+      held,
+    });
+    lifecycle.sweep({ now, poolAvailable: poolError === null });
+
+    // The record id is stamped onto the card the surfaces already render, so a
+    // client can act on what it is looking at without a second lookup — and so
+    // the widget, the Surface and the notification all name the same record.
+    const byKey = new Map(records.map((r) => [r.dedupe_key, r]));
+    const stamp = (card) => {
+      if (!card || card.kind !== 'item') return card;
+      const row = byKey.get(lifecycle.dedupeKeyFor(card));
+      if (!row) return card;
+      return {
+        ...card,
+        recordId: row.id,
+        state: row.state,
+        evidence: lifecycle.present(row).evidence,
+        actions: lifecycle.present(row).actions,
+      };
+    };
+    gated.primary = stamp(gated.primary);
+    gated.secondary = gated.secondary.map(stamp);
+    attentionBlock = { version: 'v1', available: true, records: records.map(lifecycle.present) };
+  } catch (e) {
+    console.warn('[Attention] lifecycle reconcile failed:', e.message);
+    attentionBlock = { version: 'v1', available: false, why: e.message, records: [] };
+  }
+
   // The week's task target, composed server-side with its own words, like `say`
   // and `speech`. It rides here rather than being fetched separately so the
   // ring, the Surface and any later notification cannot phrase one fact three
@@ -780,6 +838,10 @@ async function build({ now = new Date(), view = null } = {}) {
     weeklyTarget,
     readiness,
     ...gated,
+    // The lifecycle view of the same decision. Additive: every field this
+    // payload returned before is unchanged and still means the same thing, which
+    // is what lets the widget and the kiosk be migrated separately.
+    attention: attentionBlock,
     // The rest of the day, for surfaces with room. Not part of the pool: an
     // agenda is the shape of the day, not a list of things to decide about.
     // Tomorrow is read SEPARATELY and passed in, rather than widening

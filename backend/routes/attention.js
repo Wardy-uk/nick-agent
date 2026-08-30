@@ -51,4 +51,85 @@ router.get('/context', async (req, res) => {
   }
 });
 
+// ── Lifecycle (Phase 3, Gate 1) ──────────────────────────────────────────────
+//
+// ⚠ Every literal path below is registered BEFORE `/records/:id/act`. Express
+// matches in registration order, and a literal declared after a sibling
+// parameterised route is read as its parameter — which is how
+// `/api/email/triage/feedback` once answered "Email not found".
+
+const lifecycle = require('../services/attention-lifecycle');
+const settings = require('../services/attention-settings');
+
+/** GET /api/attention/records — every open record, whatever its state. */
+router.get('/records', (req, res) => {
+  try {
+    const db = require('../db/database');
+    lifecycle.releaseDeferrals(new Date());
+    res.json({
+      version: 'v1',
+      records: db.getOpenAttentionRecords().map(lifecycle.present),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * GET /api/attention/history — what was surfaced, when, and why.
+ *
+ * The required "recent notifications/attention history with the reason each was
+ * surfaced". A state column alone cannot answer it: it holds only the latest
+ * value, so a card deferred three times looks identical to one deferred once.
+ */
+router.get('/history', (req, res) => {
+  try {
+    const db = require('../db/database');
+    res.json({ events: db.getAttentionHistory(req.query.limit) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.get('/settings', (req, res) => {
+  try {
+    res.json({ settings: settings.read(), deferReasons: [...lifecycle.DEFER_REASONS], levels: settings.LEVELS });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * PATCH /api/attention/settings — the controls.
+ *
+ * Unknown keys are ignored rather than stored: this blob is read on every push,
+ * and letting a client write arbitrary fields into it is how a typo becomes a
+ * permanent silent setting nobody can find.
+ */
+router.patch('/settings', (req, res) => {
+  try {
+    res.json({ ok: true, settings: settings.update(req.body || {}) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * POST /api/attention/records/:id/act — acknowledge | defer | dismiss | resolve.
+ *
+ * Clients submit ACTIONS, never states. A refusal answers 4xx with the reason in
+ * words, rather than a success the surface would render as a change that did not
+ * happen (`action-presenter`'s blockers rule).
+ */
+router.post('/records/:id/act', (req, res) => {
+  try {
+    const { action, minutes, reason, note } = req.body || {};
+    const result = lifecycle.act(req.params.id, action, { minutes, reason, note });
+    if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
+    res.json({ ok: true, record: lifecycle.present(result.record) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 module.exports = router;

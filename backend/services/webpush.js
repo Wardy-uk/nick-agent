@@ -162,6 +162,59 @@ function _record(title, data, outcome, reason, sentCount = 0, failedCount = 0) {
   }
 }
 
+/**
+ * Every notification must have an attention record behind it.
+ *
+ * This is enforced HERE rather than at the 30 call sites, which is the only
+ * reason it is enforceable at all: `nudges`, `briefing`, `watchdog`, `scheduler`,
+ * `imports` and `capture` all send free text and none of them know about each
+ * other. A caller that names a record (`data.attentionRecordId`) gets that one;
+ * anything else gets an OPERATIONAL record opened for it — a watchdog alert is a
+ * real interruption and belongs in the history Nick reads, even though it never
+ * came from the decision pool.
+ *
+ * ⚠ It fails OPEN, and that is a deliberate trade. If the lifecycle cannot be
+ * reached, the push still goes and the failure is written to `push_log` by name.
+ * The contract wants no notification without a record; it wants an unanswered
+ * escalation more. A bookkeeping outage must not be able to silence NEURO —
+ * that is the exact failure the push log was added to make visible.
+ */
+function _attentionFor(title, body, data) {
+  try {
+    const lifecycle = require('./attention-lifecycle');
+    if (data && data.attentionRecordId) {
+      const db2 = require('../db/database');
+      const row = db2.getAttentionRecord(data.attentionRecordId);
+      return row ? { lifecycle, row } : { lifecycle, row: null, why: 'named record not found' };
+    }
+    const type = data?.type || 'system';
+    // `key` is what watchdog already passes to identify an alert; the title is
+    // the fallback. Either way the identity is the ALERT, not its wording, so a
+    // reworded disk-space warning is still the same interruption.
+    const ref = data?.key || title;
+    const dedupeKey = lifecycle.dedupeKeyForPush(type, ref);
+    const row = lifecycle.upsert(
+      {
+        // The key is EXPLICIT rather than derived from the type, so a push about
+        // a pool item finds that item's record and an operational alert lands in
+        // its own namespace where it cannot collide with a real card.
+        dedupeKey,
+        id: `push:${type}`,
+        type,
+        title,
+        reason: String(body || '').slice(0, 200) || null,
+        urgency: ALWAYS_DELIVER.has(type) ? 'critical' : 'medium',
+        tier: ALWAYS_DELIVER.has(type) ? 1 : 2,
+        meta: { operational: true, ref },
+      },
+      { operational: true }
+    );
+    return { lifecycle, row };
+  } catch (e) {
+    return { lifecycle: null, row: null, why: e.message };
+  }
+}
+
 async function sendToAll(title, body, data = {}) {
   // Both of the returns below were SILENT. A notification NEURO decided to send
   // and could not deliver is a fact worth keeping — without it, "SARA has gone
@@ -170,6 +223,29 @@ async function sendToAll(title, body, data = {}) {
     console.warn(`[WebPush] Not configured — dropped: "${title}"`);
     _record(title, data, 'undeliverable', 'VAPID not configured');
     return;
+  }
+
+  // ── Gate 1: the attention lifecycle ────────────────────────────────────────
+  // This is the gate that can tell a countdown from a state change. The governor
+  // below deduped on a fingerprint of the TEXT, so "in 25 min" and "in 10 min"
+  // were different notifications to it and both went out.
+  const { lifecycle, row: record, why: recordWhy } = _attentionFor(title, body, data);
+  if (lifecycle && record) {
+    const settings = require('./attention-settings').read();
+    const verdict = lifecycle.shouldNotify(record, settings, {
+      now: new Date(),
+      critical: ALWAYS_DELIVER.has(data?.type),
+    });
+    lifecycle.recordNotification(record.id, { ...verdict, now: new Date() });
+    if (!verdict.allowed) {
+      console.log(`[WebPush] Held by attention (${verdict.reason}): "${title}"`);
+      _record(title, data, 'suppressed', verdict.reason);
+      return;
+    }
+  } else if (recordWhy) {
+    // Loud, and in the log — a send with no record behind it is a contract
+    // violation we are choosing to make rather than one we failed to notice.
+    console.warn(`[WebPush] No attention record (${recordWhy}) — sending anyway: "${title}"`);
   }
 
   const verdict = _governor(title, body, data);

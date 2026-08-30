@@ -572,6 +572,139 @@ function getPushLog(limit = 50) {
   return all('SELECT * FROM push_log ORDER BY id DESC LIMIT ?', [n]);
 }
 
+// ── Attention records ────────────────────────────────────────────────────────
+// Contract: docs/attention-contract.md. These are thin — every judgement about
+// what a state MEANS lives in services/attention-lifecycle.js, which is pure and
+// pins without a database (the pi-health.assess() split).
+
+// The states a generated item may re-match against. Terminal states are absent
+// on purpose: a resolved, expired or dismissed record must NOT be revived by the
+// same dedupe_key turning up again, or yesterday's dismissal silences today's
+// standup and a daily recurrence can never open a fresh record.
+const ATTENTION_OPEN_STATES = ['active', 'acknowledged', 'deferred'];
+
+/** The open record for a dedupe_key, or null. Newest wins if several exist. */
+function getOpenAttentionRecord(dedupeKey) {
+  const marks = ATTENTION_OPEN_STATES.map(() => '?').join(', ');
+  return get(
+    `SELECT * FROM attention_records
+      WHERE dedupe_key = ? AND state IN (${marks})
+      ORDER BY first_seen_at DESC LIMIT 1`,
+    [dedupeKey, ...ATTENTION_OPEN_STATES]
+  ) || null;
+}
+
+function getAttentionRecord(id) {
+  return get('SELECT * FROM attention_records WHERE id = ?', [id]) || null;
+}
+
+/** Every record not in a terminal state, newest evidence first. */
+function getOpenAttentionRecords() {
+  const marks = ATTENTION_OPEN_STATES.map(() => '?').join(', ');
+  return all(
+    `SELECT * FROM attention_records WHERE state IN (${marks})
+      ORDER BY last_seen_at DESC`,
+    ATTENTION_OPEN_STATES
+  );
+}
+
+function insertAttentionRecord(r) {
+  run(
+    `INSERT INTO attention_records
+       (id, dedupe_key, type, state, title, say, reason, tab, urgency, tier, score,
+        domain, operational, confidence, evidence, actions, meta,
+        first_seen_at, last_seen_at, state_changed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      r.id, r.dedupeKey, r.type, r.state, r.title || null, r.say || null,
+      r.reason || null, r.tab || null, r.urgency || null,
+      r.tier ?? null, r.score ?? null, r.domain || null, r.operational ? 1 : 0,
+      JSON.stringify(r.confidence || null), JSON.stringify(r.evidence || []),
+      JSON.stringify(r.actions || []), JSON.stringify(r.meta || null),
+      r.firstSeenAt, r.lastSeenAt, r.stateChangedAt,
+    ]
+  );
+  return getAttentionRecord(r.id);
+}
+
+/**
+ * Refresh the volatile half of a record from a fresh sighting.
+ *
+ * ⚠ Deliberately does NOT touch state, defer_until, notified_at or
+ * notify_signature. A re-sighting is evidence that the thing still exists; it is
+ * not Nick changing his mind, and letting the generator overwrite a deferral
+ * would make "snooze" mean "snooze until the next poll" — which, at a 60-second
+ * ambient refresh, is no snooze at all.
+ */
+function touchAttentionRecord(id, r) {
+  run(
+    `UPDATE attention_records
+        SET last_seen_at = ?, title = ?, say = ?, reason = ?, tab = ?,
+            urgency = ?, tier = ?, score = ?, domain = ?,
+            confidence = ?, evidence = ?, actions = ?, meta = ?
+      WHERE id = ?`,
+    [
+      r.lastSeenAt, r.title || null, r.say || null, r.reason || null, r.tab || null,
+      r.urgency || null, r.tier ?? null, r.score ?? null, r.domain || null,
+      JSON.stringify(r.confidence || null), JSON.stringify(r.evidence || []),
+      JSON.stringify(r.actions || []), JSON.stringify(r.meta || null), id,
+    ]
+  );
+  return getAttentionRecord(id);
+}
+
+function setAttentionState(id, state, at, opts = {}) {
+  run(
+    `UPDATE attention_records
+        SET state = ?, state_changed_at = ?, defer_until = ?, defer_reason = ?, resolution = ?
+      WHERE id = ?`,
+    [state, at, opts.deferUntil || null, opts.deferReason || null, opts.resolution || null, id]
+  );
+  return getAttentionRecord(id);
+}
+
+function markAttentionSurfaced(id, at) {
+  run('UPDATE attention_records SET surfaced_at = ? WHERE id = ? AND surfaced_at IS NULL', [at, id]);
+}
+
+function markAttentionNotified(id, at, signature) {
+  run('UPDATE attention_records SET notified_at = ?, notify_signature = ? WHERE id = ?', [at, signature, id]);
+}
+
+/** Records whose defer window has passed — they return to active on their own. */
+function getExpiredDeferrals(nowIso) {
+  return all(
+    "SELECT * FROM attention_records WHERE state = 'deferred' AND defer_until IS NOT NULL AND defer_until <= ?",
+    [nowIso]
+  );
+}
+
+// Bounded on write, like push_log — an append-only history with no retention is
+// how the email triage blob became a 668KB pile.
+const ATTENTION_EVENT_RETAIN_DAYS = 90;
+
+function logAttentionEvent(recordId, event, at, detail) {
+  run(
+    'INSERT INTO attention_events (record_id, at, event, detail) VALUES (?, ?, ?, ?)',
+    [recordId, at, event, detail || null]
+  );
+  run('DELETE FROM attention_events WHERE at < ?', [
+    new Date(Date.now() - ATTENTION_EVENT_RETAIN_DAYS * 864e5).toISOString(),
+  ]);
+}
+
+/** The history Nick reads: what was surfaced, when, and why. */
+function getAttentionHistory(limit = 50) {
+  const n = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 500) : 50;
+  return all(
+    `SELECT e.*, r.type, r.title, r.dedupe_key, r.state AS current_state
+       FROM attention_events e
+       JOIN attention_records r ON r.id = e.record_id
+      ORDER BY e.at DESC, e.id DESC LIMIT ?`,
+    [n]
+  );
+}
+
 /** Outcome counts since an ISO timestamp, plus the suppression reasons behind them. */
 function getPushStats(sinceIso) {
   const since = sinceIso || new Date(Date.now() - 7 * 864e5).toISOString();
@@ -1580,6 +1713,18 @@ module.exports = {
   logPushOutcome,
   getPushLog,
   getPushStats,
+  ATTENTION_OPEN_STATES,
+  getAttentionRecord,
+  getOpenAttentionRecord,
+  getOpenAttentionRecords,
+  insertAttentionRecord,
+  touchAttentionRecord,
+  setAttentionState,
+  markAttentionSurfaced,
+  markAttentionNotified,
+  getExpiredDeferrals,
+  logAttentionEvent,
+  getAttentionHistory,
   saveImportClassification,
   getImportClassification,
   getAllImportClassifications,

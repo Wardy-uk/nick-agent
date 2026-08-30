@@ -868,3 +868,77 @@ CREATE TABLE IF NOT EXISTS mobile_sync_operations (
 );
 CREATE INDEX IF NOT EXISTS idx_mobile_sync_status ON mobile_sync_operations(status);
 CREATE INDEX IF NOT EXISTS idx_mobile_sync_device ON mobile_sync_operations(device_id, received_at);
+
+-- ── Attention records (Phase 3, Gate 1 — 30 Aug 2026) ───────────────────────
+--
+-- The durable identity of a surfaced thing. Full contract in
+-- `docs/attention-contract.md`.
+--
+-- Before this, an attention item lived for exactly one HTTP request:
+-- decision-engine recomputed the pool on every call and the answer was rendered
+-- and thrown away. So nothing could be ACKNOWLEDGED (the only durable state was
+-- a suppression timer, which cannot tell "I have seen this" from "hide it for
+-- 30 minutes" from "this is finished"), and a notification had no idea what it
+-- was about — the governor deduped on a fingerprint of the TEXT, so a meeting
+-- alert counting down produced a new fingerprint each time and passed cleanly.
+--
+-- ⚠ `dedupe_key` is the identity of the THING, not the engine's item id. Engine
+-- ids are unstable by construction: `collectOverdueTodos` emits
+-- `todo-overdue-top` for one overdue task and `todo-overdue-summary` for two, so
+-- a dismissal recorded against one silently stopped applying the moment a second
+-- task went overdue.
+--
+-- ⚠ Terminal states (resolved / expired / suppressed) NEVER re-match. If the
+-- same dedupe_key appears again a NEW record is opened — which is what makes a
+-- daily recurrence work without the key carrying a date, and what stops
+-- yesterday's dismissal silencing today's standup.
+--
+-- `evidence` is never invented: an item with nothing citable stores `[]`, and
+-- the notification gate refuses to interrupt on it. Surfacing without evidence
+-- is fine (hiding real work on a bookkeeping failure is the worse error);
+-- interrupting without it is not.
+CREATE TABLE IF NOT EXISTS attention_records (
+  id                TEXT PRIMARY KEY,
+  dedupe_key        TEXT NOT NULL,
+  type              TEXT NOT NULL,
+  state             TEXT NOT NULL,   -- active|acknowledged|deferred|suppressed|resolved|expired
+  title             TEXT,
+  say               TEXT,
+  reason            TEXT,
+  tab               TEXT,
+  urgency           TEXT,
+  tier              INTEGER,
+  score             INTEGER,
+  domain            TEXT,            -- work|personal|null, from the item's meta
+  operational       INTEGER NOT NULL DEFAULT 0,  -- opened by a raw push, not the pool
+  confidence        TEXT,            -- JSON {level, why}
+  evidence          TEXT,            -- JSON [{source, ref, observedAt, detail}]
+  actions           TEXT,            -- JSON [action ids]
+  meta              TEXT,            -- JSON, the engine's own meta
+  first_seen_at     TEXT NOT NULL,
+  last_seen_at      TEXT NOT NULL,
+  surfaced_at       TEXT,
+  notified_at       TEXT,
+  notify_signature  TEXT,            -- urgency|tier when it last interrupted
+  state_changed_at  TEXT NOT NULL,
+  defer_until       TEXT,
+  defer_reason      TEXT,
+  resolution        TEXT             -- why it left: acted|gone|aged-out|dismissed
+);
+CREATE INDEX IF NOT EXISTS idx_attention_open ON attention_records(state, dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_attention_seen ON attention_records(last_seen_at DESC);
+
+-- The audit trail. "Recent notifications/attention history with the reason each
+-- was surfaced" is a required control surface, and a state column alone cannot
+-- answer it — it holds only the latest value, so a card deferred three times
+-- looks identical to one deferred once.
+CREATE TABLE IF NOT EXISTS attention_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  record_id  TEXT NOT NULL,
+  at         TEXT NOT NULL,
+  event      TEXT NOT NULL,   -- opened|surfaced|notified|acknowledged|deferred|dismissed|resolved|expired|notify-refused
+  detail     TEXT,
+  FOREIGN KEY (record_id) REFERENCES attention_records(id)
+);
+CREATE INDEX IF NOT EXISTS idx_attention_events_record ON attention_events(record_id, at DESC);
+CREATE INDEX IF NOT EXISTS idx_attention_events_at ON attention_events(at DESC);
