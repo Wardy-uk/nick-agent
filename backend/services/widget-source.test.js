@@ -149,7 +149,13 @@ test('the field is informative, not decorative — its coherence tracks the read
 
   // Quiet dims rather than disconnects — she is present and staying out of the way.
   const quiet = fieldDrive({ poolAvailable: true, quiet: true, context: {} }, {});
-  assert.ok(quiet.dim < 0.6, 'quiet must be visibly dimmed');
+  const confident = fieldDrive({ poolAvailable: true, context: { confidence: { level: 'high' } } }, {});
+  // Expressed as a RELATIONSHIP, not a magic number. The first version asserted
+  // dim < 0.6, which was only ever the value of the day — so raising the
+  // visibility floor to stop her vanishing on a quiet weekend failed a test
+  // that had no opinion about visibility at all.
+  assert.ok(quiet.dim < confident.dim, 'quiet must be dimmer than a confident read');
+  assert.ok(quiet.depth < confident.depth, 'and must settle less');
   assert.ok(quiet.depth > 0, 'quiet is not the same as blind');
 });
 
@@ -173,4 +179,57 @@ test('the widget renders no orb, avatar or glyph', () => {
   // Positive control: the check must be capable of finding something. Without
   // this, a typo'd helper would make every assertion above pass by absence.
   assert.ok(declares('field'), 'the guard cannot detect a declaration at all');
+});
+
+test('quiet is dimmed, never invisible', () => {
+  // Nick: "we've lost SARA". She was being drawn the whole time, at 8% opacity
+  // for the nodes and 5% for the edges, because Field.jsx's dim values were
+  // lifted wholesale — and that canvas is full-screen, where a huge area of
+  // very faint texture still reads. On a 330x350 tile against a near-black card
+  // it crossed from dimmed into absent.
+  //
+  // Absent is the one thing quiet must never look like: quiet means she is here
+  // and staying out of the way, and rendering nothing says she has gone.
+  const src = source();
+  const body = src.slice(src.indexOf('// ⚠ These are NOT'), src.indexOf('function dial('));
+
+  let seen = [];
+  const stub = {
+    DrawContext: function () {
+      this.setFillColor = (c) => seen.push(['node', c.a]);
+      this.setStrokeColor = (c) => seen.push(['edge', c.a]);
+      this.setLineWidth = () => {}; this.fillEllipse = () => {};
+      this.addPath = () => {}; this.strokePath = () => {};
+      this.getImage = () => ({});
+    },
+    Size: function () {}, Rect: function () {}, Point: function () {},
+    Path: function () { this.move = () => {}; this.addLine = () => {}; },
+    Color: function (h, a) { this.h = h; this.a = a; },
+  };
+  const { field, fieldDrive } = new Function(
+    ...Object.keys(stub), body + '; return { field, fieldDrive };'
+  )(...Object.values(stub));
+
+  const alphas = (d) => {
+    seen = [];
+    field(330, 350, fieldDrive(d, {}));
+    const node = seen.filter((x) => x[0] === 'node').map((x) => x[1]);
+    const edge = seen.filter((x) => x[0] === 'edge').map((x) => x[1]);
+    return { node: node.length ? node[0] : 0, edge: edge.length ? Math.max(...edge) : 0 };
+  };
+
+  const quiet = alphas({ poolAvailable: true, quiet: true, context: {} });
+  assert.ok(quiet.node >= 0.18, `quiet nodes at ${quiet.node} are effectively invisible`);
+  assert.ok(quiet.edge >= 0.10, `quiet edges at ${quiet.edge} are effectively invisible`);
+
+  // Dimmer than a confident read, though — quiet still has to LOOK quiet.
+  const high = alphas({ poolAvailable: true, context: { confidence: { level: 'high' } } });
+  assert.ok(high.node > quiet.node && high.edge > quiet.edge,
+    'a confident read must be visibly stronger than a quiet one');
+
+  // And blind still has no mesh at all — visibility must not have bought
+  // coherence where there is none.
+  const blind = alphas({ poolAvailable: false, context: {} });
+  assert.equal(blind.edge, 0, 'an unreadable pool must still show no coherence');
+  assert.ok(blind.node > 0, 'the substrate is still there — noise, not emptiness');
 });

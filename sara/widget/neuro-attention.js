@@ -85,7 +85,7 @@ const TIMEOUT_SECONDS = 12;
 // Bumped by hand on every change. It is rendered on the widget so "did my edit
 // actually land?" is answerable at a glance instead of by guessing — the whole
 // reason this and the self-update below exist.
-const VERSION = 'v32';
+const VERSION = 'v33';
 const SOURCE_URL = 'https://raw.githubusercontent.com/Wardy-uk/nuero/main/sara/widget/neuro-attention.js';
 
 // A marker that must appear in any download before it is allowed to overwrite
@@ -666,6 +666,21 @@ const ICONS = {
  * Density, edge distance, clustering and colours are taken from Field.jsx
  * deliberately, so the widget and the phone are visibly the same entity.
  */
+// ⚠ These are NOT Field.jsx's numbers, and must not be "corrected" back to
+// them. That canvas is full-screen, where a huge area of very faint texture
+// still reads as a presence. This is a 330x350 tile on a near-black card, and
+// the same values multiplied out to 8% opacity for the nodes and 5% for the
+// edges on a QUIET day — which is every weekend. Nick's words were "we've lost
+// SARA", and he was right: she was being drawn and could not be seen.
+//
+// Absent is the one thing quiet must never look like. Quiet means she is here
+// and staying out of the way; rendering nothing says she has gone, which is a
+// different and wrong fact. So the floor is raised until the dimmest live state
+// is still legible against the darkest ground.
+const EDGE_ALPHA = 0.5;
+const NODE_BASE = 0.18;
+const NODE_GAIN = 0.34;
+
 function field(width, height, drive) {
   try {
     const dc = new DrawContext();
@@ -713,7 +728,7 @@ function field(width, height, drive) {
           const d2 = dx * dx + dy * dy;
           if (d2 >= EDGE_DIST_SQ) continue;
           const near = 1 - d2 / EDGE_DIST_SQ;
-          dc.setStrokeColor(new Color('#78aaeb', 0.30 * near * depth * dim));
+          dc.setStrokeColor(new Color('#78aaeb', EDGE_ALPHA * near * depth * dim));
           const p = new Path();
           p.move(new Point(nodes[a].x, nodes[a].y));
           p.addLine(new Point(nodes[b].x, nodes[b].y));
@@ -724,7 +739,7 @@ function field(width, height, drive) {
     }
 
     for (const n of nodes) {
-      dc.setFillColor(new Color('#96bef0', (0.10 + 0.26 * depth) * dim));
+      dc.setFillColor(new Color('#96bef0', (NODE_BASE + NODE_GAIN * depth) * dim));
       dc.fillEllipse(new Rect(n.x - 1, n.y - 1, 2, 2));
     }
     return dc.getImage();
@@ -741,7 +756,10 @@ function field(width, height, drive) {
 function fieldDrive(d, res) {
   if (res.error || d.poolAvailable === false) return { depth: 0, dim: 0.85 };
   const ctx = d.context || {};
-  if (d.quiet === true) return { depth: 0.35, dim: 0.45 };
+  // 0.7, not Field.jsx's 0.45 — see the alpha note above. The DEPTH is
+  // unchanged, so a quiet read still settles less than a confident one; only
+  // its visibility floor moved.
+  if (d.quiet === true) return { depth: 0.35, dim: 0.7 };
   const level = ctx.confidence ? ctx.confidence.level : null;
   const depth = level === 'high' ? 1 : level === 'moderate' ? 0.7 : 0.34;
   return { depth, dim: 1 };
