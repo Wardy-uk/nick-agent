@@ -36,23 +36,32 @@ import './PresenceView.css';
 export function fieldStateFor(provenanceState) {
   switch (provenanceState) {
     case 'neuro':
-      return { confidenceLevel: 'high', degraded: false };
+      return { confidenceLevel: 'high', degraded: false, partial: false };
     case 'neuro-stale':
-      // We are looking at a real read, just an old one. It settles, barely.
-      return { confidenceLevel: 'low', degraded: false };
+      // A real read, just an old one. It settles, barely.
+      return { confidenceLevel: 'low', degraded: false, partial: false };
+    // ⚠ `mixed` is a FIFTH state and it is the one the live kiosk was actually
+    // in. `provenance.js` rolls up to neuro / neuro-stale / unavailable / demo
+    // AND 'mixed' — "partly live, and the parts we could not read are blank
+    // rather than guessed". The first cut had no case for it, so it fell to the
+    // default and rendered "I can't see the brain", which is a FALSE NEGATIVE:
+    // most of the read was fine. Partly-seen must not read as blind, for the
+    // same reason blind must not read as calm.
+    case 'mixed':
+      return { confidenceLevel: 'low', degraded: false, partial: true };
     case 'demo':
       // Seeded content. It must never look like a working day.
-      return { confidenceLevel: 'low', degraded: true };
+      return { confidenceLevel: 'low', degraded: true, partial: false };
     case 'unavailable':
     default:
-      return { confidenceLevel: 'low', degraded: true };
+      return { confidenceLevel: 'low', degraded: true, partial: false };
   }
 }
 
 export default function PresenceView() {
   const { provenance, model, status } = useSaraState();
   const state = provenance?.state || 'unavailable';
-  const { confidenceLevel, degraded } = fieldStateFor(state);
+  const { confidenceLevel, degraded, partial } = fieldStateFor(state);
 
   // SARA's own line, taken verbatim from the backend. It is NOT rebuilt here:
   // three surfaces phrasing the same fact differently is how they drift, and
@@ -71,22 +80,35 @@ export default function PresenceView() {
       <div className="presence__content">
         <span className="presence__mark">SARA</span>
 
-        {status === 'connecting' && <p className="presence__line">Waking…</p>}
-
-        {status !== 'connecting' && degraded && (
-          // ⚠ Never an all-clear. "I can't see your work" and "there is nothing
+        {/* ⚠ EXACTLY ONE of these always renders. The first cut had no branch for
+            a live read with no headline, so the screen showed the field and NOT
+            ONE WORD — indistinguishable from a broken view, on the surface whose
+            whole job is to make the state legible. Silence is a valid answer for
+            a NOTIFICATION; it is never a valid answer for a screen. */}
+        {status === 'connecting' ? (
+          <p className="presence__line">Waking…</p>
+        ) : degraded ? (
+          // ⚠ Never an all-clear. "I can't see the brain" and "there is nothing
           // to see" are different facts, and only one of them is good news.
           <p className="presence__line presence__line--degraded">
             I can’t see the brain right now — this isn’t an all-clear.
           </p>
-        )}
-
-        {status !== 'connecting' && !degraded && line && (
+        ) : line ? (
           <p className="presence__line">{line}</p>
+        ) : partial ? (
+          <p className="presence__line">Partly live. What I couldn’t read is blank, not guessed.</p>
+        ) : (
+          // Live, and nothing to say. Deliberately says NOTHING about his work —
+          // this screen cannot see the pool, so "you're all clear" would be a
+          // claim it has no standing to make.
+          <p className="presence__line">Here, and reading.</p>
         )}
 
         {state === 'neuro-stale' && (
           <p className="presence__note">Last good read — not live.</p>
+        )}
+        {partial && line && (
+          <p className="presence__note">Some of NEURO could not be read.</p>
         )}
       </div>
     </section>

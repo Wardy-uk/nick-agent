@@ -1,24 +1,36 @@
 /* Presence — SARA on the desk panel.
-   The field owns the whole screen; the words sit on top of it, low-left, where
-   the scrim is heaviest. Legibility is not negotiable: the words are the
-   product, the field is the room they are said in. */
+   The field owns this view; the words sit on it, low-left, where the scrim is
+   heaviest. Legibility is not negotiable: the words are the product, the field
+   is the room they are said in. */
 
+/* ⚠ NOT `min-height: 100vh`. The first cut used it, copied from the phone where
+   the Surface owns the whole viewport — but on the kiosk this view renders
+   INSIDE `.app__view`, which sits below a provenance banner and scrolls
+   (`overflow: auto`). So the section was taller than its container, the panel
+   grew a scrollbar, and everything anchored to the bottom sat below the fold:
+   the screenshot showed a blank field and not one word of SARA's. The field was
+   drawn and the sentence was not, which is the exact failure mode the field is
+   supposed to make impossible.
+
+   Same species as the widget's opacity constants: a value calibrated against
+   one SIZE and GROUND, moved to another without re-deriving what it produces
+   there. Bounded against the viewport MINUS the shell's chrome instead. */
 .presence {
   position: relative;
-  width: 100%;
+  display: flex;
+  align-items: flex-end;
   height: 100%;
-  min-height: 100vh;
+  min-height: min(30rem, calc(100vh - 9rem));
   overflow: hidden;
+  border-radius: 14px;
   background: #0b0f14;
 }
 
 .presence__content {
-  position: absolute;
-  left: 0;
-  bottom: 0;
+  position: relative;
   z-index: 1;
-  padding: clamp(1.25rem, 4vw, 3rem);
-  max-width: min(46rem, 80%);
+  padding: clamp(1.25rem, 3vw, 2.5rem);
+  max-width: min(46rem, 85%);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -31,19 +43,17 @@
   color: #8b98a8;
 }
 
-/* Sized against a desk panel viewed from a metre away, not a phone in the hand
-   — the one thing that genuinely differs between the two surfaces. */
+/* Sized against a desk panel read from a metre away, not a phone in the hand —
+   the one thing that genuinely differs between the two surfaces. */
 .presence__line {
   margin: 0;
-  font-size: clamp(1.2rem, 2.4vw, 2rem);
+  font-size: clamp(1.2rem, 2.2vw, 1.9rem);
   line-height: 1.35;
   color: #e6edf3;
   text-wrap: balance;
 }
 
-.presence__line--degraded {
-  color: #ffc9a0;
-}
+.presence__line--degraded { color: #ffc9a0; }
 
 .presence__note {
   margin: 0;
