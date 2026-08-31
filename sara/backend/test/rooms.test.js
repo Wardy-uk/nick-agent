@@ -297,3 +297,50 @@ test('the three clock reasons stay distinct', () => {
   assert.deepEqual(new Set(reasons).size, 3,
     'elsewhere / not-here / could-not-look draw the same screen but are different facts');
 });
+
+// ── The fingerprint takes over ──────────────────────────────────────────────
+// Measured on a walk from the bedroom to the living room (31 Aug 2026): it
+// tracked every leg and then held living-room/sure for sixteen consecutive
+// polls at 0.36-0.83 against 3.1 and 4.5. It replaces a hand-picked threshold
+// that had by then been wrong twice.
+
+test('a SURE fingerprint overrules this room\'s own threshold', () => {
+  // The sensor's threshold says he is here; the fingerprint says the kitchen.
+  const arb = resolveRoom({ 'living-room': report({ inRoom: true }) }, NOW);
+  const d = displayState('living-room', arb, { away: false },
+    { room: 'kitchen', confidence: 'sure' });
+  assert.equal(d.state, 'clock');
+  assert.equal(d.decidedBy, 'fingerprint');
+  assert.match(d.say, /kitchen/);
+});
+
+test('a SURE fingerprint naming THIS room shows everything', () => {
+  const arb = resolveRoom({ 'living-room': report({ inRoom: false, rate: 0.3 }) }, NOW);
+  const d = displayState('living-room', arb, { away: false },
+    { room: 'living-room', confidence: 'sure' });
+  assert.equal(d.state, 'full');
+  assert.equal(d.decidedBy, 'fingerprint');
+});
+
+// ⚠ It can only ever be better than the threshold, never worse.
+test('unsure and none fall back to the threshold, unchanged', () => {
+  const arb = resolveRoom({ 'living-room': report({ inRoom: true }) }, NOW);
+  for (const inf of [{ room: 'kitchen', confidence: 'unsure' },
+                     { room: null, confidence: 'none' },
+                     null]) {
+    const d = displayState('living-room', arb, { away: false }, inf);
+    assert.equal(d.state, 'full', 'an uncertain fingerprint must not hide SARA');
+    assert.equal(d.decidedBy, 'threshold');
+  }
+});
+
+test('an uncalibrated house behaves exactly as it did before', () => {
+  const arb = resolveRoom({
+    'living-room': report({ inRoom: false, rate: 0.3 }),
+    kitchen: report({ inRoom: true }),
+  }, NOW);
+  const d = displayState('living-room', arb, { away: false },
+    { room: null, confidence: 'none', why: 'no rooms have been calibrated' });
+  assert.equal(d.state, 'clock');
+  assert.equal(d.decidedBy, 'threshold');
+});

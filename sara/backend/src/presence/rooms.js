@@ -160,7 +160,7 @@ function resolveRoom(reports = {}, now = new Date(), {
  * `home` is `homePresence()`'s shape: `{ away: true|false|null }`. Only a
  * literal `true` — HA read a zone and it was not home — can lock.
  */
-function displayState(thisRoom, arbitration, home) {
+function displayState(thisRoom, arbitration, home, inferred = null) {
   const away = home && home.away;
   // ⚠ "Audible somewhere" is too weak to overrule geolocation. Caught the
   // moment Nick left the house: every sensor had lost him except the bedroom,
@@ -182,7 +182,20 @@ function displayState(thisRoom, arbitration, home) {
     : null;
   // null (no sensor here, or it could not answer) is NOT false. A room with no
   // sensor falls through to the arbitration rather than being declared empty.
-  const hereByOwnSensor = own && own.readable ? own.inRoom : null;
+  const byOwnSensor = own && own.readable ? own.inRoom : null;
+
+  // ⚠ THE FINGERPRINT WINS WHEN IT IS SURE, and only then. Measured on a walk
+  // from the bedroom to the living room (31 Aug 2026): it tracked every leg,
+  // caught the kitchen in passing, then held `living-room / sure` for sixteen
+  // consecutive polls at 0.36-0.83 against 3.1 and 4.5. The threshold it
+  // replaces is a hand-picked number that has now been wrong twice.
+  //
+  // `unsure` and `none` fall back to this room's own sensor, so an uncalibrated
+  // house, a new room, or a genuinely ambiguous moment behaves exactly as it did
+  // before — this can only ever be better than the threshold, never worse.
+  const sureRoom = inferred && inferred.confidence === 'sure' ? inferred.room : null;
+  const hereByOwnSensor = sureRoom ? (sureRoom === thisRoom) : byOwnSensor;
+  const decidedBy = sureRoom ? 'fingerprint' : (byOwnSensor === null ? 'ranking' : 'threshold');
 
   if (away === true) {
     // ⚠ GEOLOCATION DOES NOT GET TO LOCK A SCREEN A SENSOR CAN HEAR HIM AT.
@@ -211,7 +224,7 @@ function displayState(thisRoom, arbitration, home) {
       return {
         state: here ? 'full' : 'clock',
         reason: 'home-contradicted',
-        say: here ? null : `In the ${arbitration.room}.`,
+        say: here ? null : `In the ${sureRoom || arbitration.room}.`,
         contradiction: `Home Assistant says not home, but the watch is audible in the ${arbitration.room}. Trusting the watch.`,
       };
     }
@@ -219,16 +232,17 @@ function displayState(thisRoom, arbitration, home) {
       state: 'locked',
       reason: 'not-home',
       say: 'Away from home — screen off.',
+      decidedBy,
     };
   }
 
   if (hereByOwnSensor === true) {
-    return { state: 'full', reason: 'watch-in-room', say: null };
+    return { state: 'full', reason: 'watch-in-room', say: null, decidedBy };
   }
   // No sensor in this room, or it could not answer: fall back to the ranking
   // rather than assert he is absent from a room nothing is watching.
   if (hereByOwnSensor === null && arbitration && arbitration.room === thisRoom) {
-    return { state: 'full', reason: 'watch-in-room-by-ranking', say: null };
+    return { state: 'full', reason: 'watch-in-room-by-ranking', say: null, decidedBy };
   }
 
   // Everything else is the clock, and the REASON is what keeps the three
@@ -240,15 +254,17 @@ function displayState(thisRoom, arbitration, home) {
       state: 'clock',
       reason: 'watch-unreadable',
       say: arbitration ? arbitration.why : 'no sensor readings',
+      decidedBy,
     };
   }
   if (arbitration.status === 'absent') {
-    return { state: 'clock', reason: 'watch-not-here', say: arbitration.why };
+    return { state: 'clock', reason: 'watch-not-here', say: arbitration.why, decidedBy };
   }
   return {
     state: 'clock',
     reason: 'watch-in-another-room',
-    say: `In the ${arbitration.room}.`,
+    say: `In the ${sureRoom || arbitration.room}.`,
+    decidedBy,
   };
 }
 

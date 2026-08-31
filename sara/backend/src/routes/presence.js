@@ -194,6 +194,10 @@ router.get('/room', (_req, res) => {
     room: inferred.room,
     confidence: inferred.confidence,     // sure | unsure | none
     why: inferred.why,
+    // How far clear the winner was. Omitted here originally, which made a
+    // decisive call and a hair's-breadth one look identical to any caller that
+    // did not read the raw scores — the exact thing the log exists to expose.
+    margin: inferred.margin === undefined ? null : inferred.margin,
     scores: inferred.scores,
     sensors: arbitration.rooms,
     unreadable: arbitration.unreadable,
@@ -241,7 +245,8 @@ router.get('/display', (req, res) => {
     });
   }
   const home = homePresence(ha.getTelemetry());
-  const display = displayState(room, arbitration, home);
+  const inferredNow = classify(liveVector(arbitration), profiles.all());
+  const display = displayState(room, arbitration, home, inferredNow);
 
   if (lastDisplay.get(room) !== display.state) {
     history.note('display:' + room, lastDisplay.get(room) || null, display.state,
@@ -261,10 +266,15 @@ router.get('/display', (req, res) => {
     // Where the fingerprint says he is. Reported alongside rather than driving
     // the screen: this room's own sensor still decides `state`, so an
     // uncalibrated house behaves exactly as before.
-    inferred: (() => {
-      const i = classify(liveVector(arbitration), profiles.all());
-      return { room: i.room, confidence: i.confidence, why: i.why };
-    })(),
+    inferred: {
+      room: inferredNow.room,
+      confidence: inferredNow.confidence,
+      why: inferredNow.why,
+      margin: inferredNow.margin === undefined ? null : inferredNow.margin,
+    },
+    // Which mechanism actually decided `state`: fingerprint / threshold /
+    // ranking. Named so a wrong screen can be attributed instead of argued about.
+    decidedBy: display.decidedBy || null,
     watch: {
       status: arbitration.status,  // present | absent | unknown
       room: arbitration.room,
