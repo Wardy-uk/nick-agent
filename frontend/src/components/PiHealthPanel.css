@@ -589,3 +589,82 @@
   color: var(--text-muted);
   padding: 6px 0;
 }
+
+/* ── Her senses ───────────────────────────────────────────────────────────
+   Five states, and `off` must never look like `stale`: not having the desktop
+   agent installed is a decision, an agent that stopped talking is a problem.
+   Colour AND position carry the difference, never colour alone. */
+.ph-signals { margin-bottom: 14px; }
+
+.ph-signals-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ph-signals-sum { font-size: 12px; font-weight: 600; }
+.ph-signals-sum.ph-band-ok  { color: var(--ok, #4ade80); }
+.ph-signals-sum.ph-band-bad { color: var(--bad, #f87171); }
+
+.ph-signals-err { color: var(--bad, #f87171); font-size: 13px; margin: 6px 0 0; }
+
+.ph-signals-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.ph-signal {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  border-left: 3px solid transparent;
+}
+
+.ph-signal-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex: 0 0 auto;
+  background: currentColor;
+}
+
+.ph-sig-ok      { border-left-color: var(--ok, #4ade80);   color: var(--ok, #4ade80); }
+.ph-sig-warn    { border-left-color: var(--warn, #fbbf24); color: var(--warn, #fbbf24); }
+.ph-sig-bad     { border-left-color: var(--bad, #f87171);  color: var(--bad, #f87171); }
+/* Not a fault. Deliberately grey and deliberately unalarming. */
+.ph-sig-neutral { border-left-color: rgba(255,255,255,0.12); color: rgba(255,255,255,0.35); }
+
+.ph-signal-body { min-width: 0; }
+
+.ph-signal-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ph-signal-name  { font-weight: 600; font-size: 13px; color: var(--text, #e8e9ee); }
+.ph-signal-state { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.ph-signal-age   { font-size: 11px; color: var(--text-dim, #8b93a7); margin-left: auto; }
+
+.ph-signal-what {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--text-dim, #8b93a7);
+  line-height: 1.35;
+}
+
+.ph-signal-why {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  color: var(--text-dim, #8b93a7);
+  opacity: 0.8;
+  font-style: italic;
+}

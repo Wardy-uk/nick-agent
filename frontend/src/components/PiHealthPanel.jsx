@@ -171,6 +171,114 @@ function assessAi(ai, ollamaReachable) {
   return { level, issues, health, byProvider };
 }
 
+/**
+ * Every sense SARA has, and whether it is actually working.
+ *
+ * This panel used to be the Pi's vitals alone. It is NEURO Health now because
+ * the machine being healthy has never been the interesting question — three
+ * separate blindnesses were found on 31 Aug 2026 and every one of them was
+ * INVISIBLE: the phone feed had returned null for five weeks, `health-signals`
+ * was computing trends nothing read, and dietary logging had stopped in March.
+ *
+ * A dead sensor and a quiet one look identical from every other screen. That is
+ * what this section exists to make impossible.
+ *
+ * ⚠ FIVE states, not two, and `off` must never look like `stale`. Not having a
+ * desktop agent installed is a decision; having one that stopped talking is a
+ * problem. Rendering them alike is how a real fault hides behind a deliberate
+ * gap — which is precisely how the phone stayed broken for five weeks.
+ */
+const SIGNAL_STATE = {
+  live:  { band: 'ok',      label: 'live' },
+  stale: { band: 'bad',     label: 'stopped' },
+  never: { band: 'warn',    label: 'never reported' },
+  error: { band: 'bad',     label: 'check failed' },
+  off:   { band: 'neutral', label: 'not set up' },
+};
+
+function fmtAge(minutes) {
+  if (minutes == null) return null;
+  if (minutes < 90) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function SignalsSection() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch(apiUrl('/api/signals'));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (alive) { setData(json); setError(null); }
+      } catch (e) {
+        if (alive) setError(e.message);
+      }
+    };
+    load();
+    const t = setInterval(load, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  if (error) {
+    return (
+      <section className="ph-card ph-signals">
+        <h2 className="ph-card-title">Her senses</h2>
+        {/* An unreadable check is NOT a clean bill of health, and must not read
+            like one — the whole point of the section. */}
+        <p className="ph-signals-err">Couldn&rsquo;t read this — {error}. That is not the same as everything being fine.</p>
+      </section>
+    );
+  }
+  if (!data) return null;
+
+  const faults = (data.signals || []).filter(s => ['stale', 'error'].includes(s.state)).length;
+  const live = (data.signals || []).filter(s => s.state === 'live').length;
+
+  return (
+    <section className="ph-card ph-signals">
+      <div className="ph-signals-head">
+        <h2 className="ph-card-title">Her senses</h2>
+        <span className={`ph-signals-sum ph-band-${faults ? 'bad' : 'ok'}`}>
+          {faults ? `${faults} not reporting` : `${live} live`}
+        </span>
+      </div>
+
+      <ul className="ph-signals-list">
+        {(data.signals || []).map(sig => {
+          const meta = SIGNAL_STATE[sig.state] || SIGNAL_STATE.error;
+          return (
+            <li key={sig.id} className={`ph-signal ph-sig-${meta.band}`}>
+              <span className="ph-signal-dot" aria-hidden="true" />
+              <div className="ph-signal-body">
+                <div className="ph-signal-top">
+                  <span className="ph-signal-name">{sig.label}</span>
+                  <span className="ph-signal-state">{meta.label}</span>
+                  {sig.ageMinutes != null && (
+                    <span className="ph-signal-age">{fmtAge(sig.ageMinutes)}</span>
+                  )}
+                </div>
+                {/* What she LOSES when this is dark, in plain words. A status
+                    row naming only the source teaches nothing about why it
+                    matters. */}
+                <p className="ph-signal-what">{sig.what}</p>
+                {(sig.why || sig.detail) && (
+                  <p className="ph-signal-why">{sig.why || sig.detail}</p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 export default function PiHealthPanel() {
   const [data, setData] = useState(null);
   const [ai, setAi] = useState(null);
@@ -250,6 +358,10 @@ export default function PiHealthPanel() {
 
   return (
     <div className="ph-panel">
+
+      {/* Her senses FIRST. The Pi being warm has never been the interesting
+          question — whether she can still see anything is. */}
+      <SignalsSection />
 
       {/* ---- FOCUS BAND: the verdict, then only what needs attention ---- */}
       <section className={`ph-focus ph-status-${overallStatus}`}>

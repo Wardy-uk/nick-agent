@@ -43,6 +43,16 @@ async function getStates() {
   }
 }
 
+/**
+ * The cached states, WITHOUT a network call. For the status page, which renders
+ * a row per sense and must not add an HTTP round trip per render. Returns null
+ * when nothing has been fetched yet — "not cached" and "no entities" are
+ * different facts and the caller says so.
+ */
+function cachedStates() {
+  return _cache.states && _cache.states.length ? _cache.states : null;
+}
+
 async function getEntity(entityId) {
   const states = await getStates();
   return states.find(e => e.entity_id === entityId) || null;
@@ -361,6 +371,7 @@ async function getHaContextBlock() {
 
 module.exports = {
   isConfigured,
+  cachedStates,
   resolvePhoneEntities,
   phoneEntity,
   getStates,

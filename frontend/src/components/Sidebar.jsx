@@ -70,7 +70,9 @@ const SECONDARY_ITEMS = [
   // Sits next to Pi Health deliberately: one is the machine's vitals, the other
   // is Nick's, and both are "how is this thing running" rather than work.
   { id: 'health',     label: 'My Health', icon: '♥' },
-  { id: 'pi-health',  label: 'Pi Health', icon: '▚' },
+  // Label only. The view id stays `pi-health` so every deep link, ?view= param
+  // and notification route keeps working — the same call as `today` for Now.
+  { id: 'pi-health',  label: 'NEURO Health', icon: '▚' },
   // Configuration, but it writes to an external workspace, so it gets its own
   // entry rather than hiding inside Settings — the mapping table is the whole
   // safety model and needs to be somewhere Nick can actually find it.

@@ -210,6 +210,7 @@ app.use('/api/state-of-play', require('./routes/state-of-play'));
 app.use('/api/attention', require('./routes/attention'));
 app.use('/api/ambient', require('./routes/ambient'));
 app.use('/api/desktop', require('./routes/desktop'));
+app.use('/api/signals', require('./routes/signals'));
 app.use('/api/weekly-risk', require('./routes/weekly-risk'));
 app.use('/api/tasks', require('./routes/tasks'));
 // Its own mount, deliberately NOT under /api/tasks — a sibling registered after
