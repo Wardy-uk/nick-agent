@@ -1,0 +1,20 @@
+{
+  "name": "vesta",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "VESTA — the shared home surface. Tasks, the diary (redacted), the kitchen and what to cook out of it.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}

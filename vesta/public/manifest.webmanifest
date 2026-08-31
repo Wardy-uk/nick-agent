@@ -1,0 +1,10 @@
+{
+  "name": "Vesta",
+  "short_name": "Vesta",
+  "description": "The house: tasks, the diary, the kitchen.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#1a1512",
+  "theme_color": "#1a1512"
+}

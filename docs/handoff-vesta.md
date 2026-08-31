@@ -2,7 +2,23 @@
 
 **For a fresh Claude Code session. Self-contained: everything you need is here or named here.**
 
-Written 31 Aug 2026. Backend is **built, tested and deployed**; the frontend does not exist yet and is your job.
+Written 31 Aug 2026.
+
+> **UPDATE, 31 Aug 2026 — step 1 is DONE.** The app is built at `vesta/` and
+> covered below. Step 2 (the Catalogues panel) was picked up by a CONCURRENT
+> session and is not mine to describe. Step 3 (photo → items) is still open, and
+> still last.
+>
+> ⚠ **A bug was found and fixed on the way in, and it is the interesting part.**
+> `routes/vesta.js` passed `req.account.username` to `capture.submissions()` and
+> `capture.submit()`, both of which take the ACCOUNT OBJECT — so `sourceFor()`
+> keyed on `capture:undefined`, every read came back `[]` and every write 429'd
+> with *"no such account"*. **The whole first feature of VESTA was dead**, behind
+> a green suite, because the only assertion was `Array.isArray(json.tasks)` —
+> true of `[]`, which is exactly what the broken path returns. That is the same
+> species as the `upsertCalendarEvent` camelCase trap in the Traps section
+> below, and the same lesson: **pair every negative assertion with a positive
+> one.** Two round-trip tests now do.
 
 ---
 
@@ -92,6 +108,14 @@ Screens:
 ### 2. A Catalogues panel in NEURO
 
 `frontend/src/components/CataloguesPanel.jsx` + a sidebar entry. Against `/api/catalogues`: list, create, add/remove items, and a **share toggle** per catalogue. The share toggle is the one control with a consequence outside the house — make it read like it.
+
+> **DONE, 31 Aug 2026** (the concurrent session — see `docs/handoff-neuro-backlog.md` §1). Sidebar
+> **Catalogues**, view id `catalogues`. Sharing asks first and names where the list goes; creating
+> has no `shared` control at all. ⚠ `parse` did not recognise `render`'s own `*(empty)*`
+> placeholder, so **every write appended one more copy of it, for ever**, to any catalogue with an
+> empty section — which every new one is. Fixed in `services/catalogue.js`, pinned on the rendered
+> TEXT and on the file on disk, since the existing stability test compares parsed fields and could
+> never see it.
 
 ### 3. Then, and only then: photo → items
 

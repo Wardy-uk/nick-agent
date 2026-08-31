@@ -92,6 +92,45 @@ test('an account with no scopes granted sees ONLY its own tasks', async () => {
   assert.equal('kitchen' in json, false, 'nor a kitchen block');
 });
 
+/**
+ * ⚠ The POSITIVE half of the tasks assertion, and it is not optional.
+ *
+ * The test above asserts `Array.isArray(json.tasks)`, which is true of `[]` —
+ * and `[]` is exactly what a BROKEN tasks path returns. It was broken: both call
+ * sites passed `req.account.username` where `capture.submissions`/`submit` take
+ * the ACCOUNT OBJECT, so `sourceFor()` keyed on `capture:undefined`, every read
+ * came back empty and every write 429'd with "no such account". The whole first
+ * feature of VESTA was dead behind a green suite.
+ *
+ * Same species as the calendar trap in the handoff: a negative assertion passes
+ * on nothing at all. Pair it with a round trip that proves the thing works.
+ */
+test('a task she adds comes back on her home screen', async () => {
+  const token = await signIn('legacy', '246810');
+
+  const added = await call('/api/v/tasks', { token, body: { text: 'pick up a prescription' } });
+  assert.equal(added.status, 200, 'adding a task must actually succeed');
+  assert.equal(added.json.ok, true);
+
+  const { json } = await call('/api/v/home', { token });
+  const texts = (json.tasks || []).map(t => t.text);
+  assert.ok(texts.includes('pick up a prescription'), 'the task she just added must be on her screen');
+
+  const row = json.tasks.find(t => t.text === 'pick up a prescription');
+  // The thin shape is the boundary: none of Nick's own triage fields.
+  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'dueDate', 'status', 'text']);
+  assert.equal(row.status, 'to do');
+});
+
+test("one account never sees another account's tasks", async () => {
+  capture.create({ label: 'Someone Else', username: 'someone', pin: '975310' });
+  const other = await signIn('someone', '975310');
+  const { json } = await call('/api/v/home', { token: other });
+  const texts = (json.tasks || []).map(t => t.text);
+  assert.equal(texts.includes('pick up a prescription'), false,
+    'submissions are scoped by source in the QUERY, not filtered in the page');
+});
+
 test('the kitchen refuses to be written by an account without the scope', async () => {
   const token = await signIn('legacy', '246810');
   const r = await call('/api/v/catalogue/kitchen/add', { token, body: { section: 'Fridge', name: 'milk' } });

@@ -1,0 +1,30 @@
+# Netlify config for VESTA.
+#
+# Set the site's *Base directory* to `vesta` — Netlify then reads THIS file and
+# the paths below are relative to that base, exactly as `sara/app` does. A stray
+# netlify.toml at the repo root would win over this one.
+#
+# Domain: vesta.nickward.co.uk
+#
+# ⚠ VITE_API_URL must be the Pi's PUBLIC Funnel address, not the tailnet one.
+# Her phone is outside the house and has no Tailscale; that is the whole reason
+# /api/v is exempt from the PIN in the first place.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# SPA fallback. Never for /api — that goes cross-origin to the Pi, not through
+# Netlify.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# She signs in with a PIN on a public URL. These cost nothing and close the
+# cheapest attacks against a page that holds a bearer token.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"

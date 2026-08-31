@@ -86,7 +86,7 @@ router.get('/home', requireAccount, (req, res) => {
 
   // ── Tasks ────────────────────────────────────────────────────────────────
   try {
-    out.tasks = capture.submissions(req.account.username);
+    out.tasks = capture.submissions(req.account);
   } catch (e) {
     out.tasks = null;
     out.gaps.push({ block: 'tasks', why: e.message });
@@ -140,7 +140,7 @@ router.get('/home', requireAccount, (req, res) => {
 // length cap and the personal-domain rule all still apply unchanged.
 router.post('/tasks', requireAccount, (req, res) => {
   try {
-    const result = capture.submit(req.account.username, req.body && req.body.text);
+    const result = capture.submit(req.account, req.body && req.body.text);
     if (!result.ok) return res.status(result.status || 400).json(result);
     res.json(result);
   } catch (e) {

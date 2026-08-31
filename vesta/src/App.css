@@ -1,0 +1,192 @@
+/* VESTA — warm where SARA is cold. It is a different house, and it should not
+   be mistaken for Nick's own screens at a glance. */
+
+:root {
+  --bg: #17120f;
+  --panel: #211a15;
+  --panel-2: #2b221b;
+  --line: #3a2e25;
+  --ink: #f2e9e0;
+  --ink-dim: #b7a696;
+  --ink-faint: #8a7a6c;
+  --ember: #e08a3c;
+  --ember-soft: #7a4a1e;
+  --good: #7fa86a;
+  --warn: #d9a441;
+  --radius: 14px;
+  --gap: 14px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+}
+
+/* ── Buttons and fields ──────────────────────────────────────────────────── */
+
+.btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 15px;
+  /* A fridge-door screen used with one thumb, often wet. */
+  min-height: 44px;
+  cursor: pointer;
+}
+.btn:disabled { opacity: .45; cursor: default; }
+.btn--primary { background: var(--ember); border-color: var(--ember); color: #1a1208; font-weight: 600; width: 100%; }
+.btn--quiet { background: none; border-color: transparent; color: var(--ink-faint); padding: 8px 10px; }
+
+.field { display: block; margin-bottom: 14px; }
+.field__label { display: block; font-size: 13px; color: var(--ink-dim); margin-bottom: 6px; }
+.field__input,
+.composer__input {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  padding: 12px;
+  /* 16px keeps iOS from zooming the whole page on focus. */
+  font-size: 16px;
+  min-height: 44px;
+}
+.field__input:focus, .composer__input:focus { outline: 2px solid var(--ember-soft); }
+
+/* ── Sign in ─────────────────────────────────────────────────────────────── */
+
+.signin { padding-top: 12vh; text-align: center; }
+.signin__hearth {
+  width: 54px; height: 54px; margin: 0 auto 18px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 60%, var(--ember), var(--ember-soft) 55%, transparent 72%);
+}
+.signin__title { margin: 0; font-size: 30px; letter-spacing: .04em; font-weight: 500; }
+.signin__sub { margin: 4px 0 30px; color: var(--ink-faint); }
+.signin__form { text-align: left; }
+.signin__error {
+  margin-top: 16px;
+  color: var(--warn);
+  background: rgba(217, 164, 65, .08);
+  border: 1px solid rgba(217, 164, 65, .3);
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 15px;
+}
+
+/* ── Home ────────────────────────────────────────────────────────────────── */
+
+.home__loading, .home__error { color: var(--ink-dim); padding: 24px 4px; }
+.home__head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+.home__title { margin: 0; font-size: 22px; font-weight: 500; letter-spacing: .04em; }
+.home__who { display: flex; align-items: center; gap: 6px; color: var(--ink-faint); font-size: 14px; }
+.home__stale {
+  color: var(--warn); font-size: 14px;
+  border-left: 3px solid var(--warn); padding: 8px 12px; margin: 0 0 16px;
+}
+.home__foot { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; }
+.home__build { color: var(--ink-faint); font-size: 11px; font-family: ui-monospace, monospace; }
+
+/* ── Sections ────────────────────────────────────────────────────────────── */
+
+.section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: var(--gap);
+}
+.section__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.section__title { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-dim); }
+.section__empty { margin: 0; color: var(--ink-faint); font-size: 15px; }
+
+/* A gap is not an empty list, and must not look like one. */
+.section__gap {
+  margin: 0;
+  color: var(--warn);
+  background: rgba(217, 164, 65, .07);
+  border: 1px solid rgba(217, 164, 65, .28);
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 15px;
+}
+.section__gap-lead { font-weight: 600; }
+.section__gap-note { color: var(--ink-faint); font-size: 13px; }
+
+/* ── Tasks ───────────────────────────────────────────────────────────────── */
+
+.tasks { list-style: none; margin: 0 0 12px; padding: 0; }
+.task {
+  display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
+  padding: 10px 0; border-bottom: 1px solid var(--line);
+}
+.task:last-child { border-bottom: none; }
+.task__text { flex: 1; }
+.task__meta { display: flex; gap: 8px; flex-shrink: 0; font-size: 12px; color: var(--ink-faint); }
+.task__status { text-transform: lowercase; }
+.task--done .task__text { color: var(--ink-faint); text-decoration: line-through; }
+.task--done .task__status { color: var(--good); }
+/* Declined, said plainly. Not hidden, not dressed up as done. */
+.task--dropped .task__text { color: var(--ink-faint); }
+.task--dropped .task__status { color: var(--warn); }
+.task--doing .task__status { color: var(--ember); }
+
+.composer { display: flex; gap: 8px; }
+.composer--small { margin-top: 10px; }
+.composer__error { color: var(--warn); font-size: 14px; margin: 8px 0 0; }
+
+/* ── Calendar ────────────────────────────────────────────────────────────── */
+
+.day { margin-bottom: 14px; }
+.day:last-of-type { margin-bottom: 0; }
+.day__label { margin: 0 0 6px; font-size: 14px; color: var(--ember); font-weight: 600; }
+.day__events { list-style: none; margin: 0; padding: 0; }
+.event { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; flex-wrap: wrap; }
+.event__time { font-variant-numeric: tabular-nums; color: var(--ink-dim); font-size: 14px; min-width: 92px; }
+.event__title { flex: 1; }
+.event__where { width: 100%; padding-left: 102px; color: var(--ink-faint); font-size: 13px; }
+/* Work is deliberately recessive. There is nothing there to read. */
+.event--work .event__title { color: var(--ink-faint); font-style: italic; }
+.day__note { margin: 12px 0 0; color: var(--ink-faint); font-size: 13px; }
+
+/* ── Kitchen ─────────────────────────────────────────────────────────────── */
+
+.shelf { margin-bottom: 18px; }
+.shelf:last-of-type { margin-bottom: 0; }
+.shelf__label { margin: 0 0 8px; font-size: 14px; color: var(--ember); font-weight: 600; }
+.shelf__empty { margin: 0; color: var(--ink-faint); font-size: 14px; }
+.shelf__items { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 8px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px;
+  color: var(--ink); padding: 9px 14px; font-size: 15px; min-height: 40px; cursor: pointer;
+}
+.chip:disabled { opacity: .45; }
+.chip__used { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .06em; }
+.chip:active { background: var(--ember-soft); }
+
+/* ── Meals ───────────────────────────────────────────────────────────────── */
+
+.meals { list-style: none; margin: 0; padding: 0; }
+.meal { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.meal:last-child { border-bottom: none; }
+.meal__name { display: block; }
+/* The evidence, on the card. A suggestion whose reason is invisible is a guess
+   with a nice font. */
+.meal__using { display: block; color: var(--ink-faint); font-size: 13px; }
