@@ -109,18 +109,30 @@ MIN_RATE = float(os.environ.get("SARA_MIN_RATE", "0.2"))
 # 5-15 dB and a plasterboard wall by 3-5, so his own arm outweighed a wall.
 # Nothing here compares rooms; each sensor answers only about its own.
 #
-# ⚠ AND THE TEST IS THE ADVERT RATE, NOT RSSI. Measured on the living-room
-# sensor:
-#   in the room  1.75 1.95 2.05 2.10 2.30 2.55 /s
-#   upstairs     0.10 0.15 0.25 0.40           /s
-# A 4x gap against RSSI's 11 dB, and a count over a window rides out a turned
-# wrist where a median of a 26 dB-swinging quantity does not. One is dead centre
-# of that gap.
+# ⚠ THE TEST IS RSSI, AND RATE WAS TRIED FIRST AND WAS WRONG. On four samples
+# rate looked like a clean 4x separation; over a real hour of Nick moving around
+# the house it was not:
+#   living-room rate, him UPSTAIRS    0.4 0.8 0.9 1.05 1.25 1.55 1.65 1.9
+#   living-room rate, him DOWNSTAIRS  2.2 2.25 2.35 2.45 2.65
+# 1.9 against 2.2 is not a gap, and the screen flapped four times across it.
 #
-# Per sensor, because a passive scanner samples ~6% as often (see SCAN_MODE) and
-# every room has its own geometry. The default errs towards saying he IS here,
-# which shows the screen rather than hiding it.
-IN_ROOM_RATE = float(os.environ.get("SARA_IN_ROOM_RATE", "1.0"))
+# ⚠ WORSE, IN PASSIVE MODE RATE IS INVERTED. The bedroom sensor:
+#   watch IN the bedroom   -51/0.08  -53/0.03  -58/0.05  -62/0.03
+#   watch downstairs       -80/0.25  -85/0.25  -86/0.48  -71/0.35
+# Nearer gives FEWER callbacks, because AdvertisementMonitor reports found/lost
+# churn rather than advert volume: a marginal device flaps and generates events,
+# a strong one is found once and goes quiet. Rate there is not weak, it is
+# backwards.
+#
+# RSSI within ONE sensor separates cleanly, which is the distinction that
+# matters - it is only comparison BETWEEN sensors that is invalid (different
+# radios, and a body in the way):
+#   living-room sensor  downstairs -62..-74   upstairs -84..-88   (10 dB)
+#   bedroom sensor      upstairs   -51..-65   downstairs -80..-86 (15 dB)
+#
+# So: per sensor, measured from that sensor's own readings. The default errs
+# towards saying he IS here, which shows the screen rather than hiding it.
+IN_ROOM_RSSI = float(os.environ.get("SARA_IN_ROOM_RSSI", "-80"))
 # Health: the background must be audible. Measured: 24-27 distinct devices and
 # ~3700 adverts per minute in this house.
 HEALTH_WINDOW_S = float(os.environ.get("SARA_HEALTH_WINDOW_S", "45"))
@@ -200,18 +212,22 @@ class Sensor:
         # the first (is the watch within earshot of this Pi); `inRoom` answers the
         # one a screen in this room actually cares about. Null when unknown -
         # never False, which would read as "he is not here" on a deaf radio.
-        in_room = None if status == "unknown" else rate >= IN_ROOM_RATE
+        median = int(statistics.median(rssis)) if rssis else None
+        # Null, never False, when there is nothing to judge on: "I could not
+        # tell" must not read as "he is not here" and hide SARA from someone
+        # standing in front of her.
+        in_room = None if (status == "unknown" or median is None) else median >= IN_ROOM_RSSI
 
         return {
             "room": ROOM,
             "status": status,                      # present | absent | unknown
             "inRoom": in_room,                     # true | false | null
-            "inRoomRate": IN_ROOM_RATE,
+            "inRoomRssi": IN_ROOM_RSSI,
             "why": why,
             "healthy": healthy,
             "rate": round(rate, 2),
             "adverts": len(rssis),
-            "rssiMedian": int(statistics.median(rssis)) if rssis else None,
+            "rssiMedian": median,
             "rssiMax": max(rssis) if rssis else None,
             "backgroundAdverts": len(self.background),
             "backgroundDevices": len(self.addresses),
