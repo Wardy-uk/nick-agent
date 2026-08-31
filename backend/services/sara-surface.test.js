@@ -526,3 +526,23 @@ test('the inbox reads the triage record fields, not the retired table names', ()
   assert.equal(r.dashboard.rows[0].what, 'Contract renewal');
   assert.equal(r.dashboard.rows[0].meta, 'Jo Smith');
 });
+
+test('⚠ an EMPTY firefighting panel still says something', () => {
+  // Caught on the live Pi by asking "anything escalating?" on a calm day: the
+  // escalations read fine, there were none, the pool was empty, and the panel
+  // rendered nothing at all — indistinguishable from one that failed to load,
+  // on the surface where that mistake costs most. Three cases, three lines.
+  const none = compose(payload({
+    context: { activity: 'steady' },
+    escalations: { known: true, items: [] },
+  }), { ask: 'anything escalating?' });
+  assert.equal(none.dashboard.rows.length, 0);
+  assert.match(none.dashboard.note, /Nothing escalating/i);
+
+  // Unread is a different fact and must not read as the good news above.
+  const unread = compose(payload({
+    context: { activity: 'steady' },
+    escalations: { known: false, items: [] },
+  }), { ask: 'anything escalating?' });
+  assert.doesNotMatch(unread.dashboard.note, /Nothing escalating/i);
+});

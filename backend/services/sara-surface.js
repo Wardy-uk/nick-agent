@@ -313,7 +313,17 @@ function dashFirefighting(payload) {
       { note: c.say || null, level: c.urgency === 'critical' ? 'crit' : 'warn' }
     )),
     figure: null,
-    note: null,
+    // ⚠ AN EMPTY PANEL MUST STILL SAY SOMETHING. Reached by ASKING "anything
+    // escalating?" on a calm day: the escalations read fine, there were none,
+    // the pool was empty too, and the dashboard rendered nothing at all — which
+    // is indistinguishable from a panel that failed to load, on the surface
+    // where that mistake is most expensive. Caught on the live Pi, not by a
+    // test. "There are none" and "I could not look" are already kept apart
+    // above; this is the third case, and it is the good news.
+    note: hot.length ? null
+      : (isObj(esc) && esc.known === true
+        ? 'Nothing escalating.'
+        : 'Nothing live that I can see.'),
   };
 }
 
