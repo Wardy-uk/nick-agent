@@ -15,8 +15,8 @@
  *
  * ── The rules ───────────────────────────────────────────────────────────────
  * 1. **Explicit evidence only.** A defer with a REASON, a `needs-smaller`, a
- *    shrink, a step-away, a reflection, a grounded waiting-on row. Nothing is
- *    inferred from silence.
+ *    shrink, a step-away, a reflection. Nothing is inferred from silence, and
+ *    nothing is inferred from what somebody ELSE has not done.
  * 2. **No evidence, no insight.** An empty list is the correct answer for most
  *    days and must not be padded.
  * 3. **A missed check-in means nothing.** Being heads-down is exactly why one
@@ -46,10 +46,6 @@ const MIN_SHRINKS = 2;
 // everything Nick has ever found hard.
 const WINDOW_DAYS = 21;
 
-// A commitment someone else owes is only worth surfacing here once it has been
-// outstanding long enough that the wait IS the blocker.
-const WAITING_DAYS = 7;
-
 const MAX_INSIGHTS = 5;
 
 const DEFER_PHRASES = {
@@ -77,14 +73,12 @@ function _times(n) {
  *   `defers`   [{dedupeKey, title, reason, at}]      — attention_events
  *   `session`  the live focus session, decorated, or null
  *   `history`  recent archived sessions
- *   `waiting`  grounded waiting_on rows
  * @param {Date} now
  * @returns {{insights: Array, evidenceCount: number, sources: object}}
  */
 function assess(input = {}, now = new Date()) {
   const defers = Array.isArray(input.defers) ? input.defers : [];
   const history = Array.isArray(input.history) ? input.history : [];
-  const waiting = Array.isArray(input.waiting) ? input.waiting : [];
   const session = input.session && typeof input.session === 'object' ? input.session : null;
 
   const insights = [];
@@ -208,24 +202,31 @@ function assess(input = {}, now = new Date()) {
     });
   }
 
-  // ── Waiting on someone else ────────────────────────────────────────────────
+  // ── Deliberately NOT here: what someone else owes Nick ─────────────────────
   //
-  // Grounded rows only — `waiting-on`'s own service warns that the backfill
-  // produced some misparses, so a row with no source is not evidence anyone
-  // promised anything, and the meeting-prep rule ("never imply a person failed
-  // without evidence") applies here word for word.
-  for (const w of waiting) {
-    if (!w || w.status !== 'open' || !w.sourcePath) continue;
-    const age = _days(w.askedAt || w.firstSeen, now);
-    if (age == null || age < WAITING_DAYS) continue;
-    insights.push({
-      kind: 'waiting',
-      text: `"${w.text}" is waiting on ${w.person}${age != null ? ` — noted ${age} days ago` : ''}.`,
-      because: `an open waiting-on row with a source note`,
-      evidence: [{ source: 'waiting-on', ref: w.sourcePath, observedAt: w.sourceDate || w.askedAt || null, detail: w.text }],
-      weight: 1,
-    });
-  }
+  // `waiting_on` rows used to become insights, and on the live Now page that was
+  // FOUR "Naomi to ..." lines under a heading reading "Friction noticed" — 316
+  // open rows feeding a five-slot list, two of them 123 days old (there was a
+  // minimum age and no maximum, so a commitment from April showed for ever).
+  // Removed 31 Aug 2026, on the rule this file already states three lines up:
+  //
+  //   the evidence does not support the claim. A `waiting_on` row evidences that
+  //   somebody said they would do something. It does NOT evidence that Nick is
+  //   blocked on it — nothing records that — so presenting it as what got in his
+  //   way asserts a fact nothing measured, and does it against a named colleague.
+  //   The meeting-prep rule ("never imply a person failed, ignored or promised
+  //   something without evidence") is quoted in this file's own comments, and
+  //   four rows naming one person under "what got in your way" is exactly it.
+  //
+  // They have a home already, and a better one: `WaitingOn` on the People board
+  // and inside PersonDetail, deliberately pull-only. This was a second, worse
+  // copy of that list wearing the wrong label.
+  //
+  // ⚠ What DOES stay is a defer Nick made himself with the reason
+  // `waiting-on-someone` — that is him saying he is blocked, which is an act he
+  // performed and NEURO recorded. The distinction is the whole point: his own
+  // statement that he cannot proceed is evidence; someone else's outstanding
+  // commitment is not.
 
   insights.sort((a, b) => b.weight - a.weight);
 
@@ -234,11 +235,10 @@ function assess(input = {}, now = new Date()) {
     // list is a real answer, and a surface that always has something to say
     // about how hard the week was is a surface that gets closed.
     insights: insights.slice(0, MAX_INSIGHTS),
-    evidenceCount: defers.length + shrinkSources.length + waiting.length,
+    evidenceCount: defers.length + shrinkSources.length,
     sources: {
       defers: defers.length,
       shrinks: shrinkSources.length,
-      waiting: waiting.length,
       liveSession: !!session,
     },
   };
@@ -284,14 +284,8 @@ function build(now = new Date()) {
     gaps.push({ source: 'focus-session', why: e.message });
   }
 
-  let waiting = [];
-  try {
-    waiting = require('./waiting-on').list();
-  } catch (e) {
-    gaps.push({ source: 'waiting-on', why: e.message });
-  }
-
-  const assessed = assess({ defers, session, history, waiting }, now);
+  // waiting-on is deliberately not read — see the note in assess().
+  const assessed = assess({ defers, session, history }, now);
   return {
     generatedAt: now.toISOString(),
     ...assessed,
@@ -308,6 +302,5 @@ module.exports = {
   MIN_DEFERS,
   MIN_SHRINKS,
   WINDOW_DAYS,
-  WAITING_DAYS,
   MAX_INSIGHTS,
 };

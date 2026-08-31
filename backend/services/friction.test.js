@@ -131,26 +131,51 @@ test('only step-aways Nick RECORDED count — arrivals are not evidence he switc
   assertNeutral(saidSo);
 });
 
-test('a waiting-on row with no source note is not evidence anyone promised anything', () => {
+test('what someone ELSE owes Nick is never friction, however well evidenced', () => {
+  // Removed 31 Aug 2026. This used to produce an insight when the row carried a
+  // source note, and on the live Now page that meant FOUR "Naomi to ..." lines
+  // under a heading reading "Friction noticed" — 316 open rows feeding a
+  // five-slot list, two of them 123 days old.
+  //
+  // The bar is not attribution, it is WHOSE ACT the evidence records. A
+  // waiting_on row evidences that somebody said they would do something; nothing
+  // anywhere records that Nick is blocked on it. So the whole signal goes, at any
+  // age and with any amount of provenance — which is what these three assertions
+  // pin, because "fixed" here would otherwise mean "raised the threshold".
   const ungrounded = friction.assess({
     waiting: [{ status: 'open', person: 'Naomi', text: 'the risk assessment', askedAt: ago(30), sourcePath: null }],
   }, NOW);
-  assert.equal(ungrounded.insights.length, 0, 'an unattributed row must not become a claim about a colleague');
+  assert.equal(ungrounded.insights.length, 0);
 
   const grounded = friction.assess({
     waiting: [{ status: 'open', person: 'Naomi', text: 'the risk assessment', askedAt: ago(30), sourcePath: 'Meetings/2026/07/1-2-1.md', sourceDate: ago(30) }],
   }, NOW);
-  assert.equal(grounded.insights.length, 1);
-  assert.equal(grounded.insights[0].evidence[0].ref, 'Meetings/2026/07/1-2-1.md');
-  // States the wait, never that the person failed.
-  assert.ok(!/failed|ignored|promised|let you down/i.test(grounded.insights[0].text));
+  assert.equal(grounded.insights.length, 0, 'a sourced row is still not a claim about what got in Nick\'s way');
+
+  const ancient = friction.assess({
+    waiting: [{ status: 'open', person: 'Naomi', text: 'the Confluence article', askedAt: ago(123), sourcePath: 'Meetings/2026/04/1-2-1.md' }],
+  }, NOW);
+  assert.equal(ancient.insights.length, 0, 'and age never converts one into friction');
+
+  // Nor may a colleague's name reach the section by any route at all.
+  for (const r of [ungrounded, grounded, ancient]) {
+    assert.equal(r.sources.waiting, undefined, 'waiting is no longer even counted as a source');
+    assert.ok(!JSON.stringify(r).includes('Naomi'));
+  }
 });
 
-test('a recent wait is not friction yet', () => {
+test('but Nick saying HE is blocked still counts — it is his own recorded act', () => {
+  // The distinction the removal above rests on. `waiting-on-someone` is a defer
+  // reason Nick chose, so it is evidence about his work; the waiting_on row is
+  // evidence about someone else's.
   const result = friction.assess({
-    waiting: [{ status: 'open', person: 'Naomi', text: 'the doc', askedAt: ago(2), sourcePath: 'Meetings/x.md' }],
+    defers: [
+      { dedupeKey: 'todo:risk', title: 'Sign off the risk assessment', reason: 'waiting-on-someone', at: ago(3) },
+      { dedupeKey: 'todo:risk', title: 'Sign off the risk assessment', reason: 'waiting-on-someone', at: ago(9) },
+    ],
   }, NOW);
-  assert.equal(result.insights.length, 0);
+  assert.equal(result.insights.length, 1);
+  assert.match(result.insights[0].text, /waiting on someone/);
 });
 
 test('the list is bounded, most-supported first', () => {
