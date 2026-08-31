@@ -165,8 +165,29 @@ function markdownToRichText(text) {
 
 // ── Blocks -> markdown ──────────────────────────────────────────────────────
 
+// ⚠ A child page is a NOTE, not content of its parent, and must never enter the
+// keep stash.
+//
+// Found by probing real pages rather than by a unit test: the D&D root page has
+// seven of these, and they were being preserved like any other unsupported
+// block. That breaks on the first PUSH — `replaceChildren` re-appends whatever
+// the stash holds, and Notion REJECTS `child_page` on the append endpoint (a
+// page is created, never appended as a block). So every parent page with
+// children — which is most of them — would have failed to push, with a 400 that
+// named a block type rather than the problem.
+//
+// Skipped outright instead: `readNotionTree` already walks these into their own
+// notes in a subfolder, and `replaceChildren` deliberately leaves existing
+// child pages alone in Notion, so both halves are handled without the parent's
+// markdown mentioning them. Emitting a `[[wikilink]]` instead was the tempting
+// alternative and is worse: it re-parses as an ordinary bullet, so every push
+// would add a duplicate list item to the Notion page.
+const NOT_CONTENT = new Set(['child_page', 'child_database']);
+
 function blockToMarkdown(block, indent, keep) {
   const type = block.type;
+
+  if (NOT_CONTENT.has(type)) return '';
 
   if (!SUPPORTED.has(type)) {
     // Preserved verbatim. `keep` is the caller's stash; the index is its length,

@@ -161,6 +161,31 @@ test('an unresolvable keep marker REFUSES the push rather than dropping the bloc
   );
 });
 
+test('a child page is SKIPPED, never preserved — it is a note, not content', () => {
+  // ⚠ Found by probing a real page, not by reasoning. Stashing these breaks the
+  // first push: replaceChildren re-appends the stash and Notion REJECTS
+  // child_page on the append endpoint, so every parent page with children —
+  // most of them — would have failed with a 400 naming a block type.
+  const child = {
+    object: 'block', id: 'c1', type: 'child_page', child_page: { title: 'Sessions' },
+  };
+  const { markdown, keep } = blocksToMarkdown([para(rt('Intro.')), child]);
+
+  assert.equal(keep.length, 0, 'a child page must not enter the keep stash');
+  assert.ok(!markdown.includes('notion:keep'), 'and must not leave a marker');
+  // Nor a wikilink: that re-parses as an ordinary bullet, so every push would
+  // append a duplicate list item to the Notion page.
+  assert.ok(!markdown.includes('[['), 'and must not become a link');
+  assert.equal(markdown.trim(), 'Intro.');
+});
+
+test('a child database is skipped for the same reason', () => {
+  const db = { object: 'block', id: 'd1', type: 'child_database', child_database: { title: 'Tasks' } };
+  const { markdown, keep } = blocksToMarkdown([db]);
+  assert.equal(keep.length, 0);
+  assert.equal(markdown.trim(), '');
+});
+
 test('several unsupported blocks keep their document order', () => {
   const a = { object: 'block', type: 'embed', embed: { url: 'a' } };
   const b = { object: 'block', type: 'table_of_contents', table_of_contents: {} };
