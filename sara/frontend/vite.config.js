@@ -16,8 +16,37 @@ export default defineConfig({
       includeAssets: ['icons/apple-touch-icon.png', 'icons/favicon-32.png'],
       workbox: {
         globPatterns: ['**/*.{js,css,html,png,svg,woff2}'],
-        navigateFallback: '/index.html',
+        // ⚠ NAVIGATION IS NETWORK-FIRST, NOT PRECACHE-FIRST, and that is a
+        // deployment fix rather than a preference. This app's primary home is a
+        // kiosk that never closes, six feet from Nick, against a server on the
+        // same tailnet. With the precached shell answering navigations, every
+        // deploy painted the PREVIOUS build first and only swapped once the new
+        // service worker had installed and claimed the page — so a screenshot of
+        // the panel taken minutes after a successful deploy showed a UI from
+        // before 30 August, three times running, over a server that was serving
+        // the new bundle correctly.
+        //
+        // A screen that shows last week's app and looks completely fine is the
+        // exact failure this codebase refuses everywhere else, and here it was
+        // being introduced by the cache rather than by the data.
+        //
+        // The server is local and up ~always, so the network arm is the normal
+        // one; the 4s timeout is what keeps the offline promise. `navigateFallback`
+        // is removed because it is what preferred the cache.
         navigateFallbackDenylist: [/^\/api/], // never serve the SPA shell for API calls
+        runtimeCaching: [
+          {
+            urlPattern: ({ request }) => request.mode === 'navigate',
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'sara-shell',
+              // Falls back to the cached shell when the Pi is genuinely
+              // unreachable — a kiosk showing chromium's own error page is
+              // worse than one showing SARA saying she cannot reach the brain.
+              networkTimeoutSeconds: 4,
+            },
+          },
+        ],
         cleanupOutdatedCaches: true,
       },
       manifest: {
