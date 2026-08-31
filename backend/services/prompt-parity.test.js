@@ -173,3 +173,93 @@ test('every surface where SARA speaks takes its voice from the one module', () =
     );
   }
 });
+
+
+// ── Nick's own spec, merged 31 Aug 2026 ──────────────────────────────────────
+//
+// These pin the half that came from "SARA — Core Personality & Behaviour
+// Prompt" (archived in the vault). They are here for the same reason the
+// #112 pins are: every one of them is a GENERATIVE instruction, and generative
+// instructions are what get quietly compressed away when someone tidies a
+// prompt — leaving a technically-compliant ban list and a lifeless assistant.
+
+test('the humour is licensed, not merely permitted', () => {
+  // "Slight playfulness, dry and occasional" produced a SARA who never actually
+  // made a joke. Nick's spec is explicit that she may take the piss, and that
+  // the target is the humour of two people who know each other well.
+  assert.match(voice.CORE_TRAITS, /take the piss/i);
+  assert.match(voice.CORE_TRAITS, /never cruel/i, 'the licence has a limit and the limit is stated with it');
+});
+
+test('she has a point of view, and helping him decide is the job', () => {
+  assert.match(voice.CORE_TRAITS, /point of view/i);
+  assert.match(
+    voice.CORE_TRAITS,
+    /listing the options is what he could have done without you/i,
+    'a menu is the failure mode this trait exists to prevent',
+  );
+});
+
+test('she reads the register instead of narrating it', () => {
+  assert.match(voice.CORE_TRAITS, /Attuned/i);
+  assert.match(voice.CORE_TRAITS, /If he's joking, join in/i);
+  // The two halves must travel together. Attunement without this rule becomes
+  // "I can tell you're frustrated" — which is therapy-speak wearing a new hat,
+  // and is exactly what "No life-coaching" already forbids.
+  assert.match(voice.CORE_RULES, /never announce that you have noticed a feeling/i);
+});
+
+test('an ordinary bad afternoon is not a symptom', () => {
+  // He is neurodivergent and the whole system is built around that, which makes
+  // this the easiest possible slip: reading every flat hour as a condition.
+  assert.match(voice.CORE_RULES, /Never medicalise/i);
+  assert.match(voice.CORE_RULES, /not fragile/i);
+});
+
+test('a memory is never invented, and a gap is a complete answer', () => {
+  assert.match(voice.CORE_RULES, /Never invent a memory/i);
+  assert.match(voice.VOICE_COMPACT, /invent facts or memories/i, 'true on the small surfaces too');
+});
+
+test('REGISTERS exists and covers work, building, personal and stuck', () => {
+  // The block that stopped SARA being only a work assistant. Everything else in
+  // this module was written for the queue and the calendar, so with no work to
+  // do she was accurate and lifeless — the #112 symptom arriving by a different
+  // route.
+  for (const register of ['Work', 'Building', 'Personal', 'Stuck']) {
+    assert.match(
+      voice.REGISTERS,
+      new RegExp(`^- ${register}\\.`, 'm'),
+      `"${register}" is one of the four registers and losing it narrows her back down`,
+    );
+  }
+  assert.ok(voice.VOICE_FULL.includes(voice.REGISTERS), 'and the full voice must actually carry it');
+});
+
+test('building the over-elaborate thing is allowed to BE the point', () => {
+  // The single most compressible line in the file, and the one that decides
+  // whether she is a collaborator on NEURO or a reviewer of it.
+  assert.match(voice.REGISTERS, /enjoyment is a legitimate requirement/i);
+  assert.match(voice.REGISTERS, /IS the hobby/);
+});
+
+test('not everything personal needs an action', () => {
+  assert.match(
+    voice.REGISTERS,
+    /sometimes the useful response is to be good company/i,
+    'without this she optimises his hobbies at him',
+  );
+});
+
+test('she knows the personal half is thin, and asks rather than inventing', () => {
+  // Nick's own point: the vault is work-heavy, so she genuinely does not know
+  // much about the rest of him. Saying so is what stops the gap being filled
+  // with a plausible invented interest.
+  assert.match(voice.WHO_IS_NICK, /he also has a life/i);
+  assert.match(voice.WHO_IS_NICK, /ask rather than assume/i);
+  assert.match(voice.WHO_IS_NICK, /Do not fill the gap by inventing an interest/i);
+});
+
+test('the self-check rides on the full voice, not just in a comment', () => {
+  assert.match(voice.VOICE_FULL, /genuinely useful, or just sounding helpful/i);
+});
