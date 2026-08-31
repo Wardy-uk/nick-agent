@@ -247,8 +247,16 @@ function _isCloudAllowed(taskType) {
   if (c.aiMode === 'off' || c.aiMode === 'ollama-only') return false;
   if (c.aiMode === 'critical-only' && !c.criticalTypes.includes(taskType)) return false;
   if (c.aiMode === 'hybrid' && c.allowedTasks[0] !== 'all' && !c.allowedTasks.includes(taskType)) return false;
-  if (_usage.calls >= c.dailyCallLimit) { _usage.lastFallbackReason = 'Daily call limit'; return false; }
-  if (_usage.tokens >= c.dailyTokenLimit) { _usage.lastFallbackReason = 'Daily token limit'; return false; }
+  if (_usage.calls >= c.dailyCallLimit) {
+    _usage.lastFallbackReason = `Daily AI call budget spent — ${_usage.calls} of ${c.dailyCallLimit} today`;
+    return false;
+  }
+  // ⚠ Carries the NUMBERS. "Daily token limit" told Nick nothing he could act
+  // on; "spent 109,885 of 100,000 today" tells him whether to raise it or wait.
+  if (_usage.tokens >= c.dailyTokenLimit) {
+    _usage.lastFallbackReason = `Daily AI token budget spent — ${_usage.tokens.toLocaleString()} of ${c.dailyTokenLimit.toLocaleString()} today`;
+    return false;
+  }
   const hk = _currentHourKey();
   if ((_usage.hourlyEscalations.get(hk) || 0) >= c.maxEscalationsPerHour) { _usage.lastFallbackReason = 'Hourly limit'; return false; }
   return true;

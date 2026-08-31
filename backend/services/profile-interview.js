@@ -235,6 +235,7 @@ async function _turn(session) {
   // write anything down herself, so the transcript is the record and `harvest()`
   // is how it gets in afterwards. A conversation without tools is worth far more
   // than no conversation.
+  let budgetReason = null;
   if (!reply.trim()) {
     try {
       const result = await aiRouting.runTask('profile_interview', {
@@ -244,13 +245,22 @@ async function _turn(session) {
       });
       reply = result.text || '';
       if (reply.trim()) session.degraded = true;
+      else if (result && result.reason) budgetReason = result.reason;
     } catch (e) {
       console.error('[ProfileInterview] Fallback failed too:', e.message);
+      budgetReason = e.message;
     }
   }
 
   if (!reply.trim()) {
-    const detail = session.degradedReason || 'no AI provider available';
+    // ⚠ Say WHY. "no AI provider available" is true and useless — it was the
+    // daily TOKEN BUDGET, spent at 109,885 of 100,000, and the message sent Nick
+    // to "it's flakey" rather than to a number he could act on. Second time today
+    // an error hid its own cause; `runTask` already returns the reason, it was
+    // simply being thrown away.
+    const detail = session.degradedReason
+      || (typeof budgetReason === 'string' && budgetReason)
+      || 'no AI provider available';
     session.lastError = detail;
     save(session);
     throw new Error(`Could not reach any AI provider (${detail})`);
