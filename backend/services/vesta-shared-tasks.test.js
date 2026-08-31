@@ -61,13 +61,13 @@ test('she can assign to herself, to Nick, or leave it unassigned', () => {
 
   const rows = capture.submissions(helen);
   const find = t => rows.find(r => r.text === t);
-  assert.equal(find('Book the dentist').assignee, 'helen');
-  assert.equal(find('Book the dentist').assigneeLabel, 'Helen');
-  assert.equal(find('Put the bins out').assignee, 'nick');
-  assert.equal(find('Put the bins out').assigneeLabel, 'Nick');
-  // ⚠ Unassigned stays null — never quietly attributed to whoever typed it.
-  assert.equal(find('Buy a birthday card').assignee, null);
-  assert.equal(find('Buy a birthday card').assigneeLabel, null);
+  assert.deepEqual(find('Book the dentist').assignees, ['helen']);
+  assert.deepEqual(find('Book the dentist').assigneeLabels, ['Helen']);
+  assert.deepEqual(find('Put the bins out').assignees, ['nick']);
+  assert.deepEqual(find('Put the bins out').assigneeLabels, ['Nick']);
+  // ⚠ Unassigned stays EMPTY — never quietly attributed to whoever typed it.
+  assert.deepEqual(find('Buy a birthday card').assignees, []);
+  assert.deepEqual(find('Buy a birthday card').assigneeLabels, []);
 });
 
 /**
@@ -76,16 +76,18 @@ test('she can assign to herself, to Nick, or leave it unassigned', () => {
  * belonging to nobody.
  */
 test('an unrecognised assignee becomes unassigned, not stored as given', () => {
-  assert.equal(capture.resolveAssignee('Nigel'), null);
-  assert.equal(capture.resolveAssignee(''), null);
-  assert.equal(capture.resolveAssignee(null), null);
+  assert.deepEqual(capture.resolveAssignees('Nigel'), []);
+  assert.deepEqual(capture.resolveAssignees(''), []);
+  assert.deepEqual(capture.resolveAssignees(null), []);
   // Case-insensitive against the real household, though.
-  assert.equal(capture.resolveAssignee('HELEN'), 'helen');
-  assert.equal(capture.resolveAssignee('Nick'), 'nick');
+  assert.deepEqual(capture.resolveAssignees('HELEN'), ['helen']);
+  assert.deepEqual(capture.resolveAssignees('Nick'), ['nick']);
+  // One bad name does not poison the good ones beside it.
+  assert.deepEqual(capture.resolveAssignees(['helen', 'Nigel', 'nick']), ['nick', 'helen']);
 
-  capture.submit(helen, 'Task for a ghost', { assignee: 'Nigel' });
+  capture.submit(helen, 'Task for a ghost', { assignees: ['Nigel'] });
   const row = capture.submissions(helen).find(r => r.text === 'Task for a ghost');
-  assert.equal(row.assignee, null);
+  assert.deepEqual(row.assignees, []);
 });
 
 // ── Who sees what ────────────────────────────────────────────────────────────
@@ -154,7 +156,7 @@ test('the assignee survives a round trip through the database', () => {
   // ⚠ createTaskRow's INSERT is an explicit column list — a field omitted there
   // is silently dropped, which is exactly how estimateMinutes once went missing
   // from POST /api/tasks. This asserts the column is really written.
-  assert.equal(row.assignee, 'nick');
+  assert.equal(row.assignee, '["nick"]');
 });
 
 // ── Due dates, and editing ───────────────────────────────────────────────────
@@ -187,12 +189,61 @@ test('a due date can be changed and cleared afterwards', () => {
   assert.equal(capture.submissions(helen).find(r => r.id === row.id).dueDate, null);
 });
 
-test('a task can be reassigned after the fact', () => {
+test('a task can be reassigned after the fact, to one person or to several', () => {
   const row = capture.submissions(helen).find(r => r.text === 'Renew the car tax');
-  capture.updateTask(helen, row.id, { assignee: 'nick' });
-  assert.equal(capture.submissions(helen).find(r => r.id === row.id).assigneeLabel, 'Nick');
-  capture.updateTask(helen, row.id, { assignee: null });
-  assert.equal(capture.submissions(helen).find(r => r.id === row.id).assignee, null);
+  const now = () => capture.submissions(helen).find(r => r.id === row.id);
+
+  capture.updateTask(helen, row.id, { assignees: ['nick'] });
+  assert.deepEqual(now().assigneeLabels, ['Nick']);
+
+  // A job can genuinely belong to two people — "strip the spare room" is not
+  // one person's, and forcing a single owner made somebody choose a lie.
+  capture.updateTask(helen, row.id, { assignees: ['helen', 'nick'] });
+  assert.deepEqual(now().assignees, ['nick', 'helen']);
+  assert.deepEqual(now().assigneeLabels, ['Nick', 'Helen']);
+
+  // Back to nobody.
+  capture.updateTask(helen, row.id, { assignees: [] });
+  assert.deepEqual(now().assignees, []);
+});
+
+/**
+ * ⚠ Order follows `people()`, not the order they were ticked — otherwise
+ * ["helen","nick"] and ["nick","helen"] are two different strings meaning one
+ * thing, and the same pair renders differently depending on who was tapped first.
+ */
+test('the same pair stores identically however it was ticked', () => {
+  assert.deepEqual(
+    capture.resolveAssignees(['helen', 'nick']),
+    capture.resolveAssignees(['nick', 'helen']),
+  );
+  // And a name ticked twice is one person.
+  assert.deepEqual(capture.resolveAssignees(['nick', 'nick']), ['nick']);
+});
+
+/**
+ * ⚠ Rows written while the column was single-valued are still in the database.
+ * Parsing only JSON would silently turn those into unassigned — losing who a
+ * task was for, quietly, which is the failure mode this whole area exists to
+ * avoid.
+ */
+test('a legacy single-id row still reads as that person', () => {
+  const t = taskStore.createTask({
+    text: 'Legacy shaped row', domain: 'personal', source: 'capture:Helen', household: 1,
+  });
+  db.updateTaskRow(t.id, { assignee: 'nick' });   // the old shape, written raw
+  const row = capture.submissions(helen).find(r => r.id === t.id);
+  assert.deepEqual(row.assignees, ['nick']);
+  assert.deepEqual(row.assigneeLabels, ['Nick']);
+});
+
+test('an unreadable assignee column is empty, never a guess', () => {
+  assert.deepEqual(capture.parseAssignees('[not json'), []);
+  assert.deepEqual(capture.parseAssignees(''), []);
+  assert.deepEqual(capture.parseAssignees(null), []);
+  // ⚠ null for nobody, never the string "[]" — which would read as
+  // assigned-to-nothing rather than unassigned.
+  assert.equal(capture.serialiseAssignees([]), null);
 });
 
 /**

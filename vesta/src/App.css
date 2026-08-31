@@ -319,3 +319,18 @@ body {
 }
 /* An overdue date is the one thing on this row worth a colour. */
 .task__due { color: var(--ink-faint); }
+
+/* ── Who it is for ───────────────────────────────────────────────────────── */
+
+.who { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.who--row { margin-top: 4px; }
+.who__label { font-size: 13px; color: var(--ink-faint); margin-right: 2px; }
+.who__chip {
+  appearance: none; background: var(--panel-2); border: 1px solid var(--line);
+  color: var(--ink-dim); border-radius: 999px; padding: 8px 14px;
+  font-size: 14px; min-height: 40px; cursor: pointer;
+}
+/* Selected is FILLED, not merely outlined — on a phone in a kitchen the
+   difference has to survive a glance. */
+.who__chip--on { background: var(--ember); border-color: var(--ember); color: #1a1208; font-weight: 600; }
+.who__chip:disabled { opacity: .5; }

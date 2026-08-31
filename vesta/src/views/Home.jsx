@@ -69,8 +69,8 @@ export default function Home({ onSignedOut }) {
   // rendering a blank panel that looks broken.
   const kitchenMissing = can('kitchen') && !kitchenGap && !data.kitchenSections;
 
-  async function addTask(text, assignee, dueDate) {
-    await api.addTask(token, text, assignee, dueDate);
+  async function addTask(text, assignees, dueDate) {
+    await api.addTask(token, text, assignees, dueDate);
     await refresh();
   }
 

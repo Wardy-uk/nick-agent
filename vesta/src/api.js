@@ -78,8 +78,8 @@ export const home = (token) => call('/home', { token });
 export const calendarDay = (token, date) =>
   call(`/calendar?date=${encodeURIComponent(date)}`, { token });
 
-export const addTask = (token, text, assignee = null, dueDate = null) =>
-  call('/tasks', { method: 'POST', body: { text, assignee, dueDate }, token });
+export const addTask = (token, text, assignees = [], dueDate = null) =>
+  call('/tasks', { method: 'POST', body: { text, assignees, dueDate }, token });
 
 /**
  * Change a household task. Only the keys PRESENT are changed — `dueDate: null`

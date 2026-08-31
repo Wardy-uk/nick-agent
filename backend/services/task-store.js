@@ -97,6 +97,9 @@ function toTodoShape(row) {
     // toggle and show its current state — otherwise the control renders as
     // "off" for a task that is already shared.
     household: row.household === 1 ? 1 : 0,
+    // Raw column (JSON array, or a bare id from the few hours it was
+    // single-valued). Consumers wanting people should use capture-links'
+    // parseAssignees rather than reading this directly.
     assignee: row.assignee || null,
     context: row.context || null,
     // Work or personal. Defaulted rather than passed through raw, so a row

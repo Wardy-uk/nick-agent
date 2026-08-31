@@ -23,7 +23,7 @@ const STATE_CLASS = {
  */
 export default function Tasks({ tasks, gap, people = [], onAdd, onUpdate }) {
   const [text, setText] = useState('');
-  const [assignee, setAssignee] = useState('');
+  const [assignees, setAssignees] = useState([]);
   const [due, setDue] = useState('');
   const [editing, setEditing] = useState(null);
   const [rowBusy, setRowBusy] = useState(null);
@@ -39,11 +39,11 @@ export default function Tasks({ tasks, gap, people = [], onAdd, onUpdate }) {
     try {
       // '' means unassigned — the absence of a choice, which the server stores
       // as null rather than attributing it to whoever typed it.
-      await onAdd(clean, assignee || null, due || null);
+      await onAdd(clean, assignees, due || null);
       // Cleared only AFTER it landed. If the add failed, the words in the box
       // are the only copy of the thought.
       setText('');
-      setAssignee('');
+      setAssignees([]);
       setDue('');
     } catch (err) {
       setError(err.message);
@@ -57,7 +57,9 @@ export default function Tasks({ tasks, gap, people = [], onAdd, onUpdate }) {
     setError(null);
     try {
       await onUpdate(id, fields);
-      setEditing(null);
+      // Deliberately NOT closing the editor: assigning is often two taps (both
+      // of us), and snapping shut after the first makes the second a hunt.
+      if (!('assignees' in fields)) setEditing(null);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -78,8 +80,8 @@ export default function Tasks({ tasks, gap, people = [], onAdd, onUpdate }) {
             <span className="task__meta">
               {/* Unassigned says so, rather than showing nothing — a blank is
                   indistinguishable from a field that failed to render. */}
-              <span className={`task__who${t.assignee ? '' : ' task__who--none'}`}>
-                {t.assigneeLabel || 'anyone'}
+              <span className={`task__who${(t.assigneeLabels || []).length ? '' : ' task__who--none'}`}>
+                {(t.assigneeLabels || []).join(' & ') || 'anyone'}
               </span>
               <span className="task__status">{t.status}</span>
               {t.dueDate && <span className="task__due">by {t.dueDate}</span>}
@@ -96,15 +98,27 @@ export default function Tasks({ tasks, gap, people = [], onAdd, onUpdate }) {
                   disabled={rowBusy === t.id}
                   onChange={e => patch(t.id, { dueDate: e.target.value || null })}
                 />
-                <select
-                  className="task__reassign"
-                  defaultValue={t.assignee || ''}
-                  disabled={rowBusy === t.id}
-                  onChange={e => patch(t.id, { assignee: e.target.value || null })}
-                >
-                  <option value="">For anyone</option>
-                  {people.map(p => <option key={p.id} value={p.id}>For {p.label}</option>)}
-                </select>
+                <div className="who who--row">
+                  {people.map(p => {
+                    const on = (t.assignees || []).includes(p.id);
+                    return (
+                      <button
+                        type="button"
+                        key={p.id}
+                        className={`who__chip${on ? ' who__chip--on' : ''}`}
+                        disabled={rowBusy === t.id}
+                        // Sent as the WHOLE new list, never as an add/remove —
+                        // the server stores a set, and two taps in flight against
+                        // a delta would race into the wrong answer.
+                        onClick={() => patch(t.id, {
+                          assignees: on
+                            ? (t.assignees || []).filter(x => x !== p.id)
+                            : [...(t.assignees || []), p.id],
+                        })}
+                      >{p.label}</button>
+                    );
+                  })}
+                </div>
                 {/* Clearing a date is a real instruction, distinct from leaving
                     it alone — so it gets its own control rather than hoping an
                     emptied date input fires. */}
@@ -141,21 +155,27 @@ export default function Tasks({ tasks, gap, people = [], onAdd, onUpdate }) {
             onChange={e => setDue(e.target.value)}
             aria-label="Due date"
           />
-          <select
-            className="composer__who"
-            value={assignee}
-            onChange={e => setAssignee(e.target.value)}
-          >
-            {/* First and default: most things put on a household list are not
-                yet anybody's, and forcing a choice invents one. */}
-            <option value="">For anyone</option>
-            {people.map(p => (
-              <option key={p.id} value={p.id}>For {p.label}</option>
-            ))}
-          </select>
           <button className="btn" disabled={busy || !text.trim()}>
             {busy ? '…' : 'Add'}
           </button>
+        </div>
+        {/* Chips rather than a dropdown, because it is a MULTI-choice now and a
+            multi-select on a phone is a fight. Nobody selected is the default:
+            most things on a household list are not yet anybody's, and forcing a
+            choice invents one. */}
+        <div className="who">
+          <span className="who__label">
+            {assignees.length ? 'For' : 'For anyone'}
+          </span>
+          {people.map(p => (
+            <button
+              type="button"
+              key={p.id}
+              className={`who__chip${assignees.includes(p.id) ? ' who__chip--on' : ''}`}
+              onClick={() => setAssignees(a =>
+                a.includes(p.id) ? a.filter(x => x !== p.id) : [...a, p.id])}
+            >{p.label}</button>
+          ))}
         </div>
       </form>
       {error && <p className="composer__error" role="alert">{error}</p>}

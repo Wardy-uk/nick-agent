@@ -194,6 +194,7 @@ router.post('/tasks', requireAccount, (req, res) => {
     const result = capture.submit(req.account, req.body && req.body.text, {
       // Who it is FOR. Resolved against the real household in the service; an
       // unrecognised name lands as unassigned rather than being stored as given.
+      assignees: (req.body || {}).assignees,
       assignee: (req.body || {}).assignee,
       dueDate: (req.body || {}).dueDate,
     });

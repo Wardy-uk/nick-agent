@@ -187,10 +187,11 @@ test('a submission carries only what she needs to see', () => {
   // a shared list readable; `id` is what lets a due date be changed, and every
   // write re-checks against the database that the row is in this account's pool.
   // Nothing here describes Nick's triage.
-  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'assignee', 'assigneeLabel', 'dueDate', 'from', 'id', 'status', 'text']);
-  // Unassigned by default — never quietly attributed to whoever typed it.
-  assert.equal(row.assignee, null);
-  assert.equal(row.assigneeLabel, null);
+  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'assigneeLabels', 'assignees', 'dueDate', 'from', 'id', 'status', 'text']);
+  // Unassigned by default — never quietly attributed to whoever typed it, and
+  // always an ARRAY so no consumer has to branch on nobody/one/both.
+  assert.deepEqual(row.assignees, []);
+  assert.deepEqual(row.assigneeLabels, []);
   // `from` is null without the shared scope: it only means anything once more
   // than one person's tasks can appear in the same list.
   assert.equal(row.from, null);

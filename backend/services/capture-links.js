@@ -403,18 +403,60 @@ function people() {
 }
 
 /**
- * Resolve a requested assignee to something storable. PURE-ish (reads accounts).
+ * Resolve who a task is for. PURE-ish (reads accounts). Always an ARRAY.
  *
- * ⚠ An unrecognised name becomes NULL — unassigned — rather than being stored as
- * given. A typo must not create a person, and a stored assignee that matches
- * nobody would render as a task belonging to a ghost, which is worse than one
- * plainly belonging to nobody.
+ * Takes a single id, an array of them, or nothing. A job can genuinely belong to
+ * two people — "strip the spare room" is not one person's — and forcing a single
+ * owner made somebody choose a lie.
+ *
+ * ⚠ An unrecognised name is DROPPED, never stored as given. A typo must not
+ * create a person, and a stored assignee matching nobody renders as a task
+ * belonging to a ghost, which is worse than one plainly belonging to nobody.
+ *
+ * ⚠ Order follows `people()`, not the order they were ticked, so the same pair
+ * always stores and renders identically — otherwise ["helen","nick"] and
+ * ["nick","helen"] are two different strings meaning one thing.
  */
+function resolveAssignees(requested) {
+  const asked = Array.isArray(requested) ? requested : (requested == null ? [] : [requested]);
+  const wanted = new Set(asked.map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
+  return people().filter((p) => wanted.has(p.id.toLowerCase())).map((p) => p.id);
+}
+
+/**
+ * The column, read. PURE.
+ *
+ * ⚠ Tolerates BOTH shapes. `tasks.assignee` held a bare id for the few hours it
+ * was single-valued, and rows written then are still in the database — parsing
+ * only JSON would silently turn those into unassigned, quietly losing who a task
+ * was for.
+ */
+function parseAssignees(raw) {
+  if (raw == null || raw === '') return [];
+  const s = String(raw).trim();
+  if (s.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(s);
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      // Unreadable is empty, not a guess. Better plainly unassigned than
+      // attributed to whoever a broken parse happens to yield.
+      return [];
+    }
+  }
+  return [s];
+}
+
+/** The column, written. PURE. `null` for nobody — never the string "[]", which
+ *  would read as assigned-to-nothing rather than unassigned. */
+function serialiseAssignees(list) {
+  const clean = Array.isArray(list) ? list.filter(Boolean) : [];
+  return clean.length ? JSON.stringify(clean) : null;
+}
+
+/** Back-compat for callers that still think in one person. */
 function resolveAssignee(requested) {
-  const want = String(requested || '').trim().toLowerCase();
-  if (!want) return null;
-  const match = people().find((p) => p.id.toLowerCase() === want);
-  return match ? match.id : null;
+  return resolveAssignees(requested)[0] || null;
 }
 
 /**
@@ -472,7 +514,8 @@ function updateTask(account, taskId, patch = {}) {
   // `null` is a real instruction here — "clear the due date" — and must stay
   // distinct from the key being absent, which means "leave it alone".
   if ('dueDate' in patch) fields.due_date = normDueDate(patch.dueDate);
-  if ('assignee' in patch) fields.assignee = resolveAssignee(patch.assignee);
+  if ('assignees' in patch) fields.assignee = serialiseAssignees(resolveAssignees(patch.assignees));
+  else if ('assignee' in patch) fields.assignee = serialiseAssignees(resolveAssignees(patch.assignee));
   if ('done' in patch) fields.status = patch.done ? 'done' : 'open';
 
   if (!Object.keys(fields).length) return { ok: false, status: 400, error: 'nothing to change' };
@@ -488,7 +531,7 @@ function sourceFor(account) {
   return `capture:${account.label}`;
 }
 
-function submit(account, text, { now = new Date(), assignee = null, dueDate = null } = {}) {
+function submit(account, text, { now = new Date(), assignee = null, assignees = null, dueDate = null } = {}) {
   const clean = String(text || '').trim().slice(0, MAX_TEXT);
   if (!clean) return { ok: false, status: 400, error: 'nothing to add' };
 
@@ -502,7 +545,9 @@ function submit(account, text, { now = new Date(), assignee = null, dueDate = nu
     source: sourceFor(account),
     // Whoever it is FOR, which is a different question from who typed it.
     // Unrecognised resolves to null rather than being stored as given.
-    assignee: resolveAssignee(assignee),
+    // `assignees` preferred; `assignee` still accepted so an older client keeps
+    // working rather than silently losing who a task was for.
+    assignee: serialiseAssignees(resolveAssignees(assignees != null ? assignees : assignee)),
     due_date: normDueDate(dueDate),
     // Anything captured through VESTA is a household task by definition — this
     // IS the shared list. Nick's own tasks default to 0 and reach it only when
@@ -510,7 +555,7 @@ function submit(account, text, { now = new Date(), assignee = null, dueDate = nu
     household: 1,
   });
 
-  return { ok: true, id, text: clean, created, assignee: resolveAssignee(assignee) };
+  return { ok: true, id, text: clean, created, assignees: resolveAssignees(assignees != null ? assignees : assignee) };
 }
 
 /**
@@ -561,8 +606,11 @@ function submissions(account, { limit = 50 } = {}) {
     text: r.text,
     // Who it is FOR. `null` is unassigned and is a real answer — the UI says
     // "anyone" rather than quietly attributing it to whoever typed it.
-    assignee: r.assignee || null,
-    assigneeLabel: r.assignee ? (who.find((p) => p.id === r.assignee) || {}).label || r.assignee : null,
+    // Always an array — one shape whether a job belongs to nobody, one person
+    // or both, so no consumer has to branch on which.
+    assignees: parseAssignees(r.assignee),
+    assigneeLabels: parseAssignees(r.assignee)
+      .map((id) => (who.find((p) => p.id === id) || {}).label || id),
     // Who SENT it, which only means anything once more than one person can.
     // Derived from the source rather than stored twice.
     from: shared ? String(r.source || '').replace(/^capture:/, '') || null : null,
@@ -584,6 +632,9 @@ module.exports = {
   setScopes,
   people,
   resolveAssignee,
+  resolveAssignees,
+  parseAssignees,
+  serialiseAssignees,
   normDueDate,
   updateTask,
   OWNER_ID,
