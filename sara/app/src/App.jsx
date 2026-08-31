@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getPin, clearPin } from './api';
+import { getPin, clearPin, apiFetch } from './api';
 import { usePushSubscription } from './hooks/usePushSubscription';
 import { useWakeLock } from './hooks/useWakeLock';
 import LockScreen from './components/LockScreen';
@@ -7,6 +7,7 @@ import NotificationActionCard from './components/NotificationActionCard';
 import { startAutoFlush } from './mobile/outbox';
 import actionSurfaces from '../../../shared/action-surfaces.cjs';
 import Field from '../../shared-ui/Field';
+import { useFieldDrive } from '../../shared-ui/useFieldDrive';
 import { PRIMARY, SECONDARY, TABS, VALID_TABS, DEFAULT_TAB, revealsSecondary } from '../../shared-ui/tabs';
 import DeploymentGuard from './components/DeploymentGuard';
 import { readRuntime } from './runtime';
@@ -49,6 +50,9 @@ import './App.css';
 // there.
 
 const { resolveSaraLitePlan, resolveSaraLiteTab } = actionSurfaces;
+
+// Module scope so the hook's effect is not re-created on every render.
+const fetchAttentionForField = () => apiFetch('/api/attention');
 
 function readLaunchIntent() {
   if (typeof window === 'undefined') return null;
@@ -208,6 +212,10 @@ export default function App() {
   // The primary row is ALWAYS visible — three modes is navigation, not a menu.
   // The secondary row is revealed on request, and stays revealed while Nick is
   // on one of its screens, or the way back is only through the way he came.
+  // ⚠ Her substrate is now DRIVEN on every screen, not hardcoded. Skipped on
+  // the Surface, which has a live read of its own and mounts its own field.
+  const fieldDrive = useFieldDrive(fetchAttentionForField, active !== 'surface');
+
   const isSecondary = revealsSecondary(active);
   const moreVisible = navOpen || isSecondary;
 
@@ -232,7 +240,7 @@ export default function App() {
           driven by the real payload. Two stacked fields would double the
           substrate and put a dishonest one under an honest one. */}
       {active !== 'surface' && (
-        <div className="app__field" aria-hidden="true"><Field quiet confidenceLevel="low" /></div>
+        <div className="app__field" aria-hidden="true"><Field {...fieldDrive} /></div>
       )}
       <header className="app__header">
         <span className="app__brand">SARA</span>

@@ -1,19 +1,24 @@
 'use strict';
 
 /**
- * The Pi kiosk's view registry — guarded from the backend suite.
+ * The Pi kiosk, guarded from the backend suite.
  *
  * `sara/frontend` has no test runner of its own, and on 30 Aug that showed:
- * three real bugs in the new Presence screen were caught by SSHing to the Pi,
+ * three real bugs in the Presence screen were caught by SSHing to the Pi,
  * screenshotting the DSI panel with `grim` and looking at the picture. That
  * worked, and it is not a gate — nobody will do it on the next change.
  *
  * Reading another workspace's source from here is the established pattern
- * (`action-surfaces.test.js` reads `sara/app/src/App.jsx` for exactly this
+ * (`action-surfaces.test.js` reads the shared tab registry for exactly this
  * reason: neither half errors on its own, so only a test spanning both catches
  * the disagreement).
  *
- * Both invariants below are bugs that ACTUALLY HAPPENED today, not hypotheses.
+ * ⚠ REWRITTEN 31 Aug 2026. This file used to assert things about the kiosk's
+ * own fourteen-screen registry and its ViewRouter. Both are gone: the kiosk
+ * mounts the phone's registry and the two shells are one app. Testing a
+ * registry that no longer routes anything would be the same species of
+ * dead-but-green as the suite that was passing over VESTA's never-working task
+ * path. What is left is what still has to be true.
  */
 
 const test = require('node:test');
@@ -22,164 +27,108 @@ const fs = require('fs');
 const path = require('path');
 
 const KIOSK = path.join(__dirname, '..', '..', 'sara', 'frontend', 'src');
-const VIEWS = path.join(KIOSK, 'state', 'views.js');
-const PRESENCE = path.join(KIOSK, 'screens', 'presence', 'PresenceView.jsx');
-// The surface both apps render. Shared on purpose — see AttentionSurface.jsx.
-const SHARED = path.join(__dirname, '..', '..', 'sara', 'shared-ui', 'AttentionSurface.jsx');
-// Every OTHER kiosk surface that says the word "SARA" to Nick. See the field test.
+const SHARED = path.join(__dirname, '..', '..', 'sara', 'shared-ui');
+
+const APP = path.join(KIOSK, 'App.jsx');
+const KIOSK_CSS = path.join(KIOSK, 'App.css');
 const LOCK = path.join(KIOSK, 'components', 'LockScreen.jsx');
 const CLOCK = path.join(KIOSK, 'components', 'ClockScreen.jsx');
+const SURFACE = path.join(SHARED, 'AttentionSurface.jsx');
+const FIELD = path.join(SHARED, 'Field.jsx');
 
 function read(file) {
   // Mixed CRLF/LF repo — normalise before any line-anchored matching.
   return fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 }
 
-/** The `key: 'value'` pairs inside a named object literal. */
-function objectKeys(src, name) {
-  const start = src.indexOf(`const ${name} = {`);
-  assert.ok(start !== -1, `could not find ${name}`);
-  const end = src.indexOf('\n};', start);
-  assert.ok(end !== -1, `could not find the end of ${name}`);
-  return [...src.slice(start, end).matchAll(/^\s*'?([A-Za-z0-9_-]+)'?:/gm)].map((m) => m[1]);
-}
-
-test('positive control — the registry parses', () => {
-  const src = read(VIEWS);
-  assert.ok(src.includes('VIEW_REGISTRY'), 'the control failed; nothing below proves anything');
-  const ids = [...src.matchAll(/id:\s*SARA_VIEWS\.([A-Z_]+)/g)].map((m) => m[1]);
-  assert.ok(ids.length >= 10, `expected the full registry, parsed ${ids.length}`);
-});
-
-test('⚠ no ALIAS shadows a real view id', () => {
-  // THE BUG. `presence` was an alias pointing at mission-control from when no
-  // presence screen existed. Adding the real view left the alias in place, so
-  // `normalizeViewId('presence')` silently rewrote every request for the new
-  // screen into the briefing — the kiosk would never have opened where it was
-  // told to, with nothing anywhere reporting a problem.
-  const src = read(VIEWS);
-  const viewValues = new Map(
-    [...src.matchAll(/^\s*([A-Z_]+):\s*'([^']+)'/gm)].map((m) => [m[1], m[2]])
-  );
-  const realIds = new Set(
-    [...src.matchAll(/id:\s*SARA_VIEWS\.([A-Z_]+)/g)].map((m) => viewValues.get(m[1])).filter(Boolean)
-  );
-
-  // ⚠ An IDENTITY alias is fine and several exist on purpose:
-  // `'mission-control': SARA_VIEWS.BRIEFING` where BRIEFING *is*
-  // 'mission-control' is a no-op that lets an old id keep working. What is
-  // fatal is an alias whose key is a registered view and whose TARGET is a
-  // DIFFERENT one — that silently rewrites every request for the real screen.
-  const start = src.indexOf('const VIEW_ALIASES = {');
-  const body = src.slice(start, src.indexOf('\n};', start));
-  const pairs = [...body.matchAll(/^\s*'?([A-Za-z0-9_-]+)'?:\s*SARA_VIEWS\.([A-Z_]+)/gm)];
-  assert.ok(pairs.length > 0, 'the control failed — no aliases parsed');
-
-  for (const [, alias, targetKey] of pairs) {
-    const target = viewValues.get(targetKey);
-    if (!realIds.has(alias)) continue;      // aliasing a non-view is the normal case
-    assert.equal(
-      target, alias,
-      `'${alias}' is a registered view but its alias points at '${target}' — every request for it is rewritten away`
-    );
-  }
-});
-
-test('DEFAULT_VIEW names a view that actually exists', () => {
-  const src = read(VIEWS);
-  const m = src.match(/export const DEFAULT_VIEW = SARA_VIEWS\.([A-Z_]+);/);
-  assert.ok(m, 'DEFAULT_VIEW is not set from SARA_VIEWS');
-  const registered = [...src.matchAll(/id:\s*SARA_VIEWS\.([A-Z_]+)/g)].map((x) => x[1]);
-  assert.ok(
-    registered.includes(m[1]),
-    `DEFAULT_VIEW is ${m[1]}, which is not in VIEW_REGISTRY — the kiosk opens on a screen the switcher cannot show`
-  );
-});
-
-test('every registered view is reachable in the router', () => {
-  const src = read(VIEWS);
-  const router = read(path.join(KIOSK, 'components', 'ViewRouter.jsx'));
-  const registered = [...src.matchAll(/id:\s*SARA_VIEWS\.([A-Z_]+)/g)].map((m) => m[1]);
-  const routed = new Set([...router.matchAll(/case SARA_VIEWS\.([A-Z_]+):/g)].map((m) => m[1]));
-  // `PlannedView` is the honest fallback for reserved-but-unbuilt screens, so a
-  // missing case is not automatically wrong — but the DEFAULT must be routed,
-  // or the kiosk opens on a placeholder.
-  const def = src.match(/export const DEFAULT_VIEW = SARA_VIEWS\.([A-Z_]+);/)[1];
-  assert.ok(routed.has(def), `the default view ${def} has no case in ViewRouter`);
-  assert.ok(registered.length > 0);
-});
-
-test('⚠ the Presence field handles EVERY provenance, mixed included', () => {
-  // THE OTHER BUG. `provenance.js` rolls up to neuro / neuro-stale /
-  // unavailable / demo AND 'mixed' — five, not the four CLAUDE.md claimed. The
-  // live kiosk sits in 'mixed' most of the time, and with no case for it the
-  // screen fell to the default and would have rendered "I can't see the brain":
-  // a false negative when most of the read was fine.
-  const src = read(PRESENCE);
-  assert.ok(src.includes('function fieldStateFor'), 'the control failed');
-  for (const state of ['neuro', 'neuro-stale', 'mixed', 'demo', 'unavailable']) {
-    assert.ok(src.includes(`case '${state}'`), `no case for provenance '${state}'`);
-  }
-});
-
-test('⚠ Presence always renders SOMETHING — silence is not a screen', () => {
-  // THE THIRD BUG. There was no branch for a live read with no headline, so the
-  // panel drew the field and NOT ONE WORD — indistinguishable from a broken
-  // view, on the surface whose whole job is making the state legible. Silence
-  // is a valid answer for a NOTIFICATION; it is never one for a screen.
-  const src = read(PRESENCE);
-  assert.ok(src.includes('Here, and reading.'), 'the live-and-quiet fallback line is gone');
-
-  // ⚠ Asserted POSITIVELY. A first cut tried "the file must not contain the
-  // words 'all-clear'" and failed on the very lines that exist to REFUSE one —
-  // a negative assertion over prose, the same trap as a regex about a regex.
-  // What matters is that the blind states say so, so that is what is checked.
-  //
-  // The two refusals now live in DIFFERENT files, which is the point of the
-  // extraction: the kiosk owns "I can't reach the feed at all", and the SHARED
-  // surface owns "the pool was unreadable" — one fact, one place, both surfaces.
-  //
-  // ⚠ Matched on the STABLE part of each phrase. An earlier version used
-  // `don.t read this...`, where `.` cannot span the `&rsquo;` entity the shared
-  // file writes — seven characters, not one. An apostrophe is exactly the kind
-  // of thing that gets re-encoded, so the assertion must not depend on it.
-  assert.match(src, /an all-clear/i, 'the unreachable-brain line must refuse an all-clear');
-  const shared = read(SHARED);
-  assert.match(shared, /read this as an all-clear/i, 'the pool-blind line must refuse an all-clear');
-  // And the three silences must stay three, in the one place they are defined.
-  assert.match(shared, /Nothing pressing/, 'the genuinely-quiet line is gone');
-  assert.match(shared, /Staying out of the way|context\?\.summary/, 'the in-a-meeting line is gone');
+test('positive control — the kiosk shell parses and mounts the shared registry', () => {
+  // Without this every assertion below can pass by reading the wrong file.
+  const src = read(APP);
+  assert.match(src, /shared-ui\/tabs/, 'the kiosk no longer mounts the shared tab registry');
+  assert.match(src, /AppShell/);
 });
 
 test('⚠ the field renders in EVERY state SARA is seen in', () => {
   // Nick, 31 Aug 2026: "crucially the nebulous connected nodes must be present
-  // whenever I see SARA." They were not. `Field` was reachable only from inside
-  // `AttentionSurface`, so it drew when the feed was GOOD and vanished in the
-  // three states where the kiosk still says the word SARA to him:
-  //
-  //   * Presence, waking, and Presence with no feed — the two branches where
-  //     she cannot see the brain, i.e. the moment the substrate is most
-  //     informative, rendered as a plain error page.
-  //   * The lock screen, which drew a pulsing ORB — a single bright point you
-  //     could call "where SARA is", which MANIFESTATION.md deprecates
-  //     permanently.
-  //   * The clock screen, the one he walks back in on.
-  //
-  // Asserted POSITIVELY per file, the rule this suite already follows: a
-  // negative ("no file lacks a Field") passes on a broken scan.
-  for (const [label, file] of [['Presence', PRESENCE], ['LockScreen', LOCK], ['ClockScreen', CLOCK]]) {
+  // whenever I see SARA." They were not — `Field` was reachable only from
+  // inside `AttentionSurface`, so it drew when the feed was good and vanished
+  // in the states where the kiosk still says her name: the lock screen (which
+  // drew a pulsing ORB, deprecated permanently by MANIFESTATION.md) and the
+  // clock screen. Asserted POSITIVELY per file: a negative ("no file lacks a
+  // Field") passes on a broken scan.
+  for (const [label, file] of [['App shell', APP], ['LockScreen', LOCK], ['ClockScreen', CLOCK]]) {
     const src = read(file);
     assert.match(src, /from '(\.\.\/)+shared-ui\/Field'/, `${label} no longer imports the shared Field`);
     assert.ok(src.includes('<Field'), `${label} imports the Field but never renders it`);
   }
-
-  // The Presence screen has TWO blind branches, not one, and both had text and
-  // no field. One <Field/> in the file would satisfy the check above while the
-  // waking branch stayed bare.
-  const src2 = read(PRESENCE);
-  assert.ok(src2.split('<Field').length - 1 >= 2,
-    'both blind branches in Presence must draw the field, not just one');
-
-  // And the orb must not come back.
   assert.doesNotMatch(read(LOCK), /lock__orb/, 'the deprecated orb is back on the lock screen');
+});
+
+test('⚠ the shell field is DRIVEN, not hardcoded', () => {
+  // It used to be pinned at `quiet` + `low` on every screen but the Surface, so
+  // she looked identical whether the queue was on fire or the day was empty —
+  // and the slow pulse could not fire there either, which meant a critical item
+  // never reached him unless he was already looking at her own screen.
+  const src = read(APP);
+  assert.match(src, /useFieldDrive/, 'the shell field is no longer driven by the brain');
+  assert.doesNotMatch(src, /<Field quiet confidenceLevel="low"/,
+    'the shell field is hardcoded again');
+});
+
+test('⚠ ONE definition of "pressing", shared by the surface and the shell', () => {
+  // Two definitions on the same screen are two answers free to drift.
+  const surface = read(SURFACE);
+  assert.match(surface, /import \{ isPressing \}/,
+    'AttentionSurface restates the pressing rule instead of importing it');
+  const hook = read(path.join(SHARED, 'useFieldDrive.js'));
+  assert.match(hook, /export function isPressing/);
+  assert.match(hook, /critical/);
+  assert.match(hook, /high/);
+});
+
+test('⚠ dimming the field must not DELETE its edges', () => {
+  // The cull ran after `dim`, so at `quiet` an edge computed 0.012 x 0.45 =
+  // 0.0054, under the 0.013 floor, and NO EDGE DREW AT ALL — the connected
+  // nodes lost their connections in the state a desk kiosk sits in most of the
+  // day. It must be tested on the undimmed value.
+  const src = read(FIELD);
+  assert.match(src, /EDGE_CULL_ALPHA/, 'the edge cull constant is gone');
+  assert.match(src, /const base = EDGE_REST_ALPHA \+ near \* EDGE_COHERENT;\s*\n\s*if \(base < EDGE_CULL_ALPHA\)/,
+    'the edge cull is being tested against a dimmed alpha again');
+});
+
+test('⚠ the kiosk stylesheet defines no app-shell classes', () => {
+  // Two files defining `.app__nav` let the cascade decide, and on the real
+  // panel the kiosk's retired 248px sidebar won: the bottom bar rendered as a
+  // column down the left with the surface squeezed to nothing. The fix is not
+  // more specificity, it is not having two definitions.
+  // ⚠ COMMENTS STRIPPED FIRST. The header explains which selectors were removed
+  // and why, so a bare `includes` matches the prose describing the rule and
+  // fails on a correct file — the widget test tripped over its own explanation
+  // the same way. Check the CODE, and do not write an exemption for the bits
+  // that describe it.
+  const css = read(KIOSK_CSS).replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const sel of ['.app__nav', '.app__view', '.app__main', '.app {']) {
+    assert.ok(!css.includes(sel), `${sel} is back in the kiosk stylesheet`);
+  }
+  // Positive control: it must still carry the THEME the remaining chrome uses.
+  assert.match(css, /:root/);
+  assert.match(css, /--accent/);
+});
+
+test('⚠ the retired screens are gone, not merely unreferenced', () => {
+  // Dead-but-readable is the shape that let a deleted Jira queue go on being
+  // read for seven weeks. If they come back, something is mounting them.
+  const screens = path.join(KIOSK, 'screens');
+  assert.ok(!fs.existsSync(screens), 'the legacy kiosk screens are back');
+  for (const gone of ['ViewRouter.jsx', 'ViewSwitcher.jsx', 'PlannedView.jsx']) {
+    assert.ok(!fs.existsSync(path.join(KIOSK, 'components', gone)), `${gone} is back`);
+  }
+});
+
+test('⚠ the three silences stay three, in the one place they are defined', () => {
+  const shared = read(SURFACE);
+  assert.match(shared, /read this as an all-clear/i, 'the pool-blind line must refuse an all-clear');
+  assert.match(shared, /Nothing pressing/, 'the genuinely-quiet line is gone');
+  assert.match(shared, /Staying out of the way|context\?\.summary/, 'the in-a-meeting line is gone');
 });

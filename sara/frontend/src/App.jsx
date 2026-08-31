@@ -3,6 +3,7 @@ import { SaraStateProvider, useSaraState } from './state/saraState';
 import { useDisplayState } from './state/useDisplayState';
 import { PRIMARY, SECONDARY, TABS, DEFAULT_TAB, revealsSecondary } from '../../shared-ui/tabs';
 import Field from '../../shared-ui/Field';
+import { useFieldDrive } from '../../shared-ui/useFieldDrive';
 import ExitButton from './components/ExitButton';
 import LockScreen from './components/LockScreen';
 import ClockScreen from './components/ClockScreen';
@@ -45,6 +46,10 @@ import './KioskShell.css';
 // rest through an ALLOWLIST (`src/routes/neuroProxy.js`), attaching the
 // credential server-side. That was always the reason the two apps could not be
 // one, and it turned out to be a fact about the BROWSER, not about the screens.
+// Module scope so the hook's effect is not re-created on every render. Same
+// origin as the SPA, so `sara/backend` answers and attaches the credential.
+const fetchAttentionForField = () => fetch('/api/attention').then((r) => r.json());
+
 function AppShell() {
   const { now } = useSaraState();
   const [active, setActive] = useState(DEFAULT_TAB);
@@ -69,6 +74,11 @@ function AppShell() {
   // Same rule as the phone: the primary row is always there, the secondary row
   // is revealed on request AND stays revealed while he is on one of its
   // screens, or the way back is only through the way he came.
+  // ⚠ Driven on every screen. The kiosk reads through `sara/backend`'s
+  // passthrough, which reports failure as a 200 carrying `available:false` —
+  // the hook treats both that and `poolAvailable:false` as blind.
+  const fieldDrive = useFieldDrive(fetchAttentionForField, active !== 'surface');
+
   const isSecondary = revealsSecondary(active);
   const moreVisible = navOpen || isSecondary;
 
@@ -85,7 +95,7 @@ function AppShell() {
           mounts its own driven by the real attention payload; two stacked
           fields would put a `quiet` placeholder under an honest one. */}
       {active !== 'surface' && (
-        <div className="app__field" aria-hidden="true"><Field quiet confidenceLevel="low" /></div>
+        <div className="app__field" aria-hidden="true"><Field {...fieldDrive} /></div>
       )}
 
       <header className="app__header">

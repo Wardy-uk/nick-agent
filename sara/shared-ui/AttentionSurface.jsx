@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import Field from './Field';
 import Dashboard from './Dashboard';
+import { isPressing } from './useFieldDrive';
 import './AttentionSurface.css';
 
 // AttentionSurface — the attention feed, rendered.
@@ -99,23 +100,16 @@ export default function AttentionSurface({
 
   // ── What counts as PRESSING ────────────────────────────────────────────────
   //
-  // Nick, 31 Aug 2026: "change anything pressing to a slow pulse." Defined HERE,
-  // once, for the same reason `degraded` is: every shell renders this file, so a
-  // second definition is a second answer free to drift.
+  // Nick, 31 Aug 2026: "change anything pressing to a slow pulse."
   //
-  // ⚠ CRITICAL OR HIGH ONLY, and deliberately not "there is a primary". On a
-  // normal working day there is nearly always a primary card, so pulsing on any
-  // of them would mean pulsing all day — and a signal that is always on is one
-  // nobody sees, which costs the real one. The urgency is the BRAIN'S ranking,
-  // not a second judgement made here.
+  // ⚠ The rule itself lives in `useFieldDrive` and is IMPORTED, not restated,
+  // because the shell's background field applies it too — two definitions of
+  // "pressing" would be two answers free to drift, on the same screen.
   //
-  // ⚠ It must be an ITEM. A `context` card ("you're in a meeting") is the frame,
-  // not a thing to act on, and breathing over it would tell him something needs
-  // doing when nothing does.
-  const pressing = Boolean(
-    primary && primary.kind === 'item'
-    && (primary.urgency === 'critical' || primary.urgency === 'high')
-  );
+  // Critical or high only, and it must be an ITEM. On a normal working day
+  // there is nearly always a primary, so pulsing on any of them would mean
+  // pulsing all day, and a signal that is always on is one nobody sees.
+  const pressing = isPressing(primary);
 
   return (
     <div className={rootClassName}>

@@ -636,6 +636,32 @@ async function gather(now = new Date()) {
     inputs.rituals = { known: false };
   }
 
+  // ── Bodies for the dashboards ────────────────────────────────────────────
+  //
+  // ⚠ These add NO CANDIDATES and change no ranking. `decision-engine` stays the
+  // one place something becomes worth surfacing; these are read purely so
+  // `sara-surface` can render a dashboard with something in it rather than a
+  // heading over the generic pool. Both are LOCAL reads (a `agent_state` blob
+  // and the triage blob), so neither puts a network call on a path polled every
+  // minute by three surfaces.
+  //
+  // Each failure is its own NAMED gap and never a silent empty list — a
+  // firefighting dashboard showing nothing because the read threw is an
+  // all-clear nobody earned.
+  try {
+    inputs.escalations = { known: true, items: require('./jira').getUnseenEscalations() || [] };
+  } catch (e) {
+    gaps.push({ input: 'escalations', why: e.message });
+    inputs.escalations = { known: false, items: [] };
+  }
+
+  try {
+    inputs.inbox = { known: true, urgent: require('./email-triage').getUrgentEmails() || [] };
+  } catch (e) {
+    gaps.push({ input: 'inbox', why: e.message });
+    inputs.inbox = { known: false, urgent: [] };
+  }
+
   // Home Assistant is read once and answers TWO inputs. It is the presence
   // source, and it is also the fallback for location — the OwnTracks recorder
   // has not been running (nothing listening on its port), so location was
@@ -752,7 +778,7 @@ async function gather(now = new Date()) {
 /**
  * Build the attention feed. This is what both SARA surfaces render.
  */
-async function build({ now = new Date(), view = null } = {}) {
+async function build({ now = new Date(), view = null, ask = null } = {}) {
   const { inputs, gaps } = await gather(now);
   const context = resolveContext(inputs, now);
 
@@ -980,9 +1006,12 @@ async function build({ now = new Date(), view = null } = {}) {
       }),
       poolAvailable: poolError === null,
       gaps,
+      escalations: inputs.escalations,
+      inbox: inputs.inbox,
     };
     framed = require('./sara-surface').compose(draft, {
       session: inputs.focusSession && inputs.focusSession.active ? inputs.focusSession.active : null,
+      ask,
     });
   } catch (e) {
     console.warn('[Attention] surface composition failed:', e.message);
@@ -1009,6 +1038,10 @@ async function build({ now = new Date(), view = null } = {}) {
     // keeps working untouched.
     surface: framed ? framed.surface : null,
     dashboard: framed ? framed.dashboard : null,
+    // Non-null when the DASHBOARD moved because he asked, rather than because
+    // the day did. A surface that changes under him with no explanation is the
+    // dishonest half of being adaptive.
+    askedSurface: framed ? framed.askedSurface : null,
     utterances: framed ? framed.utterances : [],
     // The lifecycle view of the same decision. Additive: every field this
     // payload returned before is unchanged and still means the same thing, which

@@ -65,6 +65,10 @@ const SURFACES = {
   RITUAL: 'ritual',
   OFF_DUTY: 'off-duty',
   STEADY: 'steady',
+  // Reachable only by ASKING. It has no activity of its own — "what's in my
+  // inbox" is a question, not a situation — which is exactly why the dashboards
+  // and the activities are not the same list.
+  INBOX: 'inbox',
 };
 
 // context-state's activity → the surface that frames it. A DIRECT MAP, on
@@ -101,6 +105,41 @@ function surfaceFor(payload) {
   if (payload.poolAvailable === false) return SURFACES.BLIND;
   const activity = payload.context && payload.context.activity;
   return BY_ACTIVITY[activity] || SURFACES.STEADY;
+}
+
+/**
+ * Which dashboard a QUESTION implies. PURE, deterministic, no model call.
+ *
+ * ⚠ WHY THIS EXISTS. Nick's principle is that everything she can do should be
+ * achievable conversationally, and until now asking her something streamed an
+ * answer and left the screen showing whatever it was showing. So "what have I
+ * got on" produced words where it should produce words AND the day — which made
+ * the conversation a chat window sitting on top of a dashboard, rather than the
+ * thing that drives it.
+ *
+ * ⚠ DETERMINISTIC ON PURPOSE — `event-parser`'s regex-first rule. This runs on
+ * a path polled by three surfaces and has to be instant, free, identical every
+ * time, and work with the Pi's models offline. A model call to decide which
+ * panel to draw would spend latency making the screen less predictable.
+ *
+ * ⚠ NO MATCH RETURNS NULL, and null means "leave the dashboard where it is".
+ * Guessing a panel from a question it does not understand is how she starts
+ * answering a different question from the one asked — and the streamed answer
+ * is still shown either way, so a miss costs nothing.
+ */
+const ASK_ROUTES = [
+  { re: /\b(inbox|e-?mails?|mail)\b/i, surface: SURFACES.INBOX },
+  { re: /\b(escalat\w*|breach\w*|on fire|firefight\w*)\b/i, surface: SURFACES.FIREFIGHTING },
+  { re: /\b(diary|calendar|agenda|schedule|meetings?|got on|my day|today)\b/i, surface: SURFACES.STEADY },
+  { re: /\b(finish\w*|done|wins?|this week|target|progress)\b/i, surface: SURFACES.OFF_DUTY },
+  { re: /\b(session|focus|smaller|stuck)\b/i, surface: SURFACES.SESSION },
+];
+
+function surfaceForQuestion(text) {
+  const q = typeof text === 'string' ? text.trim() : '';
+  if (!q) return null;
+  for (const r of ASK_ROUTES) if (r.re.test(q)) return r.surface;
+  return null;
 }
 
 // ── Dashboard rows ──────────────────────────────────────────────────────────
@@ -217,6 +256,43 @@ function dashPreMeeting(payload) {
 const HOT_TYPES = new Set(['escalation', 'nova-flag', 'novaFlag', 'breach', 'sla']);
 
 function dashFirefighting(payload) {
+  // ⚠ REAL ESCALATIONS FIRST, when they could be read. Before this the dashboard
+  // could only show the generic pool under the word "live now", so the one
+  // surface that exists for things actually on fire was the vaguest of the
+  // eight. These are a local `agent_state` read, not a Jira call.
+  const esc = payload.escalations;
+  if (isObj(esc) && esc.known === true && Array.isArray(esc.items) && esc.items.length) {
+    return {
+      kind: SURFACES.FIREFIGHTING,
+      label: 'unanswered escalations',
+      rows: esc.items.slice(0, 4).map((e) => row(
+        e.key || 'open',
+        e.summary || 'No summary',
+        {
+          // Each of these is already NULLED upstream when it is the queue's
+          // default rather than a fact about the ticket — "Unset" priority,
+          // "Open" status, Nick's own name. What survives is the finding.
+          meta: [e.priority, e.assignee].filter(Boolean).join(' · ') || null,
+          note: e.status || null,
+          level: e.priority === 'Critical' ? 'crit' : 'warn',
+        }
+      )),
+      figure: null,
+      note: esc.items.length > 4 ? `${esc.items.length} unanswered in total.` : null,
+    };
+  }
+  // ⚠ "I could not read the escalations" is NOT "there are none", and under the
+  // word firefighting that difference is the whole point.
+  if (isObj(esc) && esc.known === false) {
+    return {
+      kind: SURFACES.FIREFIGHTING,
+      label: 'live now',
+      rows: [],
+      figure: null,
+      note: 'Something is live, but I couldn’t read the escalations — don’t take this as an all-clear.',
+    };
+  }
+
   const pool = [payload.primary, ...(Array.isArray(payload.secondary) ? payload.secondary : [])]
     .filter((c) => c && c.kind === 'item');
 
@@ -338,6 +414,36 @@ function dashOffDuty(payload) {
   }
 
   return { kind: SURFACES.OFF_DUTY, label: 'this week', rows, figure, note: null };
+}
+
+function dashInbox(payload) {
+  const box = payload.inbox;
+  if (!isObj(box) || box.known !== true) {
+    return {
+      kind: SURFACES.INBOX,
+      label: 'your inbox',
+      rows: [],
+      figure: null,
+      // Triage having never run and the inbox being clear are different facts,
+      // and only one of them is good news.
+      note: 'I couldn’t read your inbox, so this isn’t "nothing needs you".',
+    };
+  }
+  const urgent = Array.isArray(box.urgent) ? box.urgent : [];
+  return {
+    kind: SURFACES.INBOX,
+    label: urgent.length ? 'needs an answer' : 'your inbox',
+    rows: urgent.slice(0, 5).map((m) => row(
+      null,
+      m.subject || '(no subject)',
+      // ⚠ `from`/`fromEmail` are the triage record's fields. The retired
+      // `inbox_items` table used `from_name`/`from_email`, and reading those
+      // yields `undefined` — the exact bug the urgent-email nudge shipped with.
+      { meta: (m.from || m.fromEmail || '').split('<')[0].trim() || null, level: 'warn' }
+    )),
+    figure: null,
+    note: urgent.length ? null : 'Nothing needing an answer.',
+  };
 }
 
 function dashInMeeting() {
@@ -501,8 +607,15 @@ function finish(list, payload) {
  */
 function compose(payload, opts = {}) {
   const safe = isObj(payload) ? payload : {};
-  const surface = surfaceFor(safe);
   const session = isObj(opts.session) ? opts.session : null;
+
+  // ⚠ A QUESTION can move the dashboard, but it can never move it off `blind`.
+  // If the pool could not be read, what is on screen has to say so — answering
+  // "what's in my inbox" with a confident panel while she cannot see his work
+  // is the one thing the blind state exists to prevent.
+  const contextSurface = surfaceFor(safe);
+  const asked = contextSurface === SURFACES.BLIND ? null : surfaceForQuestion(opts.ask);
+  const surface = asked || contextSurface;
 
   let dashboard;
   switch (surface) {
@@ -513,6 +626,7 @@ function compose(payload, opts = {}) {
     case SURFACES.SESSION: dashboard = dashSession(safe, session); break;
     case SURFACES.RITUAL: dashboard = dashRitual(safe); break;
     case SURFACES.OFF_DUTY: dashboard = dashOffDuty(safe); break;
+    case SURFACES.INBOX: dashboard = dashInbox(safe); break;
     default: dashboard = dashSteady(safe); break;
   }
 
@@ -520,12 +634,25 @@ function compose(payload, opts = {}) {
   // the normal case and must never render as a complete one.
   dashboard.gaps = surface === SURFACES.BLIND ? [] : gapsOf(safe);
 
-  return { surface, dashboard, utterances: utterancesFor(safe, surface, session) };
+  return {
+    surface,
+    dashboard,
+    // ⚠ Reported, so a client can tell "she moved because I asked" from "she
+    // moved because the day did". Without it a screen that changed under him
+    // has no explanation, and the honest half of an adaptive surface is being
+    // able to say why it adapted.
+    askedSurface: asked || null,
+    // ⚠ Utterances follow the surface actually SHOWN. Offering "what did I
+    // finish" under an inbox panel is the mute path disagreeing with the screen
+    // it is attached to.
+    utterances: utterancesFor(safe, surface, session),
+  };
 }
 
 module.exports = {
   compose,
   surfaceFor,
+  surfaceForQuestion,
   SURFACES,
   MAX_UTTERANCES,
   // Exported for the tests, which drive each dashboard directly rather than

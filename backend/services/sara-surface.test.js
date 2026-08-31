@@ -416,3 +416,113 @@ test('⚠ session verbs are `session` intents, never `act` ones', () => {
     }
   }
 });
+
+// ── Asking moves the dashboard ──────────────────────────────────────────────
+
+test('a question moves the DASHBOARD, deterministically', () => {
+  // Nick's principle: everything she can do should be achievable
+  // conversationally. Before this, asking streamed an answer and left the
+  // screen showing whatever it had been showing.
+  const { surfaceForQuestion } = surface;
+  assert.equal(surfaceForQuestion("what's in my inbox"), SURFACES.INBOX);
+  assert.equal(surfaceForQuestion('anything escalating?'), SURFACES.FIREFIGHTING);
+  assert.equal(surfaceForQuestion('what have I got on'), SURFACES.STEADY);
+  assert.equal(surfaceForQuestion('how am I doing this week'), SURFACES.OFF_DUTY);
+  assert.equal(surfaceForQuestion('make it smaller'), SURFACES.SESSION);
+});
+
+test('⚠ an unrecognised question leaves the dashboard exactly where it was', () => {
+  // Guessing a panel from a question she does not understand is how she comes
+  // to answer a different question from the one asked. The streamed answer is
+  // shown either way, so a miss costs nothing.
+  const { surfaceForQuestion } = surface;
+  assert.equal(surfaceForQuestion('who is Bob'), null);
+  assert.equal(surfaceForQuestion(''), null);
+  assert.equal(surfaceForQuestion(null), null);
+
+  const r = compose(payload({ context: { activity: 'steady' } }), { ask: 'who is Bob' });
+  assert.equal(r.surface, SURFACES.STEADY, 'the context surface must survive an unrouted question');
+  assert.equal(r.askedSurface, null);
+});
+
+test('⚠ a question can NEVER move the surface off blind', () => {
+  // Answering "what's in my inbox" with a confident panel while she cannot see
+  // his work is precisely what the blind state exists to prevent.
+  const r = compose(payload({ poolAvailable: false }), { ask: "what's in my inbox" });
+  assert.equal(r.surface, SURFACES.BLIND);
+  assert.equal(r.askedSurface, null);
+  assert.match(r.dashboard.note, /all-clear/i);
+});
+
+test('askedSurface says the screen moved because he ASKED', () => {
+  // A surface that changes under him with no explanation is the dishonest half
+  // of being adaptive.
+  const r = compose(payload({ context: { activity: 'steady' } }), { ask: 'anything escalating?' });
+  assert.equal(r.surface, SURFACES.FIREFIGHTING);
+  assert.equal(r.askedSurface, SURFACES.FIREFIGHTING);
+
+  const unasked = compose(payload({ context: { activity: 'firefighting' } }));
+  assert.equal(unasked.surface, SURFACES.FIREFIGHTING);
+  assert.equal(unasked.askedSurface, null, 'the context arriving there is not him asking');
+});
+
+test('⚠ utterances follow the surface SHOWN, not the context', () => {
+  // Offering "what did I finish" under an inbox panel is the mute path
+  // disagreeing with the screen it is attached to.
+  const r = compose(payload({ context: { activity: 'off' } }), { ask: 'anything escalating?' });
+  assert.equal(r.surface, SURFACES.FIREFIGHTING);
+  assert.ok(!r.utterances.some((u) => /finish/i.test(u.say)),
+    'off-duty utterances leaked onto an asked-for firefighting dashboard');
+});
+
+// ── The bodies ──────────────────────────────────────────────────────────────
+
+test('firefighting shows REAL escalations when it can read them', () => {
+  const r = compose(payload({
+    context: { activity: 'firefighting' },
+    escalations: {
+      known: true,
+      items: [
+        { key: 'NT-14855', summary: 'Portal sync failing', priority: 'Critical', assignee: 'Unassigned', status: 'Reopened' },
+        { key: 'NT-14790', summary: 'Export timeout', priority: null, assignee: null, status: null },
+      ],
+    },
+  }));
+  assert.equal(r.dashboard.rows.length, 2);
+  assert.equal(r.dashboard.rows[0].when, 'NT-14855');
+  assert.equal(r.dashboard.rows[0].level, 'crit');
+  // A nulled default (Nick's own name, "Unset", "Open") is nulled UPSTREAM, and
+  // what survives is the finding — so an all-null row simply carries no badges.
+  assert.equal(r.dashboard.rows[1].meta, null);
+});
+
+test('⚠ unreadable escalations are NOT an empty firefighting panel', () => {
+  // Under the word "firefighting", an empty box reads as an all-clear at the
+  // moment it is least true.
+  const r = compose(payload({
+    context: { activity: 'firefighting' },
+    escalations: { known: false, items: [] },
+  }));
+  assert.equal(r.dashboard.rows.length, 0);
+  assert.match(r.dashboard.note, /all-clear/i);
+});
+
+test('⚠ an unreadable inbox is not an empty one', () => {
+  const blind = compose(payload({ inbox: { known: false, urgent: [] } }), { ask: 'my inbox' });
+  assert.equal(blind.surface, SURFACES.INBOX);
+  assert.match(blind.dashboard.note, /couldn.t read your inbox/i);
+
+  // Read fine and genuinely clear is a different fact, and good news.
+  const clear = compose(payload({ inbox: { known: true, urgent: [] } }), { ask: 'my inbox' });
+  assert.match(clear.dashboard.note, /Nothing needing an answer/i);
+});
+
+test('the inbox reads the triage record fields, not the retired table names', () => {
+  // `from_name`/`from_email` belonged to the deleted `inbox_items` table and
+  // yield `undefined` — the exact bug the urgent-email nudge shipped with.
+  const r = compose(payload({
+    inbox: { known: true, urgent: [{ subject: 'Contract renewal', from: 'Jo Smith <j@x.com>' }] },
+  }), { ask: 'inbox' });
+  assert.equal(r.dashboard.rows[0].what, 'Contract renewal');
+  assert.equal(r.dashboard.rows[0].meta, 'Jo Smith');
+});

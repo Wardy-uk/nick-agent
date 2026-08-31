@@ -70,6 +70,20 @@ function tabFor(card) {
   return resolveSaraLiteTab({ type: card.type, meta: card.meta });
 }
 
+// ⚠ Can this device be spoken to AT ALL? Checked once, at module load.
+//
+// The kiosk mounts this same component (one app, both surfaces) but the Pi 4
+// has no microphone and Chromium on Debian has no Web Speech backend — so the
+// desk screen was offering "🎤 Talk to me" and would have failed on the tap.
+// The documented rule is that a kiosk carrying a mic it cannot use is worse
+// than one without, so the button is not rendered rather than rendered broken.
+//
+// It is a CAPABILITY check, not a device check: nothing here asks whether it is
+// "the kiosk". If a mic is ever plugged into the Pi the button returns on its
+// own, which is the outcome Nick's principle actually wants.
+const CAN_LISTEN = typeof window !== 'undefined'
+  && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+
 export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArrival }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [busy, setBusy] = useState(false);
@@ -83,10 +97,15 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
   const recognitionRef = useRef(null);
   const dictatedRef = useRef('');
 
-  const load = useCallback(async ({ quiet = false } = {}) => {
+  const load = useCallback(async ({ quiet = false, ask = null } = {}) => {
     if (!quiet) setState((s) => ({ ...s, loading: true, error: null }));
     try {
-      const data = await apiFetch('/api/attention');
+      // ⚠ `ask` moves the DASHBOARD to match the question — Nick's principle is
+      // that everything is achievable conversationally, and until this a
+      // question streamed an answer while the screen went on showing whatever
+      // it had been showing. The brain routes it deterministically; a question
+      // it does not recognise leaves the dashboard exactly where it was.
+      const data = await apiFetch(`/api/attention${ask ? `?ask=${encodeURIComponent(ask)}` : ''}`);
       setState({ loading: false, error: null, data });
     } catch (error) {
       // An error is NOT an empty feed. Keep the last good payload on screen
@@ -128,6 +147,11 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
 
   async function ask(question) {
     setExchange({ question, answer: '', thinking: true, error: null });
+    // Fire-and-forget, in PARALLEL with the answer: the dashboard should change
+    // as he finishes speaking, not after the model has finished replying. A
+    // failure here must never cost him the answer, so it is deliberately not
+    // awaited and its rejection is swallowed.
+    load({ quiet: true, ask: question }).catch(() => {});
     let acc = '';
     try {
       await chatStream(
@@ -377,15 +401,17 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
       footAside={voiceErr ? <p className="surface__aside surface__aside--warn">{voiceErr}</p> : null}
       footExtra={(
         <div className="surface__footrow">
-          <button
-            type="button"
-            className={`surface__mic${listening ? ' surface__mic--live' : ''}`}
-            onClick={toggleMic}
-            aria-pressed={listening}
-            aria-label={listening ? 'Stop and send' : 'Talk to SARA'}
-          >
-            {listening ? 'Listening — tap to send' : '🎤 Talk to me'}
-          </button>
+          {CAN_LISTEN && (
+            <button
+              type="button"
+              className={`surface__mic${listening ? ' surface__mic--live' : ''}`}
+              onClick={toggleMic}
+              aria-pressed={listening}
+              aria-label={listening ? 'Stop and send' : 'Talk to SARA'}
+            >
+              {listening ? 'Listening — tap to send' : '🎤 Talk to me'}
+            </button>
+          )}
           <button type="button" className="surface__all" onClick={() => onShowAll?.()}>Show me everything</button>
         </div>
       )}

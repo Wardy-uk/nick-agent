@@ -25,7 +25,13 @@ router.get('/', async (req, res) => {
     // empty diary.
     const asked = String(req.query.view || '').toLowerCase();
     const view = ['work', 'personal', 'flip'].indexOf(asked) !== -1 ? asked : null;
-    res.json(await attention.build({ view }));
+    // ⚠ `ask` moves the DASHBOARD, never the pool. It is matched
+    // deterministically against a small route table (`sara-surface`), bounded
+    // here so a caller cannot push an unbounded string into the payload, and it
+    // adds no candidates and re-ranks nothing — the answer to the question is
+    // still streamed by chat. It also cannot move the surface off `blind`.
+    const ask = typeof req.query.ask === 'string' ? req.query.ask.slice(0, 200) : null;
+    res.json(await attention.build({ view, ask }));
   } catch (e) {
     console.error('[Attention] build failed:', e.message);
     // An error is NOT an empty feed. Returning `{primary:null}` here would be
