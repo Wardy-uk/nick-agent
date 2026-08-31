@@ -91,10 +91,22 @@ function decide({ vault = null, notion = null, last = null, mode = 'two-way' } =
 
   // ── Both exist ─────────────────────────────────────────────────────────────
   if (!seen) {
-    // Both sides exist but we have no record of pairing them — a first run after
-    // a manual link, or state loss. We cannot tell which is newer in any way we
-    // trust, so this is a conflict, not a guess. Adopting one side here is how a
-    // state-file loss silently overwrites a week of edits.
+    // Both sides exist with no record of pairing them — a first run, or state
+    // loss. For a TWO-WAY mapping that is a genuine conflict: there is no way to
+    // tell which side is newer that we would trust, and adopting one is how a
+    // lost state file silently overwrites a week of edits.
+    //
+    // ⚠ But a ONE-WAY mapping has already answered the question. "Vault → Notion"
+    // means the vault IS the source; there is no competing claim to weigh, so
+    // refusing to act is not caution, it is a deadlock — the mapping can never
+    // complete its own first run. Found on the first real dry run: all five
+    // push-only mappings reported a conflict they could never resolve.
+    if (mode === 'push-only') {
+      return { action: ACTIONS.PUSH, reason: 'first sync; the vault is the source for this mapping' };
+    }
+    if (mode === 'pull-only') {
+      return { action: ACTIONS.PULL, reason: 'first sync; Notion is the source for this mapping' };
+    }
     return { action: CONFLICT, reason: 'both sides exist but have never been synced together' };
   }
 
@@ -102,14 +114,31 @@ function decide({ vault = null, notion = null, last = null, mode = 'two-way' } =
   if (vaultChanged && !notionChanged) return gate(ACTIONS.PUSH, 'changed in the vault only');
   if (!vaultChanged && notionChanged) return gate(ACTIONS.PULL, 'changed in Notion only');
 
-  // ⚠ Both moved. NEVER merged, and never resolved by picking a winner.
+  // ⚠ Both moved. NEVER merged, and never resolved by picking a winner —
+  // unless the mapping itself already named the winner.
   //
   // A merge needs a common ancestor and a block identity that survives editing,
   // and Notion gives neither — block ids are stable but markdown editing in
-  // Obsidian destroys the mapping to them. Any automatic resolution here throws
-  // away one side's work silently, in the one place Nick would not think to
-  // look. The conflict copy costs him a two-minute read; a wrong merge costs him
-  // the edit he made and no way to know it happened.
+  // Obsidian destroys the mapping to them. Any automatic resolution throws away
+  // one side's work silently, in the one place Nick would not think to look.
+  //
+  // The asymmetry between the two one-way modes is deliberate and is about what
+  // is LOST, not about symmetry of the rule:
+  //
+  //   push-only — Notion is a published window on the vault. Overwriting it is
+  //     the stated purpose of the mapping, and the thing overwritten is a copy.
+  //     So it proceeds, and SAYS it overwrote a change rather than doing it
+  //     quietly.
+  //
+  //   pull-only — the thing that would be overwritten is a note in Nick's own
+  //     vault. That is his writing, and it is not a copy of anything. So this
+  //     stays a conflict even though the mapping names Notion as the source.
+  if (mode === 'push-only') {
+    return {
+      action: ACTIONS.PUSH,
+      reason: 'changed on both sides; the vault is the source for this mapping, so the Notion page was overwritten',
+    };
+  }
   return { action: CONFLICT, reason: 'changed on BOTH sides since the last sync' };
 }
 

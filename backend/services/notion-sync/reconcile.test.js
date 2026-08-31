@@ -97,6 +97,47 @@ test('a one-way mapping still reports a conflict rather than hiding it', () => {
   assert.equal(r.action, ACTIONS.CONFLICT);
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// A one-way mapping resolves its own first sync.
+//
+// Found on the first real dry run: all five push-only mappings reported a
+// conflict they could never resolve, because "both exist, never paired" was
+// treated as undecidable even where the mapping had already decided.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('push-only pushes on first sync instead of deadlocking', () => {
+  const r = decide({ vault: V('a'), notion: N('t1'), last: null, mode: 'push-only' });
+  assert.equal(r.action, ACTIONS.PUSH);
+  assert.match(r.reason, /first sync/);
+});
+
+test('pull-only pulls on first sync instead of deadlocking', () => {
+  const r = decide({ vault: V('a'), notion: N('t1'), last: null, mode: 'pull-only' });
+  assert.equal(r.action, ACTIONS.PULL);
+  assert.match(r.reason, /first sync/);
+});
+
+test('two-way still refuses an unpaired first sync', () => {
+  // Nothing has named a winner here, so adopting one is how a lost state file
+  // silently overwrites a week of edits.
+  const r = decide({ vault: V('a'), notion: N('t1'), last: null, mode: 'two-way' });
+  assert.equal(r.action, ACTIONS.CONFLICT);
+});
+
+test('push-only overwrites a Notion edit and SAYS it did', () => {
+  // Notion is a published window on the vault; the thing overwritten is a copy.
+  const r = decide({ vault: V('b'), notion: N('t2'), last: LAST('a', 't1'), mode: 'push-only' });
+  assert.equal(r.action, ACTIONS.PUSH);
+  assert.match(r.reason, /overwrit/i, 'a silent overwrite is the thing to avoid');
+});
+
+test('⚠ pull-only still CONFLICTS when both moved — that would overwrite the vault', () => {
+  // The asymmetry is about what is lost: a vault note is Nick's own writing and
+  // is not a copy of anything, so it is never overwritten automatically.
+  const r = decide({ vault: V('b'), notion: N('t2'), last: LAST('a', 't1'), mode: 'pull-only' });
+  assert.equal(r.action, ACTIONS.CONFLICT);
+});
+
 test('nothing on either side is a noop, not a creation', () => {
   assert.equal(decide({ vault: null, notion: null, last: null }).action, ACTIONS.NOOP);
 });
