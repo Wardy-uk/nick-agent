@@ -86,15 +86,77 @@ export default function ProfilePanel() {
     }
   }
 
+  /**
+   * Wait for a turn the browser stopped listening to.
+   *
+   * ⚠ A dropped connection is NOT a lost turn. The reply is saved BEFORE the AI
+   * call and the assistant's answer is saved after it, so the work carries on
+   * server-side whatever the browser does — proved live on 31 Aug, when a turn
+   * that came back "Failed to fetch" had in fact completed and recorded a fact.
+   *
+   * `nuero.nickward.co.uk` fronts through Netlify to the Pi, and that proxy
+   * gives up around thirty seconds. A turn measured 14s directly, so a longer
+   * one with more tool rounds crosses it — which means holding the connection
+   * open was never going to be reliable and polling is the honest shape.
+   */
+  const waitForReply = useCallback(async (countBefore) => {
+    const deadline = Date.now() + 150000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const res = await fetch(apiUrl('/api/profile/interview'));
+        if (!res.ok) continue;
+        const json = await res.json();
+        if ((json.messages || []).length > countBefore) {
+          setSession(json);
+          loadProfile();
+          return true;
+        }
+      } catch { /* still unreachable — keep waiting until the deadline */ }
+    }
+    return false;
+  }, [loadProfile]);
+
   const send = async () => {
     const text = draft.trim();
     if (!text || busy) return;
-    // Cleared only once it is on its way; a failed send keeps the words in the
-    // box rather than destroying them.
+
+    const countBefore = (session?.messages || []).length;
     const previous = draft;
     setDraft('');
-    const result = await post('/api/profile/interview/reply', { message: text });
-    if (!result) setDraft(previous);
+    setBusy(true);
+    setError(null);
+
+    try {
+      const res = await fetch(apiUrl('/api/profile/interview/reply'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) {
+        if (json.messages) setSession(s => ({ ...(s || {}), messages: json.messages }));
+        // A rejected message never reached the server, so it goes back in the box.
+        if (!json.retryable) setDraft(previous);
+        throw new Error(json.retryable ? `${json.error} — try again, nothing was lost` : (json.error || `HTTP ${res.status}`));
+      }
+      setSession(json);
+      loadProfile();
+    } catch (e) {
+      // ⚠ A NETWORK failure is the case above: the message is already saved and
+      // the turn is probably still running. The draft deliberately does NOT come
+      // back — restoring it invites him to send the same thing twice.
+      const networkFailure = e instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(e.message || '');
+      if (networkFailure) {
+        setError('That took longer than the connection would hold — waiting for her to finish…');
+        const landed = await waitForReply(countBefore);
+        setError(landed ? null : 'She is still thinking, or the Pi is unreachable. Your message is saved — reopen this page in a minute.');
+      } else {
+        setError(e.message);
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (error && !profile) {
