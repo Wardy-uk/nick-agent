@@ -52,6 +52,14 @@ const path = require('path');
 
 const DIR = 'Catalogues';
 const DEFAULT_SECTIONS = ['Items'];
+// ⚠ `render` writes this under a section with nothing in it. `parse` must skip
+// it, because it is the writer's OWN output and not something anybody typed —
+// left as an unrecognised line it is PRESERVED into `trailing`, re-rendered
+// underneath the sections, and read back again on the next save. Every write
+// then adds one more copy, for ever, to any catalogue with an empty section —
+// which every newly created catalogue is. Same shape as the outcome-note fence:
+// a placeholder the system wrote must never read back as user content.
+const EMPTY_MARK = '*(empty)*';
 const MAX_NAME = 120;
 
 // ── Pure ─────────────────────────────────────────────────────────────────────
@@ -145,6 +153,7 @@ function parse(markdown = '', { fallbackTitle = 'Catalogue' } = {}) {
     }
 
     if (!raw.trim()) continue;
+    if (raw.trim() === EMPTY_MARK) continue;
     // Anything else is kept verbatim, above the sections if it came first.
     (current ? trailing : preamble).push(raw);
   }
@@ -175,7 +184,7 @@ function render(cat = {}, { today = null } = {}) {
     const list = (cat.items || {})[_sectionKey(section)] || [];
     out.push(`## ${section}`, '');
     if (!list.length) {
-      out.push('*(empty)*', '');
+      out.push(EMPTY_MARK, '');
       continue;
     }
     for (const it of list) out.push(`- ${it.name}${it.added ? ` <!--c:${it.added}-->` : ''}`);

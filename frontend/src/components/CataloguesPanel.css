@@ -1,0 +1,205 @@
+.catalogues {
+  padding: 20px;
+  max-width: 880px;
+  margin: 0 auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.cat-head h2 { margin: 0 0 4px; font-size: 18px; }
+.cat-head p { margin: 0 0 18px; }
+.cat-muted { color: var(--text-muted); }
+.cat-head code, .cat-detail-head code {
+  background: var(--bg-secondary);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* Errors are stated in words, where the person is looking — never a blank
+   panel, which reads as "nothing here" and is a different fact. */
+.cat-error {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-lg, 8px);
+  padding: 10px 12px;
+  margin: 10px 0 6px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--danger);
+}
+.cat-error-inline { color: var(--danger); }
+
+/* ------------------------------------------------------------------- list */
+
+.cat-list { list-style: none; margin: 0; padding: 0; }
+
+.cat-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 8px);
+  margin-bottom: 8px;
+  background: var(--bg-secondary);
+}
+.cat-row--broken { border-color: var(--danger); }
+
+.cat-open {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 11px 13px;
+  cursor: pointer;
+  min-width: 0;
+}
+.cat-open:hover:not(:disabled) { background: var(--bg-hover, rgba(127, 127, 127, 0.08)); }
+.cat-open:disabled { cursor: default; }
+.cat-title { font-weight: 600; }
+.cat-meta { font-size: 12px; }
+
+/* A shared catalogue is legible at a glance from the list, because "which of
+   these is on the public internet" is the question worth answering without
+   opening anything. */
+.cat-badge {
+  margin-right: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- create/foot */
+
+.cat-foot {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.cat-create {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 8px);
+  padding: 12px;
+  background: var(--bg-secondary);
+  width: 100%;
+}
+
+.catalogues input {
+  background: var(--bg-primary, var(--bg-secondary));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: inherit;
+  font: inherit;
+  padding: 7px 9px;
+  min-width: 0;
+}
+
+.cat-create-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.catalogues button {
+  border-radius: var(--radius-sm, 6px);
+  font: inherit;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.catalogues button:disabled { opacity: 0.45; cursor: default; }
+
+.cat-primary {
+  background: var(--accent, var(--bg-secondary));
+  border: 1px solid var(--accent, var(--border));
+  color: var(--accent-text, inherit);
+}
+.cat-plain {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: inherit;
+}
+/* The only control here with a consequence outside the house, and it looks it. */
+.cat-danger {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+/* ----------------------------------------------------------------- detail */
+
+.cat-detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 14px 0 10px;
+}
+.cat-detail-head h3 { margin: 0; font-size: 16px; }
+
+.cat-share {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 8px);
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  background: var(--bg-secondary);
+}
+.cat-share--on { border-color: var(--warning); }
+.cat-share-state { font-weight: 600; }
+
+.cat-confirm {
+  display: block;
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+}
+.cat-confirm p { margin: 0 0 8px; }
+
+.cat-section {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-bottom: 16px;
+}
+.cat-section h4 { margin: 0 0 8px; font-size: 13px; }
+.cat-empty { margin: 0 0 8px; }
+
+.cat-items { list-style: none; margin: 0 0 8px; padding: 0; }
+.cat-items li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px dotted var(--border);
+}
+.cat-item-name { flex: 1 1 auto; min-width: 0; }
+.cat-item-added { font-size: 11px; white-space: nowrap; }
+
+.cat-remove {
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  padding: 2px 4px;
+  font-size: 11px;
+}
+.cat-remove:hover:not(:disabled) { color: var(--danger); }
+
+.cat-add { display: flex; gap: 8px; }
+.cat-add input { flex: 1 1 auto; }
+
+@media (max-width: 560px) {
+  .catalogues { padding: 14px; }
+  .cat-badge { margin-right: 8px; }
+}

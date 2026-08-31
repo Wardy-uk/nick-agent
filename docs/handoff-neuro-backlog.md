@@ -22,8 +22,22 @@
 
 ## Ready to build
 
-### 1. Catalogues panel in NEURO — *covered in the VESTA brief*
-`/api/catalogues` is live and has no UI. See `docs/handoff-vesta.md` §2.
+### 1. ~~Catalogues panel in NEURO~~ — **DONE, 31 Aug 2026**
+`frontend/src/components/CataloguesPanel.jsx` + `.css`, sidebar **Catalogues**, wired in `App.jsx`
+(view id `catalogues`, lazy like every other non-primary panel). List, create, add/remove, and the
+share toggle — which asks first and names where the list goes, because VESTA is on the public
+internet. Created catalogues are **private**; there is no `shared` control on the create form.
+
+⚠ **A real bug was fixed on the way in.** `render` writes `*(empty)*` under a section with nothing
+in it, and `parse` did not recognise its own placeholder — so it was preserved into `trailing`,
+re-rendered under the sections, and read back on the next save. **Every write appended one more
+copy, for ever**, to any catalogue with an empty section, which every newly created one is. The
+existing `parse -> render -> parse is STABLE` test compares the parsed FIELDS and is blind to it;
+the new pins are on the **text** and on the **file on disk** across add/remove cycles.
+
+Pinned by `catalogue.test.js` (16) + `routes/catalogue-routing.test.js` (9, real HTTP). Frontend
+builds. ⚠ **Not seen rendering** — there is no component test harness in `frontend/`, so a build
+proves it compiles and nothing more.
 
 ### 2. `chunkReload` in `frontend/src/main.jsx` — **belongs to another session**
 The SPA-fallback fix (`server.js` + `sw.js` v8 + `ErrorBoundary.jsx` + `routes/spa-fallback.test.js`) landed on 31 Aug and its comment references a `chunkReload` in `main.jsx` **that does not exist**. The server now honestly 404s a missing hashed chunk instead of answering with `index.html`, which is strictly better than the dead-menu bug it replaced — but the client-side recovery is missing. **Check with the other session before writing it.**

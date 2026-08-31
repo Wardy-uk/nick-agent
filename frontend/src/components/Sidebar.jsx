@@ -77,6 +77,10 @@ const SECONDARY_ITEMS = [
   // entry rather than hiding inside Settings — the mapping table is the whole
   // safety model and needs to be somewhere Nick can actually find it.
   { id: 'notion-sync', label: 'Notion Sync', icon: '⇄' },
+  // `/api/catalogues` shipped with no UI at all — the routable-but-unreachable
+  // hole this list already documents for `todos` and `decisions`. Sits by Notion
+  // Sync because both are "a thing of Nick's kept somewhere else as well".
+  { id: 'catalogues', label: 'Catalogues', icon: '▤' },
   { id: 'admin',      label: 'Settings',  icon: '>' },
 ];
 
