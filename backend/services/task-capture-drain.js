@@ -45,25 +45,90 @@ source: obsidian
 
 `;
 
+/**
+ * Where the vault is, and whether we can honestly say we have one.
+ *
+ * ⚠ `path.join('', 'Tasks', 'Capture.md')` is `Tasks/Capture.md` — a RELATIVE
+ * path, which resolves against the backend process's working directory. So an
+ * unset `OBSIDIAN_VAULT_PATH` did not fail: it quietly created
+ * `backend/Tasks/Capture.md` inside the repository, reported success, and
+ * drained into it forever. A capture written in Obsidian went to a file NEURO
+ * was not reading, and a capture NEURO wrote went to a file Obsidian could not
+ * see — the drop-box working perfectly against nothing.
+ *
+ * Nothing here builds a path until the vault has been resolved.
+ */
 function getVaultPath() {
   return process.env.OBSIDIAN_VAULT_PATH || '';
 }
 
+/**
+ * Resolve the vault, or say precisely why not. PURE apart from the stat.
+ * Returns `{ok:true, path}` or `{ok:false, reason, error}`.
+ */
+function resolveVault() {
+  const raw = getVaultPath().trim();
+  if (!raw) {
+    return { ok: false, reason: 'not-configured', error: 'OBSIDIAN_VAULT_PATH is not set' };
+  }
+  // An absolute path is the only kind that cannot be re-rooted at the process
+  // working directory by accident.
+  if (!path.isAbsolute(raw)) {
+    return { ok: false, reason: 'not-absolute', error: `OBSIDIAN_VAULT_PATH is not an absolute path: ${raw}` };
+  }
+  let stat;
+  try { stat = fs.statSync(raw); }
+  catch (e) { return { ok: false, reason: 'unreadable', error: `Vault path is not readable: ${e.message}` }; }
+  if (!stat.isDirectory()) {
+    return { ok: false, reason: 'not-a-directory', error: `Vault path is not a directory: ${raw}` };
+  }
+  return { ok: true, path: raw };
+}
+
+/** True when a real, readable vault directory is configured. */
+function vaultConfigured() {
+  return resolveVault().ok;
+}
+
+/**
+ * The capture drop-box, or NULL when there is no vault.
+ *
+ * ⚠ Null, never a repo-relative fallback. A caller that cannot tell "no vault"
+ * from "a path" will write into the repository, which is the bug this fixes.
+ */
 function capturePath() {
-  return path.join(getVaultPath(), 'Tasks', 'Capture.md');
+  const vault = resolveVault();
+  return vault.ok ? path.join(vault.path, 'Tasks', 'Capture.md') : null;
 }
 
+/** The drain audit log, or NULL when there is no vault. Same rule. */
 function logPath() {
-  return path.join(getVaultPath(), 'Tasks', 'Archive', 'Capture drain log.md');
+  const vault = resolveVault();
+  return vault.ok ? path.join(vault.path, 'Tasks', 'Archive', 'Capture drain log.md') : null;
 }
 
-/** Create the capture file with its template if it isn't there yet. */
+/**
+ * Create the capture file with its template if it isn't there yet.
+ *
+ * Returns `{ok, created, path}` on success, or `{ok:false, reason, error}` —
+ * a structured refusal a caller can log without throwing. It never throws on a
+ * missing vault, because the only sane response to one is a warning, and a
+ * startup path that dies here takes the whole scheduler with it.
+ */
 function ensureCaptureFile() {
-  const target = capturePath();
-  if (fs.existsSync(target)) return { created: false, path: CAPTURE_RELATIVE };
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, TEMPLATE, 'utf-8');
-  return { created: true, path: CAPTURE_RELATIVE };
+  const vault = resolveVault();
+  if (!vault.ok) {
+    return { ok: false, created: false, path: null, reason: vault.reason, error: vault.error };
+  }
+  const target = path.join(vault.path, 'Tasks', 'Capture.md');
+  try {
+    if (fs.existsSync(target)) return { ok: true, created: false, path: CAPTURE_RELATIVE };
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, TEMPLATE, 'utf-8');
+    return { ok: true, created: true, path: CAPTURE_RELATIVE };
+  } catch (e) {
+    return { ok: false, created: false, path: null, reason: 'write-failed', error: e.message };
+  }
 }
 
 /**
@@ -102,6 +167,7 @@ function isStructuralLine(line) {
 function appendDrainLog(entries) {
   if (!entries.length) return;
   const target = logPath();
+  if (!target) return;   // no vault — nothing to audit into, and never into the repo
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const header = fs.existsSync(target)
     ? ''
@@ -117,13 +183,16 @@ function appendDrainLog(entries) {
  */
 function drainCaptureFile(options = {}) {
   const dryRun = options.dryRun === true;
-  const target = capturePath();
 
-  if (!getVaultPath() || !fs.existsSync(getVaultPath())) {
-    return { ok: false, error: 'Vault path not configured' };
+  const vault = resolveVault();
+  if (!vault.ok) {
+    return { ok: false, reason: vault.reason, error: vault.error };
   }
+  const target = path.join(vault.path, 'Tasks', 'Capture.md');
+
   if (!fs.existsSync(target)) {
-    ensureCaptureFile();
+    const ensured = ensureCaptureFile();
+    if (!ensured.ok) return { ok: false, reason: ensured.reason, error: ensured.error };
     return { ok: true, drained: 0, created: 0, note: 'Capture file created' };
   }
 
@@ -185,6 +254,9 @@ function drainCaptureFile(options = {}) {
 module.exports = {
   CAPTURE_RELATIVE,
   capturePath,
+  logPath,
+  resolveVault,
+  vaultConfigured,
   drainCaptureFile,
   ensureCaptureFile,
   parseCaptureLine,

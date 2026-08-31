@@ -137,9 +137,22 @@ function start() {
 
   // Make sure the capture drop-box exists, and drain anything written while the
   // backend was down — that is the whole point of the file surviving an outage.
+  //
+  // Gated on a real vault. Unguarded, `ensureCaptureFile()` resolved
+  // `Tasks/Capture.md` against the process working directory and created
+  // `backend/Tasks/Capture.md` inside the repository, then logged nothing, so a
+  // drop-box wired to nowhere looked exactly like a working one. One warning
+  // naming the reason beats a cheerful setup message over a file Obsidian
+  // cannot see.
   try {
-    require('./task-capture-drain').ensureCaptureFile();
-    require('./task-capture-drain').drainCaptureFile({ force: true });
+    const captureDrain = require('./task-capture-drain');
+    const vault = captureDrain.resolveVault();
+    if (!vault.ok) {
+      console.warn(`[Scheduler] Obsidian capture drop-box NOT set up - ${vault.error}. Offline capture via Tasks/Capture.md is unavailable until OBSIDIAN_VAULT_PATH points at the vault.`);
+    } else {
+      captureDrain.ensureCaptureFile();
+      captureDrain.drainCaptureFile({ force: true });
+    }
   } catch (e) {
     console.error('[Scheduler] Capture drain on startup failed:', e.message);
   }
