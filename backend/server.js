@@ -233,6 +233,7 @@ app.use('/api/attention', require('./routes/attention'));
 app.use('/api/ambient', require('./routes/ambient'));
 app.use('/api/desktop', require('./routes/desktop'));
 app.use('/api/signals', require('./routes/signals'));
+app.use('/api/profile', require('./routes/profile'));
 app.use('/api/catalogues', require('./routes/catalogue'));
 app.use('/api/v', require('./routes/vesta'));
 app.use('/api/weekly-risk', require('./routes/weekly-risk'));

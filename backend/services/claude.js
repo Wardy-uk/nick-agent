@@ -246,6 +246,22 @@ function anthropicAvailable() {
   return !!process.env.ANTHROPIC_API_KEY;
 }
 
+/**
+ * What SARA knows about Nick as a person, if anything.
+ *
+ * ⚠ Never allowed to fail the context. A profile read that throws must not cost
+ * him a chat turn — this is an enrichment, and the rest of the context is what
+ * he actually asked a question about.
+ */
+function _profileBlock() {
+  try {
+    return require('./profile').block();
+  } catch (e) {
+    console.warn('[Claude] Profile block unavailable:', e.message);
+    return null;
+  }
+}
+
 async function buildContextBlock(queueSummary, dailyNote, previousNote, standupContent, todos, ninetyDayPlan, weekend = false, vaultResults = [], locationContext = null, intent = 'general') {
   // Location context — injected regardless of weekend mode
   const locationLine = locationContext ? `\n\n**${locationContext}**` : '';
@@ -253,6 +269,11 @@ async function buildContextBlock(queueSummary, dailyNote, previousNote, standupC
   if (weekend) {
     // Weekend mode — skip queue and 90-day plan, keep daily note and todos only
     const parts = [];
+    // ⚠ FIRST, and on the weekend especially. This is the block that stops her
+    // being purely a work assistant when there is no work — the hole REGISTERS
+    // fixed in the voice, fixed here in the context.
+    const weekendProfile = _profileBlock();
+    if (weekendProfile) parts.push(weekendProfile);
     if (dailyNote) parts.push(`## Today's Note\n${dailyNote}`);
     else if (previousNote) parts.push(`## Previous Note (${previousNote.date})\n${previousNote.content}`);
     if (todos && todos.active && todos.active.length > 0) {
@@ -273,6 +294,9 @@ async function buildContextBlock(queueSummary, dailyNote, previousNote, standupC
   }
 
   const parts = [];
+  // Who he is, as distinct from what he is doing.
+  const weekdayProfile = _profileBlock();
+  if (weekdayProfile) parts.push(weekdayProfile);
   const diagnostics = [];
 
   // Queue block removed 27 Aug 2026 with the Jira queue cache — see
