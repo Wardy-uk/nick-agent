@@ -260,6 +260,20 @@ test('switching kind blanks the field the other kind used', () => {
   assert.equal(config.coerce({ kind: 'nonsense', vaultFolder: 'Team' }, 0).kind, 'tree');
 });
 
+test('⚠ a page mapping is ENABLED — it has no vaultFolder by design', () => {
+  // The original filter tested vaultFolder, so every page mapping was silently
+  // dropped from the run and the sync still reported success. A skipped mapping
+  // that looks like a clean run is the failure mode this area exists to prevent.
+  const rows = [
+    config.coerce({ kind: 'page', notionPageId: '00000000000000000000000000000001', vaultNote: 'Team/x.md', enabled: true }, 0),
+    config.coerce({ kind: 'tree', notionPageId: '00000000000000000000000000000002', vaultFolder: 'Areas', enabled: true }, 1),
+  ];
+  // enabled() reads from the DB, so assert the predicate it uses instead.
+  for (const r of rows) {
+    assert.ok(config.targetOf(r), `${r.kind} mapping must have a vault target`);
+  }
+});
+
 test('targetOf names the vault side whichever kind it is', () => {
   assert.equal(config.targetOf({ kind: 'page', vaultNote: 'a/b.md', vaultFolder: '' }), 'a/b.md');
   assert.equal(config.targetOf({ kind: 'tree', vaultFolder: 'a', vaultNote: '' }), 'a');

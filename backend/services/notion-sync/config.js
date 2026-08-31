@@ -264,7 +264,12 @@ function save(input) {
 }
 
 function enabled() {
-  return list().filter((m) => m.enabled && m.notionPageId && m.vaultFolder);
+  // ⚠ `targetOf`, not `vaultFolder`. A `page` mapping deliberately blanks
+  // vaultFolder, so the original test filtered every one of them out — the sync
+  // reported a clean run having silently skipped five mappings, which is the
+  // exact "looks like it worked" failure this whole area is built to avoid.
+  // Caught by the first dry run, not by a test.
+  return list().filter((m) => m.enabled && m.notionPageId && targetOf(m));
 }
 
 // ── The scheduled pass, switchable without a restart ────────────────────────
