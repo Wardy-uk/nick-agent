@@ -168,6 +168,30 @@ function start() {
   });
 
   // 9am weekdays — trigger standup and todo nudges
+  // Every 40 minutes — the ambient push pass.
+  //
+  // ⚠ The CADENCE is not the frequency. Almost every pass decides to say
+  // nothing: `ambient-push` refuses on an unconfident read, in a meeting, in
+  // Focus mode, driving, in a focus session, or when the brain has called the
+  // moment quiet — and then sends AT MOST ONE, through the governor's quiet
+  // hours, 30-minute dedupe and hourly cap, and through the attention lifecycle
+  // which will not let the same observation interrupt twice. Checking often is
+  // what lets it catch the right moment; the gates are what stop it being a
+  // pest. 40 rather than 30 so it does not beat in step with the half-hourly
+  // syncs.
+  //
+  // Deliberately NOT a TRACKED_JOBS catch-up job: replaying "you have been
+  // sitting for two hours" an hour later is a statement about a moment that has
+  // gone.
+  cron.schedule('*/40 * * * *', async () => {
+    try {
+      const result = await require('./ambient-push').deliver();
+      if (result.sent) console.log(`[Scheduler] Ambient push: ${result.chosen}`);
+    } catch (e) {
+      console.warn('[Scheduler] Ambient push failed:', e.message);
+    }
+  });
+
   cron.schedule('0 9 * * 1-5', () => {
     console.log('[Scheduler] 9am — triggering standup + todo nudges');
     nudges.triggerStandupNudge();

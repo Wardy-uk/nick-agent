@@ -36,4 +36,37 @@ router.get('/', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/ambient/push-check — what the push layer WOULD do right now, and why
+ * it refused each observation. Sends nothing.
+ *
+ * Exists because a channel that silently decides not to speak is
+ * indistinguishable from a broken one. This is how that decision is inspected
+ * without waiting for the next pass.
+ */
+router.get('/push-check', async (req, res) => {
+  try {
+    const ambientPush = require('../services/ambient-push');
+    const attention = require('../services/attention');
+    const { inputs } = await attention.gather();
+    const context = require('../services/context-state').resolveContext(inputs);
+    const ha = require('../services/ha');
+    const phone = ha.isConfigured() ? await ha.getPhoneStatus() : null;
+    const desktop = require('../services/desktop-activity').run();
+
+    const moment = ambientPush.momentFrom({ context, phone, desktop });
+    const built = await require('../services/ambient').build({ context });
+    res.json({
+      enabled: ambientPush.ENABLED,
+      moment,
+      considered: (built.observations || []).map(o => ({
+        kind: o.kind,
+        ...ambientPush.worthInterrupting(o, moment),
+      })),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 module.exports = router;
