@@ -244,21 +244,53 @@ async function replaceChildren(blockId, blocks) {
   await appendChildren(blockId, blocks);
 }
 
-/** Pages this integration can see, newest first — the folder picker's source. */
+/**
+ * Pages this integration can see, as a breadcrumb-labelled tree.
+ *
+ * ⚠ The PATH is not decoration. A real workspace has several pages with the same
+ * title — this one has two "Decisions", two "Current State" and two
+ * "Preferences" — so a picker listing bare titles cannot be used correctly: you
+ * cannot tell `Work / Decisions` from `NEURO / SARA / Decisions`, and picking the
+ * wrong one points a mapping at the wrong tree with no visible error.
+ *
+ * Notion's search returns a parent id but no parent title, so the chain is
+ * resolved locally from the same result set — no extra API calls. A parent
+ * outside the result set (not shared with the integration) simply stops the
+ * chain, so the path is always as much as we can honestly state.
+ */
 async function searchPages(query = '') {
   const results = await paged('POST', '/search', {
     query: query || undefined,
     filter: { property: 'object', value: 'page' },
     sort: { direction: 'descending', timestamp: 'last_edited_time' },
   });
-  return results.map((page) => ({
-    id: page.id,
-    title: titleOf(page) || '(untitled)',
-    url: page.url || null,
-    lastEdited: page.last_edited_time,
-    archived: Boolean(page.archived || page.in_trash),
-    isChild: page.parent?.type === 'page_id',
-  }));
+
+  const byId = new Map(results.map((p) => [p.id, p]));
+
+  const pathOf = (page, depth = 0) => {
+    const name = titleOf(page) || '(untitled)';
+    const parent = page.parent || {};
+    // Depth-capped: a cycle is not expected, but a malformed parent chain must
+    // not hang the picker.
+    if (parent.type === 'page_id' && byId.has(parent.page_id) && depth < 8) {
+      return `${pathOf(byId.get(parent.page_id), depth + 1)} / ${name}`;
+    }
+    return name;
+  };
+
+  return results
+    .map((page) => ({
+      id: page.id,
+      title: titleOf(page) || '(untitled)',
+      path: pathOf(page),
+      url: page.url || null,
+      lastEdited: page.last_edited_time,
+      archived: Boolean(page.archived || page.in_trash),
+      isChild: page.parent?.type === 'page_id',
+    }))
+    // Tree order, so the picker reads like the workspace rather than like a
+    // recently-edited feed.
+    .sort((a, b) => a.path.localeCompare(b.path));
 }
 
 module.exports = {

@@ -219,6 +219,26 @@
 }
 .ns-cov-detail button:hover { border-color: var(--text-muted); }
 
+/* A collapsed section must still look like a control, not a heading — otherwise
+   nobody discovers there is anything behind it. */
+.ns-disclosure {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ns-disclosure:hover { color: var(--text-muted); }
+.ns-disclosure-mark { color: var(--text-muted); width: 10px; }
+
+.ns-cov-list--folders { margin-top: 8px; }
+.ns-cov--plain { border-left-color: var(--border); opacity: 0.75; }
+
 /* ------------------------------------------------------------- the run */
 
 .ns-run { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 6px; }

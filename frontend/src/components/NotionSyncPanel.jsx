@@ -108,6 +108,7 @@ export default function NotionSyncPanel() {
   const [namingFolderFor, setNamingFolderFor] = useState(null);
   const [newFolder, setNewFolder] = useState('');
   const [newFolders, setNewFolders] = useState([]);
+  const [foldersOpen, setFoldersOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -216,6 +217,12 @@ export default function NotionSyncPanel() {
     return rank[a.kind] - rank[b.kind] || a.page.title.localeCompare(b.page.title);
   });
 
+  // Mapped folders are listed even if they are not in vaultFolders() — a folder
+  // named for a pull mapping does not exist until the first sync creates it.
+  const mappedFolderSet = new Set((state.mappings || []).map((m) => m.vaultFolder).filter(Boolean));
+  const mappedFolders = [...mappedFolderSet].sort();
+  const unmappedFolders = (state.vaultFolders || []).filter((f) => !mappedFolderSet.has(f));
+
   const mapped = coverageRows.filter((c) => c.kind === 'mapped');
   const unmapped = coverageRows.filter((c) => c.kind === 'unmapped');
 
@@ -304,7 +311,10 @@ export default function NotionSyncPanel() {
                     </option>
                   )}
                   {(pages?.pages || []).map((p) => (
-                    <option key={p.id} value={p.id}>{p.title}{p.isChild ? '' : '  (top level)'}</option>
+                    // ⚠ The PATH, not the title. This workspace has two
+                    // "Decisions", two "Current State" and two "Preferences" —
+                    // bare titles cannot be picked correctly.
+                    <option key={p.id} value={p.id}>{p.path || p.title}</option>
                   ))}
                 </select>
               </label>
@@ -450,7 +460,7 @@ export default function NotionSyncPanel() {
           <ul className="ns-cov-list">
             {coverageRows.map((c) => (
               <li key={c.page.id} className={`ns-cov ns-cov--${c.kind}`}>
-                <span className="ns-cov-title">{c.page.title}</span>
+                <span className="ns-cov-title">{c.page.path || c.page.title}</span>
                 {c.kind === 'mapped' && (
                   <span className="ns-cov-detail">
                     → <code>{c.mapping.vaultFolder}</code>{' '}
@@ -487,6 +497,38 @@ export default function NotionSyncPanel() {
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {/* ── Obsidian folders ────────────────────────────────────────────────
+          Collapsed by default, and that is the right default rather than a
+          cosmetic one: this vault has 99 eligible folders and almost all of
+          them will never be mapped, so expanded it buries the Notion coverage
+          above it — the list you actually act on. */}
+      {state.vaultReadable !== false && (
+        <section className="ns-coverage">
+          <button className="ns-disclosure" onClick={() => setFoldersOpen((v) => !v)}>
+            <span className="ns-disclosure-mark">{foldersOpen ? '▾' : '▸'}</span>
+            Obsidian folders — {mappedFolders.length} mapped, {unmappedFolders.length} not mapped
+          </button>
+
+          {foldersOpen && (
+            <ul className="ns-cov-list ns-cov-list--folders">
+              {mappedFolders.map((f) => (
+                <li key={f} className="ns-cov ns-cov--mapped">
+                  <span className="ns-cov-title"><code>{f}</code></span>
+                  <span className="ns-cov-detail">
+                    → {(state.mappings || []).find((m) => m.vaultFolder === f)?.notionTitle || 'Notion'}
+                  </span>
+                </li>
+              ))}
+              {unmappedFolders.map((f) => (
+                <li key={f} className="ns-cov ns-cov--plain">
+                  <span className="ns-cov-title"><code>{f}</code></span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       )}
 
