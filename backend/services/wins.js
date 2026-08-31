@@ -127,6 +127,19 @@ function addDays(d, n) {
 }
 
 /**
+ * The Monday of the week containing `anchor`.
+ *
+ * Deliberately borrowed from `weekly-target` rather than re-derived: the ring
+ * on the lock screen and the count beside it must agree about where the week
+ * starts, and the Sunday case (`getDay()` calls it 0, so the naive `dow - 1`
+ * moves a day FORWARD into a week that has not begun) is exactly the sort of
+ * thing a second copy gets wrong once and nobody notices until a Sunday.
+ */
+function weekStart(anchor = new Date()) {
+  return require('./weekly-target').weekStart(anchor);
+}
+
+/**
  * Parse a timestamp out of the DB.
  *
  * SQLite's CURRENT_TIMESTAMP writes 'YYYY-MM-DD HH:MM:SS' in **UTC** with no
@@ -594,6 +607,20 @@ function typicalDay(byDay, anchor = new Date()) {
 /**
  * The counters. Today, this week, all time, streak, seven-day shape.
  *
+ * ⚠ "This week" is the CALENDAR week — Monday to today — and it resets on a
+ * Monday morning. It was a rolling seven days until 31 Aug 2026, which is a
+ * perfectly good window and the wrong words for it: the widget said "64
+ * finished this week" on a Monday morning that had barely started, because the
+ * count still reached back into the week before. A number labelled "this week"
+ * that never resets is one nobody can act on. The Monday boundary is
+ * `weekly-target.weekStart`, not a second copy of it, so the ring and this
+ * count cannot disagree about which week it is (the ring counts `task_done`
+ * only; this counts everything finished — different numbers, same week).
+ *
+ * `doneLast7` keeps the rolling window for anything that genuinely wants a
+ * trailing read, and `last7`/`best7` stay rolling because the sparkline is
+ * explicitly a seven-day SHAPE, not a week.
+ *
  * `total` is the one that only ever goes up, and that is the point of it: every
  * other growing number in NEURO is a debt — 159 open tasks, 287 waiting-on,
  * a pending actions queue. This is the first counter where growth is good news.
@@ -601,6 +628,7 @@ function typicalDay(byDay, anchor = new Date()) {
 function summary(anchor = new Date()) {
   const today = dateKey(anchor);
   const weekAgo = dateKey(addDays(anchor, -6));
+  const monday = dateKey(weekStart(anchor));
 
   const days = db.all(
     'SELECT date_key, COUNT(*) n FROM wins WHERE date_key >= ? GROUP BY date_key',
@@ -615,16 +643,22 @@ function summary(anchor = new Date()) {
   }
 
   const total = db.get('SELECT COUNT(*) n FROM wins')?.n || 0;
-  const week = db.get('SELECT COUNT(*) n FROM wins WHERE date_key BETWEEN ? AND ?', [weekAgo, today])?.n || 0;
+  const week = db.get('SELECT COUNT(*) n FROM wins WHERE date_key BETWEEN ? AND ?', [monday, today])?.n || 0;
+  const last7Count = db.get('SELECT COUNT(*) n FROM wins WHERE date_key BETWEEN ? AND ?', [weekAgo, today])?.n || 0;
+  // The breakdown reads directly under the week's count on both surfaces, so it
+  // covers the same days. A breakdown over a different window than the number
+  // it sits beneath is two facts wearing one label.
   const bySource = db.all(
     'SELECT source, COUNT(*) n FROM wins WHERE date_key BETWEEN ? AND ? GROUP BY source ORDER BY n DESC',
-    [weekAgo, today]
+    [monday, today]
   );
 
   return {
     dateKey: today,
     doneToday: byDay.get(today) || 0,
     doneThisWeek: week,
+    weekStart: monday,
+    doneLast7: last7Count,
     total,
     typical: typicalDay(byDay, anchor),
     last7,

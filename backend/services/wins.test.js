@@ -188,6 +188,30 @@ test('summary counts today, the week and the all-time total', () => {
   assert.ok(s.knownGaps.some(g => /vault writes/i.test(g)));
 });
 
+test('"this week" is the calendar week, and it resets on a Monday', () => {
+  // The bug, exactly: on Monday 31 Aug the widget read "64 finished this week"
+  // because the count reached back seven days into the week before.
+  const insert = (dateKey, text) => db.run(
+    'INSERT OR IGNORE INTO wins (kind, source, date_key, text, count, dedupe_key, occurred_at, created_at) VALUES (?,?,?,?,?,?,?,?)',
+    ['task_done', 'test', dateKey, text, 1, `weekboundary:${dateKey}:${text}`, `${dateKey} 09:00:00`, `${dateKey} 09:00:00`]
+  );
+  insert('2026-08-27', 'last Thursday');
+  insert('2026-08-30', 'the Sunday that ends the old week');
+  insert('2026-08-31', 'Monday morning');
+
+  const monday = wins.summary(new Date(2026, 7, 31, 9, 30, 0));
+  assert.equal(monday.weekStart, '2026-08-31', 'the week starts on the Monday');
+  assert.equal(monday.doneThisWeek, monday.doneToday,
+    'on a Monday morning, the week is only what today holds');
+  // Negative: the days that would have been swept in by a rolling window.
+  assert.ok(monday.doneLast7 > monday.doneThisWeek,
+    'the rolling window still sees the week before — it is just not called "this week"');
+
+  // Sunday belongs to the week that is ENDING, not the one about to start.
+  const sunday = wins.summary(new Date(2026, 7, 30, 20, 0, 0));
+  assert.equal(sunday.weekStart, '2026-08-24');
+});
+
 test('the feed paginates newest first', () => {
   const page = wins.feed({ limit: 2, offset: 0 });
   assert.equal(page.wins.length, 2);
