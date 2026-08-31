@@ -66,6 +66,25 @@ function _times(n) {
   return n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`;
 }
 
+function _slug(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+}
+
+/**
+ * The identity of an insight, and how much evidence it currently rests on.
+ *
+ * ⚠ The SIGNATURE is what makes "Noted" honest. A dismissal here is Nick saying
+ * "I have taken this on board", not "this was never true" — the evidence is
+ * still on the record and cannot be un-recorded. So a dismissal holds only
+ * while the evidence is unchanged: shrink the same task a THIRD time and the
+ * count moves, the signature moves with it, and the observation is made again.
+ * A permanent hide would mean a pattern that is actively getting worse goes
+ * unmentioned for ever, which is the opposite of what this section is for.
+ */
+function _identify(kind, anchor, signature) {
+  return { id: `${kind}:${_slug(anchor)}`, signature: String(signature) };
+}
+
 /**
  * Turn recorded evidence into what can honestly be said about it. PURE.
  *
@@ -73,6 +92,7 @@ function _times(n) {
  *   `defers`   [{dedupeKey, title, reason, at}]      — attention_events
  *   `session`  the live focus session, decorated, or null
  *   `history`  recent archived sessions
+ *   `dismissed` {[insightId]: signature}                — what Nick has noted
  * @param {Date} now
  * @returns {{insights: Array, evidenceCount: number, sources: object}}
  */
@@ -80,6 +100,7 @@ function assess(input = {}, now = new Date()) {
   const defers = Array.isArray(input.defers) ? input.defers : [];
   const history = Array.isArray(input.history) ? input.history : [];
   const session = input.session && typeof input.session === 'object' ? input.session : null;
+  const dismissed = input.dismissed && typeof input.dismissed === 'object' ? input.dismissed : {};
 
   const insights = [];
   const cutoff = WINDOW_DAYS;
@@ -114,6 +135,7 @@ function assess(input = {}, now = new Date()) {
       ? `${label} has been put off ${_times(entry.reasons.length)} ${phrase}.`
       : `${label} has been put off ${_times(entry.reasons.length)}.`;
     insights.push({
+      ..._identify('deferred', entry.key, entry.reasons.length),
       kind: 'deferred',
       text,
       // What makes it true, said out loud. Every insight carries this and the
@@ -164,6 +186,7 @@ function assess(input = {}, now = new Date()) {
   for (const entry of shrinkByTitle.values()) {
     if (entry.count < MIN_SHRINKS) continue;
     insights.push({
+      ..._identify('shrunk', entry.title, entry.count),
       kind: 'shrunk',
       text: `You have made "${entry.title}" smaller ${_times(entry.count)}. It may need a different shape rather than another go.`,
       because: `${entry.count} recorded shrinks on this task`,
@@ -178,6 +201,7 @@ function assess(input = {}, now = new Date()) {
   // it is not history, it is where he is, and it has an obvious next move.
   if (session && session.status === 'needs-smaller') {
     insights.push({
+      ..._identify('needs-smaller', session.text, session.startedAt || 'open'),
       kind: 'needs-smaller',
       text: `"${session.text}" is parked because it is too big as it stands. Naming the smallest next bit is the way back in.`,
       because: 'the open session is in the needs-smaller state',
@@ -194,6 +218,7 @@ function assess(input = {}, now = new Date()) {
   // build a claim about his attention out of other people's timing.
   if (session && Number(session.steppedAway) > 0) {
     insights.push({
+      ..._identify('stepped-away', session.text, Number(session.steppedAway)),
       kind: 'stepped-away',
       text: `You were pulled away from "${session.text}" ${_times(Number(session.steppedAway))} since starting it.`,
       because: `${session.steppedAway} step-aways you recorded on this session`,
@@ -230,11 +255,20 @@ function assess(input = {}, now = new Date()) {
 
   insights.sort((a, b) => b.weight - a.weight);
 
+  // ⚠ Filtered LAST, and only on an exact signature match. An observation Nick
+  // has taken on board stops being repeated at him; the same one with MORE
+  // evidence behind it is a different statement and is made again. `noted`
+  // counts what was held back so the surface can say so rather than looking
+  // like a section that has quietly stopped working.
+  const shown = insights.filter((i) => !(i.id && dismissed[i.id] === i.signature));
+  const noted = insights.length - shown.length;
+
   return {
     // ⚠ No evidence, no insight, and no consolation line in its place. An empty
     // list is a real answer, and a surface that always has something to say
     // about how hard the week was is a surface that gets closed.
-    insights: insights.slice(0, MAX_INSIGHTS),
+    insights: shown.slice(0, MAX_INSIGHTS),
+    noted,
     evidenceCount: defers.length + shrinkSources.length,
     sources: {
       defers: defers.length,
@@ -284,8 +318,17 @@ function build(now = new Date()) {
     gaps.push({ source: 'focus-session', why: e.message });
   }
 
+  let dismissed = {};
+  try {
+    dismissed = readDismissals();
+  } catch (e) {
+    // Failing here shows MORE than it should, never less: an unreadable
+    // dismissal store must not hide an observation, only repeat one.
+    gaps.push({ source: 'friction-dismissals', why: e.message });
+  }
+
   // waiting-on is deliberately not read — see the note in assess().
-  const assessed = assess({ defers, session, history }, now);
+  const assessed = assess({ defers, session, history, dismissed }, now);
   return {
     generatedAt: now.toISOString(),
     ...assessed,
@@ -296,9 +339,86 @@ function build(now = new Date()) {
   };
 }
 
+// ── Noted ────────────────────────────────────────────────────────────────────
+//
+// One KV blob, following `focus-session` and `standup-session`: a schema
+// migration on the live DB is a bigger risk than the query convenience is worth,
+// and there will never be many of these.
+//
+// ⚠ This is the ONLY write in the service, and it happens on an explicit press.
+// `build()` stays read-only — it is polled beside the thing Nick is trying to
+// start, and a poll that changes state is `state-of-play`'s rule broken.
+const DISMISS_KEY = 'friction_noted';
+const DISMISS_RETAIN_DAYS = 60;
+
+function readDismissals() {
+  const db = require('../db/database');
+  const raw = db.getState(DISMISS_KEY);
+  if (!raw) return {};
+  const parsed = JSON.parse(raw);
+  const out = {};
+  for (const [id, entry] of Object.entries(parsed || {})) {
+    if (entry && typeof entry === 'object') out[id] = String(entry.signature);
+  }
+  return out;
+}
+
+/**
+ * Record that Nick has taken an observation on board.
+ *
+ * The signature is REQUIRED and comes from the insight he was looking at, so a
+ * stale screen cannot dismiss a stronger version of the same finding than the
+ * one it rendered.
+ */
+function note(id, signature, now = new Date()) {
+  if (!id || signature === undefined || signature === null || signature === '') {
+    return { ok: false, error: 'id and signature are both required' };
+  }
+  const db = require('../db/database');
+  let stored = {};
+  try {
+    stored = JSON.parse(db.getState(DISMISS_KEY) || '{}') || {};
+  } catch (e) {
+    stored = {};
+  }
+  // Bounded on write — the push_log / email-triage lesson. An append-only store
+  // with no retention becomes the next pile.
+  const cutoff = now.getTime() - DISMISS_RETAIN_DAYS * 86400000;
+  const kept = {};
+  for (const [key, entry] of Object.entries(stored)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const at = new Date(entry.at).getTime();
+    if (Number.isFinite(at) && at < cutoff) continue;
+    kept[key] = entry;
+  }
+  kept[String(id)] = { signature: String(signature), at: now.toISOString() };
+  db.setState(DISMISS_KEY, JSON.stringify(kept));
+  return { ok: true, id: String(id), signature: String(signature) };
+}
+
+/** Undo a "Noted". Nothing here is irreversible. */
+function unnote(id) {
+  const db = require('../db/database');
+  let stored = {};
+  try {
+    stored = JSON.parse(db.getState(DISMISS_KEY) || '{}') || {};
+  } catch (e) {
+    stored = {};
+  }
+  if (!Object.prototype.hasOwnProperty.call(stored, String(id))) {
+    return { ok: false, error: 'nothing noted under that id' };
+  }
+  delete stored[String(id)];
+  db.setState(DISMISS_KEY, JSON.stringify(stored));
+  return { ok: true, id: String(id) };
+}
+
 module.exports = {
   assess,
   build,
+  note,
+  unnote,
+  readDismissals,
   MIN_DEFERS,
   MIN_SHRINKS,
   WINDOW_DAYS,

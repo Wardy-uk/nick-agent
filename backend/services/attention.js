@@ -725,7 +725,47 @@ async function build({ now = new Date(), view = null } = {}) {
     gaps.push({ input: 'decision-engine', why: e.message });
   }
 
-  const gated = gate(context, items, now);
+  // ── Snoozed by Nick ────────────────────────────────────────────────────────
+  //
+  // ⚠ A deferral has to actually take a card off the surface, and until 31 Aug
+  // 2026 it did not: the pool is recomputed every poll and the lifecycle record
+  // was only STAMPED onto the resulting card, so "Not now" recorded a deferral
+  // and changed nothing anybody could see. On a card the engine marks
+  // unsuppressable — an imminent meeting, an escalation — `dismiss` is
+  // deliberately withheld, so NO button on it could clear it at all.
+  //
+  // Filtered before the gate rather than after, so `primary`, `speech` and the
+  // rationale are all computed against what is actually being shown. The full
+  // pool is still used for the lifecycle reconcile below, so a snoozed record
+  // keeps being touched and cannot be aged out by the sweep while it waits.
+  //
+  // Fails OPEN: if the lifecycle cannot be read, the card is shown. Hiding work
+  // on a failed bookkeeping read is the one direction this layer must not err.
+  let visible = items;
+  const snoozed = [];
+  try {
+    const lifecycle = require('./attention-lifecycle');
+    lifecycle.releaseDeferrals(now);
+    const held = lifecycle.deferredKeys(now);
+    if (held.size > 0) {
+      visible = items.filter((item) => {
+        const entry = held.get(lifecycle.dedupeKeyFor(item));
+        if (!entry) return true;
+        // Named, never silently withheld — `dropped` is the contract for that.
+        snoozed.push({
+          id: item.id,
+          type: item.type,
+          why: `you put this off (${entry.reason})${entry.until ? ` until ${entry.until}` : ''}`,
+        });
+        return false;
+      });
+    }
+  } catch (e) {
+    gaps.push({ input: 'attention-deferrals', why: e.message });
+  }
+
+  const gated = gate(context, visible, now);
+  gated.dropped = [...gated.dropped, ...snoozed];
 
   // ── Ambient observations ──────────────────────────────────────────────────
   //

@@ -63,6 +63,36 @@ test('the permitted action set is bounded, and start is offered only where a ses
   assert.ok(lifecycle.actionsFor({ type: 'meeting', title: 'Standup' }).includes('complete'));
 });
 
+test('a deferred card is taken OFF the surface, and comes back when the window passes', () => {
+  // THE bug, reported from the Now page on 31 Aug 2026: a deferral recorded a
+  // deferral and changed nothing anybody could see, because the pool is
+  // recomputed every poll and the record was only stamped onto the result. On
+  // an unsuppressable card, where `dismiss` is deliberately withheld, that left
+  // no action on the card capable of clearing it.
+  const now = new Date('2026-08-31T09:00:00Z');
+  const meeting = {
+    kind: 'item', id: 'cal-abc123', type: 'meeting', title: 'Take a break',
+    urgency: 'critical', tier: 1, unsuppressable: true,
+    meta: { start: '2026-08-31T09:01:00Z' },
+  };
+  const [rec] = lifecycle.reconcile([meeting], { now });
+  const key = lifecycle.dedupeKeyFor(meeting);
+
+  assert.ok(!lifecycle.actionsFor(meeting).includes('dismiss'),
+    'an imminent meeting cannot be dismissed — which is exactly why defer has to work');
+  assert.ok(!lifecycle.deferredKeys(now).has(key), 'nothing is hidden before he says so');
+
+  lifecycle.act(rec.id, 'defer', { minutes: 120, reason: 'not-now', now });
+  const hidden = lifecycle.deferredKeys(now);
+  assert.ok(hidden.has(key), 'a deferred card is hidden from the surface');
+  assert.equal(hidden.get(key).reason, 'not-now', 'and the reason travels with it');
+
+  // ⚠ Not hidden a moment longer than Nick asked for. `deferredKeys` reads the
+  // window itself rather than trusting the sweep to have run first.
+  const later = new Date(now.getTime() + 121 * 60000);
+  assert.ok(!lifecycle.deferredKeys(later).has(key), 'the window ends on its own');
+});
+
 test('starting a focus session does NOT resolve, dismiss, defer or acknowledge the record', () => {
   const rec = seed(card('Draft the succession plan'));
   assert.equal(rec.state, 'active');

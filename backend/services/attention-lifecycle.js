@@ -507,6 +507,35 @@ function releaseDeferrals(now = new Date()) {
 }
 
 /**
+ * The dedupe keys Nick has snoozed, and when each comes back.
+ *
+ * ⚠ This is what makes a deferral MEAN anything. The cards a surface renders
+ * come from `decision-engine`, and the lifecycle only ever STAMPED its record
+ * onto them afterwards — so a deferred card went on being rendered as the
+ * primary thing needing attention, at every poll, exactly as before. The
+ * contract says "snoozed until `defer_until`" and the surface said otherwise;
+ * on an unsuppressable card (an imminent meeting, an escalation), where
+ * `dismiss` is deliberately withheld, that left NO action on the card capable
+ * of clearing it — reported from the Now page, 31 Aug 2026.
+ *
+ * A record whose window has already passed is not returned, so a poll that
+ * arrives before `releaseDeferrals` has run cannot hide something that is due
+ * back.
+ */
+function deferredKeys(now = new Date()) {
+  const out = new Map();
+  for (const row of db.getOpenAttentionRecords()) {
+    if (row.state !== STATES.DEFERRED) continue;
+    if (row.defer_until && new Date(row.defer_until).getTime() <= now.getTime()) continue;
+    out.set(row.dedupe_key, {
+      until: row.defer_until || null,
+      reason: row.defer_reason || 'unspecified',
+    });
+  }
+  return out;
+}
+
+/**
  * Age out records nothing has seen for a while.
  *
  * ⚠ Only ever runs while the pool is READABLE. Expiring records during an
@@ -718,6 +747,7 @@ module.exports = {
   upsert,
   reconcile,
   releaseDeferrals,
+  deferredKeys,
   sweep,
   act,
   recordNotification,

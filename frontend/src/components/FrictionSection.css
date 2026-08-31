@@ -76,3 +76,33 @@
   line-height: 1.5;
   color: #5f6674;
 }
+
+/* "Noted" — deliberately quiet. It is an acknowledgement, not a call to
+   action, and it must not compete with the work on the card above it. */
+.friction__note-btn {
+  margin: 0 0 6px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11px;
+  color: #8b93a3;
+  background: transparent;
+  border: 1px solid #2a2f3a;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.friction__note-btn:hover:not(:disabled) {
+  color: #c6ccd8;
+  border-color: #3a4150;
+}
+
+.friction__note-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.friction__noted {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: #5f6674;
+}

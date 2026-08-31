@@ -35,12 +35,19 @@ const { resolveNueroNavigation } = actionSurfaces;
  *
  * **Not relevant** dismisses: it teaches suppression and touches no work.
  *
+ * **Seen it** acknowledges: the card STAYS on screen and stops notifying, which
+ * is the one distinction the old suppression timer could not express. It is on
+ * the record's action set and the phone has always rendered it; the desktop
+ * silently dropped it, so on a card that cannot be dismissed (an imminent
+ * meeting, an escalation) there was no way to say "yes, I know" at all.
+ *
  * Nothing here auto-completes, auto-defers, auto-dismisses, auto-starts or
  * sends anything on Nick's behalf. Every one of these is a click.
  */
 
 const LABELS = {
   open: 'Open context',
+  acknowledge: 'Seen it',
   start: 'Start this',
   complete: 'Done',
   dismiss: 'Not relevant',
@@ -145,6 +152,14 @@ export default function AttentionCard({
     return { ok: true, text: `${label}${result.canonical === false ? ' (legacy snooze — no record for this card)' : ''}` };
   });
 
+  const acknowledge = () => run('acknowledge', async () => {
+    const result = await onAct?.(card, 'acknowledge');
+    if (!result || result.ok === false) return result || { ok: false, why: 'Nothing handled that.' };
+    // Said out loud, because the card deliberately does not disappear and a
+    // button that looks like it did nothing is a button nobody presses twice.
+    return { ok: true, text: 'Noted. It stays here, but it will not interrupt again.' };
+  });
+
   const dismiss = () => run('dismiss', async () => {
     const result = await onAct?.(card, 'dismiss');
     if (!result || result.ok === false) return result || { ok: false, why: 'Nothing handled that.' };
@@ -192,6 +207,11 @@ export default function AttentionCard({
       <div className="att-card__actions">
         {permitted.includes('open') && (
           <button className="att-card__btn" type="button" onClick={open}>{LABELS.open}</button>
+        )}
+        {permitted.includes('acknowledge') && card.state !== 'acknowledged' && (
+          <button className="att-card__btn" type="button" disabled={busy === 'acknowledge'} onClick={acknowledge}>
+            {busy === 'acknowledge' ? '…' : LABELS.acknowledge}
+          </button>
         )}
         {permitted.includes('start') && (
           <button className="att-card__btn att-card__btn--do" type="button" disabled={busy === 'start'} onClick={start}>

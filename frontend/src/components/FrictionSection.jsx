@@ -21,6 +21,8 @@ import './FrictionSection.css';
  */
 export default function FrictionSection() {
   const [state, setState] = useState({ loading: true, error: null, data: null });
+  const [busy, setBusy] = useState(null);
+  const [failed, setFailed] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -34,6 +36,34 @@ export default function FrictionSection() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  /**
+   * "Noted" — the one action this section has, and the one it was missing.
+   *
+   * Every card in NEURO that Nick cannot answer in some way is a card that
+   * repeats at him until he stops reading the surface it is on. This does NOT
+   * touch the work and does NOT un-record the evidence: it says he has taken
+   * the line on board, and the server holds it only while the evidence is
+   * unchanged — a third shrink on the same task raises it again.
+   */
+  const note = useCallback(async (ins) => {
+    if (!ins?.id || busy) return;
+    setBusy(ins.id);
+    setFailed(null);
+    try {
+      const res = await apiFetch('/api/friction/note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: ins.id, signature: ins.signature }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `${res.status}`);
+      await load();
+    } catch (e) {
+      // Said out loud. A button that silently did nothing is worse than none.
+      setFailed(e.message);
+    }
+    setBusy(null);
+  }, [busy, load]);
 
   const { loading, error, data } = state;
   if (loading) return null;
@@ -71,6 +101,16 @@ export default function FrictionSection() {
                   did and NEURO wrote down, and showing the working is what keeps
                   it a statement of fact rather than a judgement about him. */}
               <p className="friction__because">Based on {ins.because}.</p>
+              {ins.id && (
+                <button
+                  className="friction__note-btn"
+                  type="button"
+                  disabled={busy === ins.id}
+                  onClick={() => note(ins)}
+                >
+                  {busy === ins.id ? '…' : 'Noted'}
+                </button>
+              )}
               {Array.isArray(ins.evidence) && ins.evidence.length > 0 && (
                 <ul className="friction__ev">
                   {ins.evidence.slice(0, 3).map((e, j) => (
@@ -85,6 +125,16 @@ export default function FrictionSection() {
             </li>
           ))}
         </ul>
+      )}
+
+      {failed && <p className="friction__gap">Couldn&rsquo;t note that &mdash; {failed}.</p>}
+
+      {/* Held back, not gone. A section that quietly shrank would look like one
+          that had stopped working. */}
+      {data?.noted > 0 && (
+        <p className="friction__noted">
+          {data.noted} noted already &mdash; back if the evidence grows.
+        </p>
       )}
 
       {gaps.length > 0 && (

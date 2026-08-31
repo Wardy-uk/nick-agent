@@ -27,4 +27,29 @@ router.get('/', (req, res) => {
   }
 });
 
+/**
+ * POST /api/friction/note — Nick has taken an observation on board.
+ *
+ * ⚠ It is a DISMISSAL OF THE LINE, never of the evidence, and it holds only
+ * while the evidence is unchanged: the signature Nick was looking at is
+ * required, so a third shrink on the same task raises the finding again.
+ *
+ * The GET above stays read-only. This is an explicit press, which is a
+ * different thing from a poll — but it is the one write in this area, so it
+ * lives in its own route rather than as a side effect of reading.
+ */
+router.post('/note', (req, res) => {
+  const { id, signature } = req.body || {};
+  const result = friction.note(id, signature, new Date());
+  if (!result.ok) return res.status(400).json(result);
+  res.json(result);
+});
+
+/** Undo one. Nothing about this section is irreversible. */
+router.delete('/note/:id', (req, res) => {
+  const result = friction.unnote(req.params.id);
+  if (!result.ok) return res.status(404).json(result);
+  res.json(result);
+});
+
 module.exports = router;

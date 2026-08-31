@@ -48,6 +48,45 @@ test('no evidence means no insight — and no consolation line in its place', ()
   assert.equal(result.evidenceCount, 0);
 });
 
+test('an insight Nick has noted stops being said — until the evidence grows', () => {
+  const shrunk = (count) => ({
+    history: [{ text: 'GATE3 VERIFY', originalText: 'GATE3 VERIFY', shrinks: count, endedAt: ago(1) }],
+  });
+
+  const first = friction.assess(shrunk(2), NOW);
+  assert.equal(first.insights.length, 1);
+  const { id, signature } = first.insights[0];
+  assert.ok(id, 'an insight with no id cannot be answered, which is the bug');
+
+  // Noted at that signature: not repeated, and the surface is told it was held
+  // back rather than the section quietly shrinking.
+  const noted = friction.assess({ ...shrunk(2), dismissed: { [id]: signature } }, NOW);
+  assert.deepEqual(noted.insights, []);
+  assert.equal(noted.noted, 1);
+
+  // ⚠ The load-bearing half. A THIRD shrink is a stronger statement than the
+  // one he took on board, so it is made again — a permanent hide would silence
+  // a pattern precisely as it got worse.
+  const worse = friction.assess({ ...shrunk(3), dismissed: { [id]: signature } }, NOW);
+  assert.equal(worse.insights.length, 1);
+  assert.equal(worse.noted, 0);
+  assert.equal(worse.insights[0].id, id, 'the identity is stable across the evidence changing');
+  assert.notEqual(worse.insights[0].signature, signature);
+});
+
+test('a dismissal for one insight never silences another', () => {
+  const result = friction.assess({
+    history: [{ text: 'GATE3 VERIFY', originalText: 'GATE3 VERIFY', shrinks: 2, endedAt: ago(1) }],
+    defers: [
+      { dedupeKey: 'todo:risk-assessment', title: 'Risk assessment', reason: 'no-context', at: ago(1) },
+      { dedupeKey: 'todo:risk-assessment', title: 'Risk assessment', reason: 'no-context', at: ago(3) },
+    ],
+    dismissed: { 'shrunk:gate3-verify': '2' },
+  }, NOW);
+  assert.equal(result.insights.length, 1);
+  assert.equal(result.insights[0].kind, 'deferred');
+});
+
 test('one deferral is a Tuesday, not a pattern', () => {
   const result = friction.assess({
     defers: [{ dedupeKey: 'todo:risk-assessment', title: 'Risk assessment', reason: 'no-context', at: ago(1) }],
