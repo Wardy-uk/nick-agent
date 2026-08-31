@@ -37,7 +37,21 @@ const express = require('express');
 const ha = require('../telemetry/homeAssistant');
 const store = require('../presence/store');
 const history = require('../presence/history');
+const profiles = require('../presence/profiles');
+const { classify } = require('../presence/fingerprint');
 const { resolveRoom, displayState } = require('../presence/rooms');
+
+profiles.load();
+
+/** The live feature vector: sensorRoom -> {rssi, rate}, readable sensors only. */
+function liveVector(arbitration) {
+  const out = {};
+  for (const r of (arbitration.rooms || [])) {
+    if (!r.readable) continue;      // a stale or deaf sensor teaches nothing and matches nothing
+    out[r.room] = { rssi: r.rssi, rate: r.rate };
+  }
+  return out;
+}
 
 const router = express.Router();
 
@@ -129,7 +143,62 @@ router.post('/sensor', express.json({ limit: '16kb' }), (req, res) => {
   // A rejected reading answers 400 and SAYS why. A sensor that cannot tell a
   // refusal from an acceptance will happily report into a hole for a fortnight.
   if (!r.ok) return res.status(400).json(r);
+
+  // Feed any calibration in progress. Never allowed to fail the sensor's push:
+  // a bookkeeping error must not cost a reading.
+  try {
+    const arb = resolveRoom(store.all(), new Date());
+    profiles.offer(liveVector(arb));
+  } catch (e) {
+    console.warn('[presence] calibration sample skipped: ' + e.message);
+  }
   return res.json(r);
+});
+
+// ── Calibration ─────────────────────────────────────────────────────────────
+//
+// Teaching a room means standing in it while every sensor reports what it hears.
+// The profile is the WHOLE pattern across all sensors, which is what makes it
+// immune to the two things that defeated ranking by RSSI: different radios, and
+// a body between the watch and one of them.
+
+router.post('/calibrate/start', express.json(), (req, res) => {
+  const room = String((req.body && req.body.room) || '').trim();
+  if (!room) return res.status(400).json({ ok: false, reason: 'room is required' });
+  res.json(profiles.startRun(room));
+});
+
+router.post('/calibrate/finish', express.json(), (_req, res) => {
+  const r = profiles.finishRun();
+  // Too little evidence is a 400 with the count, not a quiet success — a
+  // profile built from three samples produces confident nonsense.
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+router.get('/calibrate', (_req, res) => {
+  res.json({ ...profiles.status(), profiles: profiles.summary() });
+});
+
+router.delete('/calibrate/:room', (req, res) => {
+  const r = profiles.forget(req.params.room);
+  res.status(r.ok ? 200 : 404).json(r);
+});
+
+// GET /api/presence/room — which room is he in? The inference, on its own, for
+// automation that wants the answer rather than a screen's verdict.
+router.get('/room', (_req, res) => {
+  const now = new Date();
+  const arbitration = resolveRoom(store.all(), now, { previousRoom: lastRoom });
+  const inferred = classify(liveVector(arbitration), profiles.all());
+  res.json({
+    room: inferred.room,
+    confidence: inferred.confidence,     // sure | unsure | none
+    why: inferred.why,
+    scores: inferred.scores,
+    sensors: arbitration.rooms,
+    unreadable: arbitration.unreadable,
+    checkedAt: now.toISOString(),
+  });
 });
 
 // GET /api/presence/history — every room and display change, newest last, with
@@ -189,6 +258,13 @@ router.get('/display', (req, res) => {
     // than swallowed: a screen staying on despite HA saying "away" must be
     // explainable, or it reads as the lock being broken.
     contradiction: display.contradiction || null,
+    // Where the fingerprint says he is. Reported alongside rather than driving
+    // the screen: this room's own sensor still decides `state`, so an
+    // uncalibrated house behaves exactly as before.
+    inferred: (() => {
+      const i = classify(liveVector(arbitration), profiles.all());
+      return { room: i.room, confidence: i.confidence, why: i.why };
+    })(),
     watch: {
       status: arbitration.status,  // present | absent | unknown
       room: arbitration.room,
