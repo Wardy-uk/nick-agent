@@ -809,7 +809,34 @@ function check121Nudges() {
 }
 
 // EOD ritual nudge — fires at 5pm weekdays
-function triggerEodNudge() {
+/**
+ * The first line is HERS, and she says it before he asks.
+ *
+ * Nick, 31 Aug 2026, on what would make SARA feel less reactive: she should
+ * INITIATE the End of Day rather than NEURO announcing that it is time for one.
+ *
+ * The old notification was an instruction — *"End of day. Before you close the
+ * laptop: one win, one thing that didn't go to plan... Standup tab → EOD."* That
+ * is a label and a set of homework. It tells him a ritual is due; it is not SARA
+ * saying anything.
+ *
+ * So the session is STARTED SERVER-SIDE first, which runs a turn and produces
+ * her actual opening line, and THAT is what the notification carries. He taps it
+ * and walks into a conversation already begun, rather than an empty form. Same
+ * rule #109/#111 established for nudges generally: the words are the BODY, and a
+ * title is only a label.
+ *
+ * ⚠ IT NEVER COSTS HIM THE PROMPT. Starting the session is an AI call, and an AI
+ * call can fail — no credit, rate limit, provider down. Every failure falls back
+ * to the old wording rather than to silence, because a missed EOD is the thing
+ * this exists to prevent and a clever opener is not worth losing it over.
+ *
+ * ⚠ IT DOES NOT INTERRUPT A CONVERSATION ALREADY HAPPENING. If he started the
+ * EOD himself at four o'clock and is mid-flow, `start()` returns that session
+ * untouched and this sends nothing — a push at 5pm saying "how was your day?"
+ * into a chat he is already in reads as SARA not listening.
+ */
+async function triggerEodNudge() {
   const away = nudgeSuppression();
   if (away.suppressed) { console.log(`[Nudge] EOD skipped — ${away.reason}`); return; }
 
@@ -820,29 +847,73 @@ function triggerEodNudge() {
   const stateKey = `eod_nudge_${dateKey}`;
   if (db.getState(stateKey)) return;
   db.setState(stateKey, new Date().toISOString());
-  // The EOD nudge already asks for "one win" — and NEURO now knows them, so it
-  // leads with the day rather than only the ask. Deliberately riding THIS
-  // notification instead of adding a wins push of its own: nudge volume is the
-  // one signal allowed to argue against building more, and a second daily
-  // interruption to say "well done" is how the first one stops being read.
-  //
-  // Only when there is something to state. `headline()` returns null on an
-  // empty day and the original wording stands — there is no encouraging version
-  // of zero, and a quiet day is exactly where an invented win reads as false.
-  let opener = '';
+
+  let msg = null;
   try {
-    const wins = require('./wins');
-    wins.sync();
-    const line = wins.headline(wins.summary());
-    if (line) opener = `${line}. `;
+    const standupSession = require('./standup-session');
+    const session = await standupSession.start('eod');
+
+    if (_alreadyTalking(session)) {
+      console.log('[Nudge] EOD already in progress — not interrupting');
+      return;
+    }
+    msg = _openingLine(session);
   } catch (e) {
-    // A ledger failure must never cost Nick the EOD prompt itself.
-    console.warn('[Nudge] Wins headline unavailable:', e.message);
+    // Loud, because this is the path that makes her feel present and its failure
+    // is otherwise invisible — the fallback below looks exactly like success.
+    console.warn('[Nudge] SARA could not open the EOD, falling back:', e.message);
   }
 
-  const msg = `${opener}End of day. Before you close the laptop: one win, one thing that didn't go to plan, how you're feeling. 2 minutes. Standup tab → EOD.`;
+  if (!msg) {
+    // The original wording. It still carries the day's win when there is one —
+    // `headline()` returns null on an empty day and nothing is invented, because
+    // there is no encouraging version of zero.
+    let opener = '';
+    try {
+      const wins = require('./wins');
+      wins.sync();
+      const line = wins.headline(wins.summary());
+      if (line) opener = `${line}. `;
+    } catch (e) {
+      console.warn('[Nudge] Wins headline unavailable:', e.message);
+    }
+    msg = `${opener}End of day. Before you close the laptop: one win, one thing that didn't go to plan, how you're feeling. 2 minutes. Standup tab → EOD.`;
+  }
+
   broadcast({ type: 'nudge', nudge_type: 'eod', message: msg, nag_count: 0 });
   webpush.sendToAll('SARA', msg, { type: 'eod', url: '/standup' }).catch(() => {});
+}
+
+/** Has he already said something in this session? PURE.
+ *
+ *  `start()` seeds one synthetic user message ("Let's do my end of day") to open
+ *  the turn, so the test is for a SECOND one — anything beyond the seed is Nick
+ *  actually talking. */
+function _alreadyTalking(session) {
+  if (!session || !Array.isArray(session.messages)) return false;
+  return session.messages.filter(m => m && m.role === 'user').length > 1;
+}
+
+/** Her opening line, cut to something a lock screen will show. PURE.
+ *
+ *  ⚠ Cut on a SENTENCE, never mid-word with an ellipsis — a notification that
+ *  stops halfway through her first thought reads as broken rather than brief.
+ *  The full opening is in the session either way; this is only what fits. */
+function _openingLine(session, limit = 180) {
+  if (!session || !Array.isArray(session.messages)) return null;
+  const last = [...session.messages].reverse().find(m => m && m.role === 'assistant');
+  const text = last && typeof last.content === 'string' ? last.content.trim() : '';
+  if (!text) return null;
+  if (text.length <= limit) return text;
+
+  let cut = '';
+  for (const sentence of text.split(/(?<=[.?!])\s+/)) {
+    if ((cut + sentence).length > limit) break;
+    cut += (cut ? ' ' : '') + sentence;
+  }
+  // No sentence boundary inside the limit — take the first one whole rather
+  // than truncating it. A slightly long notification beats a severed one.
+  return cut || text.split(/(?<=[.?!])\s+/)[0] || text.slice(0, limit);
 }
 
 function markEodDone() {
@@ -912,6 +983,8 @@ module.exports = {
   check121Nudges,
   triggerEodNudge,
   markEodDone,
+  _alreadyTalking,
+  _openingLine,
   triggerJournalNudge,
   markJournalDone,
   isStandupDone,

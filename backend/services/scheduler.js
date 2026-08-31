@@ -320,9 +320,16 @@ function start() {
   });
 
   // 5pm weekdays — trigger EOD nudge
-  cron.schedule('0 17 * * 1-5', () => {
-    console.log('[Scheduler] 5pm — triggering EOD nudge');
-    nudges.triggerEodNudge();
+  cron.schedule('0 17 * * 1-5', async () => {
+    console.log('[Scheduler] 5pm — SARA opens the EOD');
+    // Awaited and caught: it now starts a session and makes an AI call, so an
+    // unhandled rejection here would be a silent 5pm with no notification and
+    // nothing in the log to say why.
+    try {
+      await nudges.triggerEodNudge();
+    } catch (e) {
+      console.error('[Scheduler] EOD nudge failed:', e.message);
+    }
   });
 
   // Training matrix sync is owned by n8n ("Training Matrix Sync" workflow) —
