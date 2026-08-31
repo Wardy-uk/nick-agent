@@ -21,8 +21,9 @@ import './Field.css';
 //   * low confidence       → it barely settles. She is genuinely unsure and the
 //                            picture says so.
 //   * high confidence      → a clean, complete settle.
-//   * quiet (in a meeting) → dim and near-still. Staying out of the way is a
-//                            visual fact, not just a suppressed notification.
+//   * quiet (in a meeting) → near-still, but STILL THERE. Staying out of the
+//                            way is a visual fact, not a disappearance — she
+//                            settles rarely rather than fading out.
 //   * firefighting         → settles more often. Something is actually going on.
 //
 // That mapping is why this survives the "no decorative oscillation" rule: it
@@ -50,14 +51,53 @@ const SEED_MAX = 18;
 const EDGE_DIST_SQ = 2100;     // ~46px. Latent edges only; never created while thinking
 const FOCUS_RADIUS = 150;
 
+// ── Presence ────────────────────────────────────────────────────────────────
+//
+// Nick, 31 Aug 2026: "crank up the visibility of SARA's presence — I always
+// want to see her." These are the numbers that decide that, gathered here
+// rather than buried in the paint loop, because they are the one part of this
+// file anyone will ever want to tune.
+//
+// ⚠ THE SPLIT THAT MAKES THIS HONEST: `dim` is PRESENCE, `depth`/`period` are
+// THE READ. Before this, `quiet` dropped dim to 0.45 and so conflated the two —
+// being in a meeting made her nearly invisible rather than merely calm. She is
+// still there in a meeting; she is just not resolving anything. Raising the
+// FLOOR (she is always visible) while leaving the SETTLE to carry the state
+// keeps "the coherence on screen is the coherence of the read" exactly as true
+// as it was, and is the only way to crank visibility without the field starting
+// to claim things it has not read.
+const NODE_REST_ALPHA = 0.14;  // the substrate at rest. Was 0.07 — a node at
+                               // 0.07 x 0.45 dim is 0.031 on a #0b0f14 ground,
+                               // which is black.
+const NODE_COHERENT = 0.32;    // added at full coherence
+const EDGE_REST_ALPHA = 0.03;  // was 0.012, i.e. below the cull once dimmed
+const EDGE_COHERENT = 0.18;
+
+// ⚠ THE CULL IS A PERF GUARD AND MUST BE TESTED BEFORE `dim` IS APPLIED. It was
+// applied after, so dimming did not dim the connections, it DELETED them: at
+// `quiet` an edge computed 0.012 x 0.45 = 0.0054, under the 0.013 floor, so NO
+// EDGE DREW AT ALL. The nebulous connected nodes lost their connections in
+// precisely the state a desk screen sits in most of the day, and it read as a
+// sparse dot field rather than a mesh.
+const EDGE_CULL_ALPHA = 0.006;
+
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // How the read becomes a picture. `depth` is how much order arrives (0 = none),
 // `period` how many seconds between settles.
 function drive({ degraded, confidenceLevel, quiet, activity }) {
-  if (degraded) return { depth: 0, period: 0, dim: 0.85 };
-  if (quiet) return { depth: 0.35, period: 16, dim: 0.45 };
-  const depth = confidenceLevel === 'high' ? 1 : confidenceLevel === 'moderate' ? 0.7 : 0.34;
+  // Blind: pure noise, and BRIGHT. Being unable to see is not a reason to
+  // disappear — an unresolved field is the honest picture of an unreadable
+  // read, and it has to be visible enough to read as unresolved rather than as
+  // an empty screen.
+  if (degraded) return { depth: 0, period: 0, dim: 0.9 };
+  // Quiet: she settles rarely (nothing is being worked out) but stays PRESENT.
+  // ⚠ dim was 0.45 here, which made "staying out of the way" mean "gone".
+  if (quiet) return { depth: 0.35, period: 16, dim: 0.78 };
+  // ⚠ The low-confidence floor is 0.45, not 0.34: below about 0.4 the settle
+  // stops being legible as a settle at all, so "she is unsure" and "she is not
+  // working" became the same picture. It is still clearly short of moderate.
+  const depth = confidenceLevel === 'high' ? 1 : confidenceLevel === 'moderate' ? 0.7 : 0.45;
   const period = activity === 'firefighting' ? 5.5 : activity === 'pre-meeting' ? 7 : 9.5;
   return { depth, period, dim: 1 };
 }
@@ -140,10 +180,12 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
         const mx = (n1.x + n2.x) / 2;
         const my = (n1.y + n2.y) / 2;
         const near = Math.max(0, 1 - Math.hypot(mx - focus.x, my - focus.y) / FOCUS_RADIUS) * k;
-        const alpha = (0.012 + near * 0.16) * dim;
-        if (alpha < 0.013) continue;
-        ctx.strokeStyle = `rgba(120,170,235,${alpha.toFixed(3)})`;
-        ctx.lineWidth = 0.6;
+        // ⚠ Culled on the UNDIMMED value — see EDGE_CULL_ALPHA. Testing the
+        // dimmed one made `dim` delete edges rather than dim them.
+        const base = EDGE_REST_ALPHA + near * EDGE_COHERENT;
+        if (base < EDGE_CULL_ALPHA) continue;
+        ctx.strokeStyle = `rgba(120,170,235,${(base * dim).toFixed(3)})`;
+        ctx.lineWidth = 0.7;
         ctx.beginPath();
         ctx.moveTo(n1.x, n1.y);
         ctx.lineTo(n2.x, n2.y);
@@ -158,9 +200,9 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
         const jitter = (1 - near) * 0.9;
         const jx = Math.sin(t * nd.sp + nd.ph) * jitter;
         const jy = Math.cos(t * nd.sp * 1.3 + nd.ph) * jitter;
-        ctx.fillStyle = `rgba(150,190,240,${((0.07 + near * 0.3) * dim).toFixed(3)})`;
+        ctx.fillStyle = `rgba(150,190,240,${((NODE_REST_ALPHA + near * NODE_COHERENT) * dim).toFixed(3)})`;
         ctx.beginPath();
-        ctx.arc(nd.x + jx, nd.y + jy, 0.85 + near * 0.5, 0, 6.2832);
+        ctx.arc(nd.x + jx, nd.y + jy, 0.95 + near * 0.55, 0, 6.2832);
         ctx.fill();
       }
     }
