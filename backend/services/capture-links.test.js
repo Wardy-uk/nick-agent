@@ -183,9 +183,11 @@ test('a submission carries only what she needs to see', () => {
   // working notes about his own list, and none of them is her business.
   //
   // ⚠ This list is the boundary and every addition to it is a decision. The
-  // three household fields say who a task is FOR and who sent it, which is what
-  // makes a shared list readable; nothing here describes Nick's triage.
-  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'assignee', 'assigneeLabel', 'dueDate', 'from', 'status', 'text']);
+  // household fields say who a task is FOR and who sent it, which is what makes
+  // a shared list readable; `id` is what lets a due date be changed, and every
+  // write re-checks against the database that the row is in this account's pool.
+  // Nothing here describes Nick's triage.
+  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'assignee', 'assigneeLabel', 'dueDate', 'from', 'id', 'status', 'text']);
   // Unassigned by default — never quietly attributed to whoever typed it.
   assert.equal(row.assignee, null);
   assert.equal(row.assigneeLabel, null);

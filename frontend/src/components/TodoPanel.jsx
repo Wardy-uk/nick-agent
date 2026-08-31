@@ -206,7 +206,7 @@ function MoscowReview({ onClose }) {
 // Only shown for tasks NEURO owns (task_id present). Before the 13 Aug migration none
 // of MoSCoW / priority / due date could be edited anywhere: the metadata lived in a
 // worksheet file. Now it is a plain DB write and the vault export follows.
-function TaskControls({ todo, onPatch, busy }) {
+function TaskControls({ todo, onPatch, busy, onRefresh }) {
   const dueValue = todo.due_date ? todo.due_date.split('T')[0] : '';
 
   return (
@@ -301,6 +301,11 @@ function TaskControls({ todo, onPatch, busy }) {
           has no row to hang the block on. */}
       <BlockTimeControl todo={todo} busy={busy} />
 
+      {/* Share with the house — the same instinct as blocking time: it is a
+          thought you have while LOOKING at the task, so it lives on the open
+          row rather than behind a screen you have to remember exists. */}
+      <HouseholdToggle todo={todo} busy={busy} onSaved={onRefresh} />
+
       {todo.originPath && (
         <div className="todo-edit-group">
           <span className="todo-edit-label">From</span>
@@ -325,6 +330,60 @@ function TaskControls({ todo, onPatch, busy }) {
  * has content, and the first save would erase it. When the description could not
  * be read the box is disabled and says so, rather than offering an empty one.
  */
+/**
+ * Put a task on the household list, or take it off.
+ *
+ * ⚠ The one control here with a consequence outside this screen: it publishes a
+ * task to VESTA, which his partner reads on a public URL. So it says where the
+ * task is GOING in words, rather than being a bare switch labelled "shared".
+ *
+ * Only NEURO-owned tasks reach this row; a Microsoft mirror has no `task_id` to
+ * hang the flag on, which is also why it is not offered there.
+ */
+function HouseholdToggle({ todo, busy, onSaved }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const on = todo.household === 1 || todo.household === true;
+
+  // ⚠ `task_id`, not `taskId` — the legacy todo shape uses snake_case here, and
+  // the wrong key is undefined rather than an error, so the control would simply
+  // never render.
+  if (!todo.task_id) return null;
+
+  const flip = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(apiUrl(`/api/tasks/${todo.task_id}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ household: !on }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (onSaved) onSaved();
+    } catch (e) {
+      setError(e.message);
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div className="todo-edit-group">
+      <span className="todo-edit-label">Household</span>
+      <label className="todo-household">
+        <input type="checkbox" checked={on} disabled={busy || saving} onChange={flip} />
+        <span>
+          {on
+            ? 'On the shared list — visible in VESTA'
+            : 'Share with the house'}
+        </span>
+      </label>
+      {error && <span className="todo-household-error">{error}</span>}
+    </div>
+  );
+}
+
 function MicrosoftTaskControls({ todo, onSaved }) {
   const [state, setState] = useState({ status: 'loading' });
   const [title, setTitle] = useState('');
@@ -545,7 +604,7 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
           {todo._scoreReason && <span className="todo-score-reason">{todo._scoreReason}</span>}
         </div>
         {isExpanded && editable && (
-          <TaskControls todo={todo} busy={Boolean(isToggling)} onPatch={(fields) => onPatch(todo, fields)} />
+          <TaskControls todo={todo} busy={Boolean(isToggling)} onPatch={(fields) => onPatch(todo, fields)} onRefresh={onRefresh} />
         )}
         {/* A Microsoft task is editable here now — Microsoft still owns it, so
             the edit is a PATCH to Graph rather than anything stored locally. */}

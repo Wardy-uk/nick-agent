@@ -117,6 +117,24 @@ async function init() {
       db.exec('ALTER TABLE tasks ADD COLUMN assignee TEXT');
       console.log('[DB] tasks.assignee added');
     }
+    // Migration: tasks.household — is this on the shared VESTA list?
+    //
+    // ⚠ This REPLACES the old rule, which was `source LIKE 'capture:%'`. That
+    // asked where a task was TYPED, and whether the household should see
+    // something is a question about INTENT — so a home task Nick added through
+    // NEURO could never reach the shared list however obviously it belonged
+    // there, and a shared one could never be taken back off it.
+    //
+    // Defaults 0: fails closed. Nothing of his reaches the household surface
+    // unless he says so.
+    if (taskColumns.length && !taskColumns.includes('household')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN household INTEGER NOT NULL DEFAULT 0');
+      // ⚠ NOT optional. Everything captured through VESTA was already on the
+      // household list under the old rule, so without this the deploy silently
+      // empties her list and the feature looks broken the moment it improves.
+      const moved = db.prepare("UPDATE tasks SET household = 1 WHERE source LIKE 'capture:%'").run();
+      console.log(`[DB] tasks.household added (${moved.changes} existing VESTA captures carried over)`);
+    }
     // Migration: tasks.ms_plan — the Planner board or To Do list a linked
     // Microsoft task sits on, so the card can say which one. Display only; the
     // completion push reads ms_source, not this. NULL means "we don't know",
@@ -1363,18 +1381,22 @@ function deleteTaskMoscow(filePath, lineNumber, text) {
 // Callers should go through services/task-store.js rather than these directly —
 // it owns dedupe-key normalisation and re-exports the vault note after a write.
 
+// ⚠ THE THIRD whitelist a task field has to appear in — after createTask's
+// input map and createTaskRow's INSERT column list. A field missing from any of
+// the three is silently dropped, with no error anywhere, which is how
+// estimateMinutes once vanished from POST /api/tasks. Add to all three.
 const TASK_FIELDS = [
   'text', 'status', 'moscow', 'moscow_proposed', 'priority', 'due_date', 'source',
   'origin_path', 'origin_line', 'context', 'domain', 'notes', 'ms_id', 'ms_source', 'ms_plan',
-  'estimate_minutes',
+  'estimate_minutes', 'assignee', 'household',
 ];
 
 function createTaskRow(task) {
   const info = run(
     `INSERT INTO tasks (text, status, moscow, moscow_proposed, priority, due_date, source,
                         origin_path, origin_line, context, domain, notes, ms_id, estimate_minutes,
-                        assignee, dedupe_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        assignee, household, dedupe_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       task.text, task.status || 'open', task.moscow || null,
       task.moscow_proposed ? 1 : 0, task.priority || null,
@@ -1388,6 +1410,7 @@ function createTaskRow(task) {
       task.estimate_minutes == null ? null : task.estimate_minutes,
       // NULL is unassigned and is a real answer, not a missing one.
       task.assignee || null,
+      task.household ? 1 : 0,
       task.dedupe_key,
     ]
   );
@@ -1414,11 +1437,12 @@ function listTaskRows(filters = {}) {
   }
   if (filters.moscow) { where.push('moscow = ?'); params.push(filters.moscow); }
   if (filters.source) { where.push('source = ?'); params.push(filters.source); }
-  // The whole VESTA household pool — every task captured through any household
-  // account, and NOTHING else. Deliberately a prefix on `source` rather than a
-  // domain filter: `domain = 'personal'` would sweep in Nick's own private
-  // personal tasks, which is precisely the boundary this feature must not cross.
   if (filters.sourcePrefix) { where.push('source LIKE ?'); params.push(`${filters.sourcePrefix}%`); }
+  // The VESTA household pool. An explicit flag, never a domain or a source
+  // pattern: `domain = 'personal'` would sweep in Nick's own private list, and
+  // a source prefix answers where a task was typed rather than whether it is
+  // meant to be shared.
+  if (filters.household) { where.push('household = 1'); }
   // Absent means EVERY domain, not 'work'. A default here would silently hide
   // personal tasks from every existing caller — including the exports and the
   // counts — which is the invisible half of the asymmetry task-domain describes.

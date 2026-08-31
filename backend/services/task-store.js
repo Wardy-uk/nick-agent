@@ -93,6 +93,11 @@ function toTodoShape(row) {
     moscow: row.moscow || null,
     moscowProposed: Boolean(row.moscow_proposed),
     estimateMinutes: row.estimate_minutes == null ? null : row.estimate_minutes,
+    // On the shared VESTA household list? Carried so the row can offer the
+    // toggle and show its current state — otherwise the control renders as
+    // "off" for a task that is already shared.
+    household: row.household === 1 ? 1 : 0,
+    assignee: row.assignee || null,
     context: row.context || null,
     // Work or personal. Defaulted rather than passed through raw, so a row
     // written before the column existed reads as 'work' everywhere instead of
@@ -310,6 +315,9 @@ function createTask(input = {}) {
     notes: input.notes || null,
     // VESTA household assignment. NULL is unassigned and is a real answer.
     assignee: input.assignee || null,
+    // On the shared household list? Defaults 0 — fails closed, so nothing of
+    // Nick's reaches the household surface unless something says so.
+    household: input.household ? 1 : 0,
     ms_id: input.ms_id || null,
     estimate_minutes: normEstimate(
       input.estimateMinutes ?? input.estimate_minutes,
@@ -429,6 +437,11 @@ function updateTask(id, fields = {}) {
     );
   }
   if ('due_date' in fields) patch.due_date = fields.due_date || null;
+  // ⚠ A field missing from this whitelist is SILENTLY DROPPED — the way
+  // estimateMinutes went missing from POST /api/tasks. Both of these are
+  // three-valued in effect: absent means "leave it", null means "clear it".
+  if ('assignee' in fields) patch.assignee = fields.assignee || null;
+  if ('household' in fields) patch.household = fields.household ? 1 : 0;
   if ('notes' in fields) patch.notes = fields.notes || null;
   if ('context' in fields) patch.context = fields.context || null;
   if ('status' in fields) {

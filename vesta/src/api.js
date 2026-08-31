@@ -78,8 +78,16 @@ export const home = (token) => call('/home', { token });
 export const calendarDay = (token, date) =>
   call(`/calendar?date=${encodeURIComponent(date)}`, { token });
 
-export const addTask = (token, text, assignee = null) =>
-  call('/tasks', { method: 'POST', body: { text, assignee }, token });
+export const addTask = (token, text, assignee = null, dueDate = null) =>
+  call('/tasks', { method: 'POST', body: { text, assignee, dueDate }, token });
+
+/**
+ * Change a household task. Only the keys PRESENT are changed — `dueDate: null`
+ * clears the date, while omitting it leaves it alone, and the server keeps that
+ * distinction all the way to the column.
+ */
+export const updateTask = (token, id, patch) =>
+  call(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch, token });
 
 export const addItem = (token, slug, section, name) =>
   call(`/catalogue/${encodeURIComponent(slug)}/add`, {

@@ -119,7 +119,7 @@ test('a task she adds comes back on her home screen', async () => {
   const row = json.tasks.find(t => t.text === 'pick up a prescription');
   // The thin shape IS the boundary: none of Nick's own triage fields. The three
   // additions are household facts (who it is for, who sent it), not his notes.
-  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'assignee', 'assigneeLabel', 'dueDate', 'from', 'status', 'text']);
+  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'assignee', 'assigneeLabel', 'dueDate', 'from', 'id', 'status', 'text']);
   assert.equal(row.status, 'to do');
 });
 

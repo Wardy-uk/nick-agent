@@ -21,9 +21,12 @@ const STATE_CLASS = {
  * children out for the empty message, which hid this form on exactly the screen
  * that had nothing on it yet — so the app was unusable from a standing start.
  */
-export default function Tasks({ tasks, gap, people = [], onAdd }) {
+export default function Tasks({ tasks, gap, people = [], onAdd, onUpdate }) {
   const [text, setText] = useState('');
   const [assignee, setAssignee] = useState('');
+  const [due, setDue] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [rowBusy, setRowBusy] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -36,15 +39,29 @@ export default function Tasks({ tasks, gap, people = [], onAdd }) {
     try {
       // '' means unassigned — the absence of a choice, which the server stores
       // as null rather than attributing it to whoever typed it.
-      await onAdd(clean, assignee || null);
+      await onAdd(clean, assignee || null, due || null);
       // Cleared only AFTER it landed. If the add failed, the words in the box
       // are the only copy of the thought.
       setText('');
       setAssignee('');
+      setDue('');
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function patch(id, fields) {
+    setRowBusy(id);
+    setError(null);
+    try {
+      await onUpdate(id, fields);
+      setEditing(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRowBusy(null);
     }
   }
 
@@ -69,6 +86,41 @@ export default function Tasks({ tasks, gap, people = [], onAdd }) {
             </span>
             {/* Only shown on a shared list, where it can actually differ. */}
             {t.from && <span className="task__from">added by {t.from}</span>}
+
+            {editing === t.id ? (
+              <div className="task__edit">
+                <input
+                  type="date"
+                  className="task__date"
+                  defaultValue={t.dueDate || ''}
+                  disabled={rowBusy === t.id}
+                  onChange={e => patch(t.id, { dueDate: e.target.value || null })}
+                />
+                <select
+                  className="task__reassign"
+                  defaultValue={t.assignee || ''}
+                  disabled={rowBusy === t.id}
+                  onChange={e => patch(t.id, { assignee: e.target.value || null })}
+                >
+                  <option value="">For anyone</option>
+                  {people.map(p => <option key={p.id} value={p.id}>For {p.label}</option>)}
+                </select>
+                {/* Clearing a date is a real instruction, distinct from leaving
+                    it alone — so it gets its own control rather than hoping an
+                    emptied date input fires. */}
+                {t.dueDate && (
+                  <button className="btn btn--quiet" disabled={rowBusy === t.id}
+                          onClick={() => patch(t.id, { dueDate: null })}>No date</button>
+                )}
+                <button className="btn btn--quiet" onClick={() => setEditing(null)}>Close</button>
+              </div>
+            ) : (
+              t.id && (
+                <button className="task__editbtn" onClick={() => setEditing(t.id)}>
+                  {t.dueDate ? 'Change' : 'Add a date'}
+                </button>
+              )
+            )}
           </li>
         ))}
       </ul>
@@ -82,6 +134,13 @@ export default function Tasks({ tasks, gap, people = [], onAdd }) {
           enterKeyHint="done"
         />
         <div className="composer__row">
+          <input
+            type="date"
+            className="composer__date"
+            value={due}
+            onChange={e => setDue(e.target.value)}
+            aria-label="Due date"
+          />
           <select
             className="composer__who"
             value={assignee}

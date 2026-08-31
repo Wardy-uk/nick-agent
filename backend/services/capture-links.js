@@ -417,12 +417,78 @@ function resolveAssignee(requested) {
   return match ? match.id : null;
 }
 
+/**
+ * A due date, or null. PURE.
+ *
+ * ⚠ Matched against a strict pattern rather than fed to `new Date()`, which
+ * accepts almost anything and silently answers for some other day. An
+ * unparseable date becomes NULL — no due date — rather than a wrong one: a task
+ * with no deadline is honest, a task due on a date nobody chose is not.
+ */
+const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function normDueDate(value) {
+  const clean = String(value == null ? '' : value).trim();
+  if (!clean) return null;
+  if (!DUE_RE.test(clean)) return null;
+  // Reject the impossible as well as the malformed — 2026-13-45 passes the
+  // pattern and is not a day.
+  const [y, m, d] = clean.split('-').map(Number);
+  const probe = new Date(y, m - 1, d);
+  if (probe.getFullYear() !== y || probe.getMonth() !== m - 1 || probe.getDate() !== d) return null;
+  return clean;
+}
+
+/**
+ * Change a household task she can already see.
+ *
+ * ⚠ THE OWNERSHIP CHECK IS THE WHOLE THING, and it is done against the DATABASE
+ * on every call, never against an id the client claims to own. The rule is
+ * exactly the one `submissions` reads by: with `shared-tasks`, any task on the
+ * household list; without it, only this account's own submissions. A task that
+ * is neither is reported as MISSING rather than forbidden, so this cannot be
+ * used to discover which ids belong to Nick.
+ *
+ * Only three fields are reachable — due date, assignee, and done/not-done.
+ * MoSCoW, priority, notes, estimates and provenance are Nick's own working
+ * notes and are not editable here, nor even addressable.
+ */
+function updateTask(account, taskId, patch = {}) {
+  const db = require('../db/database');
+  const taskStore = require('./task-store');
+
+  const id = Number(taskId);
+  if (!Number.isInteger(id) || id <= 0) return { ok: false, status: 400, error: 'no such task' };
+
+  const row = db.getTaskRow(id);
+  const missing = { ok: false, status: 404, error: 'no such task' };
+  if (!row) return missing;
+
+  const shared = hasScope(account, 'shared-tasks');
+  const mine = String(row.source || '') === sourceFor(account);
+  const visible = shared ? row.household === 1 : mine;
+  if (!visible) return missing;
+
+  const fields = {};
+  // `null` is a real instruction here — "clear the due date" — and must stay
+  // distinct from the key being absent, which means "leave it alone".
+  if ('dueDate' in patch) fields.due_date = normDueDate(patch.dueDate);
+  if ('assignee' in patch) fields.assignee = resolveAssignee(patch.assignee);
+  if ('done' in patch) fields.status = patch.done ? 'done' : 'open';
+
+  if (!Object.keys(fields).length) return { ok: false, status: 400, error: 'nothing to change' };
+
+  // Through task-store, so completion does whatever completion does elsewhere
+  // (the outcome-note hold, the export) rather than a raw column write.
+  const updated = taskStore.updateTask(id, fields);
+  return { ok: true, id, held: (updated && updated.held) || false };
+}
+
 /** The task source that marks a row as belonging to one account. */
 function sourceFor(account) {
   return `capture:${account.label}`;
 }
 
-function submit(account, text, { now = new Date(), assignee = null } = {}) {
+function submit(account, text, { now = new Date(), assignee = null, dueDate = null } = {}) {
   const clean = String(text || '').trim().slice(0, MAX_TEXT);
   if (!clean) return { ok: false, status: 400, error: 'nothing to add' };
 
@@ -437,6 +503,11 @@ function submit(account, text, { now = new Date(), assignee = null } = {}) {
     // Whoever it is FOR, which is a different question from who typed it.
     // Unrecognised resolves to null rather than being stored as given.
     assignee: resolveAssignee(assignee),
+    due_date: normDueDate(dueDate),
+    // Anything captured through VESTA is a household task by definition — this
+    // IS the shared list. Nick's own tasks default to 0 and reach it only when
+    // he says so.
+    household: 1,
   });
 
   return { ok: true, id, text: clean, created, assignee: resolveAssignee(assignee) };
@@ -473,7 +544,10 @@ function submissions(account, { limit = 50 } = {}) {
   // into it, not everything of his that happens not to be work.
   const shared = hasScope(account, 'shared-tasks');
   const rows = shared
-    ? taskStore.listTasks({ status: 'all', includeDone: true, sourcePrefix: 'capture:' })
+    // ⚠ The household FLAG, not a source pattern. Source answers where a task
+    // was typed; the flag answers whether it is meant to be shared — which is
+    // what lets Nick put a home task on this list from NEURO, and take one off.
+    ? taskStore.listTasks({ status: 'all', includeDone: true, household: true })
     : taskStore.listTasks({ status: 'all', includeDone: true, source: sourceFor(account) });
   // Newest first. listTaskRows orders by MoSCoW and priority, which is the right
   // order for Nick's own triage screen and meaningless here — she wants the
@@ -481,6 +555,9 @@ function submissions(account, { limit = 50 } = {}) {
   const newest = [...rows].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
   const who = people();
   return newest.slice(0, limit).map((r) => ({
+    // Needed to edit it. An opaque row id, not a path or anything guessable —
+    // and every write re-checks the row is in this account's pool anyway.
+    id: r.id,
     text: r.text,
     // Who it is FOR. `null` is unassigned and is a real answer — the UI says
     // "anyone" rather than quietly attributing it to whoever typed it.
@@ -507,6 +584,8 @@ module.exports = {
   setScopes,
   people,
   resolveAssignee,
+  normDueDate,
+  updateTask,
   OWNER_ID,
   scopesOf,
   hasScope,

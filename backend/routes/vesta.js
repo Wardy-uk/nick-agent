@@ -195,11 +195,31 @@ router.post('/tasks', requireAccount, (req, res) => {
       // Who it is FOR. Resolved against the real household in the service; an
       // unrecognised name lands as unassigned rather than being stored as given.
       assignee: (req.body || {}).assignee,
+      dueDate: (req.body || {}).dueDate,
     });
     if (!result.ok) return res.status(result.status || 400).json(result);
     res.json(result);
   } catch (e) {
     console.error('[Vesta] Task submit failed:', e.message);
+    res.status(500).json({ ok: false, error: 'Something went wrong.' });
+  }
+});
+
+/**
+ * Change a household task — its due date, who it is for, or whether it is done.
+ *
+ * ⚠ Ownership is re-checked in the SERVICE against the database on every call,
+ * never taken from the id the client sends. A task this account cannot see
+ * comes back as MISSING rather than forbidden, so this cannot be walked to find
+ * out which ids are Nick's.
+ */
+router.patch('/tasks/:id', requireAccount, (req, res) => {
+  try {
+    const result = capture.updateTask(req.account, req.params.id, req.body || {});
+    if (!result.ok) return res.status(result.status || 400).json({ ok: false, error: result.error });
+    res.json(result);
+  } catch (e) {
+    console.error('[Vesta] Task update failed:', e.message);
     res.status(500).json({ ok: false, error: 'Something went wrong.' });
   }
 });

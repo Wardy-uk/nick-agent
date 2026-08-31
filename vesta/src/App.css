@@ -299,3 +299,23 @@ body {
 .task__who--none { background: none; color: var(--ink-faint); padding: 2px 0; }
 .task__from { flex-basis: 100%; color: var(--ink-faint); font-size: 11px; margin-top: 2px; }
 .task { flex-wrap: wrap; }
+
+/* ── Due dates and row editing ───────────────────────────────────────────── */
+
+.composer__date, .task__date {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 10px; padding: 0 10px; font-size: 16px; min-height: 44px;
+}
+.composer__date { flex: 0 0 auto; }
+.task__editbtn {
+  appearance: none; background: none; border: none; color: var(--ink-faint);
+  font-size: 12px; padding: 4px 0; cursor: pointer; text-decoration: underline;
+  flex-basis: 100%; text-align: left; min-height: 32px;
+}
+.task__edit { display: flex; gap: 6px; flex-wrap: wrap; flex-basis: 100%; margin-top: 6px; }
+.task__reassign {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 10px; padding: 0 8px; font-size: 15px; min-height: 44px;
+}
+/* An overdue date is the one thing on this row worth a colour. */
+.task__due { color: var(--ink-faint); }

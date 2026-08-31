@@ -69,8 +69,13 @@ export default function Home({ onSignedOut }) {
   // rendering a blank panel that looks broken.
   const kitchenMissing = can('kitchen') && !kitchenGap && !data.kitchenSections;
 
-  async function addTask(text, assignee) {
-    await api.addTask(token, text, assignee);
+  async function addTask(text, assignee, dueDate) {
+    await api.addTask(token, text, assignee, dueDate);
+    await refresh();
+  }
+
+  async function updateTask(id, patch) {
+    await api.updateTask(token, id, patch);
     await refresh();
   }
   /**
@@ -107,7 +112,7 @@ export default function Home({ onSignedOut }) {
           rather than either blanking it or pretending it is current. */}
       {error && <p className="home__stale" role="status">{error} Showing what I last had.</p>}
 
-      <Tasks tasks={data.tasks} gap={gapFor('tasks')} people={data.people || []} onAdd={addTask} />
+      <Tasks tasks={data.tasks} gap={gapFor('tasks')} people={data.people || []} onAdd={addTask} onUpdate={updateTask} />
 
       {can('calendar') && (
         <Calendar events={data.calendar} gap={gapFor('calendar')} todayKey={data.calendarDate} />
