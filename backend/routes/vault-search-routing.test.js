@@ -122,7 +122,12 @@ test('a missing query is a 400, never an empty result set', async () => {
 test('/search does not swallow /search/temporal', async () => {
   const { status, body } = await get('/api/vault/search/temporal?query=succession&from=2020-01-01');
   assert.equal(status, 200);
-  // The temporal route answers with its own shape; if `/search` had eaten it,
-  // this would come back as a plain search result for the literal path.
-  assert.ok(body && !Object.prototype.hasOwnProperty.call(body, 'health'));
+  // ⚠ The discriminator used to be "temporal returns no `health`". It now
+  // returns one — that was the whole point of retiring its bespoke walker — so
+  // the marker had to change or this test would have gone on passing for the
+  // wrong reason. The range is the thing only the temporal route answers with.
+  assert.ok(body && Object.prototype.hasOwnProperty.call(body, 'from'), 'temporal echoes its range');
+  assert.ok(body && Object.prototype.hasOwnProperty.call(body, 'to'));
+  // And it is still a real answer, not `/search` matching the literal path.
+  assert.equal(body.health.temporalComplete, true, 'the temporal arm actually ran');
 });

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { apiUrl, apiFetch } from '../api';
+import { assessSearchHealth } from '../vaultHealth';
 import './VaultBrowser.css';
 
 function RelatedNotes({ notePath, onNavigate }) {
@@ -82,8 +83,16 @@ export default function VaultBrowser({ initialOpenPath, onClearInitialPath }) {
   const [previewMode, setPreviewMode] = useState(false);
 
   // Search
+  //
+  // The health block is kept ALONGSIDE the results, not thrown away. Without it
+  // an empty list is unreadable: a complete search of a folder with nothing in
+  // it, and a search that could not read the vault, look identical — and only
+  // one of them means the vault is empty.
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState(null);
+  const [searchHealth, setSearchHealth] = useState(null);
+  const [searchError, setSearchError] = useState(null);
+  const [searchScope, setSearchScope] = useState('');
 
   const loadDir = useCallback(async (dir) => {
     setLoading(true);
@@ -97,6 +106,8 @@ export default function VaultBrowser({ initialOpenPath, onClearInitialPath }) {
       setEntries(sorted);
       setCurrentDir(dir);
       setSearchResults(null);
+      setSearchHealth(null);
+      setSearchError(null);
     } catch (err) {
       console.error('Failed to list vault:', err);
     }
@@ -152,12 +163,25 @@ export default function VaultBrowser({ initialOpenPath, onClearInitialPath }) {
   const doSearch = async () => {
     if (!searchQuery.trim()) return;
     setLoading(true);
+    setSearchError(null);
+    setSearchScope(currentDir);
     try {
       const res = await apiFetch(`/api/vault/search?query=${encodeURIComponent(searchQuery)}&dir=${encodeURIComponent(currentDir)}`);
       const data = await res.json();
-      setSearchResults(data.results || []);
-    } catch {
-      setSearchResults([]);
+      if (!res.ok) {
+        // A refused or failed request is NOT an empty result. Rendering it as
+        // one turns "the server said no" into "there is nothing there".
+        setSearchResults(null);
+        setSearchHealth(null);
+        setSearchError((data && data.error) || `Search failed (HTTP ${res.status})`);
+      } else {
+        setSearchResults(data.results || []);
+        setSearchHealth(data.health || null);
+      }
+    } catch (e) {
+      setSearchResults(null);
+      setSearchHealth(null);
+      setSearchError((e && e.message) || 'Could not reach the vault search');
     }
     setLoading(false);
   };
@@ -178,6 +202,15 @@ export default function VaultBrowser({ initialOpenPath, onClearInitialPath }) {
   };
 
   const breadcrumbs = currentDir ? currentDir.split('/') : [];
+
+  // The one place that decides what to say about completeness — pure, shared
+  // with its tests, and never re-derived in the markup below.
+  const searchAssessment = assessSearchHealth({
+    health: searchHealth,
+    results: searchResults,
+    error: searchError,
+    scope: searchScope,
+  });
   const isDirty = openFile && edited !== openFile.content;
 
   // Preprocess markdown for preview: handle wiki-links and dataview blocks
@@ -251,7 +284,8 @@ export default function VaultBrowser({ initialOpenPath, onClearInitialPath }) {
       <div className="vault-sara">
         <span className="vault-sara-label">SARA</span>
         <span className="vault-sara-line">
-          {searchResults ? `${searchResults.length} results.` :
+          {searchError ? 'Search did not run.' :
+           searchResults ? `${searchResults.length} result${searchResults.length !== 1 ? 's' : ''}${searchAssessment.state === 'incomplete' ? ' — from part of the vault.' : '.'}` :
            entries.length === 0 && !loading ? 'Empty directory.' :
            `${entries.filter(e => e.type !== 'directory').length} notes in this folder.`}
         </span>
@@ -286,22 +320,50 @@ export default function VaultBrowser({ initialOpenPath, onClearInitialPath }) {
 
       {loading && <div className="vault-loading">Loading...</div>}
 
-      {/* Search results */}
-      {searchResults && !loading && (
+      {/* Directly above the results, and ONLY when something is actually
+          incomplete. A banner that is always there is one nobody reads. */}
+      {!loading && searchAssessment.banner && (
+        <div className={`vault-health vault-health-${searchAssessment.banner.tone}`}>
+          <span className="vault-health-title">{searchAssessment.banner.title}</span>
+          <span className="vault-health-detail">{searchAssessment.banner.detail}</span>
+        </div>
+      )}
+
+      {/* A failed request — never rendered as an empty result set. */}
+      {searchError && !loading && (
         <div className="vault-results">
           <div className="vault-results-header">
-            <span>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''}</span>
-            <button className="vault-clear-search" onClick={() => setSearchResults(null)}>Clear</button>
+            <span>Search error</span>
+            <button className="vault-clear-search" onClick={() => { setSearchError(null); setSearchQuery(''); }}>Clear</button>
+          </div>
+          <div className="vault-empty">{searchAssessment.emptyLine}</div>
+        </div>
+      )}
+
+      {/* Search results */}
+      {searchResults && !loading && !searchError && (
+        <div className="vault-results">
+          <div className="vault-results-header">
+            <span>
+              {searchResults.length} result{searchResults.length !== 1 ? 's' : ''}
+              {searchAssessment.scopeLabel && <span className="vault-results-scope"> {searchAssessment.scopeLabel}</span>}
+            </span>
+            <button className="vault-clear-search" onClick={() => { setSearchResults(null); setSearchHealth(null); }}>Clear</button>
           </div>
           {searchResults.map((r, i) => (
             <div key={i} className="vault-result" onClick={() => openFileHandler(r.path)}>
-              <span className="vault-result-path">{r.path}</span>
+              <span className="vault-result-path">
+                {r.path}
+                {r.indexIncomplete && <span className="vault-result-partial" title="Only partly indexed — the tail of this note was not searched">partly indexed</span>}
+              </span>
               {r.matches?.slice(0, 2).map((m, j) => (
-                <div key={j} className="vault-result-match">L{m.line}: {m.text}</div>
+                // `line` is null by design upstream — a fabricated line number is
+                // worse than none, and "Lnull:" is worse than either.
+                <div key={j} className="vault-result-match">{m.line != null ? `L${m.line}: ` : ''}{m.text}</div>
               ))}
             </div>
           ))}
-          {searchResults.length === 0 && <div className="vault-empty">No matches</div>}
+          {searchResults.length === 0 && <div className="vault-empty">{searchAssessment.emptyLine}</div>}
         </div>
       )}
 

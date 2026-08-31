@@ -504,3 +504,54 @@
   background: rgba(239, 68, 68, 0.1);
   border-color: #ef4444;
 }
+
+/* ── Retrieval health ────────────────────────────────────────────────────────
+   Shown directly above the results, and only when the search actually saw less
+   than the whole vault. Neutral by design: nothing is broken for Nick to fix,
+   the answer is simply narrower than it looks — and a banner that is always
+   there is one nobody reads by week two. */
+.vault-health {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--warning);
+  background: var(--bg-secondary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-family: var(--font-mono);
+}
+
+.vault-health-error {
+  border-left-color: var(--danger);
+}
+
+.vault-health-title {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.vault-health-detail {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+/* The folder a search was scoped to, so a short list inside a folder is never
+   read as a short list across the vault. */
+.vault-results-scope {
+  color: var(--text-muted);
+}
+
+/* A note the index holds only PART of. Marked on the row, because three good
+   passages from a truncated transcript look exactly like a note read in full. */
+.vault-result-partial {
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 400;
+}

@@ -592,12 +592,50 @@ async function rebuildEmbeddings(onProgress) {
     health: getEmbeddingHealth() };
 }
 
-async function semanticSearch(query, maxResults = 5) {
-  // Get all stored embeddings
+/**
+ * How many notes a POST-filtered scoped search will examine before it stops.
+ *
+ * A `folder:` scope is answered exactly — the index stores `relative_path`, so
+ * the candidate set is narrowed BEFORE ranking and nothing in scope can be
+ * ranked out by something outside it. A `person:` scope cannot be: deciding it
+ * means reading the note, so the ranked list is walked from the top and the
+ * predicate applied until enough answers are found or this many notes have been
+ * looked at. Hitting it is REPORTED (`boundedRecall`), never silent — that is
+ * the difference between "there is nothing else" and "I stopped looking".
+ */
+const SCOPED_POST_FILTER_LIMIT = 500;
+
+// The minimum cosine similarity worth calling a match.
+const MIN_RELEVANCE = 0.1;
+
+/**
+ * Semantic search, with an honest account of how it answered.
+ *
+ * Returns `{results, available, why, recall, examined, boundedRecall}`.
+ * `results` is `null` when the index could not answer at all — the caller must
+ * degrade to keyword search rather than render an empty vault.
+ *
+ * @param {object} [options]
+ * @param {(relativePath:string)=>boolean} [options.pathFilter] applied to every
+ *   row BEFORE ranking. Cheap and exact — this is what makes a `folder:` scope
+ *   a real narrowing rather than "the global top 200, then filtered".
+ * @param {(relativePath:string)=>boolean} [options.postFilter] applied to the
+ *   RANKED list, top down, for a scope that cannot be decided from the path.
+ * @param {number} [options.postFilterLimit]
+ */
+async function semanticSearchDetailed(query, maxResults = 5, options = {}) {
+  const {
+    pathFilter = null,
+    postFilter = null,
+    postFilterLimit = SCOPED_POST_FILTER_LIMIT,
+  } = options;
+
   const allEmbeddings = db.getAllEmbeddings();
   if (allEmbeddings.length === 0) {
     console.log('[Embeddings] No embeddings yet — falling back to keyword search');
-    return null; // caller should fall back to keyword search
+    // Null, not []: the caller must be able to tell "the index cannot answer"
+    // from "the index answered and nothing matched".
+    return { results: null, available: false, why: 'no embeddings indexed yet', recall: 'none', examined: 0, boundedRecall: false };
   }
 
   // Embed the query. Null means the call failed, and handing back to keyword
@@ -607,7 +645,7 @@ async function semanticSearch(query, maxResults = 5) {
   const queryEmbedding = await getQueryEmbedding(query);
   if (!queryEmbedding) {
     console.warn('[Embeddings] Query could not be embedded — falling back to keyword search');
-    return null;
+    return { results: null, available: false, why: 'query could not be embedded', recall: 'none', examined: 0, boundedRecall: false };
   }
 
   // Score every chunk, then keep the best chunk PER FILE. Without the fold,
@@ -615,6 +653,9 @@ async function semanticSearch(query, maxResults = 5) {
   // the entire result set with five passages of itself.
   const best = new Map();
   for (const row of allEmbeddings) {
+    // ⚠ Applied here, before scoring, so an in-scope note cannot be ranked out
+    // by a better-scoring note the scope excludes.
+    if (pathFilter && !pathFilter(row.relative_path)) continue;
     let embedding;
     try { embedding = JSON.parse(row.embedding); }
     catch { continue; }
@@ -625,17 +666,54 @@ async function semanticSearch(query, maxResults = 5) {
     }
   }
 
-  const scored = [...best.values()]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, maxResults)
-    .filter(r => r.score > 0.1); // minimum relevance threshold
+  const ranked = [...best.values()]
+    .filter(r => r.score > MIN_RELEVANCE)   // minimum relevance threshold
+    .sort((a, b) => b.score - a.score);
 
-  return scored.map(r => ({
-    path: r.relativePath,
-    name: path.basename(r.relativePath, '.md'),
-    excerpts: [r.chunkText ? r.chunkText.slice(0, 300) : ''],
-    score: r.score
-  }));
+  let kept;
+  let examined = ranked.length;
+  let boundedRecall = false;
+
+  if (postFilter) {
+    kept = [];
+    examined = 0;
+    for (const candidate of ranked) {
+      if (kept.length >= maxResults) break;
+      if (examined >= postFilterLimit) {
+        // We stopped looking. Say so — an answer short of maxResults here is
+        // not evidence that the scope holds nothing more.
+        boundedRecall = true;
+        break;
+      }
+      examined += 1;
+      let ok = false;
+      try { ok = postFilter(candidate.relativePath); } catch { ok = false; }
+      if (ok) kept.push(candidate);
+    }
+  } else {
+    kept = ranked.slice(0, maxResults);
+  }
+
+  return {
+    results: kept.map(r => ({
+      path: r.relativePath,
+      name: path.basename(r.relativePath, '.md'),
+      excerpts: [r.chunkText ? r.chunkText.slice(0, 300) : ''],
+      score: r.score,
+    })),
+    available: true,
+    why: null,
+    // `exact` means every candidate the scope permits was ranked. `bounded`
+    // means the ranked list was walked only so far.
+    recall: postFilter ? 'bounded' : 'exact',
+    examined,
+    boundedRecall,
+  };
+}
+
+/** The long-standing shape: an array of results, or null to degrade. */
+async function semanticSearch(query, maxResults = 5, options = {}) {
+  return (await semanticSearchDetailed(query, maxResults, options)).results;
 }
 
 module.exports = {
@@ -643,6 +721,8 @@ module.exports = {
   getEmbeddingHealth,
   rebuildEmbeddings,
   semanticSearch,
+  semanticSearchDetailed,
+  SCOPED_POST_FILTER_LIMIT,
   truncatedFiles,
   truncatedDetail,
   embedVaultFile,

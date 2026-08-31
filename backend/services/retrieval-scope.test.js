@@ -39,8 +39,34 @@ function write(rel, body) {
 }
 
 const realSemantic = embeddings.semanticSearch;
-function stubSemantic(fn) { embeddings.semanticSearch = fn; }
-test.after(() => { embeddings.semanticSearch = realSemantic; });
+const realDetailed = embeddings.semanticSearchDetailed;
+
+/**
+ * Stub the semantic arm.
+ *
+ * `fn` keeps the old array-or-null contract, which is what these tests are
+ * written against. Retrieval calls `semanticSearchDetailed` now (that is what
+ * lets a `folder:` scope narrow the index BEFORE ranking), so BOTH are replaced
+ * and the array is wrapped — otherwise a stub here would be quietly ignored and
+ * every scope test would be exercising the real index.
+ *
+ * ⚠ The stub deliberately does NOT honour `pathFilter`. That is the point: the
+ * gate has to hold over a source that hands back out-of-scope paths, which is
+ * the only way to prove it is a guarantee rather than a convention.
+ */
+function stubSemantic(fn) {
+  embeddings.semanticSearch = fn;
+  embeddings.semanticSearchDetailed = async (...args) => {
+    const results = await fn(...args);
+    return results === null
+      ? { results: null, available: false, why: 'stubbed unavailable', recall: 'none', examined: 0, boundedRecall: false }
+      : { results, available: true, why: null, recall: 'exact', examined: results.length, boundedRecall: false };
+  };
+}
+test.after(() => {
+  embeddings.semanticSearch = realSemantic;
+  embeddings.semanticSearchDetailed = realDetailed;
+});
 
 test.before(() => {
   write('Meetings/2026/08/standup.md', 'The succession plan was discussed with Naomi Wentworth today.');

@@ -281,6 +281,24 @@ function offlineBanner(source) {
   return source === 'local' ? '⚠️ NEURO offline — served directly from the local vault copy.\n\n' : '';
 }
 
+/**
+ * One sentence when a vault search could not see everything. PURE.
+ *
+ * ⚠ Traversal incompleteness counts the same as a dead index: a capped walk,
+ * a depth limit and an unreadable vault all hand back the identical short
+ * list, and none of them says anything about what the vault contains.
+ * Returns '' when the search was complete, so a good answer is not hedged.
+ */
+function incompleteBanner(health) {
+  const h = health || {};
+  const why = [];
+  if (h.semanticAvailable === false) why.push('semantic search was unavailable, so this is keyword matching only');
+  for (const r of (h.truncationReasons || [])) why.push(r);
+  if (h.truncated && why.length === 0) why.push('part of the vault was not searched');
+  if (h.semanticAvailable !== false && h.truncated !== true) return '';
+  return `⚠ This search was INCOMPLETE (${why.join('; ')}). A thin or empty result here is INCOMPLETE, not an absence.\n\n`;
+}
+
 // ── Create MCP Server ──
 const server = new McpServer({
   name: 'neuro',
@@ -351,9 +369,7 @@ server.tool('search_vault',
     // Reporting the first when the second is true is how "I couldn't find
     // anything about that" becomes a confident claim about a vault nobody
     // actually searched.
-    const degraded = data.health && data.health.semanticAvailable === false
-      ? '⚠ Semantic search was unavailable — this is keyword matching only. A thin or empty result here is INCOMPLETE, not an absence.\n\n'
-      : '';
+    const degraded = incompleteBanner(data.health);
 
     return { content: [{ type: 'text', text: offlineBanner(source) + degraded + (results || 'No results found.') }] };
   });
@@ -412,11 +428,13 @@ server.tool('search_vault_temporal', 'Search the vault within a date range (by f
   from: z.string().optional().describe('ISO date (YYYY-MM-DD). Default: 30 days ago'),
   to: z.string().optional().describe('ISO date (YYYY-MM-DD). Default: today'),
   limit: z.number().optional().describe('Max results (default 5)'),
-}, async ({ query, from, to, limit }) => {
+  dir: z.string().optional().describe('Limit the search to a folder, e.g. "Meetings"'),
+}, async ({ query, from, to, limit, dir }) => {
   const lim = limit || 5;
   const qs = new URLSearchParams({ query, limit: String(lim) });
   if (from) qs.set('from', from);
   if (to) qs.set('to', to);
+  if (dir) qs.set('dir', dir);
   const { data, source } = await vaultDispatch(
     () => neuroApi(`${VAULT_API_BASE}/search/temporal?${qs.toString()}`, { timeout: 8000 }),
     () => localVault.searchTemporal(query, from, to, lim),
@@ -425,7 +443,9 @@ server.tool('search_vault_temporal', 'Search the vault within a date range (by f
     const when = r.modified ? new Date(r.modified).toISOString().split('T')[0] : '?';
     return `### ${r.name}  _(${when})_\nPath: ${r.path}\n${(r.excerpts || []).join('\n')}`;
   }).join('\n\n');
-  return { content: [{ type: 'text', text: offlineBanner(source) + (out || 'No results in range.') }] };
+  // ⚠ A date-bounded search is the single easiest result to misread as proof
+  // that nothing happened that week, so the banner matters most here.
+  return { content: [{ type: 'text', text: offlineBanner(source) + incompleteBanner(data.health) + (out || 'No results in range.') }] };
 });
 
 server.tool('vault_backlinks',

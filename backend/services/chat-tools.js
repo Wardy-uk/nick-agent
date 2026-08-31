@@ -313,9 +313,14 @@ const HANDLERS = {
         ...(r.indexIncomplete ? { indexIncomplete: true } : {}),
       })),
     };
-    if (health && health.semanticAvailable === false) {
+    // Traversal incompleteness is treated exactly like semantic degradation:
+    // a capped or unreadable walk returns the same short list, and neither is
+    // evidence that the vault holds nothing.
+    const honesty = require('./retrieval').describeIncompleteness(health);
+    if (honesty.incomplete) {
       out.incomplete = true;
-      out.note = 'Semantic search was unavailable — this is keyword matching only. A thin or empty result here is incomplete, not an absence.';
+      out.incompleteReasons = honesty.reasons;
+      out.note = honesty.note;
     }
     if (scope && health && health.scope && health.scope.kind === 'unknown') {
       out.note = `Scope "${scope}" was not recognised, so nothing could match it. Use folder:<path> or person:<Full Name>.`;

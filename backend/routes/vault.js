@@ -138,58 +138,66 @@ router.get('/search', async (req, res) => {
   }
 });
 
-// GET /api/vault/search/temporal?query=X&from=YYYY-MM-DD&to=YYYY-MM-DD
+/**
+ * GET /api/vault/search/temporal?query=X&from=YYYY-MM-DD&to=YYYY-MM-DD&dir=optional
+ *
+ * ⚠ This was the LAST bespoke walker in the codebase, and it carried every bug
+ * `/api/vault/search` was rebuilt to remove: depth capped at 4 (so a note in
+ * `Meetings/2026/08/deep/` was unreachable while looking perfectly searchable),
+ * an early stop at `limit * 3` in raw filesystem order, no ranking, no semantic
+ * arm, no scope, and — the one that matters most here — no way for a caller to
+ * tell a complete answer from a partial one. A date-bounded search is exactly
+ * where a thin answer gets read as "nothing happened that week".
+ *
+ * It is the unified retrieval now. `dir` becomes a `folder:` scope, enforced
+ * after every source and again after fusion, so temporal results obey the same
+ * scope guarantee ordinary search does.
+ */
 router.get('/search/temporal', async (req, res) => {
-  const { query, from, to, limit = 5 } = req.query;
+  const { query, from, to, limit = 5, dir } = req.query;
   if (!query) return res.status(400).json({ error: 'query required' });
+
+  // Still resolved, purely to refuse a traversal attempt before it becomes a
+  // scope. The walk itself no longer takes a directory.
+  const searchDir = safePath(dir || '');
+  if (!searchDir) return res.status(400).json({ error: 'Invalid path' });
 
   const fromDate = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const toDate = to ? new Date(to) : new Date();
+  const maxResults = Math.max(1, Math.min(parseInt(limit, 10) || 5, 100));
 
-  const results = [];
-  const SKIP_DIRS = new Set(['.obsidian', '.git', '.trash', 'Imports']);
+  try {
+    const scopeDir = String(dir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const { results, health } = await require('../services/retrieval').searchWithHealth(String(query), {
+      maxResults,
+      from: fromDate,
+      to: toDate,
+      scope: scopeDir ? `folder:${scopeDir}` : undefined,
+    });
 
-  function walk(dir, depth) {
-    if (depth > 4 || results.length >= parseInt(limit) * 3) return;
-    if (!fs.existsSync(dir)) return;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue;
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) continue;
-        walk(fullPath, depth + 1);
-      } else if (entry.name.endsWith('.md')) {
-        const stat = fs.statSync(fullPath);
-        const modified = new Date(stat.mtime);
-        if (modified < fromDate || modified > toDate) continue;
-
-        const content = fs.readFileSync(fullPath, 'utf-8');
-        if (!content.toLowerCase().includes(query.toLowerCase())) continue;
-
-        const relPath = path.relative(VAULT_PATH, fullPath).replace(/\\/g, '/');
-        const body = content.replace(/^---[\s\S]*?---\n*/, '');
-        const lines = body.split('\n');
-        const excerpts = [];
-        for (let i = 0; i < lines.length && excerpts.length < 2; i++) {
-          if (lines[i].toLowerCase().includes(query.toLowerCase())) {
-            excerpts.push(lines[i].substring(0, 200));
-          }
-        }
-        results.push({
-          path: relPath,
-          name: entry.name.replace('.md', ''),
-          modified: stat.mtime,
-          excerpts
-        });
-      }
-    }
+    res.json({
+      query,
+      results: results.map(r => ({
+        path: r.path,
+        name: r.name,
+        modified: r.modified || null,
+        // `line` is null rather than invented — same rule as `/search`.
+        matches: (r.excerpts || []).slice(0, 3).map(text => ({ line: null, text })),
+        excerpts: r.excerpts || [],
+        score: r.score,
+        ...(r.indexIncomplete ? { indexIncomplete: true } : {}),
+      })),
+      from: fromDate,
+      to: toDate,
+      // Carried for the same reason `/search` carries it: a short list inside a
+      // date range is the single easiest result in NEURO to misread as proof.
+      health,
+    });
+  } catch (e) {
+    console.error('[Vault] temporal search failed:', e.message);
+    // An error is NOT an empty week.
+    res.status(500).json({ error: e.message });
   }
-
-  walk(VAULT_PATH, 0);
-  results.sort((a, b) => new Date(b.modified) - new Date(a.modified));
-
-  res.json({ results: results.slice(0, parseInt(limit)), from: fromDate, to: toDate });
 });
 
 // POST /api/vault/export-docx — create a Word doc from markdown content

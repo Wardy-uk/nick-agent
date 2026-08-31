@@ -109,11 +109,14 @@ async function buildChatContext(userMessage, options = {}) {
         );
         parts.push(`Relevant vault notes:\n${snippets.join('\n')}`);
       }
-      if (health && health.semanticAvailable === false) {
-        // Said even when results came back, and said even when none did:
-        // "nothing matched" and "I could only search half the ways I normally
-        // do" are different facts about the same empty list.
-        parts.push('Vault search note: semantic search was unavailable, so this used keyword matching only. Treat a thin or empty result as incomplete, not as an absence.');
+      // Said even when results came back, and said even when none did:
+      // "nothing matched" and "I could only search half the ways I normally do"
+      // are different facts about the same empty list. Traversal
+      // incompleteness (a depth cap, a file cap, an unreadable vault) counts
+      // exactly the same — it produces the identical short list.
+      const honesty = retrieval.describeIncompleteness(health);
+      if (honesty.incomplete) {
+        parts.push(`Vault search note: ${honesty.note}`);
       }
     } catch {}
   }
