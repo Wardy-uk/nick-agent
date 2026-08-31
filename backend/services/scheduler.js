@@ -183,6 +183,20 @@ function start() {
   // Deliberately NOT a TRACKED_JOBS catch-up job: replaying "you have been
   // sitting for two hours" an hour later is a statement about a moment that has
   // gone.
+  // Hourly at :35 — judge whether yesterday's prompts made any difference, and
+  // quieten anything that has earned it. Idempotent over pending deliveries, so
+  // deliberately NOT a TRACKED_JOBS catch-up job: a missed hour self-corrects.
+  cron.schedule('35 * * * *', () => {
+    try {
+      const result = require('./attention-learning').sweep();
+      if (result.muted.length) {
+        console.log(`[Scheduler] SARA quietened: ${result.muted.map(m => m.kind).join(', ')}`);
+      }
+    } catch (e) {
+      console.warn('[Scheduler] Attention learning sweep failed:', e.message);
+    }
+  });
+
   cron.schedule('*/40 * * * *', async () => {
     try {
       const result = await require('./ambient-push').deliver();

@@ -58,7 +58,7 @@ const DRY_HOURS = 3;
  * spelling out `phone.activity === 'Still' && !phone.focusMode && ...` is one
  * nobody can check against what he asked for.
  */
-function momentFrom({ context = null, phone = null, desktop = null, now = new Date() } = {}) {
+function momentFrom({ context = null, phone = null, desktop = null, now = new Date(), muted = [] } = {}) {
   const activity = phone && phone.activity ? String(phone.activity) : null;
 
   // At a desk: the laptop is reporting an app in the foreground, OR the phone is
@@ -83,6 +83,9 @@ function momentFrom({ context = null, phone = null, desktop = null, now = new Da
     atLaptop,
     atDesk: atLaptop || stillSomewhere,
     inFocusSession: context ? context.activity === 'in-focus-session' : false,
+    // Kinds SARA has quietened, or Nick has. Passed IN rather than read here so
+    // `worthInterrupting` stays pure.
+    muted: Array.isArray(muted) ? muted : [],
   };
 }
 
@@ -160,6 +163,15 @@ function worthInterrupting(observation, moment) {
   const rule = RULES[observation.kind];
   if (!rule) return { push: false, why: `no push rule for ${observation.kind}` };
 
+  // ⚠ MUTED stops the PUSH and nothing else. The observation still renders on
+  // the Surface, the widget and Now — muting is about interruption, not about
+  // hiding, which is `attention-lifecycle`'s acknowledged rule. And it is
+  // confessed in the EOD, where Nick can turn it back on: SARA going quiet is
+  // only safe because there is a place she says she has.
+  if (moment.muted && moment.muted.includes(observation.kind)) {
+    return { push: false, why: 'muted — it was not making a difference' };
+  }
+
   // ── Universal vetoes ──────────────────────────────────────────────────────
   //
   // ⚠ UNKNOWN NEVER PUSHES. Every other part of this system may act on a
@@ -225,7 +237,14 @@ async function deliver({ now = new Date() } = {}) {
 
     const ambient = await require('./ambient').build({ now, context });
     observations = ambient.observations || [];
-    moment = momentFrom({ context, phone, desktop, now });
+    const learning = require('./attention-learning');
+    moment = momentFrom({
+      context,
+      phone,
+      desktop,
+      now,
+      muted: learning.mutedList().map(m => m.kind),
+    });
   } catch (e) {
     console.warn('[AmbientPush] Could not read the moment:', e.message);
     // ⚠ Refuses rather than guessing. Not knowing where he is is precisely when
@@ -256,6 +275,12 @@ async function deliver({ now = new Date() } = {}) {
       key: `ambient:${chosen.kind}`,
       url: '/?view=today',
     });
+    // Recorded so the sweep can ask, later, whether it made any difference.
+    // Without this there is nothing to learn from — and a learning loop cannot
+    // be retrofitted onto deliveries nobody kept.
+    try { require('./attention-learning').recordDelivery(chosen.kind); } catch (e) {
+      console.warn('[AmbientPush] Could not record delivery:', e.message);
+    }
     return { sent: 1, chosen: chosen.kind, considered: results };
   } catch (e) {
     console.error('[AmbientPush] Send failed:', e.message);

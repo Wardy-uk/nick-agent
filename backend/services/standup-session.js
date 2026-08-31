@@ -164,6 +164,26 @@ async function buildContext(kind) {
   // for closing the day, and being asked to commit to a number at 5pm is the
   // wrong moment. Failures leave it null, which renders as nothing rather than
   // as "no target set": we could not look, which is a different fact.
+  // What SARA has quietened, and how her prompts are doing. EOD ONLY — this is
+  // her confession, and the morning is not the moment for it.
+  //
+  // ⚠ This is what makes going quiet SAFE. She mutes a prompt that is not
+  // helping without asking, which is what Nick wanted, and the whole reason that
+  // is not just "SARA silently breaking" is that she says so here and he can
+  // turn any of it back on in the same breath.
+  if (kind === 'eod') {
+    try {
+      const learning = require('./attention-learning');
+      ctx.muted = learning.mutedList();
+      ctx.promptStats = learning.summary();
+    } catch (e) {
+      // A failure means she cannot say what she muted — which must read as
+      // "I could not check", never as "I have muted nothing".
+      console.warn('[StandupSession] Attention learning read failed:', e.message);
+      ctx.mutedUnknown = e.message;
+    }
+  }
+
   if (kind !== 'eod') {
     try {
       ctx.weeklyTarget = require('./weekly-target').snapshot();
@@ -293,19 +313,50 @@ Run it roughly like this, adapting to his answers:
 const EOD_PROMPT = `${SHARED_VOICE}
 
 ## Your job this evening
-Close the day honestly, and make the next working day easier.
+This is a REFLECTION, not a status report. Nick's words, 31 Aug 2026: the EOD
+should be "more journal/reflection than specifically work related". He has spent
+all day being Head of Technical Support; do not make the last conversation of it
+another one about the queue.
 
-1. Open by reflecting back what actually got done today from the context — do not ask "what did you get done?" when you can already see it. Ask him to confirm or correct it.
-2. Ask what did not go to plan. One question.
-3. If something slipped that he also committed to yesterday, name it — gently, as a fact. Twice in a row is a pattern worth noticing out loud; do not moralise about it.
-4. Ask what the first thing on the NEXT WORKING DAY should be — on a Friday that is Monday, not tomorrow. Capture it with create_task if it is a real action, dated to that day.
-5. Acknowledge the day's wins without ceremony. "That's a good day's work" not "Amazing!".
-6. When you have enough, call set_eod_summary and tell him he's done.
+You are running this — you started it, he did not come and find you.
+
+1. Open on the DAY, not the work. How was it. One question, and mean it.
+2. Reflect back what actually happened from the context — work, movement, what
+   he finished — but as material for the conversation, not as a list to confirm.
+   Do not ask "what did you get done?" when you can already see it.
+3. Follow what he gives you. If the thing on his mind is a person, or how tired
+   he is, or something that has nothing to do with Nurtur, go there. A day is
+   not only its tasks and this is the one ritual that can say so.
+4. If something slipped that he also committed to yesterday, name it once —
+   gently, as a fact. Twice in a row is a pattern worth saying out loud. Do not
+   moralise, and do not turn the evening into a review because of it.
+5. If there is a first thing for the NEXT WORKING DAY — on a Friday that is
+   Monday — capture it with create_task. Only if he names one. Do not fish.
+6. Acknowledge what went right, without ceremony. "That's a good day's work",
+   not "Amazing!".
+7. When you have enough, call set_eod_summary and tell him he is done.
+
+## What you have quietened — say this, every time there is something to say
+The context may carry a "muted" list: prompts you have STOPPED sending him
+because they were measurably not making any difference, plus "promptStats" for
+the rest.
+
+⚠ You quietened these on your own. That is only fair if you own up to it, so say
+so plainly and once — what you muted, and the number that made you: "I have
+stopped nagging you about water. Eleven times, it changed nothing, so I have
+knocked it off." Then tell him he can have any of it back, and if he asks, call
+resume_prompt. Do not defend the decision and do not labour it: it is one or two
+sentences near the end, not the centre of the conversation.
+
+If "mutedUnknown" is set you could not check — say that, rather than implying
+there is nothing.
 
 ## Rules
 - He is tired. Be shorter than you are in the morning. Under 50 words a message.
-- Do not open new work at 6pm. If he raises something big, park it: capture it and say it is tomorrow's problem.
-- Never end without acknowledging something that went right, even on a bad day. Especially on a bad day.`;
+- Do not open new work at 6pm. If he raises something big, park it: capture it
+  and say it is tomorrow's problem.
+- Never end without acknowledging something that went right, even on a bad day.
+  Especially on a bad day.`;
 
 // ── Tools ────────────────────────────────────────────────────────────────────
 
@@ -344,6 +395,17 @@ const SESSION_TOOLS = [
         mood: { type: 'string', description: 'How he sounds, one short phrase. Only if he said something about it.' },
       },
       required: ['items'],
+    },
+  },
+  {
+    name: 'resume_prompt',
+    description: 'Turn a prompt back on that SARA had quietened. Use the exact kind from the muted list in the context. Only when Nick asks for it.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', description: 'The prompt kind, e.g. low-water, sedentary, no-exercise.' },
+      },
+      required: ['kind'],
     },
   },
   {
@@ -442,6 +504,16 @@ async function executeTool(session, name, input = {}) {
       session.outcome.mood = input.mood || null;
       session.state = 'ready';
       return { ok: true, focus: items, note: 'Focus recorded. Tell Nick he is done — the system writes the note.' };
+    }
+
+    case 'resume_prompt': {
+      // ⚠ `unmute` also clears the history that produced the mute. Without that
+      // the next sweep re-mutes it on the same evidence and his instruction
+      // lasts one night — an escape hatch that does not let you out is not one.
+      const result = require('./attention-learning').unmute(String(input.kind || '').trim());
+      return result.ok
+        ? { ok: true, kind: result.kind, note: 'Back on. It starts from scratch, so it will not be muted again on the old evidence.' }
+        : { ok: false, error: `"${input.kind}" was not muted.` };
     }
 
     case 'set_eod_summary': {
