@@ -26,6 +26,18 @@ const SOURCE = {
   STALE: 'neuro-stale',
   UNAVAILABLE: 'unavailable',
   DEMO: 'demo',
+  // ⚠ RETIRED is not a failure, and that distinction is the whole reason it
+  // exists. NEURO deleted its Jira queue in July 2026 ("too much noise") — a
+  // deliberate product removal, not an outage. Reported as `unavailable` it
+  // rolled the whole model up to `mixed`, so the kiosk banner read "Partly
+  // live — some of NEURO could not be read" PERMANENTLY, seven weeks and
+  // counting, over three domains that were all perfectly live.
+  //
+  // A warning that is always on is a warning nobody reads, and it costs the
+  // real one: by week two "partly live" carries no information at all. Same
+  // species as the stale Jira cache that reported a 3 July snapshot as current
+  // fact — a reader outliving its writer — one level up in the UI.
+  RETIRED: 'retired',
 };
 
 const UNAVAILABLE_SOURCES = new Set([SOURCE.UNAVAILABLE]);
@@ -34,6 +46,35 @@ const UNAVAILABLE_SOURCES = new Set([SOURCE.UNAVAILABLE]);
 function cannotSee(what, detail) {
   const because = detail ? ` ${detail}` : '';
   return `SARA cannot see ${what} — this is not an all-clear.${because}`;
+}
+
+/**
+ * A domain that was REMOVED, not one that failed.
+ *
+ * It still renders its own honest line if anything asks, and it is still
+ * `available: false` so no screen can read a fact out of it — but it is
+ * excluded from the rollup, because "we deleted this" is not news about
+ * whether SARA can see Nick's day.
+ */
+function retiredQueue(detail) {
+  return {
+    source: SOURCE.RETIRED,
+    available: false,
+    detail: detail || null,
+    summary: 'The Jira queue was retired in July 2026. Escalations are tracked live instead.',
+    // ⚠ The SHAPE must match the contract exactly — `open`/`breaching`/`sections`,
+    // the same keys `unavailableQueue` returns. The first cut returned `at_risk`
+    // instead of `sections`, so the model failed its own contract validation and
+    // confidence was capped at `low`: a fix for a permanently-amber banner that
+    // silently made the whole read look worse. Caught by the suite, not by
+    // reading.
+    //
+    // null, never 0: "no tickets" and "no reading" are different facts, and this
+    // is a third — "there is no such feature" — which the summary carries.
+    open: null,
+    breaching: null,
+    sections: { act_now: [], today: [], watch: [] },
+  };
 }
 
 function unavailableQueue(detail) {
@@ -95,7 +136,11 @@ const UNAVAILABLE_BUILDERS = {
  * @returns {'demo'|'unavailable'|'neuro'|'neuro-stale'|'mixed'}
  */
 function rollUp(bySource) {
-  const sources = Object.values(bySource);
+  // ⚠ RETIRED domains are excluded before anything is decided. A feature that
+  // was deliberately deleted must not drag the rollup to `mixed` for ever — see
+  // SOURCE.RETIRED. If EVERY domain is retired there is nothing left to
+  // describe, and `unavailable` is the honest answer rather than `live`.
+  const sources = Object.values(bySource).filter((s) => s !== SOURCE.RETIRED);
   if (!sources.length) return SOURCE.UNAVAILABLE;
   if (sources.every((s) => s === SOURCE.DEMO)) return SOURCE.DEMO;
   if (sources.every((s) => UNAVAILABLE_SOURCES.has(s))) return SOURCE.UNAVAILABLE;
@@ -144,6 +189,7 @@ module.exports = {
   SOURCE,
   cannotSee,
   unavailableQueue,
+  retiredQueue,
   unavailableFocus,
   unavailablePeople,
   unavailableVault,

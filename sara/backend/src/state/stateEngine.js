@@ -163,7 +163,7 @@ function buildQueue(neuroData, ctx = {}) {
   // must stay `unavailable` rather than a confident zero, because a screen reading
   // "0 breaching" from a feed that no longer exists is the same lie as the seed was.
   if (!raw || !Array.isArray(raw.tickets)) {
-    return provenance.unavailableQueue(
+    return provenance.retiredQueue(
       'NEURO served no queue feed. NEURO retired its Jira queue in July 2026 — escalations are tracked live instead.'
     );
   }

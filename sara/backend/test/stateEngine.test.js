@@ -448,3 +448,54 @@ test('with nothing readable the presentation block is empty and says why', () =>
   // can still usefully offer, even if the save itself then fails honestly.
   assert.ok(s.presentation.quickActions.some((a) => a.action === 'capture'));
 });
+
+test('⚠ a RETIRED domain is not an outage, and does not make the banner amber for ever', () => {
+  // Nick, 31 Aug 2026, looking at the kiosk: "why does SARA on Pi say partly
+  // live - some of neuro could be read?"
+  //
+  // Because the Jira queue was DELETED in July 2026 ("too much noise") and the
+  // state engine still reported it as `unavailable`. Three domains were live,
+  // one had been removed on purpose, and the rollup called that `mixed` — so
+  // the banner read "Partly live — some of NEURO could not be read" for seven
+  // weeks straight, over a perfectly healthy read.
+  //
+  // A warning that is always on is a warning nobody reads, and it costs the
+  // real one. Same species as the stale Jira cache reporting a 3 July snapshot
+  // as current fact — a reader outliving its writer — one level up in the UI.
+  const p = require('../src/state/provenance');
+
+  // Excluded from the rollup entirely.
+  assert.equal(p.rollUp({ queue: 'retired', focus: 'neuro', people: 'neuro', vault: 'neuro' }), 'neuro');
+  assert.equal(p.rollUp({ queue: 'retired', focus: 'neuro-stale', people: 'neuro-stale', vault: 'neuro-stale' }), 'neuro-stale');
+  // ⚠ But it never manufactures good news: a genuine outage elsewhere still
+  // reads as mixed, and a model with NOTHING but retired domains has nothing
+  // left to describe.
+  assert.equal(p.rollUp({ queue: 'retired', focus: 'neuro', people: 'unavailable', vault: 'neuro' }), 'mixed');
+  assert.equal(p.rollUp({ queue: 'retired' }), 'unavailable');
+
+  // The domain itself still refuses to be read as a fact — `available:false`
+  // and null counts, exactly like an unavailable one. Retired means "there is
+  // no such feature", not "there is nothing in it".
+  const q = p.retiredQueue();
+  assert.equal(q.available, false);
+  assert.equal(q.open, null);
+  assert.equal(q.breaching, null);
+  assert.match(q.summary, /retired/i);
+
+  // ⚠ And it is CONTRACT-SHAPED. The first cut returned `at_risk` instead of
+  // `sections`, so the model failed validation and confidence was capped low —
+  // a fix for a cosmetic banner quietly making the whole read look worse.
+  for (const key of ['source', 'summary', 'open', 'breaching', 'sections']) {
+    assert.ok(key in q, `retiredQueue is missing the contract key "${key}"`);
+  }
+
+  // End to end: a live NEURO with the retired queue is LIVE, and the banner is
+  // silent rather than amber.
+  neuro._setSnapshotForTest(liveSnapshot());
+  const s = getState();
+  assert.equal(s.domains.queue.source, 'retired');
+  assert.equal(s.provenance.state, 'neuro');
+  assert.doesNotMatch(s.provenance.message, /partly live/i);
+  assert.equal(s.meta.valid, true, 'the retired domain must not break contract validation');
+  neuro._setSnapshotForTest(null);
+});

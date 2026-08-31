@@ -97,6 +97,26 @@ export default function AttentionSurface({
   // with no way to answer it.
   const speaks = Boolean(onSay) && Array.isArray(utterances) && utterances.length > 0;
 
+  // ── What counts as PRESSING ────────────────────────────────────────────────
+  //
+  // Nick, 31 Aug 2026: "change anything pressing to a slow pulse." Defined HERE,
+  // once, for the same reason `degraded` is: every shell renders this file, so a
+  // second definition is a second answer free to drift.
+  //
+  // ⚠ CRITICAL OR HIGH ONLY, and deliberately not "there is a primary". On a
+  // normal working day there is nearly always a primary card, so pulsing on any
+  // of them would mean pulsing all day — and a signal that is always on is one
+  // nobody sees, which costs the real one. The urgency is the BRAIN'S ranking,
+  // not a second judgement made here.
+  //
+  // ⚠ It must be an ITEM. A `context` card ("you're in a meeting") is the frame,
+  // not a thing to act on, and breathing over it would tell him something needs
+  // doing when nothing does.
+  const pressing = Boolean(
+    primary && primary.kind === 'item'
+    && (primary.urgency === 'critical' || primary.urgency === 'high')
+  );
+
   return (
     <div className={rootClassName}>
       {/* The coherence on screen is the coherence of the READ — informative
@@ -107,6 +127,7 @@ export default function AttentionSurface({
         confidenceLevel={context?.confidence?.level}
         quiet={quiet}
         degraded={!poolAvailable}
+        pressing={pressing}
       />
 
       <div className="surface__content">

@@ -81,36 +81,71 @@ const EDGE_COHERENT = 0.18;
 // sparse dot field rather than a mesh.
 const EDGE_CULL_ALPHA = 0.006;
 
+// ── The slow pulse ──────────────────────────────────────────────────────────
+//
+// Nick, 31 Aug 2026: "change anything pressing to a slow pulse."
+//
+// ⚠ IT SURVIVES THE "NO DECORATIVE OSCILLATION" RULE ONLY BECAUSE IT IS
+// STATE-DRIVEN. It happens when something is pressing and it stops when nothing
+// is, so the breathing itself carries information — if the pool is calm the
+// field does not breathe at all. A pulse that ran always would be exactly the
+// screensaver this component was written to avoid.
+//
+// It BRIGHTENS and never darkens (the multiplier runs 1 → 1+amp, never below
+// 1). Dipping below the resting level would make her LESS visible at the moment
+// something needs him, which is backwards.
+//
+// Slow on purpose: ~6.5s is a breath, and a breath at the edge of vision reads
+// as "something is waiting" where a faster flicker reads as agitation. It also
+// stays legible at IDLE_FPS.
+const PULSE_PERIOD = 6.5;
+const PULSE_AMP = 0.45;
+
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // How the read becomes a picture. `depth` is how much order arrives (0 = none),
 // `period` how many seconds between settles.
-function drive({ degraded, confidenceLevel, quiet, activity }) {
+function drive({ degraded, confidenceLevel, quiet, activity, pressing }) {
   // Blind: pure noise, and BRIGHT. Being unable to see is not a reason to
   // disappear — an unresolved field is the honest picture of an unreadable
   // read, and it has to be visible enough to read as unresolved rather than as
   // an empty screen.
-  if (degraded) return { depth: 0, period: 0, dim: 0.9 };
+  // Blind never pulses. She cannot know whether anything is pressing, and a
+  // field that breathes over an unreadable pool is asserting exactly the thing
+  // it cannot see.
+  if (degraded) return { depth: 0, period: 0, dim: 0.9, pulse: 0 };
   // Quiet: she settles rarely (nothing is being worked out) but stays PRESENT.
   // ⚠ dim was 0.45 here, which made "staying out of the way" mean "gone".
-  if (quiet) return { depth: 0.35, period: 16, dim: 0.78 };
+  // ⚠ Quiet still pulses when something is pressing. `quiet` means SARA will
+  // not SPEAK — it has never meant she may hide a breaching escalation, and the
+  // gate already refuses to drop a critical item off duty. Silent is not the
+  // same as invisible.
+  if (quiet) return { depth: 0.35, period: 16, dim: 0.78, pulse: pressing ? PULSE_AMP : 0 };
   // ⚠ The low-confidence floor is 0.45, not 0.34: below about 0.4 the settle
   // stops being legible as a settle at all, so "she is unsure" and "she is not
   // working" became the same picture. It is still clearly short of moderate.
   const depth = confidenceLevel === 'high' ? 1 : confidenceLevel === 'moderate' ? 0.7 : 0.45;
-  const period = activity === 'firefighting' ? 5.5 : activity === 'pre-meeting' ? 7 : 9.5;
-  return { depth, period, dim: 1 };
+  // ⚠ `firefighting` no longer SHORTENS the settle. It used to drop to 5.5s, so
+  // once the pulse arrived the same fact was being told twice — a faster settle
+  // AND a breath — which reads as agitation rather than as one clear signal.
+  // The pulse carries "something needs you" now; the settle is left to mean
+  // what it always meant, which is how much she is resolving.
+  //
+  // `pre-meeting` keeps its 7s: imminent is not the same as pressing, and that
+  // one is about a clock rather than about a queue.
+  const period = activity === 'pre-meeting' ? 7 : 9.5;
+  return { depth, period, dim: 1, pulse: pressing ? PULSE_AMP : 0 };
 }
 
-export default function Field({ activity, confidenceLevel, quiet = false, degraded = false }) {
+export default function Field({ activity, confidenceLevel, quiet = false, degraded = false, pressing = false }) {
   const canvasRef = useRef(null);
   // Live state the loop reads without being torn down and rebuilt — regenerating
   // the substrate on every poll would make the whole field flicker once a minute.
-  const driveRef = useRef(drive({ degraded, confidenceLevel, quiet, activity }));
+  const driveRef = useRef(drive({ degraded, confidenceLevel, quiet, activity, pressing }));
 
   useEffect(() => {
-    driveRef.current = drive({ degraded, confidenceLevel, quiet, activity });
-  }, [degraded, confidenceLevel, quiet, activity]);
+    driveRef.current = drive({ degraded, confidenceLevel, quiet, activity, pressing });
+  }, [degraded, confidenceLevel, quiet, activity, pressing]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -211,9 +246,18 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
 
     if (reduced) {
       // One still, half-coherent frame. No loop, no motion, no battery.
-      paint(0, 0.45 * driveRef.current.depth, { x: w * 0.7, y: h * 0.25 }, driveRef.current.dim);
+      //
+      // ⚠ The pulse becomes a STEADY LIFT here rather than vanishing. Reduced
+      // motion is a request for less movement, not for less information — a
+      // reader who has asked for stillness must not silently lose the one
+      // signal that says something needs them.
+      const still = () => {
+        const d = driveRef.current;
+        paint(0, 0.45 * d.depth, { x: w * 0.7, y: h * 0.25 }, d.dim * (1 + d.pulse));
+      };
+      still();
       const ro = new ResizeObserver(() => {
-        if (build()) paint(0, 0.45 * driveRef.current.depth, { x: w * 0.7, y: h * 0.25 }, driveRef.current.dim);
+        if (build()) still();
       });
       ro.observe(canvas);
       return () => ro.disconnect();
@@ -254,7 +298,15 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
         : 0;
       const k = raw * raw * (3 - 2 * raw) * d.depth;
 
-      paint(t, k, focus, d.dim);
+      // A slow global breath over the whole field, independent of the LOCAL
+      // settle above — they are two different facts (something needs you /
+      // she is resolving something) and must not be the same gesture.
+      // Raised cosine so it runs 1 → 1+amp and never dips below the floor.
+      const breath = d.pulse
+        ? 1 + d.pulse * (0.5 - 0.5 * Math.cos((2 * Math.PI * t) / PULSE_PERIOD))
+        : 1;
+
+      paint(t, k, focus, d.dim * breath);
     }
 
     function start() {
