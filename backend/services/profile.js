@@ -382,7 +382,18 @@ async function extractFacts(text) {
 
   try {
     const aiRouting = require('./ai-routing');
-    const result = await aiRouting.runTask('profile_seed', prompt, { maxTokens: 4000 });
+    // ⚠ `runTask(taskType, payload, options)` — the payload is an OBJECT with
+    // `systemPrompt` and `messages`, not a bare prompt string. Passing a string
+    // produced "messages: at least one message is required" from the provider,
+    // which surfaced here as "no model answered" and sent me chasing the routing
+    // order, the cloud gate and AI_MODE for an hour. The pm2 log had the real
+    // answer on the first attempt.
+    const result = await aiRouting.runTask('profile_seed', {
+      systemPrompt: 'You extract facts from text. You return only JSON. You never invent anything.',
+      messages: [{ role: 'user', content: prompt }],
+      maxTokens: 4000,
+      temperature: 0,
+    });
     const body = typeof result === 'string' ? result : (result && (result.text || result.content)) || '';
     const match = body.match(/\[[\s\S]*\]/);
     if (!match) {
