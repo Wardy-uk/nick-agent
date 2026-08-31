@@ -427,6 +427,18 @@ function assess(input = {}, now = new Date()) {
     }
   }
 
+  // ── Too long at one thing ─────────────────────────────────────────────────
+  //
+  // Nick's own example: four hours in VS Code. Nothing else NEURO holds can see
+  // it — the phone knows where he is, the watch knows whether he is sitting, the
+  // calendar knows whether a meeting is running, and none of them can tell four
+  // hours of one job from four hours of twelve.
+  //
+  // Passed in already judged by `desktop-activity`, which owns the reminder
+  // interval too: this is polled by several surfaces and a fresh observation on
+  // every poll would be the same line over and over.
+  if (input.longFocus) observations.push(input.longFocus);
+
   // ── Ordering and the cap ──────────────────────────────────────────────────
   //
   // Health findings outrank body-maintenance prompts: "your resting heart rate
@@ -492,9 +504,21 @@ async function build({ now = new Date(), context = null } = {}) {
   const dietEnergy = _dailyTotals('dietary_energy_consumed', DIET_WINDOW_DAYS, now, gaps);
   const water = _dailyTotals('dietary_water', DIET_WINDOW_DAYS, now, gaps);
 
+  // ⚠ Read AFTER everything else and never allowed to fail the build: the
+  // desktop agent is the one input that lives on a machine NEURO does not
+  // control, so it is the most likely to be absent, and its absence must cost
+  // nothing but itself.
+  let longFocus = null;
+  try {
+    longFocus = require('./desktop-activity').longRunObservation(now);
+  } catch (e) {
+    gaps.push({ source: 'desktop', why: e.message });
+  }
+
   const assessed = assess({
     phone,
     standHours,
+    longFocus,
     days,
     dietEnergy,
     water,
