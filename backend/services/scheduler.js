@@ -848,6 +848,30 @@ function start() {
     }
   });
 
+  // ── Semantic index coverage ──────────────────────────────────────────────
+  // Measured, not assumed. `getCoverage()` is what the search path reads to
+  // decide whether "the index answered" also means "the index holds your
+  // vault", and it is a cheap KV read precisely because this pass does the
+  // walking. Durable, so `known:false` is only ever seen on a brand-new install.
+  //
+  // Deliberately NOT a TRACKED_JOBS catch-up job: it is idempotent, reads live
+  // state every time, and a missed run self-corrects on the next one.
+  setTimeout(() => {
+    try {
+      const cov = require('./embeddings').refreshCoverage();
+      if (cov.known && !cov.complete) {
+        console.warn(`[Embeddings] Coverage INCOMPLETE at startup — ${cov.reasons.join('; ')}`);
+      } else if (cov.known) {
+        console.log(`[Embeddings] Coverage OK — ${cov.indexed}/${cov.eligible} notes indexed`);
+      }
+    } catch (e) { console.error('[Scheduler] Coverage refresh failed:', e.message); }
+  }, 25000);
+
+  cron.schedule('35 * * * *', () => {
+    try { require('./embeddings').refreshCoverage(); }
+    catch (e) { console.error('[Scheduler] Coverage refresh failed:', e.message); }
+  });
+
   // Startup health check — verify capture system is working
   setTimeout(() => {
     const fs = require('fs');

@@ -962,6 +962,25 @@ function getAllEmbeddings() {
   return all('SELECT * FROM vault_embeddings');
 }
 
+/**
+ * One row per indexed NOTE — path, hash, mtime and chunk count, WITHOUT the
+ * vectors.
+ *
+ * ⚠ The coverage report needs exactly this and nothing else. `getAllEmbeddings`
+ * loads every embedding blob (thousands of rows of 1024 floats as JSON), which
+ * is fine for a scoring pass and absurd for a bookkeeping one — reading the
+ * whole index to count it is how a health check becomes the reason the Pi is
+ * slow.
+ */
+function getEmbeddingIndexSummary() {
+  return all(`SELECT relative_path,
+                     MIN(content_hash) AS content_hash,
+                     MIN(file_modified) AS file_modified,
+                     COUNT(*) AS chunks
+              FROM vault_embeddings
+              GROUP BY relative_path`);
+}
+
 function deleteEmbedding(relativePath) {
   // Deletes all chunks for this file
   run('DELETE FROM vault_embeddings WHERE relative_path = ?', [relativePath]);
@@ -1791,6 +1810,7 @@ module.exports = {
   getEmbedding,
   getEmbeddingChunkCount,
   getAllEmbeddings,
+  getEmbeddingIndexSummary,
   deleteEmbedding,
   // Entity extraction
   saveEntity,

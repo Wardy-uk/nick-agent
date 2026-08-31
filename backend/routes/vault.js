@@ -23,12 +23,89 @@ function requireApiKey(req, res, next) {
 
 router.use(requireApiKey);
 
-// Resolve and validate path stays within vault
+/**
+ * Resolve a caller-supplied path and prove it is inside the vault.
+ *
+ * ⚠ THE BUG THIS REPLACES: `resolved.startsWith(path.resolve(VAULT_PATH))` is a
+ * STRING prefix test, and a sibling directory shares the prefix. With the vault
+ * at `C:\Vault`, the path `../Vault-old/secret.md` resolves to
+ * `C:\Vault-old\secret.md`, which starts with `C:\Vault` — so it passed, and
+ * every route that reads, writes, appends, lists or DELETES did so outside the
+ * vault. `C:\Vault-backup`, `C:\Vault Personal` and `/home/nickw/nuero-vault-old`
+ * are all the same hole. Nick's vault has a `Personal/` folder holding
+ * disciplinary prep, a fraud investigation and OH documents; a sibling copy of
+ * it is exactly the thing this must not hand out.
+ *
+ * The fix is to ask the path library rather than the string: `path.relative`
+ * from the root is `..` or starts with `..<sep>` for anything outside, and is
+ * absolute when the two are on different drives.
+ *
+ * Returns the absolute path, or null. Null is a REFUSAL — every caller already
+ * turns it into a 400, and none of them may treat it as "use the root".
+ */
 function safePath(relativePath) {
   if (relativePath === undefined || relativePath === null) return null;
-  const resolved = path.resolve(VAULT_PATH, relativePath);
-  if (!resolved.startsWith(path.resolve(VAULT_PATH))) return null; // path traversal guard
+  if (typeof relativePath !== 'string') return null;
+  // A NUL byte truncates a path inside some native calls — refuse outright.
+  if (relativePath.includes('\0')) return null;
+
+  // ⚠ No vault, no answer. Without this the whole thing resolves against the
+  // process working directory, which is how the capture drop-box came to write
+  // into the repository — the same class of bug, one service along.
+  if (!VAULT_PATH) return null;
+  let root;
+  try {
+    root = fs.realpathSync(path.resolve(VAULT_PATH));
+  } catch {
+    // The vault root is missing or unreadable. Refusing is the only honest
+    // answer; guessing would operate on a path nobody has verified.
+    return null;
+  }
+
+  const resolved = path.resolve(root, relativePath);
+  if (!isInside(root, resolved)) return null;
+
+  // ── Symlink escape ────────────────────────────────────────────────────────
+  // If the target already exists, resolve it for real: a symlink INSIDE the
+  // vault pointing outside it passes every textual test there is. A path that
+  // does not exist yet is legitimate (this is how a new note is created), so
+  // only the deepest existing ancestor is checked — which is what stops a new
+  // file being created *through* an escaping link.
+  const realTarget = realpathDeepest(resolved);
+  if (realTarget && !isInside(root, realTarget)) return null;
+
   return resolved;
+}
+
+/** Is `target` the root itself, or inside it? PURE. */
+function isInside(root, target) {
+  const rel = path.relative(root, target);
+  if (rel === '') return true;                       // the vault root itself
+  if (rel === '..') return false;
+  if (rel.startsWith('..' + path.sep)) return false;
+  if (rel.startsWith('../')) return false;           // belt and braces on win32
+  if (path.isAbsolute(rel)) return false;            // different drive/UNC root
+  return true;
+}
+
+/**
+ * `realpath` of the deepest part of this path that actually exists.
+ *
+ * Returns null when nothing along it exists yet — which is not a failure, it is
+ * a new file. Never throws.
+ */
+function realpathDeepest(target) {
+  let current = target;
+  for (let i = 0; i < 64; i++) {
+    try {
+      return fs.realpathSync(current);
+    } catch {
+      const parent = path.dirname(current);
+      if (!parent || parent === current) return null;
+      current = parent;
+    }
+  }
+  return null;
 }
 
 // GET /api/vault/read?path=relative/path.md
@@ -162,16 +239,23 @@ router.get('/search/temporal', async (req, res) => {
   const searchDir = safePath(dir || '');
   if (!searchDir) return res.status(400).json({ error: 'Invalid path' });
 
-  const fromDate = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const toDate = to ? new Date(to) : new Date();
+  // ⚠ Validate BEFORE searching. `new Date('lastweek')` is Invalid Date, every
+  // comparison against it is false, and the old code fed it straight into the
+  // filter — so a typo'd bound silently searched all of time and returned the
+  // answer labelled as a date range. A bad date is a 400, never a wider search.
+  const retrieval = require('../services/retrieval');
+  const range = retrieval.parseDateRange({ from, to });
+  if (!range.ok) {
+    return res.status(400).json({ error: range.error, field: range.field });
+  }
   const maxResults = Math.max(1, Math.min(parseInt(limit, 10) || 5, 100));
 
   try {
     const scopeDir = String(dir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-    const { results, health } = await require('../services/retrieval').searchWithHealth(String(query), {
+    const { results, health } = await retrieval.searchWithHealth(String(query), {
       maxResults,
-      from: fromDate,
-      to: toDate,
+      from: range.from,
+      to: range.to,
       scope: scopeDir ? `folder:${scopeDir}` : undefined,
     });
 
@@ -187,8 +271,16 @@ router.get('/search/temporal', async (req, res) => {
         score: r.score,
         ...(r.indexIncomplete ? { indexIncomplete: true } : {}),
       })),
-      from: fromDate,
-      to: toDate,
+      // Normalised, so the caller can see exactly which window was searched —
+      // including that a date-only `to` means the END of that day.
+      from: range.fromIso,
+      to: range.toIso,
+      range: {
+        from: range.fromIso,
+        to: range.toIso,
+        fromDefaulted: range.fromDefaulted,
+        toDefaulted: range.toDefaulted,
+      },
       // Carried for the same reason `/search` carries it: a short list inside a
       // date range is the single easiest result in NEURO to misread as proof.
       health,
@@ -212,11 +304,16 @@ router.post('/export-docx', async (req, res) => {
 
   const targetDir = safePath(subdir || 'Exports');
   if (!targetDir) return res.status(400).json({ error: 'Invalid export path' });
-  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-  const targetPath = path.join(targetDir, docxName);
 
+  // The filename is already stripped of separators above, but it is joined onto
+  // a caller-supplied directory — so the join goes back through the guard
+  // rather than being trusted because its two halves looked fine apart.
+  const targetPath = safePath(path.join(targetDir, docxName));
+  const mdPath = safePath(path.join(targetDir, docxName.replace('.docx', '.md')));
+  if (!targetPath || !mdPath) return res.status(400).json({ error: 'Invalid export path' });
+
+  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
   const mdContent = `---\ntype: export\nexported: ${new Date().toISOString()}\noriginal_format: docx\n---\n\n${content}`;
-  const mdPath = path.join(targetDir, docxName.replace('.docx', '.md'));
   fs.writeFileSync(mdPath, mdContent, 'utf-8');
 
   const relPath = path.relative(VAULT_PATH, mdPath).replace(/\\/g, '/');
@@ -380,9 +477,11 @@ router.post('/person-doc', (req, res) => {
 
   const targetDir = safePath('People/Documents');
   if (!targetDir) return res.status(400).json({ error: 'Invalid path' });
-  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
-  const filePath = path.join(targetDir, filename);
+  const filePath = safePath(path.join(targetDir, filename));
+  if (!filePath) return res.status(400).json({ error: 'Invalid path' });
+
+  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
   const titleCase = type.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   const fileContent = `---\ntype: ${type}\nperson: ${safeName}\ndate: ${dateStr}\nsource: neuro-chat\n---\n\n# ${titleCase} — ${safeName}\n\n*Generated ${new Date().toLocaleString('en-GB')}*\n\n${content}\n`;
 
@@ -401,3 +500,8 @@ router.post('/person-doc', (req, res) => {
 });
 
 module.exports = router;
+// Exported for tests: containment is the security boundary of this whole
+// router, and it is worth asserting directly rather than only through eight
+// routes that happen to call it.
+module.exports._safePath = safePath;
+module.exports._isInside = isInside;

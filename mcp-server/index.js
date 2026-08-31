@@ -295,7 +295,17 @@ function incompleteBanner(health) {
   if (h.semanticAvailable === false) why.push('semantic search was unavailable, so this is keyword matching only');
   for (const r of (h.truncationReasons || [])) why.push(r);
   if (h.truncated && why.length === 0) why.push('part of the vault was not searched');
-  if (h.semanticAvailable !== false && h.truncated !== true) return '';
+  // A note that is not in the index cannot be found by semantic search, and the
+  // result set looks identical either way — so a coverage gap earns the same
+  // warning as a dead provider or a capped walk.
+  const coverageGap = h.semanticCoverageComplete === false;
+  if (coverageGap) {
+    const cov = (h.semanticCoverageReasons || []).filter(Boolean);
+    why.push(cov.length
+      ? `the semantic index does not cover the whole vault (${cov.join('; ')})`
+      : 'the semantic index does not cover the whole vault');
+  }
+  if (h.semanticAvailable !== false && h.truncated !== true && !coverageGap) return '';
   return `⚠ This search was INCOMPLETE (${why.join('; ')}). A thin or empty result here is INCOMPLETE, not an absence.\n\n`;
 }
 

@@ -14,6 +14,11 @@
  *   - `incomplete` — it answered, but from part of what it should have read.
  *   - complete   — it read everything it meant to. Say nothing.
  *
+ * "Part of what it should have read" covers three independent failures that all
+ * produce the same short list: the embeddings provider being down, the vault
+ * walk being capped, and — the quietest — the semantic INDEX not holding the
+ * whole vault while the provider answers perfectly.
+ *
  * The last one matters as much as the others: a permanent warning above every
  * search is one nobody reads by week two.
  */
@@ -51,6 +56,19 @@ export function assessSearchHealth({ health = null, results = null, error = null
   const reasons = [];
   if (health && health.semanticAvailable === false) {
     reasons.push('Semantic search was unavailable, so this is keyword matching only.');
+  }
+
+  // ⚠ A coverage gap is not the same failure as a dead provider, and it is the
+  // quieter one: semantic search answers perfectly, from an index that does not
+  // hold your whole vault. Said in the same breath, because the result set is
+  // indistinguishable.
+  if (health && health.semanticCoverageComplete === false) {
+    const detail = (health.semanticCoverageReasons || []).filter(Boolean).join('; ');
+    reasons.push(
+      detail
+        ? `The semantic index does not cover the whole vault — ${detail}.`
+        : 'The semantic index does not cover the whole vault.'
+    );
   }
   for (const r of (health && health.truncationReasons) || []) {
     reasons.push(`Part of the vault was not searched — ${r}.`);

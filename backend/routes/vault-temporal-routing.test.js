@@ -138,6 +138,58 @@ test('the range is a BOUND, not a ranking hint — no out-of-range note leaks in
   assert.deepEqual(body.results, [], 'a well-matching note outside the window is still outside the window');
 });
 
+
+// ── Date validation: a typo is a 400, never a wider search ──────────────────
+
+test('an invalid "from" is a 400, not an unbounded search', async () => {
+  // ⚠ Every comparison against Invalid Date is false, so this used to search
+  // ALL of time and return the answer labelled as a date range.
+  const { status, body } = await get('/api/vault/search/temporal?query=succession&from=lastweek');
+  assert.equal(status, 400);
+  assert.equal(body.field, 'from');
+  assert.match(body.error, /Invalid "from"/);
+});
+
+test('an invalid "to" is a 400', async () => {
+  const { status, body } = await get('/api/vault/search/temporal?query=succession&to=notadate');
+  assert.equal(status, 400);
+  assert.equal(body.field, 'to');
+});
+
+test('a date that does not exist is a 400, not rolled forward into March', async () => {
+  const { status, body } = await get('/api/vault/search/temporal?query=succession&from=2026-02-31');
+  assert.equal(status, 400);
+  assert.match(body.error, /not a real calendar date/);
+});
+
+test('an inverted range is a 400', async () => {
+  const { status, body } = await get('/api/vault/search/temporal?query=succession&from=2026-09-01&to=2026-08-01');
+  assert.equal(status, 400);
+  assert.equal(body.field, 'range');
+});
+
+test('omitting a bound keeps the default — omission is not a typo', async () => {
+  const { status, body } = await get('/api/vault/search/temporal?query=succession');
+  assert.equal(status, 200);
+  assert.equal(body.range.fromDefaulted, true);
+  assert.equal(body.range.toDefaulted, true);
+});
+
+test('the response returns NORMALISED ISO bounds, with the "to" day included', async () => {
+  const { body } = await get('/api/vault/search/temporal?query=succession&from=2026-08-01&to=2026-08-31');
+  assert.equal(body.from, '2026-08-01T00:00:00.000Z');
+  // ⚠ Not midnight: a date-only `to` used to drop the whole of the last day.
+  assert.equal(body.to, '2026-08-31T23:59:59.999Z');
+  assert.equal(body.range.fromDefaulted, false);
+});
+
+test('a valid range stays a HARD bound after fusion', async () => {
+  // The fixtures were all written moments ago, so a 2020 window must return
+  // nothing at all — however well they match the query.
+  const { status, body } = await get('/api/vault/search/temporal?query=succession%20plan&from=2020-01-01&to=2020-12-31&limit=20');
+  assert.equal(status, 200);
+  assert.deepEqual(body.results, [], 'no keyword or semantic hit may leak past the range');
+});
 test('a date range that excludes everything returns an empty list, not an error', async () => {
   const { status, body } = await get('/api/vault/search/temporal?query=succession&from=1990-01-01&to=1990-01-02');
   assert.equal(status, 200);

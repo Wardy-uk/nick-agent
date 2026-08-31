@@ -37,6 +37,16 @@
  * that read nothing look identical from the outside, and only one of them is
  * evidence about the vault. No consumer may use the result count as a proxy.
  *
+ * ── Available is not the same claim as complete ────────────────────────────
+ * `semanticAvailable` only ever meant "the query embedded and the index had
+ * rows". It said nothing about whether the index holds the VAULT — and it could
+ * not, because the inventory walked to depth 4 while this file walked to 12, so
+ * deep notes were permanently unindexed and every search over them came back
+ * confident and thin. `health.semanticCoverage*` is the second question, asked
+ * of `embeddings.getCoverage()` (durable, measured by the rebuild, never walked
+ * on the search path), and an incomplete index makes the whole answer
+ * incomplete even when the provider is perfectly healthy.
+ *
  * CommonJS — NEURO backend convention.
  */
 
@@ -44,20 +54,18 @@ const fs = require('fs');
 const path = require('path');
 const embeddings = require('./embeddings');
 const vaultExclusions = require('./vault-exclusions');
+const vaultWalk = require('./vault-walk');
 
 const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
 const RRF_K = 60; // standard RRF constant
 
-// Generous, and a backstop against a symlink loop rather than a content
-// decision. `Meetings/2026/08/note.md` is depth 3; the old limit of 4 left one
-// level of headroom for a vault that already nests deeper than that.
-const MAX_DEPTH = 12;
-
-// A hard bound on how many files one walk will read, so a pathological vault
-// cannot wedge a request. Hitting it is REPORTED (`truncated`), never silent —
-// a capped scan that presents itself as a complete one is the bug this file
-// just had in three different shapes.
-const MAX_FILES_SCANNED = 5000;
+// ⚠ The traversal policy now lives in `vault-walk.js`, shared with the
+// embeddings inventory. They used to disagree — retrieval reached depth 12 and
+// the index stopped at depth 4, so a deep note was findable by keyword and
+// could never be indexed for semantic search. Re-exported here because callers
+// and tests read them from this module.
+const MAX_DEPTH = vaultWalk.MAX_DEPTH;
+const MAX_FILES_SCANNED = vaultWalk.MAX_FILES_SCANNED;
 
 // ── Scope ────────────────────────────────────────────────────────────────────
 
@@ -175,6 +183,112 @@ function matchesDateRange(relativePath, modified, fromDate, toDate) {
   return true;
 }
 
+/**
+ * Parse one end of a temporal range. PURE.
+ *
+ * ⚠ `new Date(x)` accepts almost anything and answers `Invalid Date` for the
+ * rest, and the old code fed that straight into a comparison — where EVERY
+ * comparison against `NaN` is false, so an invalid bound silently became an
+ * UNBOUNDED one. Asking for notes since "lastweek" therefore searched all time
+ * and reported itself as a date-bounded search. A typo must be a 400, never a
+ * wider answer wearing the caller's label.
+ *
+ * Accepted, and nothing else:
+ *   - a calendar date, `YYYY-MM-DD`
+ *   - a full ISO timestamp, which must round-trip
+ *
+ * A date-only bound is interpreted in UTC, and `to` is taken as the END of that
+ * day. ⚠ That is a deliberate fix: `new Date('2026-08-31')` is midnight, so
+ * `to=2026-08-31` used to exclude everything that happened ON the 31st — a
+ * whole day quietly missing from the one search whose entire purpose is a date
+ * range.
+ *
+ * @returns {{ok:true, date:Date}|{ok:false, error:string}}
+ */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+function parseDateBound(value, { end = false } = {}) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? { ok: false, error: 'not a valid date' }
+      : { ok: true, date: value };
+  }
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return { ok: false, error: 'empty' };
+
+  if (DATE_ONLY.test(raw)) {
+    const date = new Date(`${raw}T${end ? '23:59:59.999' : '00:00:00.000'}Z`);
+    if (Number.isNaN(date.getTime())) return { ok: false, error: `not a valid calendar date: ${raw}` };
+    // `2026-02-31` parses as 2 March. Round-tripping the day is what catches it.
+    if (date.toISOString().slice(0, 10) !== raw) {
+      return { ok: false, error: `not a real calendar date: ${raw}` };
+    }
+    return { ok: true, date };
+  }
+
+  // A full timestamp. Deliberately strict: anything Date can guess at but not
+  // reproduce is a typo, not a date.
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return { ok: false, error: `not a valid ISO date or timestamp: ${raw}` };
+  if (!/^\d{4}-\d{2}-\d{2}[T ]/.test(raw)) {
+    return { ok: false, error: `not an ISO date or timestamp: ${raw}` };
+  }
+  return { ok: true, date };
+}
+
+/**
+ * Validate and normalise a whole `from`/`to` range. PURE.
+ *
+ * An OMITTED bound keeps the long-standing default (30 days back / now); an
+ * INVALID one is an error. Those are different acts and must not share a
+ * behaviour — defaulting a typo is how a bounded search silently becomes an
+ * unbounded one.
+ *
+ * @returns {{ok:true, from:Date, to:Date, fromIso:string, toIso:string,
+ *            fromDefaulted:boolean, toDefaulted:boolean}
+ *          |{ok:false, field:string, error:string}}
+ */
+function parseDateRange({ from, to, now = new Date(), defaultDays = 30 } = {}) {
+  let fromDate;
+  let toDate;
+  const fromDefaulted = from === undefined || from === null || String(from).trim() === '';
+  const toDefaulted = to === undefined || to === null || String(to).trim() === '';
+
+  if (fromDefaulted) {
+    fromDate = new Date(now.getTime() - defaultDays * 24 * 60 * 60 * 1000);
+  } else {
+    const parsed = parseDateBound(from, { end: false });
+    if (!parsed.ok) return { ok: false, field: 'from', error: `Invalid "from" — ${parsed.error}` };
+    fromDate = parsed.date;
+  }
+
+  if (toDefaulted) {
+    toDate = new Date(now.getTime());
+  } else {
+    const parsed = parseDateBound(to, { end: true });
+    if (!parsed.ok) return { ok: false, field: 'to', error: `Invalid "to" — ${parsed.error}` };
+    toDate = parsed.date;
+  }
+
+  if (fromDate > toDate) {
+    return {
+      ok: false,
+      field: 'range',
+      error: `Invalid range — "from" (${fromDate.toISOString()}) is later than "to" (${toDate.toISOString()})`,
+    };
+  }
+
+  return {
+    ok: true,
+    from: fromDate,
+    to: toDate,
+    fromIso: fromDate.toISOString(),
+    toIso: toDate.toISOString(),
+    fromDefaulted,
+    toDefaulted,
+  };
+}
+
 // ── The walk ─────────────────────────────────────────────────────────────────
 
 // Kept alongside the shared exclusion list rather than instead of it. These two
@@ -195,63 +309,33 @@ function skipDir(name) {
  * able to tell from a complete one.
  */
 /**
- * The traversal record for a walk that never happened.
- *
- * ⚠ It is `truncated: true`, always. "We could not look" is a form of
- * incompleteness, and the one this whole file exists to keep apart from
- * "we looked and there was nothing". A missing vault must never read as an
- * empty one.
+ * The traversal record for a walk that never happened. Shared with the walker,
+ * so "we could not look" has one definition.
  */
 function noTraversal(why) {
-  return { scanned: 0, truncated: true, why };
+  return vaultWalk.noWalk(why);
 }
 
+/**
+ * Walk the permitted set, calling `visit(relativePath, fullPath)`.
+ *
+ * Returns the shared walker's record: `{scanned, truncated, why, reasons,
+ * inaccessible, inaccessibleCount, excluded}`. `truncated` is the honest half —
+ * it means the answer below is drawn from PART of the vault, which a consumer
+ * has to be able to tell from a complete one.
+ */
 function walkVault(parsed, visit, bounds = {}) {
-  // Overridable so the caps can be exercised for real rather than asserted
-  // against a stand-in. The defaults are the production bounds.
-  const maxDepth = Number.isFinite(bounds.maxDepth) ? bounds.maxDepth : MAX_DEPTH;
-  const maxFiles = Number.isFinite(bounds.maxFiles) ? bounds.maxFiles : MAX_FILES_SCANNED;
-
-  const state = { scanned: 0, truncated: false, why: null };
-  if (!VAULT_PATH || !fs.existsSync(VAULT_PATH)) {
-    return { ...state, truncated: true, why: 'vault path is not readable' };
-  }
-
-  const stack = [{ dir: VAULT_PATH, depth: 0 }];
-  while (stack.length) {
-    const { dir, depth } = stack.pop();
-    if (state.scanned >= maxFiles) {
-      state.truncated = true;
-      state.why = `scan capped at ${maxFiles} files`;
-      break;
-    }
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      const rel = path.relative(VAULT_PATH, full).replace(/\\/g, '/');
-      if (entry.isDirectory()) {
-        if (skipDir(entry.name)) continue;
-        // Prune to the requested folder rather than walking the whole vault and
-        // filtering — the scope is known here, and this is what makes a scoped
-        // search cheap enough not to need an early stop.
-        if (parsed && parsed.kind === 'folder' && !folderIsReachable(rel, parsed.value)) continue;
-        if (depth + 1 > maxDepth) {
-          state.truncated = true;
-          state.why = `directories deeper than ${maxDepth} levels were not searched`;
-          continue;
-        }
-        stack.push({ dir: full, depth: depth + 1 });
-        continue;
-      }
-      if (!entry.name.endsWith('.md')) continue;
-      if (parsed && parsed.kind === 'folder' && !pathInFolder(rel, parsed.value)) continue;
-      state.scanned += 1;
-      visit(rel, full);
-    }
-  }
-  return state;
+  return vaultWalk.walk(VAULT_PATH, {
+    maxDepth: bounds.maxDepth,
+    maxFiles: bounds.maxFiles,
+    skipDir,
+    // Prune to the requested folder rather than walking the whole vault and
+    // filtering — the scope is known here, and this is what makes a scoped
+    // search cheap enough not to need an early stop. Out of scope is NOT a gap.
+    pruneDir: (relDir) => !(parsed && parsed.kind === 'folder') || folderIsReachable(relDir, parsed.value),
+    skipFile: (rel) => Boolean(parsed && parsed.kind === 'folder' && !pathInFolder(rel, parsed.value)),
+    visit,
+  });
 }
 
 // ── Sources ──────────────────────────────────────────────────────────────────
@@ -359,6 +443,13 @@ async function semanticSearchScoped(query, options = {}) {
     }
   }
 
+  // ⚠ Asked whether or not the query succeeds, because the two failures are
+  // independent: a working provider over a half-built index is the quiet one.
+  // Cheap by construction — one KV read, never a walk.
+  let coverage;
+  try { coverage = embeddings.coverageForScope(embeddings.getCoverage(), _parsed); }
+  catch { coverage = { known: false, complete: null, reasons: ['coverage could not be read'] }; }
+
   try {
     const detail = await embeddings.semanticSearchDetailed(query, maxResults, { pathFilter, postFilter });
     if (!detail || detail.results === null) {
@@ -368,6 +459,7 @@ async function semanticSearchScoped(query, options = {}) {
         why: (detail && detail.why) || 'embeddings unavailable — degraded to keyword search',
         recall: 'none',
         boundedRecall: false,
+        coverage,
       };
     }
     // Belt and braces: the gate runs over the source's output too, so a filter
@@ -382,10 +474,11 @@ async function semanticSearchScoped(query, options = {}) {
       why: null,
       recall: detail.recall || 'exact',
       boundedRecall: detail.boundedRecall === true,
+      coverage,
     };
   } catch (e) {
     console.warn('[Retrieval] Semantic search failed:', e.message);
-    return { results: [], available: false, why: e.message, recall: 'none', boundedRecall: false };
+    return { results: [], available: false, why: e.message, recall: 'none', boundedRecall: false, coverage };
   }
 }
 
@@ -404,14 +497,28 @@ async function semanticSearchWrapper(query, options = {}) {
  */
 async function temporalSearchDetailed(query, options = {}) {
   const { from, to, maxResults = 10, scope, _personCache, _bounds } = options;
+
+  // ⚠ An invalid bound is an EMPTY range here, never an unbounded one — every
+  // comparison against Invalid Date is false, which is how a typo used to
+  // become a search of all time wearing the caller's date label. The route
+  // validates first and 400s; this is the backstop for a programmatic caller.
+  //
+  // Checked BEFORE the vault, deliberately: a bad range is a caller error and
+  // is the same error whatever the environment, so reporting "no vault" over it
+  // would hide a typo behind a deployment problem.
+  const range = parseDateRange({ from, to });
+  if (!range.ok) {
+    return { results: [], traversal: noTraversal(`temporal range rejected: ${range.error}`) };
+  }
+
   if (!VAULT_PATH) {
     return { results: [], traversal: noTraversal('vault path is not configured') };
   }
 
   const parsed = options._parsed !== undefined ? options._parsed : parseScope(scope);
   const personCache = _personCache || new Map();
-  const fromDate = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const toDate = to ? new Date(to) : new Date();
+  const fromDate = range.from;
+  const toDate = range.to;
   const searchTerms = String(query || '').toLowerCase().split(/\s+/).filter((t) => t.length >= 3);
 
   const results = [];
@@ -523,8 +630,12 @@ async function searchWithHealth(query, options = {}) {
   // week — the temporal endpoint's own promise, silently broken by the very
   // refactor that made it honest about everything else.
   if (temporalAsked) {
-    const fromDate = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const toDate = to ? new Date(to) : new Date();
+    // ⚠ The SAME validated bounds the temporal arm used. Re-deriving them here
+    // with `new Date(from)` was how an invalid bound became an unbounded gate
+    // that let everything through while the arm above filtered properly.
+    const range = parseDateRange({ from, to });
+    const fromDate = range.ok ? range.from : new Date(0);
+    const toDate = range.ok ? range.to : new Date(0);
     scoped = scoped.filter((r) => {
       let modified = r.modified;
       if (!modified) {
@@ -571,6 +682,15 @@ async function searchWithHealth(query, options = {}) {
   const temporalComplete = temporal ? !temporal.traversal.truncated : null;
   const truncated = !keywordComplete || temporalComplete === false || semantic.boundedRecall;
 
+  // ⚠ Semantic COVERAGE — a different question from `semanticAvailable`, and
+  // the one nobody was asking. `null` means never measured, which is reported
+  // as its own state and never as `true`.
+  const cov = semantic.coverage || { known: false, complete: null, reasons: [] };
+  const semanticCoverageComplete = cov.known === true ? cov.complete === true : null;
+  const semanticCoverageReasons = cov.known === true
+    ? (cov.complete === true ? [] : (cov.reasons || []))
+    : ['semantic index coverage has not been measured yet'];
+
   return {
     results,
     health: {
@@ -592,6 +712,22 @@ async function searchWithHealth(query, options = {}) {
       // complete", which is `true`.
       temporalComplete,
       filesScanned: keyword.traversal.scanned + (temporal ? temporal.traversal.scanned : 0),
+      // ── Semantic coverage ──────────────────────────────────────────────
+      // true / false / null, where null is "not measured" — never conflate it
+      // with true, which is the whole reason it is three-valued.
+      semanticCoverageComplete,
+      semanticCoverageKnown: cov.known === true,
+      semanticCoverageReasons,
+      semanticEligibleCount: cov.eligible != null ? cov.eligible : null,
+      semanticIndexedCount: cov.indexed != null ? cov.indexed : null,
+      semanticUnindexedCount: cov.unindexed != null ? cov.unindexed : null,
+      // A bounded sample, never the whole list: the counts above are exact.
+      semanticUnindexedPaths: cov.unindexedSample || [],
+      semanticStaleCount: cov.stale != null ? cov.stale : null,
+      semanticFailedCount: cov.failed != null ? cov.failed : null,
+      semanticInaccessibleCount: cov.inaccessible != null ? cov.inaccessible : null,
+      semanticCoverageScope: cov.scoped || null,
+      semanticCoverageAt: cov.at || null,
       keywordCount: keyword.results.length,
       semanticCount: semantic.results.length,
       temporalCount: temporalResults.length,
@@ -620,7 +756,17 @@ function describeIncompleteness(health) {
   }
   for (const r of (health.truncationReasons || [])) reasons.push(r);
   if (health.truncated && reasons.length === 0) reasons.push('part of the vault was not searched');
-  const incomplete = health.semanticAvailable === false || health.truncated === true;
+  // ⚠ A coverage gap gets the SAME warning as a dead provider or a capped walk.
+  // A note that is not in the index is not findable by semantic search, and the
+  // result set looks identical either way — which is the entire problem.
+  const coverageGap = health.semanticCoverageComplete === false;
+  if (coverageGap) {
+    const why = (health.semanticCoverageReasons || []).filter(Boolean);
+    reasons.push(why.length
+      ? `the semantic index does not cover the whole vault (${why.join('; ')})`
+      : 'the semantic index does not cover the whole vault');
+  }
+  const incomplete = health.semanticAvailable === false || health.truncated === true || coverageGap;
   if (!incomplete) return { incomplete: false, reasons: [], note: null };
   return {
     incomplete: true,
@@ -650,6 +796,8 @@ module.exports = {
   folderIsReachable,
   inScope,
   matchesDateRange,
+  parseDateBound,
+  parseDateRange,
   noteMentionsPerson,
   rrfFuse,
   walkVault,

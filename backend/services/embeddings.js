@@ -7,6 +7,7 @@ const db = require('../db/database');
 
 const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
 const exclusions = require('./vault-exclusions');
+const vaultWalk = require('./vault-walk');
 const MAX_CHUNK_CHARS = 1500; // keep well within token limits
 // Bounds cost on genuine outliers, nothing more. It is NOT there to stop a long
 // note dominating results — semanticSearch folds to the best chunk per file,
@@ -104,6 +105,11 @@ function getEmbeddingHealth() {
     // would make one of the two unactionable.
     truncatedCount: truncated.length,
     truncated,
+    // ⚠ Separate from `status`, and it must stay separate: `status` is about the
+    // PROVIDER (is Voyage answering) and this is about the INDEX (does it hold
+    // your vault). A green provider over a half-built index is precisely the
+    // false all-clear this exists to stop.
+    coverage: getCoverage(),
   };
 }
 
@@ -417,6 +423,7 @@ async function embedVaultFile(relativePath, fullPath) {
     // un-stamped so the next run retries it — where writing hash vectors here
     // would mark it done forever with content nothing can reach.
     _health.writesSkipped++;
+    _noteFailed(relativePath, _health.lastError || 'embedding unavailable');
     console.warn(`[Embeddings] ${relativePath}: embedding unavailable — left unindexed for the next run`);
     return false;
   }
@@ -427,36 +434,257 @@ async function embedVaultFile(relativePath, fullPath) {
   prepared.chunks.forEach((chunk, i) => {
     db.saveEmbedding(prepared.relativePath, prepared.hash, embeddings[i], chunk, prepared.modified, i);
   });
+  _clearFailed(prepared.relativePath);
   return true;
 }
 
+/**
+ * Every note this index is SUPPOSED to hold, plus an account of the walk.
+ *
+ * ⚠ This was hard-coded to **depth 4** while retrieval reached depth 12. So a
+ * note in `Meetings/2026/08/deep/` was findable by keyword and could never be
+ * indexed for semantic search — permanently, silently, and invisibly, because
+ * a hybrid search always returns something. The traversal policy now comes from
+ * `vault-walk.js`, shared with retrieval, so the two cannot drift again.
+ *
+ * The EXCLUSION policy stays embeddings-specific on purpose: `Daily/` is out of
+ * the semantic index (hundreds of scratchpads ruin it) and deliberately kept
+ * for entity extraction. That is a decision, not drift.
+ *
+ * Returns `{files, traversal}`. `listVaultFiles()` keeps the bare-array shape.
+ */
+function inventoryVaultFiles() {
+  if (!VAULT_PATH) return { files: [], traversal: vaultWalk.noWalk('vault path is not configured') };
+  const files = [];
+  const traversal = vaultWalk.walk(VAULT_PATH, {
+    skipDir: (name) => name.startsWith('.') || exclusions.isExcludedDir(name, { forEmbeddings: true }),
+    skipFile: (rel) => exclusions.isExcludedPath(rel, { forEmbeddings: true }),
+    visit: (relativePath, fullPath) => files.push({ relativePath, fullPath }),
+  });
+  return { files, traversal };
+}
+
+/** Back-compat: the long-standing array shape. */
 function listVaultFiles() {
-  if (!VAULT_PATH) return [];
-  const results = [];
+  return inventoryVaultFiles().files;
+}
 
-  function walk(dir, depth) {
-    if (depth > 4) return;
-    if (!fs.existsSync(dir)) return;
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-    catch { return; }
 
-    for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue;
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (exclusions.isExcludedDir(entry.name, { forEmbeddings: true })) continue;
-        walk(fullPath, depth + 1);
-      } else if (entry.name.endsWith('.md')) {
-        const relativePath = path.relative(VAULT_PATH, fullPath).replace(/\\/g, '/');
-        if (exclusions.isExcludedPath(relativePath, { forEmbeddings: true })) continue;
-        results.push({ relativePath, fullPath });
-      }
+// ── Index coverage: what the semantic index can and cannot see ──────────────
+//
+// ⚠ THE POINT. "The embeddings provider answered my query" and "the index holds
+// your vault" are different claims, and until now only the first was ever
+// checked. A vault indexed to depth 4, or half-indexed by a rebuild that ran
+// out of Voyage quota, answered every search with a confident, complete-looking
+// result set drawn from part of itself.
+//
+// The report is DURABLE (`agent_state`) and read synchronously by the search
+// path — the `team-availability` split: `getCoverage()` is a cheap cache read
+// that never does I/O beyond one KV get, `refreshCoverage()` is the pass that
+// walks. A failed refresh KEEPS the previous report rather than emptying it,
+// because "we measured and it was fine an hour ago" beats "no idea".
+
+const COVERAGE_KEY = 'embeddings_coverage';
+const FAILED_KEY = 'embeddings_failed';
+
+// How many unindexed paths are named. The COUNTS are always exact; the sample
+// is bounded so a never-indexed vault cannot write a megabyte of health.
+const MAX_COVERAGE_SAMPLE = 25;
+
+function _readJsonState(key, fallback) {
+  try {
+    const raw = db.getState(key);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch { return fallback; }
+}
+
+function _writeJsonState(key, value) {
+  try { db.setState(key, JSON.stringify(value)); } catch { /* health is bookkeeping */ }
+}
+
+/**
+ * Files a run could not embed, and why. Durable, because the backend restarts
+ * several times a day and an in-memory list would report a clean index every
+ * deploy — the `ai-routing` budget lesson, one service along.
+ */
+function _readFailed() { return _readJsonState(FAILED_KEY, {}); }
+
+function _noteFailed(relativePath, reason) {
+  const map = _readFailed();
+  const prior = map[relativePath];
+  map[relativePath] = {
+    reason,
+    at: new Date().toISOString(),
+    attempts: (prior && prior.attempts ? prior.attempts : 0) + 1,
+  };
+  _writeJsonState(FAILED_KEY, map);
+}
+
+function _clearFailed(relativePath) {
+  const map = _readFailed();
+  if (!Object.prototype.hasOwnProperty.call(map, relativePath)) return;
+  delete map[relativePath];
+  _writeJsonState(FAILED_KEY, map);
+}
+
+/** Paths a previous run left unindexed, with the reason. */
+function failedFiles() {
+  return Object.entries(_readFailed()).map(([relativePath, v]) => ({ relativePath, ...v }));
+}
+
+/**
+ * Measure what the index holds against what the vault contains. Walks.
+ *
+ * Stores the result and returns it. Never throws: a coverage pass that dies
+ * must not take down the caller that scheduled it.
+ */
+function refreshCoverage() {
+  try {
+    const { files, traversal } = inventoryVaultFiles();
+
+    // One row per note, WITHOUT the vectors — see `getEmbeddingIndexSummary`.
+    const indexed = new Map();
+    try {
+      for (const row of db.getEmbeddingIndexSummary()) indexed.set(row.relative_path, row);
+    } catch (e) {
+      // We could not read the index. That is emphatically not "the index is
+      // empty" — keep the last known report rather than publishing a scare.
+      console.warn('[Embeddings] Coverage: index unreadable —', e.message);
+      return getCoverage();
     }
-  }
 
-  walk(VAULT_PATH, 0);
-  return results;
+    const unindexed = [];
+    const stale = [];
+    for (const { relativePath, fullPath } of files) {
+      const row = indexed.get(relativePath);
+      if (!row) { unindexed.push(relativePath); continue; }
+      // Stale by MTIME, which is a stat rather than a full read. The content
+      // hash is the authority and `prepareFile` checks it at index time; this
+      // pass only has to notice that the note moved on.
+      let mtime = null;
+      try { mtime = fs.statSync(fullPath).mtime.toISOString(); } catch { /* counted below */ }
+      if (mtime && row.file_modified && mtime !== row.file_modified) stale.push(relativePath);
+    }
+
+    const failed = failedFiles();
+    const truncated = truncatedDetail();
+
+    const reasons = [];
+    if (traversal.truncated) {
+      for (const r of (traversal.reasons || [])) reasons.push(`the vault walk was partial: ${r}`);
+    }
+    if (unindexed.length) reasons.push(`${unindexed.length} eligible note(s) are not in the semantic index`);
+    if (stale.length) reasons.push(`${stale.length} indexed note(s) have changed since they were embedded`);
+    if (failed.length) reasons.push(`${failed.length} note(s) could not be embedded by the last run`);
+    if (traversal.inaccessibleCount) reasons.push(`${traversal.inaccessibleCount} path(s) could not be read`);
+
+    const report = {
+      known: true,
+      at: new Date().toISOString(),
+      // ⚠ `complete` is about COVERAGE, not about the provider. It is false
+      // whenever the index does not hold what the vault holds — which is a
+      // different question from whether a query can be embedded right now.
+      complete: reasons.length === 0,
+      reasons,
+      eligible: files.length,
+      indexed: files.length - unindexed.length,
+      unindexed: unindexed.length,
+      unindexedSample: unindexed.slice(0, MAX_COVERAGE_SAMPLE),
+      stale: stale.length,
+      staleSample: stale.slice(0, MAX_COVERAGE_SAMPLE),
+      failed: failed.length,
+      failedSample: failed.slice(0, MAX_COVERAGE_SAMPLE),
+      // Truncated notes ARE indexed — just not all the way to the end. Counted
+      // separately, because "we hold none of it" and "we hold the first 60
+      // chunks of it" license different answers.
+      truncated: truncated.length,
+      truncatedSample: truncated.slice(0, MAX_COVERAGE_SAMPLE).map(t => t.relativePath),
+      // Deliberately kept out of the vault: the exclude list is a decision, so
+      // it is reported as a number and never as a gap.
+      excluded: traversal.excluded,
+      inaccessible: traversal.inaccessibleCount,
+      inaccessibleSample: traversal.inaccessible,
+      walkTruncated: traversal.truncated === true,
+      walkReasons: traversal.reasons || [],
+      // Orphans: indexed rows with no eligible note behind them. Informational —
+      // the next rebuild prunes them, and they cannot make an answer thin.
+      orphaned: Math.max(0, indexed.size - (files.length - unindexed.length)),
+    };
+
+    _writeJsonState(COVERAGE_KEY, report);
+    return report;
+  } catch (e) {
+    console.warn('[Embeddings] Coverage refresh failed:', e.message);
+    return getCoverage();
+  }
+}
+
+/**
+ * The last measured coverage. SYNCHRONOUS and cheap — one KV read, no walk.
+ *
+ * ⚠ `known: false` means nobody has measured yet. It is NOT the same as
+ * complete, and callers must not treat it as one: it is reported as its own
+ * state so the difference survives. It is durable, so on any system that has
+ * ever run a refresh this is only ever seen on a brand-new install.
+ */
+function getCoverage() {
+  const stored = _readJsonState(COVERAGE_KEY, null);
+  if (!stored || stored.known !== true) {
+    return {
+      known: false,
+      complete: null,
+      reasons: ['semantic index coverage has not been measured yet'],
+      eligible: null, indexed: null, unindexed: null, unindexedSample: [],
+      stale: null, failed: null, truncated: null, excluded: null,
+      inaccessible: null, at: null,
+    };
+  }
+  return { ...stored, ageMs: stored.at ? Date.now() - new Date(stored.at).getTime() : null };
+}
+
+/**
+ * Is the index complete for one scope? PURE given a report.
+ *
+ * ⚠ A scope narrows what MATTERS. A vault with an unindexed `Projects/` note is
+ * complete as far as `folder:Meetings` is concerned, and saying otherwise
+ * teaches Nick to ignore the warning on the searches where it is real. The
+ * counts stay vault-wide (they are the honest totals); only `complete` and
+ * `reasons` are scoped, and ONLY when the sample is exhaustive — a truncated
+ * sample cannot prove a scope is clean, so it stays incomplete.
+ */
+function coverageForScope(report, scope) {
+  const base = report || getCoverage();
+  if (!scope || scope.kind !== 'folder' || base.known !== true || base.complete === true) return base;
+
+  const prefix = String(scope.value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!prefix) return base;
+
+  const inScope = (p) => p === prefix || String(p).startsWith(prefix + '/');
+  const sampleExhaustive = (listed, total) => total === 0 || listed.length >= Math.min(total, MAX_COVERAGE_SAMPLE) && total <= MAX_COVERAGE_SAMPLE;
+
+  const gaps = [];
+  const check = (listName, sample, total, phrase) => {
+    if (!total) return;
+    if (!sampleExhaustive(sample || [], total)) {
+      // Too many to enumerate — we cannot prove this scope is unaffected.
+      gaps.push(`${phrase} (too many to attribute to a scope)`);
+      return;
+    }
+    const hits = (sample || []).filter(inScope);
+    if (hits.length) gaps.push(`${hits.length} ${phrase}`);
+  };
+
+  check('unindexed', base.unindexedSample, base.unindexed, 'eligible note(s) in this folder are not in the semantic index');
+  check('stale', base.staleSample, base.stale, 'note(s) in this folder have changed since they were embedded');
+  check('failed', (base.failedSample || []).map(f => f.relativePath), base.failed, 'note(s) in this folder could not be embedded');
+
+  // A partial WALK is never scoped away: if the walk did not finish, we do not
+  // know what is in any folder, including this one.
+  if (base.walkTruncated) gaps.push(...(base.walkReasons || []).map(r => `the vault walk was partial: ${r}`));
+  if (base.inaccessible) gaps.push(`${base.inaccessible} path(s) could not be read`);
+
+  return { ...base, complete: gaps.length === 0, reasons: gaps, scoped: prefix };
 }
 
 async function rebuildEmbeddings(onProgress) {
@@ -551,6 +779,12 @@ async function rebuildEmbeddings(onProgress) {
       if (embeddings === null) {
         _health.writesSkipped += batch.length;
         skippedForFailure += batch.length;
+        // ⚠ WHICH files, not just how many chunks. Their old rows stay
+        // searchable (that is the point of skipping rather than writing hash
+        // vectors), so from the outside a partially failed rebuild is
+        // indistinguishable from a complete one — this ledger is the only thing
+        // that can say otherwise, and it is what makes the search say so too.
+        for (const b of batch) _noteFailed(b.relativePath, _health.lastError || 'embedding unavailable');
         console.warn(`[Embeddings] Skipped ${batch.length} chunk(s) — no usable embedding; `
           + `they remain queued for the next run`);
         if (onProgress) onProgress({ i: Math.min(i + BATCH_SIZE, work.length), total: work.length, updated, skipped });
@@ -566,11 +800,13 @@ async function rebuildEmbeddings(onProgress) {
           cleared.add(relativePath);
         }
         db.saveEmbedding(relativePath, hash, embeddings[j], chunk, modified, chunkIndex);
+        _clearFailed(relativePath);
         updated++;
       }
     } catch (e) {
       console.error(`[Embeddings] Batch error at ${i}:`, e.message);
       errors += batch.length;
+      for (const b of batch) _noteFailed(b.relativePath, e.message);
     }
 
     if (onProgress) onProgress({ i: Math.min(i + BATCH_SIZE, work.length), total: work.length, updated, skipped });
@@ -588,8 +824,16 @@ async function rebuildEmbeddings(onProgress) {
     console.warn(`[Embeddings] INCOMPLETE — ${skippedForFailure} chunk(s) could not be embedded. `
       + `Last error: ${_health.lastError}`);
   }
+  // ⚠ Measured at the END of every run, so the search path never has to walk
+  // the vault to know whether the index is whole. A run that failed halfway
+  // publishes a report saying exactly that, rather than leaving the previous
+  // (clean) one standing.
+  const coverage = refreshCoverage();
+  if (coverage.known && !coverage.complete) {
+    console.warn(`[Embeddings] Coverage INCOMPLETE — ${coverage.reasons.join('; ')}`);
+  }
   return { updated, skipped, errors, pruned, skippedForFailure, files: needsEmbedding.length,
-    health: getEmbeddingHealth() };
+    health: getEmbeddingHealth(), coverage };
 }
 
 /**
@@ -725,6 +969,15 @@ module.exports = {
   SCOPED_POST_FILTER_LIMIT,
   truncatedFiles,
   truncatedDetail,
+  inventoryVaultFiles,
+  refreshCoverage,
+  getCoverage,
+  coverageForScope,
+  failedFiles,
+  // Exported for tests: a partially failed run is the state that is hardest
+  // to reach honestly, and the ledger is the only thing that records it.
+  _noteFailed,
+  _clearFailed,
   embedVaultFile,
   listVaultFiles,
   // exported for tests — the chunker is the thing that was silently discarding

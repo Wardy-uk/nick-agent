@@ -32,7 +32,7 @@ test.before(async () => {
   EMPTY_INCOMPLETE_LINE = mod.EMPTY_INCOMPLETE_LINE;
 });
 
-const COMPLETE = { semanticAvailable: true, truncated: false, truncationReasons: [], incomplete: [] };
+const COMPLETE = { semanticAvailable: true, truncated: false, truncationReasons: [], incomplete: [], semanticCoverageComplete: true };
 
 // ── The five states ─────────────────────────────────────────────────────────
 
@@ -86,6 +86,32 @@ test('request failure: never an authoritative empty result', () => {
 });
 
 // ── And silence when there is nothing to say ────────────────────────────────
+
+
+test('semantic COVERAGE gap: the quiet one, and it earns the same warning', () => {
+  // ⚠ The provider is perfectly healthy here. The index simply does not hold
+  // the whole vault — which produces an identical-looking result set.
+  const a = assessSearchHealth({
+    health: { ...COMPLETE, semanticCoverageComplete: false,
+              semanticCoverageReasons: ['12 eligible note(s) are not in the semantic index'] },
+    results: [],
+  });
+  assert.equal(a.state, 'incomplete');
+  assert.match(a.banner.detail, /does not cover the whole vault/);
+  assert.match(a.banner.detail, /12 eligible note/);
+  assert.equal(a.emptyLine, EMPTY_INCOMPLETE_LINE);
+});
+
+test('coverage that is merely UNMEASURED does not raise a banner', () => {
+  // null is "nobody has measured", which is reported in health but is not a
+  // known gap — hedging every search on it would be the permanent warning.
+  const a = assessSearchHealth({
+    health: { ...COMPLETE, semanticCoverageComplete: null, semanticCoverageKnown: false },
+    results: [],
+  });
+  assert.equal(a.state, 'ok');
+  assert.equal(a.banner, null);
+});
 
 test('a complete search is NOT hedged — no banner, plain empty line', () => {
   const a = assessSearchHealth({ health: COMPLETE, results: [] });
