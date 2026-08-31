@@ -9,7 +9,13 @@
 // here even though nothing routes a notification TO it, because the parity test
 // reads both lists and an id in one and not the other is silent in both
 // directions.
-const SARA_LITE_TABS = new Set(['surface', 'now', 'review', 'today', 'focus', 'tasks', 'capture', 'voice', 'chat', 'prep', 'standup', 'brain', 'controls']);
+// 'brain' was REMOVED on 31 Aug 2026: vault maintenance moved to NEURO's own
+// Brain Health panel, because it is a deliberate desk job with reports to read
+// and writes to weigh, not something SARA should come to Nick about. The
+// notification KIND 'brain' is unchanged and still routes the desktop to
+// Imports; only its SARA destination is gone, so it now lands on the Surface
+// like everything else with no dedicated tab.
+const SARA_LITE_TABS = new Set(['surface', 'now', 'review', 'today', 'focus', 'tasks', 'capture', 'voice', 'chat', 'prep', 'standup', 'controls']);
 
 function lower(value) {
   return String(value || '').trim().toLowerCase();
@@ -72,7 +78,6 @@ function resolveSaraLiteTab(raw = {}) {
   const kind = resolveActionKind(raw);
   if (['standup', 'eod'].includes(kind)) return 'standup';
   if (kind === 'meeting') return 'prep';
-  if (['journal', 'brain'].includes(kind)) return 'brain';
   if (kind === 'capture') return 'capture';
   if (kind === 'chat') return 'chat';
   if (kind === 'todo') return 'tasks';

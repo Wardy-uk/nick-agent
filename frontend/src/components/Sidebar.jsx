@@ -44,6 +44,7 @@ const SECONDARY_ITEMS = [
   { id: 'calendar',   label: 'Calendar',  icon: '>' },
   { id: 'meeting-prep', label: 'Meeting Prep', icon: '>' },
   { id: 'vault',      label: 'Vault',     icon: '>' },
+  { id: 'brain-health', label: 'Brain Health', icon: '⋈' },
   { id: 'inbox',      label: 'Inbox',     icon: '>' },
   { id: 'escalations', label: 'Escalations', icon: '▲' },
   // 'standup' is the editor (start the guided standup / EOD); 'standups' is the

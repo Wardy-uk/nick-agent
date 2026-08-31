@@ -37,7 +37,6 @@ import Tasks from '../app/src/views/Tasks';
 import Chat from '../app/src/views/Chat';
 import MeetingPrep from '../app/src/views/MeetingPrep';
 import Standup from '../app/src/views/Standup';
-import BrainManagement from '../app/src/views/BrainManagement';
 import Controls from '../app/src/views/Controls';
 
 export const PRIMARY = [
@@ -57,7 +56,6 @@ export const SECONDARY = [
   { id: 'chat', label: 'Chat', icon: '💬', Component: Chat },
   { id: 'prep', label: 'Prep', icon: '📅', Component: MeetingPrep },
   { id: 'standup', label: 'Ritual', icon: '📝', Component: Standup },
-  { id: 'brain', label: 'Brain', icon: '🧠', Component: BrainManagement },
   { id: 'controls', label: 'Controls', icon: '⚙', Component: Controls },
 ];
 

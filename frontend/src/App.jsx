@@ -46,6 +46,7 @@ const WeeklyRiskPanel = lazy(() => import('./components/WeeklyRiskPanel'));
 const ImportsPanel = lazy(() => import('./components/ImportsPanel'));
 const RecentPanel = lazy(() => import('./components/RecentPanel'));
 const VaultBrowser = lazy(() => import('./components/VaultBrowser'));
+const BrainHealthPanel = lazy(() => import('./components/BrainHealthPanel'));
 const StravaPanel = lazy(() => import('./components/StravaPanel'));
 const InsightsPanel = lazy(() => import('./components/InsightsPanel'));
 const StandupsPanel = lazy(() => import('./components/StandupsPanel'));
@@ -312,6 +313,7 @@ function AuthenticatedApp() {
       case 'strava': return <StravaPanel />;
       case 'inbox': return <InboxPanel focusContext={navContext} />;
       case 'vault': return <VaultBrowser initialOpenPath={vaultOpenPath} onClearInitialPath={() => setVaultOpenPath(null)} />;
+      case 'brain-health': return <BrainHealthPanel />;
       case 'qa': return <QATab />;
       case 'escalations': return <EscalationPanel />;
       case 'actions': return <ActionsPanel onNavigate={handleNavigate} />;
