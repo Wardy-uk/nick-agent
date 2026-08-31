@@ -1,0 +1,42 @@
+/* The clock state: at home, not in this room.
+   Deliberately plain and dim — it is a screen nobody is standing at. */
+
+.clockscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 900;              /* above the views, below the lock overlay */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  background: #06080c;
+  color: #7d8da5;
+  /* No pointer events: there is nothing here to interact with, and swallowing
+     taps would stop them reaching whatever is underneath when this clears. */
+  pointer-events: none;
+  user-select: none;
+}
+
+.clockscreen__time {
+  font-size: clamp(4rem, 18vw, 11rem);
+  font-weight: 200;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;   /* so the minutes do not jitter the layout */
+  color: #b7c4d8;
+}
+
+.clockscreen__date {
+  font-size: clamp(0.9rem, 2.6vw, 1.4rem);
+  font-weight: 300;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+
+.clockscreen__say {
+  margin-top: 1.2rem;
+  font-size: clamp(0.85rem, 2.2vw, 1.15rem);
+  opacity: 0.4;
+}

@@ -1,11 +1,11 @@
 import { SaraStateProvider, useSaraState } from './state/saraState';
-import { usePresenceLock } from './state/usePresenceLock';
+import { useDisplayState } from './state/useDisplayState';
 import { SARA_VIEWS, normalizeViewId } from './state/views';
 import ViewSwitcher from './components/ViewSwitcher';
 import ViewRouter from './components/ViewRouter';
 import ExitButton from './components/ExitButton';
 import LockScreen from './components/LockScreen';
-import LockCountdown from './components/LockCountdown';
+import ClockScreen from './components/ClockScreen';
 import ConnectionStatus from './components/ConnectionStatus';
 
 // SARA app shell (WS2-WP1; inference strip WS5-WP1; Exit + auto-lock WS2-WP2/WP3).
@@ -21,12 +21,18 @@ function AppShell() {
   // here would only add latency — awayStreak:1 keeps end-to-end lock ~5-6s.
   // Watch-presence is the primary lock trigger; idle is a long safety-net (15 min) so a
   // glance-display doesn't keep locking itself while you're nearby.
-  const { locked, reason, pending, paused, lockNow, unlock, togglePause, dismissCountdown } = usePresenceLock({
-    pollMs: 2000,
-    awayStreak: 1,
-    idleMs: 15 * 60 * 1000,
-    graceMs: 5000, // "Locking…" countdown before an AWAY lock; activity cancels it
-  });
+  // ⚠ The kiosk no longer decides when to hide itself. `usePresenceLock` did,
+  // and it had two faults that only showed on the wall: unlock was MANUAL, so
+  // Nick came home from an evening out to a locked screen that had to be
+  // tapped; and it locked on IDLE, which measures the wrong thing entirely for
+  // a display that is looked at rather than touched. Neither was in his spec:
+  // watch here -> SARA, watch elsewhere -> clock, out of the house -> off.
+  //
+  // NEURO composes the verdict now, so this screen, the phone and the widget
+  // cannot each invent their own idea of what a missing watch means.
+  const { state: displayState, detail: displayDetail } = useDisplayState();
+  const locked = displayState === 'locked';
+  const showClock = displayState === 'clock';
 
   // Some views are full-bleed: they draw their OWN nav, header and footer, so the shell
   // hides its chrome (ViewSwitcher + SARA-thinks strip) to avoid doubling up. The Briefing
@@ -39,21 +45,14 @@ function AppShell() {
   // hook + lock overlay are unconditional), so only the manual buttons are hidden there.
   const showFloatingSys = view === SARA_VIEWS.BRIEFING;
 
+  // ⚠ The pause and manual-lock buttons went with the self-deciding lock. Both
+  // controlled a thing that no longer exists here: there is no auto-lock timer
+  // to pause, and "lock now" would be overruled by the next poll four seconds
+  // later, which is worse than no button at all. Locking is NEURO's decision
+  // and the backlight's job. ExitButton stays — leaving the kiosk is a real
+  // thing a person at this screen may want to do.
   const sysControls = (
     <div className="app__sys">
-      <button
-        type="button"
-        className={`lockbtn${paused ? ' lockbtn--paused' : ''}`}
-        aria-label={paused ? 'Resume auto-lock' : 'Pause auto-lock'}
-        title={paused ? 'Auto-lock paused — tap to resume' : 'Pause auto-lock'}
-        aria-pressed={paused}
-        onClick={togglePause}
-      >
-        <span aria-hidden="true">{paused ? '▶' : '⏸'}</span>
-      </button>
-      <button type="button" className="lockbtn" aria-label="Lock SARA" title="Lock SARA" onClick={lockNow}>
-        <span aria-hidden="true">🔒</span>
-      </button>
       <ExitButton />
     </div>
   );
@@ -72,8 +71,8 @@ function AppShell() {
           <ViewRouter />
         </main>
         {showFloatingSys && <div className="app__sys app__sys--floating">{sysControls.props.children}</div>}
-        {pending != null && !locked && <LockCountdown seconds={pending} onStay={dismissCountdown} />}
-        {locked && <LockScreen reason={reason} now={now} onUnlock={unlock} />}
+        {showClock && <ClockScreen now={now} say={displayDetail?.say} />}
+        {locked && <LockScreen reason={displayDetail?.reason} now={now} />}
       </div>
     );
   }
@@ -103,8 +102,8 @@ function AppShell() {
           rerank work, invent urgency, or phrase the same state differently.
           An advisory "suggested view" is also a menu, which is the one thing
           SARA is not. */}
-      {pending != null && !locked && <LockCountdown seconds={pending} onStay={dismissCountdown} />}
-      {locked && <LockScreen reason={reason} now={now} onUnlock={unlock} />}
+      {showClock && <ClockScreen now={now} say={displayDetail?.say} />}
+      {locked && <LockScreen reason={displayDetail?.reason} now={now} />}
     </div>
   );
 }
