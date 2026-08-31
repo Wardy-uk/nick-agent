@@ -475,7 +475,8 @@ const CROSS_POOL_LIMIT = 2000;
 // Off is a supported state, not a bug: if folding is ever wrong for a corpus,
 // the queue filling up again is recoverable and a wrongly-merged commitment is
 // harder to notice.
-const DEDUPE_ENABLED = process.env.CAPTURE_DEDUPE_ENABLED !== 'false';
+// Default TRUE — a kill switch for behaviour that is already live and wanted.
+const dedupeEnabled = () => require('./feature-flags').isEnabled('capture_dedupe');
 
 /**
  * The fold does NOT inherit task-dedupe's 0.42, and that is the whole finding.
@@ -517,7 +518,7 @@ const FOLD_SCORE = 0.85;
  */
 function loadCrossNotePool(relativePath) {
   const rows = [];
-  if (DEDUPE_ENABLED) {
+  if (dedupeEnabled()) {
     try {
       const all = db.getPendingSaraActionsByType('capture_todo', CROSS_POOL_LIMIT);
       if (all.length === CROSS_POOL_LIMIT) {
@@ -537,7 +538,7 @@ function loadCrossNotePool(relativePath) {
 
   return {
     match(text) {
-      if (!DEDUPE_ENABLED || !rows.length) return null;
+      if (!dedupeEnabled() || !rows.length) return null;
       // Lazily required: task-dedupe pulls in task-store, and this module is
       // loaded from the vault hooks at startup.
       const taskDedupe = require('./task-dedupe');

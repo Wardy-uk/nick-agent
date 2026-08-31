@@ -57,15 +57,29 @@ test('an unconsented scope is reported, not thrown — and no email path is touc
 });
 
 test('the kill switch is off-by-explicit-value, so an unset var is not a silent second gate', async () => {
+  // ⚠ The switch is read at CALL time now, not captured at require time — that is
+  // what lets the Settings toggle work without a pm2 restart. So the environment
+  // has to be set around the CALL, not merely around the load; `loadTeams`
+  // restores it in a finally.
   const stub = { getScopedToken: async () => ({ token: 'tok' }) };
+  const teams = loadTeams(stub);
 
-  const off = loadTeams(stub, { TEAMS_DM_ENABLED: 'false' });
-  assert.equal((await off.sendDm({ email: 'a@b.co', text: 'x' })).reason, 'disabled');
+  const withEnv = async (value) => {
+    const prev = process.env.TEAMS_DM_ENABLED;
+    if (value === undefined) delete process.env.TEAMS_DM_ENABLED;
+    else process.env.TEAMS_DM_ENABLED = value;
+    try { return await teams.sendDm({ email: 'a@b.co', text: 'x' }); }
+    finally {
+      if (prev === undefined) delete process.env.TEAMS_DM_ENABLED;
+      else process.env.TEAMS_DM_ENABLED = prev;
+    }
+  };
+
+  assert.equal((await withEnv('false')).reason, 'disabled');
 
   // Unset must NOT mean disabled — consent is the real gate, and a second
   // invisible one is how a feature looks broken for reasons nobody can find.
-  const unset = loadTeams(stub, { TEAMS_DM_ENABLED: undefined });
-  assert.notEqual((await unset.sendDm({ email: 'a@b.co', text: 'x' })).reason, 'disabled');
+  assert.notEqual((await withEnv(undefined)).reason, 'disabled');
 });
 
 test('no existing 1:1 chat falls back rather than trying to create one', async () => {

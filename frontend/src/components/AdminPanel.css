@@ -300,6 +300,25 @@
 }
 .admin-toggle input:disabled + span { opacity: 0.55; }
 
+.admin-flag { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.admin-flag:last-of-type { border-bottom: none; }
+/* Off because its parent is, not because of anything set here. */
+.admin-flag--blocked { opacity: 0.55; }
+.admin-flag .admin-hint { margin: 4px 0 0 24px; }
+
+/* The consequence, on the control itself — this is what decides whether to
+   think before clicking, so it does not belong buried in the description. */
+.admin-flag-impact {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--warning);
+  border: 1px solid var(--warning);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-left: 8px;
+}
+
 @media (max-width: 768px) {
   .admin-cards {
     grid-template-columns: 1fr;

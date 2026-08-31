@@ -176,10 +176,10 @@ const FULL_CAPACITY = {
 // and a completely different claim from "you will get less done". Nick turns it
 // on if he wants it. Shipping it on by default would be NEURO quietly acting on
 // a correlation it went and looked for and did not find.
-const HEALTH_CAPACITY_ENABLED = process.env.DAY_PLANNER_HEALTH_CAPACITY === 'true';
+const healthCapacityEnabled = () => require('./feature-flags').isEnabled('day_planner_health');
 
 /** PURE. Takes a `health-daily.readiness()` result (or nothing at all). */
-function capacityFor(readiness, { enabled = HEALTH_CAPACITY_ENABLED } = {}) {
+function capacityFor(readiness, { enabled = healthCapacityEnabled() } = {}) {
   if (!enabled) return { ...FULL_CAPACITY };
   if (!readiness || !readiness.known || readiness.state !== 'low') return { ...FULL_CAPACITY };
   return {
@@ -506,7 +506,9 @@ function durationSamples() {
 // ⚠ DEFAULT OFF. This writes real events into a real calendar on a timer. It is
 // armed with one env var once Nick has seen a dry run he agrees with — arming a
 // scheduled calendar-writer unattended is how 52 duplicate blocks happened.
-const ENABLED = process.env.DAY_PLANNER_ENABLED === 'true';
+// ⚠ A FUNCTION, not a const. Captured at require time this needed a pm2
+// restart to change; the switch now lives in Settings and is read per call.
+const isEnabled = () => require('./feature-flags').isEnabled('day_planner');
 
 /**
  * Plan one half of today and, if applying, create the blocks.
@@ -591,7 +593,9 @@ async function run(windowKey, { now = new Date(), apply = false, force = false }
   };
 
   if (!apply) return result;
-  if (!ENABLED && !force) return { ...result, skipped: 'DAY_PLANNER_ENABLED is not true' };
+  if (!isEnabled() && !force) {
+    return { ...result, skipped: 'Auto-plan focus blocks is switched off (Settings)' };
+  }
   if (!force && alreadyPlanned(dateKey, windowKey)) {
     return { ...result, skipped: 'already planned this half-day' };
   }
@@ -686,7 +690,7 @@ module.exports = {
   MORNING,
   AFTERNOON,
   WINDOWS,
-  ENABLED,
+  isEnabled,
   run,
   gather,
   toPlannerTask,

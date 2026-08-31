@@ -10,7 +10,7 @@ const router = express.Router();
 // Syncthing/Obsidian Sync-managed personal vault.
 const VAULT_PATH = process.env.DND_VAULT_PATH || process.env.OBSIDIAN_VAULT_PATH || '';
 const DND_ROOT = normalizeRelative(process.env.DND_VAULT_ROOT || 'Projects/D&D');
-const READ_ONLY = process.env.DND_VAULT_READ_ONLY === 'true';
+const readOnly = () => require('../services/feature-flags').isEnabled('dnd_vault_read_only');
 
 function normalizeRelative(input) {
   return String(input || '')
@@ -63,7 +63,7 @@ router.get('/status', (req, res) => {
   res.json({
     configured: Boolean(VAULT_PATH && DND_ROOT && process.env.DND_VAULT_API_KEY),
     root: DND_ROOT,
-    readOnly: READ_ONLY,
+    readOnly: readOnly(),
     deleteEnabled: false,
   });
 });
@@ -77,7 +77,7 @@ router.get('/read', (req, res) => {
 });
 
 router.post('/write', (req, res) => {
-  if (READ_ONLY) return res.status(403).json({ error: 'D&D vault is read-only; update the Notion campaign instead' });
+  if (readOnly()) return res.status(403).json({ error: 'D&D vault is read-only; update the Notion campaign instead' });
   const { path: relPath, content } = req.body;
   if (!relPath || content === undefined) return res.status(400).json({ error: 'path and content required' });
   const filePath = safeScopedPath(relPath);
@@ -92,7 +92,7 @@ router.post('/write', (req, res) => {
 });
 
 router.post('/append', (req, res) => {
-  if (READ_ONLY) return res.status(403).json({ error: 'D&D vault is read-only; update the Notion campaign instead' });
+  if (readOnly()) return res.status(403).json({ error: 'D&D vault is read-only; update the Notion campaign instead' });
   const { path: relPath, content } = req.body;
   if (!relPath || !content) return res.status(400).json({ error: 'path and content required' });
   const filePath = safeScopedPath(relPath);

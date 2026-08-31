@@ -244,6 +244,7 @@ app.use('/api/task-dedupe', require('./routes/task-dedupe'));
 app.use('/api/task-blocks', require('./routes/task-blocks'));
 app.use('/api/day-plan', require('./routes/day-planner'));
 app.use('/api/notion-sync', require('./routes/notion-sync'));
+app.use('/api/feature-flags', require('./routes/feature-flags'));
 // The Neuro Mobile contract (Phase 2) — versioned in the path, because the
 // phone caches responses and replays operations across app upgrades.
 app.use('/api/mobile', require('./routes/mobile'));

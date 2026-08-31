@@ -29,7 +29,8 @@ const SEND_SCOPE = 'ChatMessage.Send';
 
 // Kill switch. Absent = enabled, because the real gate is consent — an unset env
 // var must not be a second, invisible reason for silence.
-const SEND_ENABLED = process.env.TEAMS_DM_ENABLED !== 'false';
+// Default TRUE — a kill switch, not an opt-in.
+const sendEnabled = () => require('./feature-flags').isEnabled('teams_dm');
 
 async function _graphGet(path, token) {
   const res = await fetch(`${GRAPH}${path}`, {
@@ -180,7 +181,7 @@ async function _findOneOnOneChat(email, token) {
  * reason: 'disabled' | 'auth' | 'consent' | 'no-chat' | 'error'
  */
 async function sendDm({ email, text }) {
-  if (!SEND_ENABLED) return { sent: false, reason: 'disabled' };
+  if (!sendEnabled()) return { sent: false, reason: 'disabled' };
   if (!email || !String(text || '').trim()) {
     return { sent: false, reason: 'error', error: 'sendDm needs an address and a body' };
   }
@@ -224,8 +225,8 @@ async function sendDm({ email, text }) {
  * sat dead for months while looking built. This makes the waiting visible.
  */
 async function getSendStatus() {
-  if (!SEND_ENABLED) {
-    return { available: false, reason: 'disabled', detail: 'TEAMS_DM_ENABLED=false' };
+  if (!sendEnabled()) {
+    return { available: false, reason: 'disabled', detail: 'Teams DM is switched off (Settings)' };
   }
   const { token, reason, error } = await microsoft.getScopedToken([SEND_SCOPE]);
   if (token) return { available: true, scope: SEND_SCOPE };

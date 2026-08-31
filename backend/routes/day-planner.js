@@ -57,7 +57,9 @@ router.post('/forget', (req, res) => {
 
 /** The ledger itself, so "why did nothing happen this morning?" is answerable. */
 router.get('/ledger', (req, res) => {
-  res.json({ ok: true, enabled: planner.ENABLED, ledger: planner.ledger() });
+  // `isEnabled()`, not the old `ENABLED` const — the switch is read at call time
+  // now so the Settings toggle takes effect without a restart.
+  res.json({ ok: true, enabled: planner.isEnabled(), ledger: planner.ledger() });
 });
 
 module.exports = router;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { apiUrl, setPin as storePin } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import './AdminPanel.css';
@@ -280,6 +280,77 @@ function VaultSyncCard({ vaultSync }) {
             Vault path set but watcher not running — check that the path exists and is a git repo
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The switches that are Nick's decision.
+ *
+ * Every one of these was an .env edit and a pm2 restart — including the two that
+ * CLAUDE.md records as his calls (the day planner, and its lighter-plan-on-a-
+ * low-recovery-day rule), which made them exactly the wrong things to bury
+ * behind six steps of SSH.
+ */
+function FeatureSwitches() {
+  const [flags, setFlags] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(apiUrl('/api/feature-flags'));
+      const d = await r.json();
+      setFlags(d.flags || []);
+    } catch (e) { setError(e.message); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggle = async (key, enabled) => {
+    setBusy(key);
+    setError(null);
+    try {
+      const r = await fetch(apiUrl(`/api/feature-flags/${key}`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      const d = await r.json();
+      if (d.flags) setFlags(d.flags);
+      if (d.ok === false) setError(d.error);
+    } catch (e) { setError(e.message); } finally { setBusy(null); }
+  };
+
+  if (!flags) return null;
+
+  return (
+    <div className="admin-section">
+      <div className="admin-section-title">Switches</div>
+      <div className="admin-ms-section">
+        {flags.map((f) => (
+          <div key={f.key} className={`admin-flag${f.blockedBy ? ' admin-flag--blocked' : ''}`}>
+            <label className="admin-toggle">
+              <input
+                type="checkbox"
+                checked={f.enabled}
+                disabled={f.lockedByEnv || busy === f.key}
+                onChange={(e) => toggle(f.key, e.target.checked)}
+              />
+              <span>{f.label}</span>
+              {/* Named on the control, not buried in the description — this is
+                  the one thing that decides whether to think before clicking. */}
+              {f.impact && <span className="admin-flag-impact">{f.impact}</span>}
+            </label>
+            <p className="admin-hint">
+              {f.description}
+              {f.lockedByEnv && ` · Set by ${f.envVar} in the environment, so it can’t be changed here.`}
+              {f.blockedBy && ' · Off while the switch above it is off.'}
+            </p>
+          </div>
+        ))}
+        {error && <div className="admin-error">{error}</div>}
       </div>
     </div>
   );
@@ -940,6 +1011,8 @@ export default function AdminPanel({ pushState = {} }) {
       <PlaudSyncCard plaud={status.plaud} onRefresh={fetchStatus} />
 
       <NotionConnectCard notion={status.notion} onRefresh={fetchStatus} />
+
+      <FeatureSwitches />
 
       <div className="admin-section">
         <div className="admin-section-title">Push Notifications</div>
