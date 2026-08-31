@@ -13,7 +13,7 @@ const { resolveRoom, displayState } = require('../src/presence/rooms');
 const NOW = new Date('2026-08-31T13:00:00.000Z');
 
 function report(over = {}) {
-  return {
+  const r = {
     status: 'present',
     healthy: true,
     rate: 2.2,
@@ -22,6 +22,13 @@ function report(over = {}) {
     at: NOW.toISOString(),
     ...over,
   };
+  // A real sensor derives inRoom from its own rate, so an `absent` room is not
+  // also claiming he is standing in it. Explicit overrides still win — that is
+  // how "audible from here, but not here" is expressed.
+  if (!('inRoom' in over)) {
+    r.inRoom = r.status === 'present' ? true : r.status === 'absent' ? false : null;
+  }
+  return r;
 }
 
 // ── Arbitration ─────────────────────────────────────────────────────────────
@@ -158,9 +165,50 @@ test('watch in this room shows everything', () => {
   assert.equal(displayState('living-room', arb, { away: false }).state, 'full');
 });
 
+// ⚠ The live failure, as a test. Sat still in the living room with the watch on
+// the shielded arm, the kitchen out-read the living room by 9 dB and the
+// arbitration handed it the room — so the screen he was sitting at showed a
+// clock. The room's OWN sensor knows better and now decides.
+test('this room\'s own sensor beats the ranking, even when another room is louder', () => {
+  const arb = resolveRoom({
+    'living-room': report({ inRoom: true, rate: 2.1, rssiMedian: -73 }),
+    kitchen: report({ inRoom: true, rate: 2.05, rssiMedian: -64 }),
+  }, NOW);
+  assert.equal(arb.room, 'kitchen', 'the ranking still prefers the louder room');
+  const d = displayState('living-room', arb, { away: false });
+  assert.equal(d.state, 'full', 'but the living room sensor says he is here');
+  assert.equal(d.reason, 'watch-in-room');
+});
+
+test('merely audible from this room is NOT being in it', () => {
+  const arb = resolveRoom({
+    'living-room': report({ inRoom: false, rate: 0.25, rssiMedian: -89 }),
+    kitchen: report({ inRoom: true, rssiMedian: -64 }),
+  }, NOW);
+  const d = displayState('living-room', arb, { away: false });
+  assert.equal(d.state, 'clock');
+  assert.match(d.say, /kitchen/);
+});
+
+test('a room with no sensor of its own falls back to the ranking', () => {
+  const arb = resolveRoom({ kitchen: report({ rssiMedian: -64 }) }, NOW);
+  assert.equal(displayState('kitchen', arb, { away: false }).state, 'full');
+  // And a room nothing watches is never declared empty on that basis.
+  assert.equal(displayState('study', arb, { away: false }).state, 'clock');
+});
+
+test('an older sensor sending no inRoom is not treated as absent', () => {
+  const legacy = report();
+  delete legacy.inRoom;
+  const arb = resolveRoom({ 'living-room': legacy }, NOW);
+  assert.equal(displayState('living-room', arb, { away: false }).state, 'full',
+    'silence about inRoom must fall back, never read as "not here"');
+});
+
 test('watch in another room shows the clock, and names the room', () => {
   const arb = resolveRoom({
-    'living-room': report({ rssiMedian: -80 }),
+    // Audible from the living room but not IN it — the sensor's own verdict.
+    'living-room': report({ inRoom: false, rate: 0.3, rssiMedian: -80 }),
     kitchen: report({ rssiMedian: -55 }),
   }, NOW);
   const d = displayState('living-room', arb, { away: false });
@@ -190,7 +238,7 @@ test('a watch that IS audible refuses the lock, and says so out loud', () => {
 
 test('a contradicted lock still respects WHICH room he is in', () => {
   const arb = resolveRoom({
-    'living-room': report({ rssiMedian: -80 }),
+    'living-room': report({ inRoom: false, rate: 0.3, rssiMedian: -80 }),
     kitchen: report({ rssiMedian: -55 }),
   }, NOW);
   const d = displayState('living-room', arb, { away: true });

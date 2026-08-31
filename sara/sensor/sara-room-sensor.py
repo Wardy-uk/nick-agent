@@ -99,6 +99,28 @@ REPORT_S = float(os.environ.get("SARA_REPORT_S", "3"))        # how often we spe
 # at the desk; a distant room gives a trickle. 0.2/s = 4 adverts in a 20s window,
 # comfortably above noise and far below anything seen in-room.
 MIN_RATE = float(os.environ.get("SARA_MIN_RATE", "0.2"))
+# Is he in THIS room, as opposed to merely audible from it?
+#
+# ⚠ PER SENSOR, AND THAT IS THE WHOLE POINT. The first design compared rooms by
+# RSSI and picked the loudest, which silently compared a Pi 4's radio with a Pi
+# 5's THROUGH NICK'S BODY: measured 31 Aug 2026, sat still in the living room
+# with the watch on the arm shielded from the Pi 4 and a clear line to the Pi 5,
+# the KITCHEN read 9 dB stronger and took the room. A body attenuates 2.4 GHz by
+# 5-15 dB and a plasterboard wall by 3-5, so his own arm outweighed a wall.
+# Nothing here compares rooms; each sensor answers only about its own.
+#
+# ⚠ AND THE TEST IS THE ADVERT RATE, NOT RSSI. Measured on the living-room
+# sensor:
+#   in the room  1.75 1.95 2.05 2.10 2.30 2.55 /s
+#   upstairs     0.10 0.15 0.25 0.40           /s
+# A 4x gap against RSSI's 11 dB, and a count over a window rides out a turned
+# wrist where a median of a 26 dB-swinging quantity does not. One is dead centre
+# of that gap.
+#
+# Per sensor, because a passive scanner samples ~6% as often (see SCAN_MODE) and
+# every room has its own geometry. The default errs towards saying he IS here,
+# which shows the screen rather than hiding it.
+IN_ROOM_RATE = float(os.environ.get("SARA_IN_ROOM_RATE", "1.0"))
 # Health: the background must be audible. Measured: 24-27 distinct devices and
 # ~3700 adverts per minute in this house.
 HEALTH_WINDOW_S = float(os.environ.get("SARA_HEALTH_WINDOW_S", "45"))
@@ -174,9 +196,17 @@ class Sensor:
             status = "absent"
             why = None
 
+        # Heard at all, and heard NEAR, are different questions. `status` answers
+        # the first (is the watch within earshot of this Pi); `inRoom` answers the
+        # one a screen in this room actually cares about. Null when unknown -
+        # never False, which would read as "he is not here" on a deaf radio.
+        in_room = None if status == "unknown" else rate >= IN_ROOM_RATE
+
         return {
             "room": ROOM,
             "status": status,                      # present | absent | unknown
+            "inRoom": in_room,                     # true | false | null
+            "inRoomRate": IN_ROOM_RATE,
             "why": why,
             "healthy": healthy,
             "rate": round(rate, 2),

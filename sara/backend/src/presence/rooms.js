@@ -81,6 +81,7 @@ function resolveRoom(reports = {}, now = new Date(), {
     const row = {
       room,
       status: report && report.status ? report.status : 'unknown',
+      inRoom: report && typeof report.inRoom === 'boolean' ? report.inRoom : null,
       rate: report && typeof report.rate === 'number' ? report.rate : null,
       rssi: report && typeof report.rssiMedian === 'number' ? report.rssiMedian : null,
       healthy: !!(report && report.healthy),
@@ -163,6 +164,20 @@ function displayState(thisRoom, arbitration, home) {
   const away = home && home.away;
   const heard = !!(arbitration && arbitration.status === 'present');
 
+  // ⚠ THIS ROOM'S OWN SENSOR DECIDES WHETHER HE IS IN THIS ROOM. Not the
+  // arbitration, which ranks rooms by RSSI and therefore compares different
+  // radios through a body — measured 31 Aug 2026, the kitchen out-read the
+  // living room by 9 dB with Nick sat still in the living room, because his
+  // watch was on the shielded arm. It is also Nick's original spec: "if it sees
+  // the watch, SARA is visible; if not, just the clock." Arbitration survives
+  // only to WORD the clock ("In the kitchen"), where being wrong costs nothing.
+  const own = arbitration && arbitration.rooms
+    ? arbitration.rooms.find(r => r.room === thisRoom)
+    : null;
+  // null (no sensor here, or it could not answer) is NOT false. A room with no
+  // sensor falls through to the arbitration rather than being declared empty.
+  const hereByOwnSensor = own && own.readable ? own.inRoom : null;
+
   if (away === true) {
     // ⚠ GEOLOCATION DOES NOT GET TO LOCK A SCREEN A SENSOR CAN HEAR HIM AT.
     //
@@ -185,10 +200,12 @@ function displayState(thisRoom, arbitration, home) {
     // heard (absent, or every sensor deaf) does NOT rescue it: `not_home` is a
     // positive statement, where a deaf sensor is only ever an absence of one.
     if (heard) {
+      const here = hereByOwnSensor === true
+        || (hereByOwnSensor === null && arbitration.room === thisRoom);
       return {
-        state: arbitration.room === thisRoom ? 'full' : 'clock',
+        state: here ? 'full' : 'clock',
         reason: 'home-contradicted',
-        say: arbitration.room === thisRoom ? null : `In the ${arbitration.room}.`,
+        say: here ? null : `In the ${arbitration.room}.`,
         contradiction: `Home Assistant says not home, but the watch is audible in the ${arbitration.room}. Trusting the watch.`,
       };
     }
@@ -199,8 +216,13 @@ function displayState(thisRoom, arbitration, home) {
     };
   }
 
-  if (arbitration && arbitration.room === thisRoom) {
+  if (hereByOwnSensor === true) {
     return { state: 'full', reason: 'watch-in-room', say: null };
+  }
+  // No sensor in this room, or it could not answer: fall back to the ranking
+  // rather than assert he is absent from a room nothing is watching.
+  if (hereByOwnSensor === null && arbitration && arbitration.room === thisRoom) {
+    return { state: 'full', reason: 'watch-in-room-by-ranking', say: null };
   }
 
   // Everything else is the clock, and the REASON is what keeps the three

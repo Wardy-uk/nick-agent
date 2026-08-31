@@ -40,6 +40,10 @@ function record(body, now = new Date()) {
     // difference between an empty room and a deaf radio. Absent means NOT
     // healthy: a sensor too old to send it is one we cannot vouch for.
     healthy: body.healthy === true,
+    // The sensor's OWN verdict about its OWN room, against a threshold
+    // calibrated to that sensor. Absent (an older sensor) is null, not false:
+    // "did not say" must never read as "he is not here".
+    inRoom: body.inRoom === true ? true : body.inRoom === false ? false : null,
     rate: Number.isFinite(body.rate) ? body.rate : null,
     rssiMedian: Number.isFinite(body.rssiMedian) ? body.rssiMedian : null,
     backgroundDevices: Number.isFinite(body.backgroundDevices) ? body.backgroundDevices : null,
