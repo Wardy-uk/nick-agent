@@ -398,6 +398,77 @@ Pinned by `retrieval-completeness.test.js` (15), `vault-temporal-routing.test.js
 `capture-vault-safety.test.js` (8, child processes with the env scrubbed) and
 `vault-browser-health.test.js` (10, dynamic-import of the ESM module + a source scan with a positive
 control).
+- **The index walked to depth 4 while search walked to 12 (31 Aug 2026)** — `services/vault-walk.js` is now
+the ONE traversal, shared by `retrieval.js` and `embeddings.listVaultFiles()`. They had disagreed about how
+much vault exists: retrieval was fixed to depth 12 with a reported cap and the embeddings inventory was
+still hard-coded at **depth 4**, so a note in `Meetings/2026/08/deep/` was findable by keyword and **could
+never be indexed for semantic search** — permanently, silently, and invisibly, because a hybrid search
+always returns something. The DEPTH/CAP policy is shared; the EXCLUSION policy stays per-caller on purpose
+(`Daily/` is out of embeddings and deliberately kept for entities; retrieval additionally drops `Templates`
+and `Vault Audit`). ⚠ **An unreadable folder is now RECORDED, not skipped** — both old walkers did
+`try{readdir}catch{continue}`, so a broken permission or an unmounted disk produced a smaller answer that
+called itself complete.
+  ⚠ **`semanticAvailable` only ever meant "the query embedded".** It said nothing about whether the index
+holds the vault, so a half-built index answered every search looking whole. `embeddings.refreshCoverage()`
+measures **eligible / indexed / unindexed / stale / failed / truncated / excluded / inaccessible** and
+stores it in `agent_state.embeddings_coverage`; `getCoverage()` is a **cheap synchronous KV read** on the
+search path and the walk happens on a schedule (25s after boot, hourly at :35, and at the end of every
+rebuild) — the `team-availability` live→cache split, for the same reason. `db.getEmbeddingIndexSummary()`
+exists because `getAllEmbeddings()` loads every 1024-float vector, and reading the whole index to count it
+is how a health check becomes the reason the Pi is slow. **A failed run records WHICH FILES** in
+`agent_state.embeddings_failed` — their old rows deliberately survive, so from the outside a partly failed
+rebuild is otherwise identical to a clean one. ⚠ **`complete` is THREE-VALUED**: `true` / `false` /
+**`null` = never measured**, which is reported as its own state and never as `true`; it is durable, so
+`null` is only ever seen on a brand-new install. ⚠ **A scope narrows what COUNTS as a gap** —
+`coverageForScope` — but a partial WALK is never scoped away, and the scope is never widened to compensate.
+  `health` gains `semanticCoverageComplete` / `semanticCoverageReasons` / `semanticIndexedCount` /
+`semanticEligibleCount` / `semanticUnindexedPaths` (bounded sample; the counts are exact), and
+`describeIncompleteness()` treats a coverage gap **exactly like** a dead provider or a capped walk, because
+all three produce the identical short list. `health.truncated` deliberately keeps its narrower meaning
+(traversal only) so existing consumers do not shift under them.
+- **A sibling directory shares the prefix (31 Aug 2026)** — `routes/vault.js` containment. The guard was
+`resolved.startsWith(path.resolve(VAULT_PATH))`, a **STRING** test: with the vault at `C:\Vault`, the path
+`../Vault-old/secret.md` resolves to `C:\Vault-old\secret.md`, which starts with `C:\Vault` — so it
+**passed**, and read / write / append / list / **delete** / export all operated outside the vault on a path
+the guard had just approved. Not theoretical: `nuero-vault` has siblings on the Pi, and the vault holds a
+`Personal/` folder of disciplinary prep, a fraud investigation and OH documents. Now `path.relative` decides
+(`..`, `..<sep>`, or absolute = outside), plus: a **missing or unreadable vault root REFUSES** rather than
+resolving against the process working directory (the capture drop-box bug, one service along), a NUL byte
+is refused, and **symlink escape** is closed by `realpath` on the deepest EXISTING ancestor — which is what
+lets a genuinely new file still be created while stopping one being created *through* an escaping link. The
+two `path.join(safeDir, filename)` sites (export-docx, person-doc) go back through the guard rather than
+being trusted because their halves looked fine apart. Pinned by `vault-path-safety.test.js` (21, real HTTP;
+the symlink case skips honestly where Windows will not create one).
+- **An invalid date became an UNBOUNDED search (31 Aug 2026)** — `retrieval.parseDateRange` /
+`parseDateBound`, both PURE. `new Date('lastweek')` is `Invalid Date` and **every comparison against NaN is
+false**, so the old filter excluded nothing: a typo'd bound silently searched all of time and returned the
+answer labelled as a date range. Now only a real `YYYY-MM-DD` or a full ISO timestamp is accepted;
+`2026-02-31` is refused rather than rolled into March; an inverted range is refused; and the route answers
+**400 with the offending field**. ⚠ **Omission is not a typo** — an absent bound keeps the 30-day default,
+an invalid one is an error, and conflating them is what made this invisible. ⚠ **A date-only `to` now means
+the END of that day** — `to=2026-08-31` used to mean midnight and dropped the whole of the 31st from the one
+search whose entire purpose is a date range. The response returns **normalised ISO bounds** plus
+`range.fromDefaulted`/`toDefaulted`. The range check runs **BEFORE** the vault check, because a caller error
+is the same error whatever the environment. Pinned by `temporal-range.test.js` (14) + 7 route tests.
+- **Brain Health moved out of SARA into NEURO (31 Aug 2026)** — `components/BrainHealthPanel.jsx`, sidebar
+**Brain Health** (view id `brain-health`), replacing SARA's `brain` tab (`BrainManagement`, deleted). The
+division of labour decides it: NEURO is the brain and the NEURO app is Nick's DIRECT access to it, while
+SARA comes to him — and vault maintenance is neither ambient nor something worth interrupting him about.
+It is a desk job with dated reports to read and writes to weigh, and on a phone the reports were unreadable.
+⚠ **Removing a SARA tab is never only a deletion**: an id missing from `SARA_LITE_TABS` routes its
+notifications to Focus IN SILENCE. The notification KIND `brain` is deliberately KEPT (`vault_hygiene`,
+`plaud`, `imports`, `knowledge_reflection`, `sweep_complete` still resolve to it, and the desktop still
+navigates to Imports); only its SARA destination is gone, so it now falls through to the **Surface** like
+everything else with no dedicated tab. Two things the SARA screen got wrong and this fixes: **read and
+WRITE were the same grey Run button** — `Plan links` previews while `Apply links` and `Connect orphans`
+edit real notes and `PLAUD repull` re-downloads recordings — so effect is now a per-job badge AND the card's
+left edge (unmarked / amber / blue), and **nothing said what an action would do**, so every job states what
+it READS, what it CHANGES, what it will NOT do, how to get back (`Scripts/.lint-backups/` + changelog) and
+where the report lands. Anything that writes is **two-step**: it refuses until its own preview has run, and
+the confirm quotes that preview's real numbers — the `event-parser` / `one-to-one-booking` / `task-blocks`
+idiom. A failed scan renders *"missing, not zero"* rather than a clean bill of health. Pinned by
+`brain-health-migration.test.js` (9, source scans with positive controls), incl. that the vault-hygiene
+notification still resolves to a tab that exists.
 - **Offline-first** — IndexedDB caching via `idb` library, service worker for PWA
 - **Per-component CSS** — each component has its own `.css` file, no Tailwind
 - **SPA fallback** — non-API routes serve `index.html` with no-cache headers
