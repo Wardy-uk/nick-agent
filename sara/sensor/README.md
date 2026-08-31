@@ -36,10 +36,25 @@ the *background*: every BLE device in earshot, not just the watch. This house ha
 not that the house is empty. Without this rule a dead sensor and an empty room
 are the same reading — which is precisely how fifteen days went by.
 
-**Presence is advert RATE over a window, not per-sample RSSI.** The watch either
-chatters at you (~2.3/sec in-room) or it does not. RSSI is reported because it is
-useful for *comparing rooms*, but it never decides present/absent — it is far too
-noisy at a fixed distance to be a trigger.
+**Heard at all is advert RATE over a window; IN THIS ROOM is median RSSI.** The
+watch either chatters at you (~2.3/sec in-room) or it does not, and that answers
+"is it within earshot". It does NOT answer "is he in this room" — that was tried
+and was wrong twice. Over a real hour of Nick moving about, the living-room rate
+with him UPSTAIRS reached 1.9 against 2.2 with him downstairs, and the screen
+flapped four times across the threshold. ⚠ And in passive mode rate is INVERTED
+(see below), so a bedroom sensor hearing the watch at -51 was reporting `absent`.
+
+⚠ The in-room test is therefore **median RSSI against a per-sensor threshold**,
+and the per-sensor part is not optional: absolute RSSI is not comparable BETWEEN
+radios, only within one. Measured:
+
+```
+living-room sensor:  downstairs -62..-74   upstairs   -84..-88   (10 dB)
+bedroom sensor:      upstairs   -51..-65   downstairs -80..-86   (15 dB)
+```
+
+Once rooms are calibrated the fingerprint supersedes this entirely and needs no
+threshold at all; the per-sensor number is the fallback for an untaught room.
 
 **A hang counts as stuck.** `scanner.start()` does not always raise; on pi5 at 49
 days uptime it simply never returned, and systemd reported the unit `active` with
@@ -116,7 +131,7 @@ dongle on the Pi 3 would restore parity and remove the caveat.
 |---|---|---|---|
 | living-room | pi-dev (Pi 4) | active | also the kiosk display + the backlight agent |
 | kitchen | pi5 | active | HA's `bluetooth` integration disabled here to free the radio |
-| bedroom | pi3 (Pi 3B+) | **passive** | LAN only — no Tailscale, so it pushes to pi5's `192.168.1.16` |
+| bedroom | pi3 (Pi 3B+) | **passive** | on the tailnet as `pi3-1` (the ghost `pi3` node from a previous image still holds that name) |
 
 ## Room inference (fingerprinting)
 
