@@ -21,6 +21,10 @@ import './LockScreen.css';
 // the bare word rather than rendering a stale explanation for a new state.
 const REASON_TEXT = {
   'not-home': 'Away from home',
+  // Settled in the bedroom for half an hour. Saying "Away from home" here would
+  // be plainly wrong to anyone who walked past it, and the two locks are worth
+  // telling apart on the rare occasion someone is looking at the thing.
+  'in-bed': 'Goodnight',
 };
 
 function formatTime(date) {

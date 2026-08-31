@@ -48,6 +48,23 @@ const SENSOR_STALE_MS = 30_000;
 // because two medians a decibel apart is a coin toss.
 const SWITCH_MARGIN_DB = 6;
 
+// Settled in the bedroom for this long and the screen goes dark (Nick, 31 Aug
+// 2026). It is a proxy for "gone to bed", so it wants to be long enough that
+// fetching something from upstairs does not trigger it and short enough to be
+// dark before he is asleep.
+//
+// ⚠ CONTINUOUS, and the clock resets on any change of room. Accumulating total
+// time in a room across a whole evening would lock the screen after a few trips
+// upstairs, which is not what going to bed looks like.
+//
+// ⚠ It inherits the watch caveat, and here it BITES: a watch left charging in
+// the bedroom reads as Nick being in the bedroom, so the living-room screen
+// would go dark half an hour later even with him sat in front of it. He wears it
+// overnight for sleep tracking, so this should be rare — and it recovers the
+// moment the watch moves. Worth knowing before blaming the lock.
+const SLEEP_ROOM = process.env.SARA_SLEEP_ROOM || 'bedroom';
+const SLEEP_LOCK_MS = (Number(process.env.SARA_SLEEP_LOCK_MINUTES) || 30) * 60_000;
+
 function ageOf(report, now) {
   const t = report && report.at ? Date.parse(report.at) : NaN;
   if (!Number.isFinite(t)) return null;
@@ -160,7 +177,25 @@ function resolveRoom(reports = {}, now = new Date(), {
  * `home` is `homePresence()`'s shape: `{ away: true|false|null }`. Only a
  * literal `true` — HA read a zone and it was not home — can lock.
  */
-function displayState(thisRoom, arbitration, home, inferred = null) {
+function displayState(thisRoom, arbitration, home, inferred = null, sustained = null) {
+  // ⚠ Settled in the bedroom = gone to bed, and that outranks everything below,
+  // including the "audible watch refuses a lock" rule. That rule exists to stop
+  // a bad GEOFENCE blanking a screen he is sitting at; here the watch is the
+  // very thing saying he is in bed, so letting it veto its own conclusion would
+  // mean the screen never sleeps.
+  if (sustained
+      && sustained.room === SLEEP_ROOM
+      && typeof sustained.ms === 'number'
+      && sustained.ms >= SLEEP_LOCK_MS) {
+    return {
+      state: 'locked',
+      reason: 'in-bed',
+      say: 'Goodnight.',
+      decidedBy: 'sustained-room',
+      sustainedMinutes: Math.round(sustained.ms / 60000),
+    };
+  }
+
   const away = home && home.away;
   // ⚠ "Audible somewhere" is too weak to overrule geolocation. Caught the
   // moment Nick left the house: every sensor had lost him except the bedroom,
@@ -268,4 +303,7 @@ function displayState(thisRoom, arbitration, home, inferred = null) {
   };
 }
 
-module.exports = { resolveRoom, displayState, SENSOR_STALE_MS, SWITCH_MARGIN_DB };
+module.exports = {
+  resolveRoom, displayState,
+  SENSOR_STALE_MS, SWITCH_MARGIN_DB, SLEEP_ROOM, SLEEP_LOCK_MS,
+};

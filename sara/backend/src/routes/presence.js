@@ -65,6 +65,15 @@ const SENSOR_TOKEN = (process.env.SARA_SENSOR_TOKEN || '').trim();
 // the readings themselves; a restart simply means the next poll picks the
 // loudest room outright, which is the correct cold-start answer.
 let lastRoom = null;
+// When the CURRENT inferred room was first seen, for the bedtime lock. Reset on
+// every change of room, so the half hour is continuous rather than a total for
+// the evening.
+//
+// ⚠ In memory: a backend restart forgets it, which postpones the lock by up to
+// half an hour rather than triggering one early. That is the right direction to
+// fail — a restart must never blank a screen he is sitting at.
+let inferredRoom = null;
+let inferredSince = null;
 // Per-room, the last display verdict we handed out — so a change is logged once
 // when it happens rather than on every poll.
 const lastDisplay = new Map();
@@ -246,7 +255,20 @@ router.get('/display', (req, res) => {
   }
   const home = homePresence(ha.getTelemetry());
   const inferredNow = classify(liveVector(arbitration), profiles.all());
-  const display = displayState(room, arbitration, home, inferredNow);
+
+  // Only a CONFIDENT room advances the clock. An `unsure` or `none` moment is
+  // not evidence he got up, so it neither resets the timer nor extends it.
+  if (inferredNow.confidence === 'sure' && inferredNow.room) {
+    if (inferredNow.room !== inferredRoom) {
+      inferredRoom = inferredNow.room;
+      inferredSince = now.getTime();
+    }
+  }
+  const sustained = inferredRoom && inferredSince
+    ? { room: inferredRoom, ms: now.getTime() - inferredSince }
+    : null;
+
+  const display = displayState(room, arbitration, home, inferredNow, sustained);
 
   if (lastDisplay.get(room) !== display.state) {
     history.note('display:' + room, lastDisplay.get(room) || null, display.state,
@@ -275,6 +297,7 @@ router.get('/display', (req, res) => {
     // Which mechanism actually decided `state`: fingerprint / threshold /
     // ranking. Named so a wrong screen can be attributed instead of argued about.
     decidedBy: display.decidedBy || null,
+    sustained,
     watch: {
       status: arbitration.status,  // present | absent | unknown
       room: arbitration.room,

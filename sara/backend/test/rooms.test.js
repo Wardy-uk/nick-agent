@@ -344,3 +344,56 @@ test('an uncalibrated house behaves exactly as it did before', () => {
   assert.equal(d.state, 'clock');
   assert.equal(d.decidedBy, 'threshold');
 });
+
+// ── The bedtime lock ────────────────────────────────────────────────────────
+// Settled in the bedroom for half an hour = gone to bed; the screen goes dark.
+
+const MIN = 60_000;
+
+test('half an hour settled in the bedroom locks the screen', () => {
+  const arb = resolveRoom({ 'living-room': report({ inRoom: false, rate: 0.2 }) }, NOW);
+  const d = displayState('living-room', arb, { away: false },
+    { room: 'bedroom', confidence: 'sure' }, { room: 'bedroom', ms: 31 * MIN });
+  assert.equal(d.state, 'locked');
+  assert.equal(d.reason, 'in-bed');
+  assert.equal(d.decidedBy, 'sustained-room');
+});
+
+test('a shorter stay upstairs does NOT lock', () => {
+  const arb = resolveRoom({ 'living-room': report({ inRoom: false, rate: 0.2 }) }, NOW);
+  for (const mins of [0, 5, 20, 29]) {
+    const d = displayState('living-room', arb, { away: false },
+      { room: 'bedroom', confidence: 'sure' }, { room: 'bedroom', ms: mins * MIN });
+    assert.equal(d.state, 'clock', `${mins} min upstairs is fetching something, not bedtime`);
+  }
+});
+
+test('time in ANOTHER room never locks, however long', () => {
+  const arb = resolveRoom({ 'living-room': report() }, NOW);
+  const d = displayState('living-room', arb, { away: false },
+    { room: 'kitchen', confidence: 'sure' }, { room: 'kitchen', ms: 5 * 60 * MIN });
+  assert.notEqual(d.state, 'locked');
+});
+
+// ⚠ It outranks the "an audible watch refuses a lock" rule on purpose. That rule
+// exists to stop a bad geofence blanking a screen he is sitting at; here the
+// watch is the very thing saying he is in bed, so letting it veto its own
+// conclusion would mean the screen never sleeps.
+test('an audible watch does not veto bedtime', () => {
+  const arb = resolveRoom({
+    'living-room': report({ inRoom: false, rate: 0.2 }),
+    bedroom: report({ inRoom: true, rssiMedian: -55 }),
+  }, NOW);
+  const d = displayState('living-room', arb, { away: true },
+    { room: 'bedroom', confidence: 'sure' }, { room: 'bedroom', ms: 45 * MIN });
+  assert.equal(d.state, 'locked');
+  assert.equal(d.reason, 'in-bed', 'and it says WHY it locked, not "not-home"');
+});
+
+test('no sustained reading at all behaves exactly as before', () => {
+  const arb = resolveRoom({ 'living-room': report() }, NOW);
+  for (const s of [null, undefined, { room: 'bedroom' }, { room: 'bedroom', ms: null }]) {
+    assert.equal(displayState('living-room', arb, { away: false },
+      { room: 'living-room', confidence: 'sure' }, s).state, 'full');
+  }
+});
