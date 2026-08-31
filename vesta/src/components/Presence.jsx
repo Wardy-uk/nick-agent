@@ -1,0 +1,65 @@
+import Section from './Section.jsx';
+
+/**
+ * Where Nick is in the house.
+ *
+ * ⚠ IT KNOWS WHERE HIS WATCH IS, WHICH IS NOT QUITE THE SAME THING, and the
+ * wording has to carry that. Proven on the day it was built: he showered while
+ * the watch sat on a bedroom surface and the room read `bedroom` with full
+ * confidence for eight minutes. So this never says "Nick is in the kitchen" as
+ * a bare fact — it says where he was last picked up, which is what was actually
+ * measured and is still perfectly useful for "is he upstairs or down".
+ *
+ * ⚠ Three renderings stay distinct, the `Section` rule applied to a person:
+ *
+ *   • a room        — he was picked up there
+ *   • can't tell    — the sensors could not place him. NOT "he's out": he may
+ *                     be in a room with no sensor, or the watch may be off.
+ *   • not mounted   — no `presence` scope. The caller does not render this at
+ *                     all, so no permission and no reading never share a box.
+ *
+ * "I don't know where he is" and "he's out" send her looking in different
+ * places, and merging them is how this surface starts lying.
+ *
+ * The room name is all that arrives from the server — no signal strengths, no
+ * history, no timestamps. There is deliberately nothing else here to render.
+ */
+
+// Rooms read better with the article the house uses for them. Unknown names
+// fall through unchanged rather than being mangled into a guess.
+const PHRASING = {
+  'living-room': 'the living room',
+  kitchen: 'the kitchen',
+  bedroom: 'the bedroom',
+};
+
+export default function Presence({ presence }) {
+  // No block at all rather than an empty one: the server did not send it, which
+  // for this section means it was not asked for.
+  if (!presence) return null;
+
+  if (!presence.known) {
+    return (
+      <Section title="Nick">
+        <p className="presence__unknown">
+          I can&rsquo;t tell which room he&rsquo;s in.{' '}
+          <span className="presence__note">That isn&rsquo;t the same as him being out.</span>
+        </p>
+      </Section>
+    );
+  }
+
+  const where = PHRASING[presence.room] || presence.room;
+
+  return (
+    <Section title="Nick">
+      <p className="presence__room">
+        Last picked up in <strong>{where}</strong>.
+      </p>
+      {/* Said plainly and once. She should know what the house is actually
+          measuring, so that a watch left on a windowsill is a thing she can
+          work out rather than a mystery. */}
+      <p className="presence__note">From his watch, so it&rsquo;s where that is.</p>
+    </Section>
+  );
+}

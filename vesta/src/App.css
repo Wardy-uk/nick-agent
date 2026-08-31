@@ -334,3 +334,19 @@ body {
    difference has to survive a glance. */
 .who__chip--on { background: var(--ember); border-color: var(--ember); color: #1a1208; font-weight: 600; }
 .who__chip:disabled { opacity: .5; }
+
+/* Where Nick is. Quiet by design — it is one line of fact, not a feature. */
+.presence__room {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.presence__unknown {
+  margin: 0;
+  color: var(--muted, #7a7f87);
+}
+.presence__note {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted, #7a7f87);
+}

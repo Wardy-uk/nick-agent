@@ -4,6 +4,7 @@ import Tasks from '../components/Tasks.jsx';
 import Calendar from '../components/Calendar.jsx';
 import Kitchen from '../components/Kitchen.jsx';
 import Meals from '../components/Meals.jsx';
+import Presence from '../components/Presence.jsx';
 
 const KITCHEN_SLUG = 'kitchen';
 
@@ -113,6 +114,12 @@ export default function Home({ onSignedOut }) {
       {error && <p className="home__stale" role="status">{error} Showing what I last had.</p>}
 
       <Tasks tasks={data.tasks} gap={gapFor('tasks')} people={data.people || []} onAdd={addTask} onUpdate={updateTask} />
+
+      {/* Above the calendar: "where is he right now" is the question she is most
+          likely to have opened this for, and it is one line. Gated on the scope
+          so the block is ABSENT without it, never rendered-then-hidden — the
+          client enforces nothing and must never start. */}
+      {can('presence') && <Presence presence={data.presence} />}
 
       {can('calendar') && (
         <Calendar events={data.calendar} gap={gapFor('calendar')} todayKey={data.calendarDate} />
