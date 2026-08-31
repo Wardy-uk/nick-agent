@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { SaraStateProvider, useSaraState } from './state/saraState';
 import { useDisplayState } from './state/useDisplayState';
-import { PRIMARY, SECONDARY, TABS, DEFAULT_TAB } from '../../shared-ui/tabs';
+import { PRIMARY, SECONDARY, TABS, DEFAULT_TAB, revealsSecondary } from '../../shared-ui/tabs';
 import Field from '../../shared-ui/Field';
 import ExitButton from './components/ExitButton';
 import LockScreen from './components/LockScreen';
@@ -69,7 +69,7 @@ function AppShell() {
   // Same rule as the phone: the primary row is always there, the secondary row
   // is revealed on request AND stays revealed while he is on one of its
   // screens, or the way back is only through the way he came.
-  const isSecondary = SECONDARY.some((t) => t.id === active);
+  const isSecondary = revealsSecondary(active);
   const moreVisible = navOpen || isSecondary;
 
   function goTab(tab) {

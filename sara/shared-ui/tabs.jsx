@@ -70,3 +70,19 @@ export const VALID_TABS = new Set(TABS.map((t) => t.id));
 // start. A launch intent from a notification still wins on the phone. Capture
 // leads the nav on both because it is the lowest-barrier thing either can do.
 export const DEFAULT_TAB = 'surface';
+
+/**
+ * Does being on this tab reveal the secondary row? PURE, and shared so the two
+ * shells cannot answer it differently.
+ *
+ * The rule is that the row stays revealed while Nick is on one of its screens,
+ * or the way back is only through the way he came. ⚠ THE DEFAULT TAB IS THE
+ * EXCEPTION, and it matters: `surface` lives in SECONDARY, so without this SARA
+ * opens with the full menu already showing — on her own home screen, which is
+ * the one place the whole point is that there ISN'T one. She carries her own
+ * escape hatch ("Show me everything") so nothing is stranded.
+ */
+export function revealsSecondary(active) {
+  if (active === DEFAULT_TAB) return false;
+  return SECONDARY.some((t) => t.id === active);
+}
