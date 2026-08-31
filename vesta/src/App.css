@@ -249,3 +249,32 @@ body {
   cursor: pointer;
   flex-shrink: 0;
 }
+
+/* ── Month picker ────────────────────────────────────────────────────────── */
+
+.cal { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.cal__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.cal__month { font-size: 15px; color: var(--ink); }
+.cal__nav {
+  appearance: none; background: var(--panel-2); border: 1px solid var(--line);
+  color: var(--ink); border-radius: 8px; width: 40px; min-height: 40px;
+  font-size: 18px; line-height: 1; cursor: pointer;
+}
+.cal__grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal__dow {
+  text-align: center; font-size: 11px; color: var(--ink-faint);
+  padding-bottom: 4px; text-transform: uppercase; letter-spacing: .04em;
+}
+.cal__day {
+  appearance: none; background: none; border: 1px solid transparent;
+  color: var(--ink); border-radius: 8px;
+  /* Square-ish and thumb-sized: this is tapped on a phone at the fridge door. */
+  aspect-ratio: 1 / 1; min-height: 38px; font-size: 14px; cursor: pointer;
+}
+.cal__day:hover { background: var(--panel-2); }
+/* Today is marked by an outline, the picked day by fill — so the two are still
+   distinguishable when they are the same day. */
+.cal__day--today { border-color: var(--ember); color: var(--ember); font-weight: 600; }
+.cal__day--picked { background: var(--ember); border-color: var(--ember); color: #1a1208; font-weight: 600; }
+
+.day--picked { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }

@@ -74,6 +74,10 @@ export const login = (username, pin) =>
 
 export const home = (token) => call('/home', { token });
 
+/** One day of his diary, for the date picker. Redacted server-side like /home. */
+export const calendarDay = (token, date) =>
+  call(`/calendar?date=${encodeURIComponent(date)}`, { token });
+
 export const addTask = (token, text) =>
   call('/tasks', { method: 'POST', body: { text }, token });
 

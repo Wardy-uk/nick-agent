@@ -1,7 +1,13 @@
+import { useState } from 'react';
 import Section from './Section.jsx';
+import * as api from '../api';
 
 /**
- * His next three days, as much of them as he agreed to share.
+ * Today's agenda, and a month to pick any other day from.
+ *
+ * Nick, 31 Aug 2026: today's agenda, and the rest behind a date picker. The
+ * first cut showed a rolling three days as one flat list, which was neither
+ * thing — too long to scan at a glance and too short to plan against.
  *
  * ⚠ NOTHING IS REDACTED HERE. A work event arrives with `title` already the
  * literal string "Busy" and NO subject and NO location on the object at all —
@@ -17,64 +23,131 @@ import Section from './Section.jsx';
  */
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+// Monday-first, which is how a working week is read here.
+const DOW = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
-function localDayKey(d) {
-  const p = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-function dayLabel(key, todayKey, tomorrowKey) {
-  if (key === todayKey) return 'Today';
-  if (key === tomorrowKey) return 'Tomorrow';
-  const [y, m, d] = key.split('-').map(Number);
-  return DAYS[new Date(y, m - 1, d).getDay()];
-}
-
+const pad = n => String(n).padStart(2, '0');
+const keyOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const timeOf = iso => String(iso || '').slice(11, 16);
 
-export default function Calendar({ events, gap }) {
-  const now = new Date();
-  const todayKey = localDayKey(now);
-  const tomorrowKey = localDayKey(new Date(now.getTime() + 86400000));
+/** Monday-first column for a JS day index (0 = Sunday). */
+const mondayIndex = jsDay => (jsDay + 6) % 7;
 
-  const byDay = new Map();
-  for (const e of events || []) {
-    const key = String(e.start || '').slice(0, 10);
-    if (!key) continue;
-    if (!byDay.has(key)) byDay.set(key, []);
-    byDay.get(key).push(e);
+function EventList({ events }) {
+  if (!events.length) return <p className="section__empty">Nothing in the diary.</p>;
+  return (
+    <ul className="day__events">
+      {events.map(e => (
+        <li key={e.id || `${e.start}-${e.title}`}
+            className={`event ${e.personal ? 'event--personal' : 'event--work'}`}>
+          <span className="event__time">
+            {e.allDay ? 'All day' : `${timeOf(e.start)}–${timeOf(e.end)}`}
+          </span>
+          <span className="event__title">{e.title}</span>
+          {e.location && <span className="event__where">{e.location}</span>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export default function Calendar({ events, gap, todayKey }) {
+  const today = todayKey || keyOf(new Date());
+  const [cursor, setCursor] = useState(() => {
+    const [y, m] = today.split('-').map(Number);
+    return { year: y, month: m - 1 };
+  });
+  const [picked, setPicked] = useState(null);
+  const [dayEvents, setDayEvents] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [dayError, setDayError] = useState(null);
+
+  async function pick(dateKey) {
+    // Tapping today again closes the picked day and returns to the agenda,
+    // rather than showing the same list twice.
+    if (dateKey === picked) { setPicked(null); return; }
+    setPicked(dateKey);
+    setLoading(true);
+    setDayError(null);
+    try {
+      const r = await api.calendarDay(api.getToken(), dateKey);
+      setDayEvents(r.events || []);
+    } catch (err) {
+      // ⚠ Distinct from an empty day. "I couldn't read the diary" and "nothing
+      // on that day" must never look alike.
+      setDayError(err.message);
+      setDayEvents([]);
+    } finally {
+      setLoading(false);
+    }
   }
-  const days = [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+  const first = new Date(cursor.year, cursor.month, 1);
+  const daysInMonth = new Date(cursor.year, cursor.month + 1, 0).getDate();
+  const lead = mondayIndex(first.getDay());
+  const cells = [
+    ...Array(lead).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, i) => new Date(cursor.year, cursor.month, i + 1)),
+  ];
+
+  const shift = by => setCursor(c => {
+    const d = new Date(c.year, c.month + by, 1);
+    return { year: d.getFullYear(), month: d.getMonth() };
+  });
+
+  const [py, pm, pd] = (picked || '').split('-').map(Number);
 
   return (
-    <Section
-      title="His diary"
-      gap={gap}
-      empty={events && events.length === 0 ? 'Nothing in the diary for the next few days.' : null}
-    >
-      {days.map(([key, list]) => (
-        <div className="day" key={key}>
-          <h3 className="day__label">{dayLabel(key, todayKey, tomorrowKey)}</h3>
-          <ul className="day__events">
-            {list.map(e => (
-              <li key={e.id || `${e.start}-${e.title}`}
-                  className={`event ${e.personal ? 'event--personal' : 'event--work'}`}>
-                <span className="event__time">
-                  {e.allDay ? 'All day' : `${timeOf(e.start)}–${timeOf(e.end)}`}
-                </span>
-                <span className="event__title">{e.title}</span>
-                {e.location && <span className="event__where">{e.location}</span>}
-              </li>
-            ))}
-          </ul>
+    <Section title="His diary" gap={gap}>
+      <h3 className="day__label">Today</h3>
+      <EventList events={events || []} />
+
+      <div className="cal">
+        <div className="cal__head">
+          <button className="cal__nav" onClick={() => shift(-1)} aria-label="Previous month">‹</button>
+          <span className="cal__month">{MONTHS[cursor.month]} {cursor.year}</span>
+          <button className="cal__nav" onClick={() => shift(1)} aria-label="Next month">›</button>
         </div>
-      ))}
+
+        <div className="cal__grid">
+          {DOW.map((d, i) => <span className="cal__dow" key={i}>{d}</span>)}
+          {cells.map((d, i) => {
+            if (!d) return <span key={`b${i}`} />;
+            const k = keyOf(d);
+            return (
+              <button
+                key={k}
+                className={`cal__day${k === today ? ' cal__day--today' : ''}${k === picked ? ' cal__day--picked' : ''}`}
+                onClick={() => pick(k)}
+              >{d.getDate()}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      {picked && (
+        <div className="day day--picked">
+          <h3 className="day__label">
+            {DAYS[new Date(py, pm - 1, pd).getDay()]} {pd} {MONTHS[pm - 1]}
+          </h3>
+          {loading ? (
+            <p className="section__empty">Looking…</p>
+          ) : dayError ? (
+            <p className="section__gap" role="status">
+              <span className="section__gap-lead">I couldn&rsquo;t read that day.</span> {dayError}
+            </p>
+          ) : (
+            <EventList events={dayEvents} />
+          )}
+        </div>
+      )}
+
       {/* Said once, quietly, rather than repeated on every grey row. Without it
           a screen full of "Busy" reads as a system that knows nothing, instead
           of one deliberately not telling. */}
-      {days.length > 0 && (
-        <p className="day__note">&ldquo;Busy&rdquo; is work &mdash; the details stay at work.</p>
-      )}
+      <p className="day__note">&ldquo;Busy&rdquo; is work &mdash; the details stay at work.</p>
     </Section>
   );
 }

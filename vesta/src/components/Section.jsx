@@ -13,6 +13,18 @@
  *
  * "I couldn't read the kitchen" and "the fridge is empty" send her to different
  * shops.
+ *
+ * ⚠ EMPTY DOES NOT REPLACE THE CHILDREN — it is a line ABOVE them. The first
+ * version rendered `empty ? <message> : children`, which hid every add form on
+ * exactly the screens that had nothing in them yet: an empty task list hid its
+ * own composer and an empty kitchen hid all three shelves and their inputs. So
+ * the app was unusable from a standing start and became usable only once
+ * something had been added by other means — which is the worst possible
+ * direction for that bug to point.
+ *
+ * A GAP still replaces the children, and that difference is deliberate: "there
+ * is nothing here" is a fact you can act on, while "I could not read this" means
+ * the controls would be operating against a state nobody knows.
  */
 export default function Section({ title, gap, empty, children, action }) {
   return (
@@ -31,10 +43,11 @@ export default function Section({ title, gap, empty, children, action }) {
             Don&rsquo;t treat it as nothing &mdash; it means I couldn&rsquo;t look.
           </span>
         </p>
-      ) : empty ? (
-        <p className="section__empty">{empty}</p>
       ) : (
-        children
+        <>
+          {empty && <p className="section__empty">{empty}</p>}
+          {children}
+        </>
       )}
     </section>
   );

@@ -109,7 +109,9 @@ export default function Home({ onSignedOut }) {
 
       <Tasks tasks={data.tasks} gap={gapFor('tasks')} onAdd={addTask} />
 
-      {can('calendar') && <Calendar events={data.calendar} gap={gapFor('calendar')} />}
+      {can('calendar') && (
+        <Calendar events={data.calendar} gap={gapFor('calendar')} todayKey={data.calendarDate} />
+      )}
 
       {can('kitchen') && (
         kitchenMissing ? (

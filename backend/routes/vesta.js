@@ -96,13 +96,12 @@ router.get('/home', requireAccount, (req, res) => {
   // ── Calendar ─────────────────────────────────────────────────────────────
   if (capture.hasScope(req.account, 'calendar')) {
     try {
-      const now = new Date();
-      const p = n => String(n).padStart(2, '0');
-      const dayKey = d => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-      const from = `${dayKey(now)}T00:00:00`;
-      const to = `${dayKey(new Date(now.getTime() + 2 * 86400000))}T23:59:59`;
-      // ⚠ Redacted by the SERVICE before it is anywhere near this handler.
-      out.calendar = vesta.redactDay(db.getCalendarEvents(from, to) || []);
+      // TODAY only. The home screen answers "what is happening now"; any other
+      // day is a deliberate ask and goes through /calendar below. A rolling
+      // three-day list was neither one thing nor the other — too long to scan
+      // at a glance and too short to plan against.
+      out.calendar = vesta.redactDay(db.getCalendarEvents(dayBounds(_today()).from, dayBounds(_today()).to) || []);
+      out.calendarDate = _today();
     } catch (e) {
       out.calendar = null;
       out.gaps.push({ block: 'calendar', why: e.message });
@@ -140,6 +139,48 @@ router.get('/home', requireAccount, (req, res) => {
   }
 
   res.json(out);
+});
+
+
+// ⚠ Local getters, never toISOString() — that shifts to UTC and lands the whole
+// query on the wrong day west of here, which is the calendar bug NEURO has
+// already had once.
+function _pad(n) { return String(n).padStart(2, '0'); }
+function _today() {
+  const d = new Date();
+  return `${d.getFullYear()}-${_pad(d.getMonth() + 1)}-${_pad(d.getDate())}`;
+}
+function dayBounds(dateKey) {
+  return { from: `${dateKey}T00:00:00`, to: `${dateKey}T23:59:59` };
+}
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * One day of his diary, redacted, for the date picker.
+ *
+ * Gated on the SAME `calendar` scope as the home block — a second door to the
+ * same data with a weaker lock is how a scope becomes decorative.
+ *
+ * ⚠ The date is validated against a strict pattern rather than fed to `new
+ * Date()`, which happily accepts nonsense and answers for some other day.
+ */
+router.get('/calendar', requireAccount, (req, res) => {
+  if (!capture.hasScope(req.account, 'calendar')) {
+    return res.status(403).json({ ok: false, error: 'Not enabled for this account.' });
+  }
+  const date = String((req.query && req.query.date) || '') || _today();
+  if (!DATE_RE.test(date)) {
+    return res.status(400).json({ ok: false, error: 'that is not a date I understand' });
+  }
+  try {
+    const { from, to } = dayBounds(date);
+    res.json({ ok: true, date, events: vesta.redactDay(db.getCalendarEvents(from, to) || []) });
+  } catch (e) {
+    console.error('[Vesta] Calendar day failed:', e.message);
+    // ⚠ `events: null` with a reason, never an empty array — "I could not read
+    // your diary" and "nothing on that day" must not render alike.
+    res.status(500).json({ ok: false, error: 'I could not read the diary just now.' });
+  }
 });
 
 // POST /api/v/tasks — reuses the existing submission path, so the throttle, the
