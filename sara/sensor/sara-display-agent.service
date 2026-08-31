@@ -1,0 +1,22 @@
+[Unit]
+Description=SARA display agent (backlight for the locked state)
+After=network-online.target
+
+[Service]
+Type=simple
+# SARA_ROOM comes from the same per-room file the sensor uses; this adds
+# SARA_DISPLAY_URL. Shared deliberately — a Pi is in one room, and two files
+# disagreeing about which is a bug waiting to happen.
+EnvironmentFile=/etc/sara-room.env
+ExecStart=/home/nickw/watch-irk/venv/bin/python -u /home/nickw/watch-irk/sara-display-agent.py
+Restart=always
+RestartSec=5
+# ⚠ On stop, put the light back. Otherwise stopping the agent while the screen
+# is locked leaves a dark panel with nothing left running to undo it — the one
+# way this can strand Nick in front of a screen that looks dead.
+ExecStopPost=/bin/sh -c 'cat /sys/class/backlight/panel_backlight@1/max_brightness > /sys/class/backlight/panel_backlight@1/brightness'
+# root: writing /sys/class/backlight needs it.
+User=root
+
+[Install]
+WantedBy=multi-user.target

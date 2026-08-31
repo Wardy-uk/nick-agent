@@ -68,10 +68,52 @@ Verify with `sudo cat /run/sara-room-sensor.json`. `healthy: true` with a
 plausible `backgroundDevices` count is the check that matters — a sensor
 reporting `absent` with `backgroundDevices: 0` is broken, not lonely.
 
+## The Pi 3B+ needs passive scanning (31 Aug 2026)
+
+The Pi 3B+ runs WiFi and Bluetooth through **one combo chip on one antenna**, and
+an active scan transmits a scan request for every advert it hears. Measured:
+
+```
+active  scan running:  4/8  pings   (~50% packet loss — scp failed outright)
+passive scan running: 20/20 pings   (clean)
+bluetooth off:        10/10 pings
+```
+
+The Pi 4 and Pi 5 have far better coexistence and are unaffected, so passive is
+opt-in per sensor via `SARA_SCAN_MODE=passive`, and needs `bluetoothd
+--experimental` on that host (a drop-in at
+`/etc/systemd/system/bluetooth.service.d/experimental.conf`).
+
+⚠ **Passive is not just a quieter active scan — it samples far less.** BlueZ
+passive scanning with patterns goes through the AdvertisementMonitor API, which
+reports found/lost events plus periodic RSSI samples rather than a raw advert
+stream. Measured over the same spot with the watch present:
+
+```
+active   adverts=2407  devices=26  watch=80  rate=2.00/s  rssi_med=-67
+passive  adverts=24    devices=18  watch=5   rate=0.12/s  rssi_med=-66
+```
+
+Same RSSI, **6% of the callbacks**. So a passive sensor needs its own
+`SARA_MIN_RATE` (0.05) and a longer `SARA_WINDOW_S` (60) to gather enough
+samples. `passive-probe.py` runs both modes back to back over one spot and is
+the thing to reach for before blaming distance.
+
+⚠ The filter is NOT the reason for the reduction, and this was checked rather
+than assumed: every one of 59 consecutive watch adverts carried Apple
+manufacturer data (`0x004C`, an Apple Continuity Nearby Info message), so the
+`or_patterns` match all of them. Do not go hunting for a better pattern.
+
+⚠ **A passive room's RSSI median rests on a handful of samples where an active
+room's rests on forty**, so cross-mode comparison in the arbitration is less
+sure than like-for-like. It works here because the gaps between rooms are large
+(-84 from the bedroom against -71 in the living room), but a USB Bluetooth
+dongle on the Pi 3 would restore parity and remove the caveat.
+
 ## Deployed
 
-| Room | Host | Notes |
-|---|---|---|
-| living-room | pi-dev (Pi 4) | also the kiosk display |
-| kitchen | pi5 | HA's `bluetooth` integration disabled here to free the radio |
-| bedroom | Pi 3 | not yet deployed |
+| Room | Host | Scan | Notes |
+|---|---|---|---|
+| living-room | pi-dev (Pi 4) | active | also the kiosk display + the backlight agent |
+| kitchen | pi5 | active | HA's `bluetooth` integration disabled here to free the radio |
+| bedroom | pi3 (Pi 3B+) | **passive** | LAN only — no Tailscale, so it pushes to pi5's `192.168.1.16` |

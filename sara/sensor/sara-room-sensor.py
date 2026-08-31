@@ -53,6 +53,31 @@ import aiohttp
 from bleak import BleakScanner
 from bluetooth_data_tools import get_cipher_for_irk, resolve_private_address
 
+# Passive scanning, for the Pi 3B+ only.
+#
+# ⚠ WHY IT EXISTS: the Pi 3B+ runs WiFi and Bluetooth through ONE combo chip on
+# ONE antenna. Measured 31 Aug 2026: with Bluetooth up it dropped to 4/8 pings;
+# with Bluetooth down, 10/10. The Pi 4 and Pi 5 have far better coexistence and
+# are unaffected, so this is opt-in per sensor rather than the default.
+#
+# An ACTIVE scan transmits a scan request for every advert it hears, and on a
+# shared antenna that transmission is what wrecks the WiFi. Passive is
+# receive-only. We lose scan-response data and never used it: the IRK is
+# resolved from the advertising ADDRESS, and RSSI comes with the advert.
+#
+# ⚠ BlueZ passive scanning requires `--experimental` AND at least one
+# advertisement-data pattern - bleak will not start a passive scan with an empty
+# filter. So the patterns below must be broad enough to keep hearing the
+# BACKGROUND, not just the watch: the background is the health signal that tells
+# a deaf radio from an empty room, and narrowing it to Apple would quietly
+# destroy that check while appearing to work.
+try:
+    from bleak.args.bluez import BlueZScannerArgs, OrPattern
+    from bleak.assigned_numbers import AdvertisementDataType
+    PASSIVE_AVAILABLE = True
+except Exception:  # older bleak
+    PASSIVE_AVAILABLE = False
+
 IRK_HEX = os.environ.get("WATCH_IRK", "").strip()
 if not IRK_HEX:
     raise SystemExit("WATCH_IRK is required (root-only EnvironmentFile, never argv)")
@@ -77,6 +102,14 @@ MIN_RATE = float(os.environ.get("SARA_MIN_RATE", "0.2"))
 # Health: the background must be audible. Measured: 24-27 distinct devices and
 # ~3700 adverts per minute in this house.
 HEALTH_WINDOW_S = float(os.environ.get("SARA_HEALTH_WINDOW_S", "45"))
+# "active" (default) or "passive" — see the block above. Only the Pi 3B+ needs
+# passive; asking for it where bleak cannot do it is a hard failure rather than a
+# silent downgrade, because a sensor quietly running active on a Pi 3 takes the
+# WiFi down and looks like a network fault.
+SCAN_MODE = os.environ.get("SARA_SCAN_MODE", "active").strip().lower()
+if SCAN_MODE == "passive" and not PASSIVE_AVAILABLE:
+    raise SystemExit("SARA_SCAN_MODE=passive needs a bleak with BlueZ passive support")
+
 # A scan start that has not returned in this long is wedged, not slow.
 START_TIMEOUT_S = float(os.environ.get("SARA_START_TIMEOUT_S", "30"))
 # Consecutive failed starts before escalating from an adapter cycle to a
@@ -210,13 +243,31 @@ async def reset_adapter(hard=False):
         await asyncio.sleep(3)
 
 
+def build_scanner(on_advert):
+    if SCAN_MODE != "passive":
+        return BleakScanner(on_advert)
+    # Broad on purpose. Flags is the one AD type almost every advertiser emits,
+    # and matching its common values keeps the whole background audible; the
+    # Apple manufacturer id is added so the watch is caught even in the sweep
+    # where it omits Flags.
+    patterns = [
+        OrPattern(0, AdvertisementDataType.FLAGS, b"\x02"),
+        OrPattern(0, AdvertisementDataType.FLAGS, b"\x06"),
+        OrPattern(0, AdvertisementDataType.FLAGS, b"\x1a"),
+        OrPattern(0, AdvertisementDataType.MANUFACTURER_SPECIFIC_DATA, b"\x4c\x00"),
+    ]
+    return BleakScanner(on_advert, scanning_mode="passive",
+                        bluez=BlueZScannerArgs(or_patterns=patterns))
+
+
 async def main():
     sensor = Sensor()
     last_state = None
     failures = 0
+    print("[sensor] scan mode: " + SCAN_MODE, flush=True)
     async with aiohttp.ClientSession() as session:
         while True:
-            scanner = BleakScanner(sensor.on_advert)
+            scanner = build_scanner(sensor.on_advert)
             try:
                 # Bounded: `start()` has been observed to hang forever rather
                 # than raise, which systemd reports as a perfectly healthy unit.
