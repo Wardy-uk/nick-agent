@@ -79,7 +79,7 @@ export default function AttentionSurface({
 
   const {
     context, primary, secondary = [], dropped = [], quiet,
-    rationale, poolAvailable, gaps = [], transition = null,
+    rationale, poolAvailable, gaps = [], transition = null, ambient = null,
   } = data;
 
   const act = (card, action, opts) => onAct && onAct(card, action, opts);
@@ -257,6 +257,32 @@ export default function AttentionSurface({
                   <span className="surface__rowtitle">{card.title}</span>
                   {card.say && <span className="surface__rowsay">{card.say}</span>}
                 </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {/* ── What she has noticed ──────────────────────────────────────────
+            Ambient observations: sat still a long time, no exercise for three
+            days, a health trend against his own baseline, no food logged when
+            he normally logs it.
+
+            ⚠ BELOW the pool, never above it, and never in the primary slot.
+            These are facts about right now, not things to decide about — a
+            sitting-down prompt must never outrank a breaching escalation. They
+            are here because he is already looking, and NOTHING here notifies.
+
+            ⚠ A caveat is rendered whenever the observation carries one. Apple
+            Health cannot separate exercise, illness, alcohol and a hard week,
+            and dropping the caveat is how a reading becomes a diagnosis. */}
+        {!hideSecondary && ambient?.observations?.length > 0 && (
+          <ul className="surface__ambient">
+            {ambient.observations.map((o, i) => (
+              <li key={`${o.kind}-${i}`} className={`surface__amb surface__amb--${o.level || 'info'}`}>
+                <span className="surface__ambtext">{o.text}</span>
+                {o.detail && <span className="surface__ambdetail">{o.detail}</span>}
+                {o.suggestion && <span className="surface__ambsuggest">{o.suggestion}</span>}
+                {o.caveat && <span className="surface__ambcaveat">{o.caveat}</span>}
               </li>
             ))}
           </ul>

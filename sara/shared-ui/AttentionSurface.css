@@ -306,3 +306,53 @@
   margin-bottom: 0.75rem;
   border-bottom: 1px solid rgba(76, 154, 255, 0.35);
 }
+
+/* ── Ambient observations ─────────────────────────────────────────────────
+   Sat still a long time, no exercise for three days, a health trend. Rendered
+   BELOW the pool and visibly quieter than it: these are things she noticed,
+   not things he has to decide about, and typographic weight is what keeps that
+   distinction without a label saying so. */
+.surface__ambient {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--surface-rule, rgba(255,255,255,0.08));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.surface__amb {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.surface__ambtext {
+  color: var(--surface-text, #e8e9ee);
+  opacity: 0.85;
+}
+
+/* A health trend earns a little more presence than a glass of water. */
+.surface__amb--notice .surface__ambtext {
+  opacity: 1;
+  font-weight: 500;
+}
+
+.surface__ambdetail,
+.surface__ambsuggest {
+  color: var(--surface-dim, #9aa0b0);
+  font-size: 0.8rem;
+}
+
+/* The caveat is never dropped and never hidden behind a tap. Apple Health
+   cannot separate exercise, illness, alcohol and a hard week, and the finding
+   is only honest while it is carrying that sentence. */
+.surface__ambcaveat {
+  color: var(--surface-dim, #9aa0b0);
+  font-size: 0.74rem;
+  opacity: 0.75;
+  font-style: italic;
+}

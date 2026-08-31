@@ -727,6 +727,32 @@ async function build({ now = new Date(), view = null } = {}) {
 
   const gated = gate(context, items, now);
 
+  // ── Ambient observations ──────────────────────────────────────────────────
+  //
+  // What SARA can notice about Nick's body and his day: sat still a long time,
+  // no exercise for three days, a health trend against his own baseline, nothing
+  // logged for food when he normally logs it.
+  //
+  // ⚠ Carried BESIDE the pool, never through the gate, and deliberately so.
+  // `decision-engine` stays the one place something becomes worth surfacing and
+  // this adds no candidates to it — an observation is a fact about right now,
+  // not a thing to decide about, and routing it through the pool would make
+  // "you've been sitting for two hours" compete with a breaching escalation for
+  // the primary slot.
+  //
+  // ⚠ NOTHING HERE NOTIFIES. Pull only. Six new interruption sources is how SARA
+  // becomes a pest and gets muted, and nudge volume is the one budget allowed to
+  // argue against building more. It is rendered where he is already looking.
+  //
+  // Never allowed to fail the payload: a broken sensor read must not take the
+  // whole attention feed down with it.
+  let ambient = null;
+  try {
+    ambient = await require('./ambient').build({ now, context });
+  } catch (e) {
+    gaps.push({ input: 'ambient', why: e.message });
+  }
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   //
   // The gated feed is reconciled against durable records so a card can be
@@ -862,6 +888,7 @@ async function build({ now = new Date(), view = null } = {}) {
     weeklyTarget,
     readiness,
     transition,
+    ambient,
     ...gated,
     // The lifecycle view of the same decision. Additive: every field this
     // payload returned before is unchanged and still means the same thing, which
