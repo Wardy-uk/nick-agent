@@ -32,6 +32,9 @@ router.get('/', (req, res) => {
       vaultFolders: folders.folders,
       vaultReadable: folders.known,
       lastRun: sync.lastRun(),
+      // What a `generated` mapping can be pointed at.
+      generators: Object.entries(require('../services/notion-sync/generators').GENERATORS)
+        .map(([key, g]) => ({ key, label: g.label })),
     });
   } catch (e) {
     console.error('[notion-sync] read failed:', e.message);

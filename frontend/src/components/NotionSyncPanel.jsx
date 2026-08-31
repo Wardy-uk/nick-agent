@@ -159,6 +159,12 @@ const KINDS = [
     label: 'Folder → child pages',
     hint: 'The Notion page is a container; each note becomes a child page inside it.',
   },
+  {
+    id: 'generated',
+    label: 'NEURO writes this page',
+    hint: 'Built from NEURO’s own records — no vault note behind it. Push-only, and '
+      + 'anything typed into it in Notion is replaced on the next sync.',
+  },
 ];
 
 export default function NotionSyncPanel() {
@@ -440,7 +446,22 @@ export default function NotionSyncPanel() {
               <span className="ns-arrow" aria-hidden="true">↔</span>
 
               <label className="ns-field">
-                <span>{(row.kind || 'tree') === 'page' ? 'Obsidian note' : 'Obsidian parent folder'}</span>
+                <span>
+                  {row.kind === 'generated' ? 'Built from'
+                    : row.kind === 'page' ? 'Obsidian note'
+                    : 'Obsidian parent folder'}
+                </span>
+                {row.kind === 'generated' ? (
+                  <select
+                    value={row.generator || ''}
+                    onChange={(e) => update(row.id, { generator: e.target.value })}
+                  >
+                    <option value="">Choose what builds it…</option>
+                    {(state.generators || []).map((g) => (
+                      <option key={g.key} value={g.key}>{g.label}</option>
+                    ))}
+                  </select>
+                ) : (<>
                 {namingFolderFor === row.id ? (
                   // ⚠ A pull-only mapping's destination USUALLY DOES NOT EXIST
                   // yet — Hiking, Aquarium and the Memory Inbox live only in
@@ -509,6 +530,7 @@ export default function NotionSyncPanel() {
                     onPick={(notePath) => update(row.id, { vaultNote: notePath })}
                   />
                 )}
+                </>)}
               </label>
             </div>
 
@@ -519,7 +541,11 @@ export default function NotionSyncPanel() {
               >
                 {KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
               </select>
-              <select value={row.mode} onChange={(e) => update(row.id, { mode: e.target.value })}>
+              <select
+                value={row.kind === 'generated' ? 'push-only' : row.mode}
+                disabled={row.kind === 'generated'}
+                onChange={(e) => update(row.id, { mode: e.target.value })}
+              >
                 {MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
               </select>
               <label className="ns-toggle">
@@ -606,7 +632,7 @@ export default function NotionSyncPanel() {
                 <span className="ns-cov-title">{c.page.path || c.page.title}</span>
                 {c.kind === 'mapped' && (
                   <span className="ns-cov-detail">
-                    → <code>{c.mapping.vaultNote || c.mapping.vaultFolder}</code>{' '}
+                    → <code>{c.mapping.generator ? `NEURO: ${c.mapping.generator}` : (c.mapping.vaultNote || c.mapping.vaultFolder)}</code>{' '}
                     {MODES.find((m) => m.id === c.mapping.mode)?.label}
                     {!c.mapping.enabled && ' · disabled'}
                   </span>

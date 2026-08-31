@@ -149,3 +149,19 @@ test('a conflict copy is not re-synced as if it were a note', () => {
     assert.deepEqual(found, ['Notes/Plan.md']);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('_about.md is not published — it describes the folder, not the subject', () => {
+  // This vault uses _about.md as a folder description (Areas/, MOCs/, Tasks/).
+  // MOCs/_about.md reached Notion as "Navigation hubs that link related notes
+  // across folders" — noise in a tree meant to answer "who I am and what I do".
+  const fs2 = require('fs');
+  const os2 = require('os');
+  const path2 = require('path');
+  const root2 = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'notion-about-'));
+  try {
+    fs2.mkdirSync(path2.join(root2, 'MOCs'));
+    fs2.writeFileSync(path2.join(root2, 'MOCs', '_about.md'), 'folder description');
+    fs2.writeFileSync(path2.join(root2, 'MOCs', 'MOC - NOVA.md'), 'real content');
+    assert.deepEqual(vault.listNotes(root2, 'MOCs'), ['MOCs/MOC - NOVA.md']);
+  } finally { fs2.rmSync(root2, { recursive: true, force: true }); }
+});

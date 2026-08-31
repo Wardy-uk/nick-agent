@@ -108,8 +108,18 @@ function listNotes(root, folder) {
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue;
       const rel = `${relative}/${entry.name}`;
-      if (entry.isDirectory()) walk(path.join(absolute, entry.name), rel);
-      else if (entry.name.endsWith('.md') && !/\.sync-conflict-/i.test(entry.name)) out.push(rel);
+      if (entry.isDirectory()) { walk(path.join(absolute, entry.name), rel); continue; }
+      if (!entry.name.endsWith('.md')) continue;
+      // A conflict copy is not a note anyone means to publish.
+      if (/\.sync-conflict-/i.test(entry.name)) continue;
+      // ⚠ `_about.md` is this vault's convention for "what this folder is for"
+      // (Areas/, MOCs/, Tasks/ all have one). It describes the FOLDER to someone
+      // browsing the vault and says nothing to a reader of the published page —
+      // MOCs/_about.md went to Notion as "Navigation hubs that link related notes
+      // across folders", which is noise in a tree meant to answer "who I am and
+      // what I do".
+      if (entry.name.toLowerCase() === '_about.md') continue;
+      out.push(rel);
     }
   };
   walk(start, folder);

@@ -28,7 +28,11 @@ const MODES = new Set(['two-way', 'pull-only', 'push-only']);
 //          content in the page body and no children at all. Mapping those as
 //          `tree` syncs nothing on pull and buries content one level down on
 //          push, which is the mismatch that made the first cut unusable.
-const KINDS = new Set(['tree', 'page']);
+// `generated` — NEURO writes the page body from its own state. No vault note
+// behind it, push-only by definition, and never pulled: `Current Priorities`
+// and `Current Problems` are a VIEW of what NEURO knows, not a document Nick
+// keeps. See generators.js.
+const KINDS = new Set(['tree', 'page', 'generated']);
 
 function vaultPath() {
   return process.env.OBSIDIAN_VAULT_PATH || '';
@@ -165,7 +169,13 @@ function validate(mappings) {
       errors.push(`${where}: unknown kind "${m.kind}".`);
     }
 
-    const refusal = kind === 'page' ? noteRefusal(m.vaultNote) : folderRefusal(m.vaultFolder);
+    let refusal = null;
+    if (kind === 'generated') {
+      const known = Object.keys(require('./generators').GENERATORS);
+      if (!m.generator) refusal = 'Pick what generates this page.';
+      else if (!known.includes(m.generator)) refusal = `Unknown generator "${m.generator}".`;
+    } else if (kind === 'page') refusal = noteRefusal(m.vaultNote);
+    else refusal = folderRefusal(m.vaultFolder);
     if (refusal) errors.push(`${where}: ${refusal}`);
 
     if (kind === 'tree') {
@@ -224,13 +234,17 @@ function coerce(input, index) {
     // stale folder that some later reader treats as live.
     vaultFolder: kind === 'tree' ? normaliseFolder(input.vaultFolder) : '',
     vaultNote: kind === 'page' ? normaliseNotePath(input.vaultNote) : '',
-    mode: MODES.has(input.mode) ? input.mode : 'two-way',
+    generator: kind === 'generated' ? String(input.generator || '').trim() : '',
+    // ⚠ A generated page can only ever be pushed — there is no vault side to
+    // pull into, so any other mode is a contradiction rather than a preference.
+    mode: kind === 'generated' ? 'push-only' : (MODES.has(input.mode) ? input.mode : 'two-way'),
     enabled: input.enabled !== false,
   };
 }
 
 /** The vault side of a mapping, whichever kind it is. For messages and overlap. */
 function targetOf(mapping) {
+  if (mapping.kind === 'generated') return `generated:${mapping.generator}`;
   return mapping.kind === 'page' ? mapping.vaultNote : mapping.vaultFolder;
 }
 

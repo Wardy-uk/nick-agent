@@ -263,6 +263,60 @@ async function syncPageMapping(mapping, state, now, { dryRun }) {
   return entry;
 }
 
+/**
+ * One mapping of kind `generated`: NEURO writes the page from its own state.
+ *
+ * ⚠ The churn guard is the whole design. This runs every 15 minutes, and a
+ * generated body is rebuilt from scratch each time — so the decision to push is
+ * made by HASHING the generated markdown against what was last pushed. Without
+ * that it would rewrite the page every quarter of an hour for ever, burning API
+ * quota and filling the page history with edits nobody made. It is why
+ * generators.js may not put a timestamp in the body.
+ */
+async function syncGeneratedMapping(mapping, state, now, { dryRun }) {
+  const built = await require('./generators').generate(mapping.generator);
+  const entry = { path: `generated:${mapping.generator}`, action: ACTIONS.NOOP, reason: '' };
+
+  if (!built.ok) {
+    // Told not to publish — a body that would mislead is worse than a stale one.
+    entry.action = 'error';
+    entry.reason = built.gaps.join('; ') || 'generator refused';
+    return entry;
+  }
+
+  const hash = vault.contentHash(built.markdown);
+  const record = state[mapping.notionPageId];
+
+  if (record && record.vaultHash === hash) {
+    entry.reason = 'generated content is unchanged';
+    return entry;
+  }
+
+  entry.action = ACTIONS.PUSH;
+  entry.reason = record ? 'generated content changed' : 'first generation';
+  if (built.gaps.length) entry.gaps = built.gaps;
+  if (dryRun) return entry;
+
+  const body = blocks.markdownToBlocks(built.markdown, { keep: [], strict: false });
+  if (body.length > MAX_PUSH_BLOCKS) {
+    entry.action = 'error';
+    entry.reason = `generated ${body.length} blocks, limit ${MAX_PUSH_BLOCKS} — nothing written`;
+    return entry;
+  }
+
+  await notion.replaceChildren(mapping.notionPageId, body);
+  const after = await notion.getPage(mapping.notionPageId);
+
+  state[mapping.notionPageId] = {
+    generated: mapping.generator,
+    vaultHash: hash,
+    notionLastEdited: after.last_edited_time,
+    keep: [],
+    syncedAt: now.toISOString(),
+  };
+  return entry;
+}
+
 // ── The run ─────────────────────────────────────────────────────────────────
 
 /**
@@ -318,6 +372,26 @@ async function run({ dryRun = false } = {}) {
 
       summary.kind = mapping.kind;
       summary.target = config.targetOf(mapping);
+
+      // A `generated` mapping has no vault side at all.
+      if (mapping.kind === 'generated') {
+        try {
+          const entry = await syncGeneratedMapping(mapping, state, now, { dryRun });
+          summary.notes.push(entry);
+          if (entry.action === ACTIONS.PUSH) report.counts.pushed += 1;
+          else if (entry.action === ACTIONS.NOOP) report.counts.unchanged += 1;
+          else { report.counts.skipped += 1; report.ok = false; report.gaps.push(`${config.targetOf(mapping)}: ${entry.reason}`); }
+          // A gap on a generated page is reported even when the push succeeded —
+          // the page says so too, but a silent partial is what this avoids.
+          for (const g of entry.gaps || []) report.gaps.push(`${config.targetOf(mapping)}: ${g}`);
+          if (!dryRun) saveState(state);
+        } catch (error) {
+          summary.error = error.message;
+          report.gaps.push(`${config.targetOf(mapping)}: ${error.message}`);
+          report.ok = false;
+        }
+        continue;
+      }
 
       // A `page` mapping is one note against one page body — no tree walk.
       if (mapping.kind === 'page') {
