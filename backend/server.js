@@ -270,6 +270,22 @@ app.get('/api/status', async (req, res) => {
       configured: n8nService.isConfigured()
     },
     plaud: require('./services/plaud-sync').getStatus(),
+    // Notion sync. Reports WHETHER a credential is set and which source answered
+    // — never the token itself. `mappings` is the number of folder pairs, because
+    // a connected integration with nothing mapped does no work, and a card
+    // reading "connected" over that would be telling half the story.
+    notion: (() => {
+      try {
+        const notionApi = require('./services/notion-sync/notion-api');
+        const notionConfig = require('./services/notion-sync/config');
+        return {
+          configured: notionApi.isConfigured(),
+          credentialSource: notionApi.credentialSource(),
+          mappings: notionConfig.enabled().length,
+          autoSync: notionConfig.autoSyncEnabled(),
+        };
+      } catch { return { configured: false, credentialSource: null, mappings: 0, autoSync: false }; }
+    })(),
     push: {
       configured: require('./services/webpush').isConfigured(),
       subscriptions: db.getAllPushSubscriptions().length

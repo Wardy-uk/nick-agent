@@ -243,10 +243,68 @@
   margin-top: 8px;
 }
 
+/* ---------------------------------------------- shared small primitives */
+/* Introduced with the Notion connect card. Named generically because the next
+   integration that needs a paste-a-token row should reuse these rather than
+   growing a fourth private variant. */
+
+.admin-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+.admin-hint a { color: inherit; }
+
+.admin-inline-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.admin-inline-form input {
+  flex: 1 1 280px;
+  min-width: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.admin-btn {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.admin-btn:hover:not(:disabled) { border-color: var(--text-muted); }
+.admin-btn:disabled { opacity: 0.45; cursor: default; }
+
+.admin-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+.admin-toggle input:disabled + span { opacity: 0.55; }
+
 @media (max-width: 768px) {
   .admin-cards {
     grid-template-columns: 1fr;
   }
+  .admin-inline-form input { flex-basis: 100%; }
 }
 
 /* ── AI Settings ── */

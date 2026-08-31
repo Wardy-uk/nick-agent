@@ -285,6 +285,109 @@ function VaultSyncCard({ vaultSync }) {
   );
 }
 
+/**
+ * Notion — the credential and the automatic-sync switch, in Settings.
+ *
+ * Both used to require an SSH session, an .env edit and a pm2 restart. They live
+ * in the DB now (following the OpenRouter key in routes/ai-settings.js), so this
+ * is a paste and a checkbox.
+ *
+ * The FOLDER MAPPINGS deliberately stay on the Notion Sync screen. A mapping
+ * table with a folder picker, direction per row and a dry-run report is a
+ * working surface, not a setting — putting it here would bury it, and Settings
+ * is where you come to connect a thing, not to operate it.
+ */
+function NotionConnectCard({ notion, onRefresh }) {
+  const [token, setToken] = useState('');
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const post = async (path, body, method = 'POST') => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch(apiUrl(`/api/notion-sync${path}`), {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await r.json();
+      if (data.ok === false) setError(data.error || 'That did not work.');
+      else { setToken(''); onRefresh(); }
+    } catch (e) {
+      setError(e.message);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="admin-section">
+      <div className="admin-section-title">Notion</div>
+      <div className="admin-ms-section">
+        {!notion?.configured ? (
+          <>
+            <p className="admin-hint">
+              Create an integration at{' '}
+              <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer">
+                notion.so/my-integrations
+              </a>{' '}
+              with read, update and insert content capabilities, then paste its token here.
+              Afterwards, share each parent page with it in Notion (⋯ → Connections) — the
+              token on its own grants access to nothing.
+            </p>
+            <div className="admin-inline-form">
+              <input
+                type="password"
+                value={token}
+                placeholder="ntn_…"
+                autoComplete="off"
+                spellCheck="false"
+                onChange={(e) => setToken(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && token && post('/token', { token })}
+              />
+              <button
+                className="admin-btn"
+                disabled={!token || busy}
+                onClick={() => post('/token', { token })}
+              >
+                {busy ? 'Connecting…' : 'Connect Notion'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="admin-hint">
+              {notion.mappings > 0
+                ? `${notion.mappings} folder${notion.mappings === 1 ? '' : 's'} mapped.`
+                : 'Connected, but no folders are mapped yet — nothing will sync until one is.'}
+              {' '}Map folders on the Notion Sync screen.
+            </p>
+            <label className="admin-toggle">
+              <input
+                type="checkbox"
+                checked={Boolean(notion.autoSync)}
+                disabled={busy}
+                onChange={(e) => post('/auto', { enabled: e.target.checked })}
+              />
+              <span>Sync automatically every 15 minutes</span>
+            </label>
+            {/* An env-set token cannot be changed from here, so no button is
+                offered rather than one that silently does nothing. */}
+            {notion.credentialSource === 'stored' && (
+              <button className="admin-btn" disabled={busy} onClick={() => post('/token', null, 'DELETE')}>
+                Disconnect
+              </button>
+            )}
+            {notion.credentialSource === 'env' && (
+              <p className="admin-hint">Token is set in the environment, so it can’t be changed here.</p>
+            )}
+          </>
+        )}
+        {error && <div className="admin-error">{error}</div>}
+      </div>
+    </div>
+  );
+}
+
 function PlaudSyncCard({ plaud, onRefresh }) {
   const [syncing, setSyncing] = useState(false);
   const [result, setResult] = useState(null);
@@ -715,6 +818,21 @@ export default function AdminPanel({ pushState = {} }) {
       detail: status.location?.configured
         ? `Recorder at ${status.location.recorderUrl}`
         : 'OWNTRACKS_RECORDER_URL not set — see setup guide'
+    },
+    {
+      // ⚠ "Connected" is NOT the same claim as "syncing". A token with no folder
+      // mapped does no work at all, and a card reading connected over that would
+      // be the half-truth this file already avoids for Strava.
+      name: 'Notion',
+      status: !status.notion?.configured ? 'unconfigured'
+        : status.notion.mappings > 0 ? 'connected'
+        : 'disconnected',
+      detail: !status.notion?.configured
+        ? 'No token — connect it on the Notion Sync screen'
+        : status.notion.mappings === 0
+        ? 'Token set, but no folders mapped yet — map one on the Notion Sync screen'
+        : `${status.notion.mappings} folder${status.notion.mappings === 1 ? '' : 's'} mapped · `
+          + `${status.notion.autoSync ? 'syncing every 15 min' : 'manual sync only'}`
     }
   ];
 
@@ -820,6 +938,8 @@ export default function AdminPanel({ pushState = {} }) {
       </div>
 
       <PlaudSyncCard plaud={status.plaud} onRefresh={fetchStatus} />
+
+      <NotionConnectCard notion={status.notion} onRefresh={fetchStatus} />
 
       <div className="admin-section">
         <div className="admin-section-title">Push Notifications</div>
