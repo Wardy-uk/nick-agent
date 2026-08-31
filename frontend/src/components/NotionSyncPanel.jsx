@@ -64,6 +64,23 @@ function TokenField({ onSaved }) {
   );
 }
 
+/**
+ * What the empty option says.
+ *
+ * Four states that look identical as an empty dropdown and need different
+ * actions: not connected, still asking, could not ask, and connected-but-nothing
+ * -shared. The last is the one people hit — the token grants access to nothing
+ * until pages are shared with the integration — so it must never render as
+ * "no pages exist".
+ */
+function pageChoicePrompt(pages, state) {
+  if (!state.configured) return 'Connect Notion first';
+  if (!pages || pages.loading) return 'Loading pages…';
+  if (pages.error || pages.ok === false) return "Couldn't reach Notion";
+  if (!pages.shared) return 'No pages shared with the integration yet';
+  return 'Choose a page…';
+}
+
 const blankRow = () => ({
   id: `new-${Math.random().toString(36).slice(2, 8)}`,
   notionPageId: '', notionTitle: '', vaultFolder: '', mode: 'two-way', enabled: true,
@@ -101,6 +118,11 @@ export default function NotionSyncPanel() {
       setPages({ ok: false, error: e.message });
     }
   }, []);
+
+  // Fetched as soon as we are connected, rather than behind a "Browse" button:
+  // the dropdown IS the browser now, and a select that only fills in after you
+  // find the right button is just the paste field with extra steps.
+  useEffect(() => { if (state?.configured) loadPages(); }, [state?.configured, loadPages]);
 
   const update = (id, patch) => {
     setDirty(true);
@@ -201,27 +223,51 @@ export default function NotionSyncPanel() {
             <div className="ns-row-main">
               <label className="ns-field">
                 <span>Notion page</span>
-                <input
+                <select
                   value={row.notionPageId}
-                  placeholder="Paste a Notion page URL or ID"
-                  onChange={(e) => update(row.id, { notionPageId: e.target.value })}
-                />
-                {row.notionTitle && <small className="ns-muted">{row.notionTitle}</small>}
+                  onChange={(e) => {
+                    const picked = (pages?.pages || []).find((p) => p.id === e.target.value);
+                    // The title rides along so a mapping still names its page
+                    // when Notion is unreachable, or after it is unshared.
+                    update(row.id, { notionPageId: e.target.value, notionTitle: picked?.title || null });
+                  }}
+                >
+                  <option value="">{pageChoicePrompt(pages, state)}</option>
+                  {/* ⚠ A select cannot represent a value that is not among its
+                      options — it renders blank and the next save silently
+                      rewrites the mapping to nothing. So a page that is stored
+                      but no longer listed (unshared, archived, or Notion simply
+                      unreachable) is kept as an explicit option that SAYS so. */}
+                  {row.notionPageId && !(pages?.pages || []).some((p) => p.id === row.notionPageId) && (
+                    <option value={row.notionPageId}>
+                      {row.notionTitle ? `${row.notionTitle} — not currently visible` : 'Stored page — not currently visible'}
+                    </option>
+                  )}
+                  {(pages?.pages || []).map((p) => (
+                    <option key={p.id} value={p.id}>{p.title}{p.isChild ? '' : '  (top level)'}</option>
+                  ))}
+                </select>
               </label>
 
               <span className="ns-arrow" aria-hidden="true">↔</span>
 
               <label className="ns-field">
                 <span>Obsidian parent folder</span>
-                <input
-                  list={`ns-folders-${row.id}`}
+                <select
                   value={row.vaultFolder}
-                  placeholder="Projects/Notion"
                   onChange={(e) => update(row.id, { vaultFolder: e.target.value })}
-                />
-                <datalist id={`ns-folders-${row.id}`}>
-                  {(state.vaultFolders || []).map((f) => <option key={f} value={f} />)}
-                </datalist>
+                >
+                  <option value="">
+                    {state.vaultReadable === false ? 'Vault not readable' : 'Choose a folder…'}
+                  </option>
+                  {/* Same trap: a folder that has been renamed or removed since
+                      the mapping was made must stay selectable, or saving would
+                      quietly repoint the mapping. */}
+                  {row.vaultFolder && !(state.vaultFolders || []).includes(row.vaultFolder) && (
+                    <option value={row.vaultFolder}>{row.vaultFolder} — no longer in the vault</option>
+                  )}
+                  {(state.vaultFolders || []).map((f) => <option key={f} value={f}>{f}</option>)}
+                </select>
               </label>
             </div>
 
@@ -254,11 +300,31 @@ export default function NotionSyncPanel() {
         <button onClick={() => { setDirty(true); setRows((p) => [...p, blankRow()]); }}>
           Add mapping
         </button>
-        <button onClick={loadPages} disabled={!state.configured}>Browse Notion pages</button>
+        {/* Refresh, not Browse — the dropdown already lists the pages. This is
+            for the common setup moment: share a page in Notion, come back, and
+            expect to find it without reloading NEURO. */}
+        <button onClick={loadPages} disabled={!state.configured || pages?.loading}>
+          {pages?.loading ? 'Checking Notion…' : 'Refresh page list'}
+        </button>
         <button className="ns-primary" onClick={save} disabled={!dirty || busy}>
           {busy ? 'Saving…' : dirty ? 'Save mappings' : 'Saved'}
         </button>
       </div>
+
+      {/* Only the states that need an action. A healthy list is the dropdown's
+          job to show, not a second panel repeating it. */}
+      {state.configured && pages && !pages.loading && (pages.error || pages.ok === false) && (
+        <div className="ns-warn">
+          <strong>Couldn’t reach Notion.</strong> {pages.error}
+        </div>
+      )}
+      {state.configured && pages?.ok && !pages.shared && (
+        <div className="ns-warn">
+          <strong>No pages shared yet.</strong> In Notion, open the page you want synced →
+          <strong> ⋯ → Connections → your integration</strong>, then hit “Refresh page list”.
+          The token on its own grants access to nothing.
+        </div>
+      )}
 
       {errors.length > 0 && (
         <div className="ns-warn">
@@ -267,30 +333,6 @@ export default function NotionSyncPanel() {
         </div>
       )}
 
-      {pages && (
-        <section className="ns-pages">
-          <h3>Pages shared with NEURO</h3>
-          {pages.loading && <p className="ns-muted">Asking Notion…</p>}
-          {pages.error && <p className="ns-warn">{pages.error}</p>}
-          {/* "Nothing shared yet" is a setup step, not an empty workspace. */}
-          {pages.ok && !pages.shared && <p className="ns-muted">{pages.note}</p>}
-          {pages.ok && pages.shared && (
-            <ul>
-              {pages.pages.map((p) => (
-                <li key={p.id}>
-                  <button onClick={() => {
-                    setDirty(true);
-                    setRows((prev) => [...prev, { ...blankRow(), notionPageId: p.id, notionTitle: p.title }]);
-                  }}>
-                    {p.title}
-                  </button>
-                  {p.isChild && <small className="ns-muted"> (child page)</small>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
 
       <section className="ns-run">
         <div className="ns-actions">

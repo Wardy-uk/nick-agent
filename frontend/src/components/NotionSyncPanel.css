@@ -83,6 +83,7 @@
 
 .ns-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 260px; min-width: 0; }
 .ns-field > span { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.ns-field select,
 .ns-field input {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -92,6 +93,22 @@
   padding: 7px 9px;
   min-width: 0;
 }
+
+.ns-field select {
+  /* An OS-default select renders light-on-light against this surface in some
+     browsers, so the control is painted explicitly rather than inherited. */
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 16px) calc(50% + 2px), calc(100% - 11px) calc(50% + 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 30px;
+  cursor: pointer;
+}
+/* The "choose…" placeholder reads as muted in the open list rather than looking
+   like a real choice. */
+.ns-field select option[value=""] { color: var(--text-muted); }
 
 .ns-arrow { color: var(--text-muted); padding-bottom: 9px; flex: 0 0 auto; }
 
@@ -119,8 +136,7 @@
 .ns-actions { display: flex; gap: 10px; margin: 16px 0; flex-wrap: wrap; }
 
 .ns-actions button,
-.ns-remove,
-.ns-pages button {
+.ns-remove {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 6px);
@@ -130,18 +146,11 @@
   cursor: pointer;
 }
 .ns-actions button:hover:not(:disabled),
-.ns-remove:hover,
-.ns-pages button:hover { border-color: var(--text-muted); }
+.ns-remove:hover { border-color: var(--text-muted); }
 .ns-actions button:disabled { opacity: 0.45; cursor: default; }
 
 .ns-primary { border-color: var(--accent, var(--success)) !important; }
 .ns-remove { padding: 5px 10px; color: var(--text-muted); }
-
-/* --------------------------------------------------------- page browser */
-
-.ns-pages { margin: 16px 0; }
-.ns-pages h3 { font-size: 13px; margin: 0 0 8px; }
-.ns-pages ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* ------------------------------------------------------------- the run */
 
