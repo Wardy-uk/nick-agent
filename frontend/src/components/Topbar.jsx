@@ -1,7 +1,52 @@
 import React from 'react';
-import { apiUrl } from '../api';
+import { apiUrl, getPin } from '../api';
 import { assessWorker } from '../../../shared/worker-health.cjs';
 import './Topbar.css';
+
+// Which room Nick is in, for the banner.
+//
+// ⚠ It shows a room ONLY when the fingerprint was sure. Every other answer -
+// uncalibrated, no match, too close to call, SARA unreachable - renders NOTHING
+// rather than a placeholder, because a banner that permanently reads "NEURO:
+// unknown" is one nobody reads by week two, and it would be sat next to the
+// logo on every screen. Silence is the honest empty state here.
+//
+// ⚠ It polls /api/signals/room, NOT /api/attention/context. The latter runs a
+// full gather - Home Assistant, calendar, location, working days - on every
+// call, and this sits in the chrome of every page.
+function useRoom(apiUrlFn) {
+  const [room, setRoom] = React.useState(null);
+
+  React.useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const res = await fetch(apiUrlFn('/api/signals/room'), {
+          headers: { 'X-Neuro-Pin': getPin() },
+        });
+        if (!res.ok) throw new Error('bad status');
+        const d = await res.json();
+        if (alive) setRoom(d && d.known && d.room ? d.room : null);
+      } catch {
+        if (alive) setRoom(null);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, [apiUrlFn]);
+
+  return room;
+}
+
+// "living-room" is a sensor id, not something to show a person.
+function roomLabel(room) {
+  if (!room) return null;
+  return room
+    .split('-')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
 
 function QuickAdd({ apiUrl: apiUrlFn }) {
   const [open, setOpen] = React.useState(false);
@@ -101,6 +146,7 @@ function QuickAdd({ apiUrl: apiUrlFn }) {
 
 export default function Topbar({ status, onMenuToggle, onChatToggle, chatOpen, weekend, onWeekendOverride, weekendOverride, children }) {
   const itIsWeekend = new Date().getDay() === 0 || new Date().getDay() === 6;
+  const roomHere = roomLabel(useRoom(apiUrl));
 
   // AI provider status
   const ai = status?.ai || {};
@@ -177,7 +223,9 @@ export default function Topbar({ status, onMenuToggle, onChatToggle, chatOpen, w
           <span /><span /><span />
         </button>
         <span className="topbar-logo">NUERO</span>
-        <span className="topbar-version">v1.0</span>
+        {roomHere
+          ? <span className="topbar-room" title="Where your watch was last picked up">{roomHere}</span>
+          : <span className="topbar-version">v1.0</span>}
       </div>
       <div className="topbar-center">
         {weekend && (

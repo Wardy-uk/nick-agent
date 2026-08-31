@@ -321,3 +321,17 @@
     width: 150px;
   }
 }
+
+/* Which room he is in, beside the logo. Takes the place of the version string
+   when known, so the banner gains a fact rather than another badge. */
+.topbar-room {
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  color: var(--accent, #7fd1ff);
+  background: rgba(127, 209, 255, 0.10);
+  border: 1px solid rgba(127, 209, 255, 0.22);
+  white-space: nowrap;
+}
