@@ -203,11 +203,39 @@ test('away comes from presence OR location', () => {
 
 test('place is reported separately from activity', () => {
   const c = resolveContext(calm(), TUE_1430);
-  assert.deepEqual(c.place, { known: true, name: 'office', source: 'owntracks' });
+  assert.deepEqual(c.place, {
+    known: true, name: 'office', source: 'owntracks',
+    // The room, when the BLE fingerprint was sure. Null here because this
+    // fixture carries no room — and null must stay a REAL answer, distinct from
+    // a room that happens to be called "unknown".
+    room: null, roomSubject: null, roomWhy: null,
+  });
 
   const blind = resolveContext(calm({ location: { known: false } }), TUE_1430);
   assert.equal(blind.place.known, false);
   assert.equal(blind.place.name, null);
+});
+
+test('a known room rides on place, and says what it measured', () => {
+  const c = resolveContext(
+    calm({ location: { known: true, place: 'home', source: 'home-assistant', room: 'kitchen', roomSubject: 'watch' } }),
+    TUE_1430,
+  );
+  assert.equal(c.place.room, 'kitchen');
+  // ⚠ It tracks the WATCH. Proven live: Nick showered while it sat on a bedroom
+  // surface and the room read `bedroom` for eight minutes. Nothing downstream
+  // may promote that to a claim about where the man is.
+  assert.equal(c.place.roomSubject, 'watch');
+  assert.equal(c.place.roomWhy, null);
+});
+
+test('an unreadable room states WHY, and never guesses one', () => {
+  const c = resolveContext(
+    calm({ location: { known: true, place: 'home', source: 'home-assistant', roomWhy: 'no rooms have been calibrated' } }),
+    TUE_1430,
+  );
+  assert.equal(c.place.room, null, 'no room is better than a guessed one');
+  assert.match(c.place.roomWhy, /calibrated/);
 });
 
 // ── Confidence is earned by inputs, not by how firm the answer sounds ─────────

@@ -61,7 +61,13 @@ const STATE_KEY = 'capture_links';
 // `['tasks']` — precisely what it could do yesterday.
 //
 // `tasks` is implicit and always granted: it is what an account IS.
-const SCOPES = ['tasks', 'calendar', 'kitchen', 'shared-tasks'];
+// ⚠ `presence` is Nick's real-time location INSIDE the house, published to an
+// endpoint that is on the PUBLIC INTERNET behind a Tailscale funnel. It is the
+// most personal thing this mount can carry — finer than a calendar, and live —
+// so it is its own scope, granted deliberately, and it is NOT in DEFAULT_SCOPES.
+// Nothing bundles it with `calendar` or `kitchen`: a scope that arrives as a
+// side effect of wanting the shopping list is not consent.
+const SCOPES = ['tasks', 'calendar', 'kitchen', 'shared-tasks', 'presence'];
 const DEFAULT_SCOPES = ['tasks'];
 
 /** Normalise a requested scope list. Unknown scopes are DROPPED, never passed

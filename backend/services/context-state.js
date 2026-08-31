@@ -374,7 +374,17 @@ function resolveContext(inputs = {}, now = new Date()) {
   // Place is reported independently of activity — "where" and "what" are
   // different questions and a surface may want one without the other.
   const place = known(src.location)
-    ? { known: true, name: src.location.place || 'unknown', source: src.location.source || null }
+    ? {
+      known: true,
+      name: src.location.place || 'unknown',
+      source: src.location.source || null,
+      // The room, when the fingerprint was sure. Null is a real answer here and
+      // must stay distinguishable from a room called "unknown": `roomWhy` says
+      // why it could not tell, and the two are never merged.
+      room: src.location.room || null,
+      roomSubject: src.location.roomSubject || null,
+      roomWhy: src.location.room ? null : (src.location.roomWhy || null),
+    }
     : { known: false, name: null, source: null };
 
   if (unknowns.length === INPUT_BLOCKS.length) {

@@ -679,6 +679,29 @@ async function gather(now = new Date()) {
     gaps.push({ input: 'location', why: e.message });
   }
 
+  // Which ROOM, from the BLE fingerprint. Read as a sensor feed, never as a
+  // second opinion — it measures, NEURO reasons. Attached to `location` rather
+  // than added as a new input block, because "where is he" is one question and
+  // the house is simply a finer answer to it than the town.
+  //
+  // ⚠ It tracks the WATCH: he showered on 31 Aug while it sat on a bedroom
+  // surface and it reported `bedroom` for eight minutes. `subject` says so, and
+  // nothing downstream may quietly promote that to a claim about the man.
+  try {
+    const roomPresence = require('./room-presence');
+    const r = await roomPresence.read(now);
+    if (r.known) {
+      inputs.location.room = r.room;
+      inputs.location.roomSubject = r.subject;
+    } else if (r.why) {
+      // Not a gap in `location` — the town-level read may be perfectly fine.
+      // Recorded so "no room" is never mistaken for "no sensors".
+      inputs.location.roomWhy = r.why;
+    }
+  } catch (e) {
+    inputs.location.roomWhy = e.message;
+  }
+
   // The HA fallback inherits the same freshness rule by construction: a stale
   // `phone` has had its presence nulled above, so this cannot fire on it.
   if (!inputs.location.known && phone && phone.presence) {

@@ -82,7 +82,7 @@ router.post('/login', (req, res) => {
  * Each block is independently guarded and reports its own failure: a kitchen
  * file that will not parse must not blank the calendar, and vice versa.
  */
-router.get('/home', requireAccount, (req, res) => {
+router.get('/home', requireAccount, async (req, res) => {
   const out = { ok: true, label: req.account.label, scopes: capture.scopesOf(req.account), gaps: [] };
 
   // ── Tasks ────────────────────────────────────────────────────────────────
@@ -95,6 +95,36 @@ router.get('/home', requireAccount, (req, res) => {
   } catch (e) {
     out.tasks = null;
     out.gaps.push({ block: 'tasks', why: e.message });
+  }
+
+  // ── Where Nick is in the house ───────────────────────────────────────────
+  //
+  // ⚠ ABSENT unless the account holds `presence`, not hidden. The section is
+  // not mounted at all, exactly as a private catalogue answers the same 404 a
+  // missing one does — the client enforces nothing and must never start.
+  //
+  // ⚠ COARSE ON PURPOSE: the room NAME and nothing else. No RSSI, no scores, no
+  // history, no timestamps of movement. A stream of those is a record of what
+  // somebody did all day, which is a different thing from "he's in the kitchen"
+  // and is not what was asked for.
+  //
+  // ⚠ Three renderings stay distinct, the `Section.jsx` rule: `known:false` with
+  // a reason (could not tell), a room (he is there), and `home:false` (out of
+  // the house). "I couldn't read it" and "he's out" send her to different
+  // rooms, and merging them is how this surface starts lying.
+  if (capture.hasScope(req.account, 'presence')) {
+    try {
+      const roomPresence = require('../services/room-presence');
+      const r = await roomPresence.read();
+      out.presence = r.known
+        ? { known: true, room: r.room, subject: r.subject || 'watch' }
+        // The classifier's own reason, generalised — it can name sensors and
+        // calibration state, which is Nick's business and not hers.
+        : { known: false, why: "can't tell which room" };
+    } catch (e) {
+      out.presence = { known: false, why: "can't tell which room" };
+      out.gaps.push({ block: 'presence', why: e.message });
+    }
   }
 
   // ── Calendar ─────────────────────────────────────────────────────────────
