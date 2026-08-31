@@ -59,8 +59,26 @@ const LATENCY_SENSITIVE_TASKS = new Set([
   'briefing_synthesis',
 ]);
 
-// Kept as an alias — _isOpenRouterAllowed and older callers still reference it.
-const CLOUD_PREFERRED_TASKS = LATENCY_SENSITIVE_TASKS;
+/**
+ * Tasks that need a CAPABLE model, for reasons that have nothing to do with
+ * latency. Nobody is waiting on these; a 1.5B model simply cannot do them.
+ *
+ * The policy above splits on "is Nick sitting there waiting", which is the right
+ * axis for almost everything — and it has a gap, found 31 Aug 2026 when the
+ * profile seed went to Ollama and came back without the JSON array it was asked
+ * for. Structured extraction over several thousand words of prose is not a
+ * latency problem, it is a capability one, and routing it as "background,
+ * therefore local" was reading the wrong axis.
+ */
+const CAPABILITY_TASKS = new Set([
+  'profile_seed',
+]);
+
+// Everything that should reach for cloud FIRST, for either reason. Kept under
+// the old name because `_isOpenRouterAllowed` and older callers reference it —
+// but it is now a real superset rather than an alias, which is what the name
+// claimed all along.
+const CLOUD_PREFERRED_TASKS = new Set([...LATENCY_SENSITIVE_TASKS, ...CAPABILITY_TASKS]);
 
 /**
  * Provider order for a task.
@@ -71,7 +89,7 @@ const CLOUD_PREFERRED_TASKS = LATENCY_SENSITIVE_TASKS;
  * and, being tier 1 at the time, took chat and the standup down with it.
  */
 function _providerOrder(taskType) {
-  if (LATENCY_SENSITIVE_TASKS.has(taskType)) {
+  if (CLOUD_PREFERRED_TASKS.has(taskType)) {
     return ['openrouter', 'anthropic', 'openai', 'ollama'];
   }
   return ['ollama', 'openrouter', 'anthropic', 'openai'];
@@ -925,6 +943,8 @@ module.exports = {
   getToolProvider,
   _providerOrder,
   LATENCY_SENSITIVE_TASKS,
+  CAPABILITY_TASKS,
+  CLOUD_PREFERRED_TASKS,
   // Tool-using chat calls the Anthropic provider directly (the loop has to see
   // each response before it can run anything), so it has to report its own usage
   // or the daily budget silently under-counts every turn that used tools.
