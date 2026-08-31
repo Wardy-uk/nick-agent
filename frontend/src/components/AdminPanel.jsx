@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { apiUrl, setPin as storePin } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import './AdminPanel.css';
+import VestaAccounts from './VestaAccounts';
 
 /**
  * Change the NEURO PIN.
@@ -1011,6 +1012,8 @@ export default function AdminPanel({ pushState = {} }) {
       <PlaudSyncCard plaud={status.plaud} onRefresh={fetchStatus} />
 
       <NotionConnectCard notion={status.notion} onRefresh={fetchStatus} />
+
+      <VestaAccounts />
 
       <FeatureSwitches />
 
