@@ -358,6 +358,10 @@ async function searchPages(query = '') {
       id: page.id,
       title: titleOf(page) || '(untitled)',
       path: pathOf(page),
+      // The real parent id, so coverage can be worked out by walking ANCESTRY
+      // rather than by string-matching the breadcrumb — a page whose title
+      // contains " / " would break the string approach silently.
+      parentId: page.parent?.type === 'page_id' ? page.parent.page_id : null,
       url: page.url || null,
       lastEdited: page.last_edited_time,
       archived: Boolean(page.archived || page.in_trash),

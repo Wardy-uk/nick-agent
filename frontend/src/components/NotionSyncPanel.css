@@ -195,6 +195,11 @@
    need a badge; an ignored one is a decision already taken. */
 .ns-cov--unmapped { border-left-color: var(--warning); }
 .ns-cov--mapped { border-left-color: var(--success); }
+/* Synced via an ancestor mapping — the same good state as `mapped`, reached a
+   different way, so it reads the same rather than as a lesser one. */
+.ns-cov--covered { border-left-color: var(--success); opacity: 0.75; }
+/* A container whose children are mapped. Structural, not a gap. */
+.ns-cov--container { border-left-color: var(--border); opacity: 0.55; }
 .ns-cov--ignored { opacity: 0.6; }
 
 .ns-cov-title { flex: 0 1 auto; }

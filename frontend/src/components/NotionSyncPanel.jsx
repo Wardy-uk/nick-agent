@@ -270,16 +270,61 @@ export default function NotionSyncPanel() {
   const ignoredById = new Map(ignored.map((e) => [e.id, e]));
   const savedByPage = new Map((state.mappings || []).map((m) => [m.notionPageId, m]));
 
+  // ⚠ Coverage is about ANCESTRY, not about whether a page is itself a row.
+  //
+  // The first version asked "is this page a mapping target?" and called
+  // everything else a gap. Measured against the live workspace that made 48 of
+  // 60 pages amber — but 20 were descendants of a mapping and already syncing
+  // (one of them a page this very sync had CREATED), and 10 were under the
+  // ignored D&D tree. Only 7 were real. A gap column that is 85% noise is one
+  // nobody reads, which costs exactly the one time it is right.
+  const pageById = new Map((pages?.pages || []).map((p) => [p.id, p]));
+
+  // Walk to the root, returning every ancestor id. Depth-capped against a
+  // malformed parent chain.
+  const ancestorsOf = (page) => {
+    const out = [];
+    let cur = page;
+    for (let i = 0; i < 8 && cur?.parentId; i += 1) {
+      out.push(cur.parentId);
+      cur = pageById.get(cur.parentId);
+    }
+    return out;
+  };
+
+  // A page whose DESCENDANT is mapped is structural, not a gap — `Work` is a
+  // container for six mapped children, and calling it unmapped is noise.
+  const mappedAncestry = new Set();
+  for (const m of state.mappings || []) {
+    const page = pageById.get(m.notionPageId);
+    if (page) for (const id of ancestorsOf(page)) mappedAncestry.add(id);
+  }
+
   const coverageRows = (pages?.pages || []).map((page) => {
     const mapping = savedByPage.get(page.id);
     if (mapping) return { page, kind: 'mapped', mapping };
-    const ig = ignoredById.get(page.id);
+
+    const ancestry = ancestorsOf(page);
+
+    const ig = ignoredById.get(page.id) || ancestry.map((id) => ignoredById.get(id)).find(Boolean);
     if (ig) return { page, kind: 'ignored', note: ig.note };
+
+    // Inside a mapped TREE: its content is synced by that mapping.
+    const coveringId = ancestry.find((id) => {
+      const m = savedByPage.get(id);
+      return m && m.kind !== 'page';
+    });
+    if (coveringId) {
+      return { page, kind: 'covered', via: savedByPage.get(coveringId) };
+    }
+
+    if (mappedAncestry.has(page.id)) return { page, kind: 'container' };
+
     return { page, kind: 'unmapped' };
-  // Gaps first — the column worth acting on should not be below the noise.
+  // Real gaps first — the column worth acting on must not sit below the noise.
   }).sort((a, b) => {
-    const rank = { unmapped: 0, mapped: 1, ignored: 2 };
-    return rank[a.kind] - rank[b.kind] || a.page.title.localeCompare(b.page.title);
+    const rank = { unmapped: 0, mapped: 1, covered: 2, container: 3, ignored: 4 };
+    return rank[a.kind] - rank[b.kind] || a.page.path.localeCompare(b.page.path);
   });
 
   // Mapped folders are listed even if they are not in vaultFolders() — a folder
@@ -296,6 +341,7 @@ export default function NotionSyncPanel() {
   const unmappedFolders = (state.vaultFolders || []).filter((f) => !mappedFolderSet.has(f));
 
   const mapped = coverageRows.filter((c) => c.kind === 'mapped');
+  const covered = coverageRows.filter((c) => c.kind === 'covered');
   const unmapped = coverageRows.filter((c) => c.kind === 'unmapped');
 
   return (
@@ -546,8 +592,13 @@ export default function NotionSyncPanel() {
           "handled elsewhere" and "a gap" need opposite reactions. */}
       {state.configured && pages?.ok && pages.shared && (
         <section className="ns-coverage">
-          <h3>Coverage — {mapped.length} mapped, {unmapped.length} not mapped
-            {ignored.length > 0 && `, ${ignored.length} ignored`}</h3>
+          {/* "Synced" is the honest headline: a page inside a mapped tree IS
+              synced, and counting it as a gap is what made this list unreadable. */}
+          <h3>
+            Coverage — {mapped.length + covered.length} synced
+            {unmapped.length > 0 && `, ${unmapped.length} not mapped`}
+            {ignored.length > 0 && `, ${ignored.length} ignored`}
+          </h3>
 
           <ul className="ns-cov-list">
             {coverageRows.map((c) => (
@@ -559,6 +610,14 @@ export default function NotionSyncPanel() {
                     {MODES.find((m) => m.id === c.mapping.mode)?.label}
                     {!c.mapping.enabled && ' · disabled'}
                   </span>
+                )}
+                {c.kind === 'covered' && (
+                  <span className="ns-cov-detail">
+                    synced by <code>{c.via.vaultFolder}</code>
+                  </span>
+                )}
+                {c.kind === 'container' && (
+                  <span className="ns-cov-detail">holds mapped pages</span>
                 )}
                 {c.kind === 'ignored' && (
                   <span className="ns-cov-detail">
