@@ -36,6 +36,7 @@ const router = express.Router();
 const capture = require('../services/capture-links');
 const vesta = require('../services/vesta');
 const catalogue = require('../services/catalogue');
+const vestaVision = require('../services/vesta-vision');
 const db = require('../db/database');
 
 /**
@@ -127,6 +128,11 @@ router.get('/home', requireAccount, (req, res) => {
         out.kitchen = kitchen.cat.items;
         out.kitchenSections = kitchen.cat.sections;
         out.meals = vesta.suggestMeals(kitchen.cat);
+        // Whether the camera button is worth showing at all. The same principle
+        // as `scopes`: the page renders what it is allowed to, rather than
+        // offering a control that answers 503 when tapped. Still not the
+        // enforcement — the route re-checks the flag on every call.
+        out.photo = vestaVision.isEnabled();
       } else if (!kitchen.notFound && !kitchen.notShared) {
         out.gaps.push({ block: 'kitchen', why: kitchen.why });
       }
@@ -193,6 +199,52 @@ router.post('/catalogue/:slug/used', requireAccount, kitchenGate, (req, res) => 
   const result = catalogue.removeItem(req.params.slug, section, name);
   if (!result.ok) return res.status(result.notFound ? 404 : 400).json({ ok: false, error: result.why });
   res.json({ ok: true, items: result.cat.items, sections: result.cat.sections });
+});
+
+/**
+ * A photograph of the shelf, turned into a list she confirms.
+ *
+ * ⚠ IT CREATES NOTHING. The response is a PROPOSAL; each item she keeps is then
+ * added through `/catalogue/:slug/add` above, exactly as a typed one is. That is
+ * Nick's own condition on this feature and it is also the safe shape — a vision
+ * model is right most of the time, and "most of the time" is not good enough to
+ * write a fact about the freezer that somebody will shop against.
+ *
+ * ⚠ The photo is never stored, never logged and never echoed back. It lives in
+ * memory for this request only. See `services/vesta-vision.js`.
+ *
+ * Gated three deep, because this is the one route on the public mount that
+ * spends money: the `kitchen` scope, `VESTA_PHOTO_ENABLED` (default FALSE), and
+ * a per-account daily cap.
+ */
+router.post('/catalogue/:slug/scan', requireAccount, kitchenGate, async (req, res) => {
+  const found = sharedCatalogueOr404(req.params.slug, res);
+  if (!found) return;
+
+  const { image, mediaType } = req.body || {};
+  try {
+    const result = await vestaVision.proposeFromPhoto({
+      username: req.account.username,
+      imageBase64: image,
+      mediaType,
+      // The catalogue's REAL sections, read fresh — never a list the client
+      // sent, which would let a caller name a section it invented.
+      sections: found.cat.sections,
+    });
+    if (!result.ok) {
+      // 503 when the feature is off or unreachable, 429 when she has used the
+      // day's allowance, 400 when the photo itself is the problem. Distinct
+      // because the thing to do about each is different.
+      const status = result.disabled ? 503 : (result.cap && result.used >= result.cap) ? 429 : 400;
+      return res.status(status).json({ ok: false, error: result.why });
+    }
+    res.json({ ok: true, proposed: result.proposed, used: result.used, cap: result.cap });
+  } catch (e) {
+    // ⚠ Never the raw message — this mount is public and the message can carry
+    // model, key and account detail.
+    console.error('[Vesta] Photo scan failed:', e.message);
+    res.status(500).json({ ok: false, error: 'Something went wrong.' });
+  }
 });
 
 module.exports = router;

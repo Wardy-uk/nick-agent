@@ -73,9 +73,20 @@ export default function Home({ onSignedOut }) {
     await api.addTask(token, text);
     await refresh();
   }
-  async function addItem(section, name) {
-    await api.addItem(token, KITCHEN_SLUG, section, name);
-    await refresh();
+  /**
+   * `quiet` skips the refresh so a confirmed photo does not re-fetch the whole
+   * home screen once per item — the proposal loop refreshes once when it is
+   * finished. The result is returned either way, because the caller needs to
+   * know whether something was already in.
+   */
+  async function addItem(section, name, { quiet = false } = {}) {
+    const result = await api.addItem(token, KITCHEN_SLUG, section, name);
+    if (!quiet) await refresh();
+    return result;
+  }
+
+  async function scanPhoto(image, mediaType) {
+    return api.scanPhoto(token, KITCHEN_SLUG, image, mediaType);
   }
   async function useItem(section, name) {
     await api.useItem(token, KITCHEN_SLUG, section, name);
@@ -115,8 +126,11 @@ export default function Home({ onSignedOut }) {
               sections={data.kitchenSections}
               items={data.kitchen}
               gap={kitchenGap}
+              photo={data.photo === true}
               onAdd={addItem}
               onUse={useItem}
+              onScan={scanPhoto}
+              onRefresh={refresh}
             />
             <Meals meals={data.meals} />
           </>

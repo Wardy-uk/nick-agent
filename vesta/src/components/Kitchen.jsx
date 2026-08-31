@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import Section from './Section.jsx';
+import PhotoProposal from './PhotoProposal.jsx';
+import { preparePhoto, ACCEPTED } from '../photo.js';
 
 /**
  * What is in, and getting it in and out.
@@ -13,10 +15,33 @@ import Section from './Section.jsx';
  * capitalisation and, worse, silently drop a section he has created but not yet
  * put anything in — an empty Freezer must still show, or she cannot add to it.
  */
-export default function Kitchen({ sections, items, gap, onAdd, onUse }) {
+export default function Kitchen({ sections, items, gap, photo, onAdd, onUse, onScan, onRefresh }) {
   const [pending, setPending] = useState(null);
   const [error, setError] = useState(null);
   const [drafts, setDrafts] = useState({});
+  const [proposal, setProposal] = useState(null);
+  const [scanning, setScanning] = useState(false);
+  const fileRef = useRef(null);
+
+  async function takePhoto(e) {
+    const file = e.target.files && e.target.files[0];
+    // ⚠ Cleared immediately, or choosing the SAME photo twice fires no change
+    // event and the button appears dead.
+    e.target.value = '';
+    if (!file) return;
+
+    setScanning(true);
+    setError(null);
+    try {
+      const { image, mediaType } = await preparePhoto(file);
+      const result = await onScan(image, mediaType);
+      setProposal(result.proposed);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setScanning(false);
+    }
+  }
 
   async function act(fn, key) {
     setPending(key);
@@ -37,6 +62,55 @@ export default function Kitchen({ sections, items, gap, onAdd, onUse }) {
         ? "Nothing recorded in here yet — add what's in and I'll start suggesting meals."
         : null}
     >
+      {/* Only rendered when the server said the camera is switched on — a
+          button that answers 503 when tapped is worse than no button. */}
+      {photo && !proposal && (
+        <div className="kitchen__photo">
+          <input
+            ref={fileRef}
+            className="kitchen__file"
+            type="file"
+            accept={ACCEPTED}
+            // Opens the camera straight away on a phone, rather than the
+            // library — she is standing at the fridge.
+            capture="environment"
+            onChange={takePhoto}
+          />
+          <button className="btn" disabled={scanning} onClick={() => fileRef.current?.click()}>
+            {scanning ? 'Looking…' : 'Photograph a shelf'}
+          </button>
+        </div>
+      )}
+
+      {proposal && (
+        <PhotoProposal
+          proposed={proposal}
+          sections={list}
+          onConfirm={async picked => {
+            let added = 0, skipped = 0;
+            const failed = [];
+            // Sequential and fault-isolated: each add is a real write, and one
+            // failure must not abandon the rest (bookAll()'s rule). Nothing is
+            // retried.
+            for (const item of picked) {
+              try {
+                const r = await onAdd(item.section, item.name, { quiet: true });
+                if (r && r.already) skipped++; else added++;
+              } catch (err) {
+                failed.push({ name: item.name, why: err.message });
+              }
+            }
+            return { added, skipped, failed };
+          }}
+          onCancel={() => {
+            setProposal(null);
+            // One refresh when the batch is done, rather than one per item —
+            // the adds above ran `quiet`.
+            onRefresh();
+          }}
+        />
+      )}
+
       {list.map(section => {
         const key = section.toLowerCase();
         const contents = (items || {})[key] || [];

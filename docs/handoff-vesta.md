@@ -6,8 +6,12 @@ Written 31 Aug 2026.
 
 > **UPDATE, 31 Aug 2026 — step 1 is DONE.** The app is built at `vesta/` and
 > covered below. Step 2 (the Catalogues panel) was picked up by a CONCURRENT
-> session and is not mine to describe. Step 3 (photo → items) is still open, and
-> still last.
+> session and is not mine to describe. **Step 3 (photo → items) is now built
+> too** — but behind `VESTA_PHOTO_ENABLED`, which **defaults FALSE**, because
+> the gate below ("do this last, after the typed path is proven") is a judgement
+> about readiness rather than about code, and it is yours to lift. It proposes a
+> list she confirms and writes nothing; the vault file is asserted byte-identical
+> after a scan.
 >
 > ⚠ **A bug was found and fixed on the way in, and it is the interesting part.**
 > `routes/vesta.js` passed `req.account.username` to `capture.submissions()` and

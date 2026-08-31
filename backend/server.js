@@ -54,6 +54,14 @@ const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors());
+// ⚠ /api/v is the PUBLIC mount (Tailscale Funnel), and since VESTA gained a
+// fridge photo it accepts uploads. It gets its own, much tighter parser
+// REGISTERED FIRST — body-parser skips a request whose body is already parsed,
+// so the order is the whole mechanism and swapping these two lines silently
+// restores the 50mb ceiling for anyone on the internet. 6mb leaves room for a
+// 4mb image (base64 inflates by a third); the service refuses above that with a
+// sentence rather than letting the parser answer with a stack trace.
+app.use('/api/v', express.json({ limit: '6mb' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 

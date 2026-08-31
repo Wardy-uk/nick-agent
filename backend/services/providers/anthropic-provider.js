@@ -51,6 +51,67 @@ async function chat(systemPrompt, messages, options = {}) {
   return { text, usage };
 }
 
+/**
+ * One image, one question, one answer. Used by VESTA's fridge photo.
+ *
+ * Lives here rather than in the caller so every Anthropic SDK call in NEURO is
+ * in one file — the same reason `chat` and `chatWithTools` are neighbours.
+ *
+ * ⚠ THE IMAGE IS NEVER PERSISTED, NEVER LOGGED, AND NEVER RETURNED. It exists
+ * as a base64 string for the life of one request. A photo of a kitchen is a
+ * photo of somebody's home: the post on the worktop, a prescription, a laptop
+ * screen, whoever happens to be standing in it. The list it produces is the
+ * output; the picture is not kept.
+ *
+ * Effort is deliberately LOW: reading labels off a shelf is extraction, not
+ * reasoning, and the depth would be paid for on every photo without changing
+ * the answer.
+ */
+async function vision(systemPrompt, { imageBase64, mediaType, prompt }, options = {}) {
+  if (!_key()) throw new Error('Anthropic API key not configured');
+
+  const response = await _getClient().messages.create({
+    model: options.model || _model(),
+    // Generous on purpose. A long shelf is a long JSON array, and the failure
+    // mode of a tight cap is a truncated array that fails to parse and takes
+    // the whole run down — NEURO has been bitten by exactly that in email
+    // triage. Thinking tokens count against this too.
+    max_tokens: options.maxTokens || 4000,
+    output_config: { effort: options.effort || 'low' },
+    system: systemPrompt || undefined,
+    messages: [{
+      role: 'user',
+      content: [
+        // Image before text: the model is being asked about the picture, and
+        // this is the documented ordering.
+        { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+        { type: 'text', text: prompt },
+      ],
+    }],
+  });
+
+  // ⚠ A refusal is an HTTP 200 with `stop_reason: "refusal"`, not a thrown
+  // error. Reading `.content` without checking would turn a decline into an
+  // empty answer, which downstream is indistinguishable from an empty fridge.
+  if (response.stop_reason === 'refusal') {
+    const why = response.stop_details?.explanation || 'the request was declined';
+    const err = new Error(`refused: ${why}`);
+    err.refusal = true;
+    throw err;
+  }
+
+  const text = (response.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  return {
+    text,
+    model: response.model || null,
+    usage: {
+      prompt_tokens: response.usage?.input_tokens || 0,
+      completion_tokens: response.usage?.output_tokens || 0,
+      total_tokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0),
+    },
+  };
+}
+
 async function generate(prompt, options = {}) {
   return chat(
     'You are a helpful, concise assistant. Respond directly without preamble.',
@@ -188,4 +249,4 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
   return { text, usage, toolCalls, truncated: true };
 }
 
-module.exports = { isConfigured, chat, generate, streamChat, chatWithTools, _normaliseHistory };
+module.exports = { isConfigured, chat, generate, streamChat, chatWithTools, vision, _normaliseHistory };

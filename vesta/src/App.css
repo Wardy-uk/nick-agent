@@ -190,3 +190,44 @@ body {
 /* The evidence, on the card. A suggestion whose reason is invisible is a guess
    with a nice font. */
 .meal__using { display: block; color: var(--ink-faint); font-size: 13px; }
+
+/* ── Photo → proposal ────────────────────────────────────────────────────── */
+
+.kitchen__photo { margin-bottom: 16px; }
+/* The real input is driven by the button so the control can be styled like
+   every other one; hidden rather than removed, or the click has no target. */
+.kitchen__file { display: none; }
+
+.proposal {
+  border: 1px solid var(--ember-soft);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 16px;
+  background: var(--panel-2);
+}
+.proposal__lead { margin: 0 0 12px; font-size: 15px; color: var(--ink-dim); }
+.proposal__lead strong { color: var(--ink); }
+.proposal__empty, .proposal__note { margin: 0 0 12px; color: var(--ink-faint); font-size: 14px; }
+.proposal__note { color: var(--warn); }
+.proposal__done { margin: 0 0 12px; }
+.proposal__failed { margin: 0 0 12px; padding-left: 18px; color: var(--warn); font-size: 14px; }
+.proposal__rows { list-style: none; margin: 0 0 12px; padding: 0; }
+
+.prow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.prow:last-child { border-bottom: none; }
+.prow__keep { display: flex; align-items: center; gap: 10px; flex: 1; cursor: pointer; }
+.prow__keep input { width: 22px; height: 22px; accent-color: var(--ember); flex-shrink: 0; }
+/* Unticked stays visible and legible — it is a thing she has decided about,
+   not a thing that has gone. */
+.prow--out .prow__name { color: var(--ink-faint); text-decoration: line-through; }
+.prow__section {
+  background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 8px; padding: 8px; font-size: 15px; min-height: 40px;
+}
+.prow__section:disabled { opacity: .4; }
+
+.proposal__actions { display: flex; gap: 10px; align-items: center; }
+.proposal__actions .btn--primary { width: auto; flex: 1; }

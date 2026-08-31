@@ -928,6 +928,11 @@ module.exports = {
   // Tool-using chat calls the Anthropic provider directly (the loop has to see
   // each response before it can run anything), so it has to report its own usage
   // or the daily budget silently under-counts every turn that used tools.
+  // VESTA's fridge photo calls the Anthropic provider directly (no other tier
+  // does vision) and so has to ask the budget question itself. Exported rather
+  // than re-implemented: a second opinion about whether cloud spending is
+  // allowed today is how AI_MODE comes to mean two different things.
+  isCloudAllowed: _isCloudAllowed,
   recordUsage: _recordOpenRouterUsage,
   // Same reason, for health: a turn that bypasses the routing tiers would
   // otherwise be invisible to the provider mix — and tool-using chat is the

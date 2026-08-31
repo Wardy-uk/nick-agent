@@ -65,7 +65,7 @@ async function signIn(username, pin) {
 // ── The boundary ─────────────────────────────────────────────────────────────
 
 test('no token reaches nothing', async () => {
-  for (const p of ['/api/v/home', '/api/v/tasks', '/api/v/catalogue/kitchen/add']) {
+  for (const p of ['/api/v/home', '/api/v/tasks', '/api/v/catalogue/kitchen/add', '/api/v/catalogue/kitchen/scan']) {
     const r = await call(p, { body: p === '/api/v/home' ? null : { text: 'x' } });
     assert.equal(r.status, 401, `${p} must refuse an unauthenticated caller`);
   }
@@ -238,3 +238,81 @@ test('narrowing an account takes effect on the NEXT request, not in twelve hours
   const after = await call('/api/v/home', { token });
   assert.equal('calendar' in after.json, false, 'the same token no longer sees the diary');
 });
+
+// ── The fridge photo ─────────────────────────────────────────────────────────
+//
+// It is the only route on the public mount that spends money, so what is proved
+// here is mostly what it REFUSES to do.
+//
+// ⚠ Its own account, deliberately. An earlier test narrows `partner` to
+// ['tasks'] to prove that revocation is immediate, and these tests run after
+// it — borrowing that account made every one of them 403 before it ever reached
+// the thing being tested, which passes for the wrong reason as easily as it
+// fails for one.
+test('a photographer account', () => {
+  capture.create({ label: 'Snapper', username: 'snapper', pin: '864209', scopes: ['tasks', 'kitchen'] });
+});
+
+test('the photo route is OFF by default, and says so rather than failing oddly', async () => {
+  const token = await signIn('snapper', '864209');
+  const r = await call('/api/v/catalogue/kitchen/scan', {
+    token, body: { image: 'AAAA', mediaType: 'image/jpeg' },
+  });
+  // 503, not 400: the feature is switched off, which is a different thing from
+  // a bad photo and has a different answer ("Nick has not turned this on yet").
+  assert.equal(r.status, 503);
+  assert.match(r.json.error, /not switched on/i);
+});
+
+test('an account without the kitchen scope cannot photograph anything', async () => {
+  const token = await signIn('legacy', '246810');
+  const r = await call('/api/v/catalogue/kitchen/scan', {
+    token, body: { image: 'AAAA', mediaType: 'image/jpeg' },
+  });
+  assert.equal(r.status, 403);
+});
+
+/**
+ * ⚠ The load-bearing one. Whatever happens — enabled, disabled, refused, capped
+ * — the photo route must not put anything in the catalogue. Adding is a
+ * separate, deliberate call she makes after reading the proposal.
+ *
+ * Asserted against the VAULT FILE, not the API response: a route that answered
+ * politely while writing would pass any check made on its own output.
+ */
+test('the photo route NEVER writes to the catalogue', async () => {
+  const token = await signIn('snapper', '864209');
+  const file = path.join(process.env.OBSIDIAN_VAULT_PATH, 'Catalogues', 'kitchen.md');
+  const before = fs.readFileSync(file, 'utf-8');
+
+  process.env.VESTA_PHOTO_ENABLED = 'true';
+  try {
+    // No API key is configured in the test environment, so this takes the
+    // "cannot read photos right now" path — which is precisely a run that got
+    // part-way and must still leave the file alone.
+    const r = await call('/api/v/catalogue/kitchen/scan', {
+      token, body: { image: 'AAAA', mediaType: 'image/jpeg' },
+    });
+    assert.equal(r.json.ok, false);
+    assert.equal(fs.readFileSync(file, 'utf-8'), before, 'the kitchen file must be untouched');
+  } finally {
+    delete process.env.VESTA_PHOTO_ENABLED;
+  }
+});
+
+test('a private catalogue cannot be photographed either', async () => {
+  // `vinyl` is created unshared elsewhere in this file. Naming it directly must
+  // give the same 404 a missing one gives, or the door enumerates what he owns.
+  const token = await signIn('snapper', '864209');
+  process.env.VESTA_PHOTO_ENABLED = 'true';
+  try {
+    const r = await call('/api/v/catalogue/vinyl/scan', {
+      token, body: { image: 'AAAA', mediaType: 'image/jpeg' },
+    });
+    assert.equal(r.status, 404);
+  } finally {
+    delete process.env.VESTA_PHOTO_ENABLED;
+  }
+});
+
+module.exports = {};

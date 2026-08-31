@@ -31,6 +31,9 @@ const PRICES_PER_MTOK = {
   'anthropic/claude-sonnet-5': { input: 2, output: 10 },
   'claude-sonnet-5': { input: 2, output: 10 },
   'claude-sonnet-4-6': { input: 3, output: 15 },
+  // VESTA's fridge photo. NOVA has no twin of this row — it does no vision —
+  // so it is not part of the parity check above.
+  'claude-opus-5': { input: 5, output: 25 },
   'gpt-4.1': { input: 2, output: 8 },
   'gpt-4.1-mini': { input: 0.4, output: 1.6 },
 };

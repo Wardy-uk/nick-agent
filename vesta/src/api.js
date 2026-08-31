@@ -82,6 +82,15 @@ export const addItem = (token, slug, section, name) =>
     method: 'POST', body: { section, name }, token,
   });
 
+/**
+ * A photograph in, a PROPOSED list out. Writes nothing — everything it suggests
+ * still goes through `addItem` after she has agreed to it.
+ */
+export const scanPhoto = (token, slug, image, mediaType) =>
+  call(`/catalogue/${encodeURIComponent(slug)}/scan`, {
+    method: 'POST', body: { image, mediaType }, token,
+  });
+
 export const useItem = (token, slug, section, name) =>
   call(`/catalogue/${encodeURIComponent(slug)}/used`, {
     method: 'POST', body: { section, name }, token,
