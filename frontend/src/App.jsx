@@ -55,6 +55,7 @@ const BriefingPanel = lazy(() => import('./components/BriefingPanel'));
 const PiHealthPanel = lazy(() => import('./components/PiHealthPanel'));
 const NotionSyncPanel = lazy(() => import('./components/NotionSyncPanel'));
 const CataloguesPanel = lazy(() => import('./components/CataloguesPanel'));
+const ProfilePanel = lazy(() => import('./components/ProfilePanel'));
 const HealthPanel = lazy(() => import('./components/HealthPanel'));
 const MeetingPrep = lazy(() => import('./components/MeetingPrep'));
 
@@ -323,6 +324,7 @@ function AuthenticatedApp() {
       case 'pi-health': return <PiHealthPanel />;
       case 'notion-sync': return <NotionSyncPanel />;
       case 'catalogues': return <CataloguesPanel />;
+      case 'about-me': return <ProfilePanel />;
       case 'admin': return <AdminPanel pushState={pushState} />;
       // An unknown view lands on the execution surface, not on the briefing.
       default: return <AdhdPanel onNavigate={handleNavigate} />;

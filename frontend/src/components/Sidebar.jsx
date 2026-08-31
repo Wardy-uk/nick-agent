@@ -81,6 +81,10 @@ const SECONDARY_ITEMS = [
   // hole this list already documents for `todos` and `decisions`. Sits by Notion
   // Sync because both are "a thing of Nick's kept somewhere else as well".
   { id: 'catalogues', label: 'Catalogues', icon: '▤' },
+  // The profile + the get-to-know-you conversation. Shipped without a door
+  // first time round, which is the routable-but-unreachable hole this codebase
+  // has fallen into twice before.
+  { id: 'about-me',   label: 'About me', icon: '◍' },
   { id: 'admin',      label: 'Settings',  icon: '>' },
 ];
 

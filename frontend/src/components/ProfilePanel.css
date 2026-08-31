@@ -1,0 +1,38 @@
+.prof-panel{padding:20px;max-width:1200px}
+.prof-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:14px}
+.prof-title{font-size:22px;margin:0 0 4px}
+.prof-sub{margin:0;font-size:13px;color:var(--text-dim,#8b93a7);line-height:1.5;max-width:62ch}
+.prof-sub code{font-size:12px;opacity:.85}
+.prof-count{text-align:right;flex:0 0 auto}
+.prof-count strong{display:block;font-size:26px;line-height:1}
+.prof-count span{font-size:11px;color:var(--text-dim,#8b93a7);text-transform:uppercase;letter-spacing:.04em}
+.prof-gaps{margin:0 0 16px;font-size:12px;color:var(--text-dim,#8b93a7);font-style:italic}
+.prof-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:start}
+@media (max-width:900px){.prof-body{grid-template-columns:1fr}}
+.prof-section{margin-bottom:18px}
+.prof-section h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim,#8b93a7);margin:0 0 8px}
+.prof-section ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+.prof-section li{display:flex;gap:8px;align-items:baseline;font-size:13.5px;line-height:1.45}
+.prof-fact{flex:1 1 auto}
+/* Weaker evidence LOOKS weaker. Flattening the two would quietly claim he
+   confirmed things he never did. */
+.prof-src{flex:0 0 auto;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:9px;white-space:nowrap}
+.prof-src--seed{color:var(--text-dim,#8b93a7);background:rgba(255,255,255,.05);opacity:.75}
+.prof-src--interview,.prof-src--conversation{color:var(--ok,#4ade80);background:rgba(74,222,128,.09)}
+.prof-src--observed{color:var(--warn,#fbbf24);background:rgba(251,191,36,.09)}
+.prof-src--nick{color:var(--accent,#8ab4f8);background:rgba(138,180,248,.1)}
+.prof-empty{font-size:13px;color:var(--text-dim,#8b93a7)}
+.prof-chat{background:rgba(255,255,255,.025);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px;position:sticky;top:16px}
+.prof-start p{margin:0 0 12px;font-size:13px;color:var(--text-dim,#8b93a7);line-height:1.5}
+.prof-thread{display:flex;flex-direction:column;gap:10px;max-height:52vh;overflow-y:auto}
+.prof-msg{font-size:13.5px;line-height:1.5;padding:9px 12px;border-radius:9px;white-space:pre-wrap}
+.prof-msg--assistant{background:rgba(255,255,255,.05)}
+.prof-msg--user{background:rgba(138,180,248,.1);margin-left:22px}
+.prof-composer{display:flex;flex-direction:column;gap:8px}
+.prof-composer textarea{width:100%%;resize:vertical;font:inherit;font-size:13.5px;padding:9px 11px;border-radius:8px;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.2);color:inherit}
+.prof-btn{align-self:flex-start;font:inherit;font-size:13px;font-weight:600;padding:8px 16px;border-radius:8px;border:0;cursor:pointer;background:var(--accent,#8ab4f8);color:#0b0d12}
+.prof-btn:disabled{opacity:.5;cursor:default}
+.prof-btn--quiet{background:rgba(255,255,255,.08);color:inherit}
+.prof-done p{margin:0 0 10px;font-size:13px}
+.prof-warn{margin:0;font-size:12px;color:var(--warn,#fbbf24)}
+.prof-err{margin:0;font-size:13px;color:var(--bad,#f87171)}
