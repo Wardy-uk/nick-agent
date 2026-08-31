@@ -78,8 +78,8 @@ export const home = (token) => call('/home', { token });
 export const calendarDay = (token, date) =>
   call(`/calendar?date=${encodeURIComponent(date)}`, { token });
 
-export const addTask = (token, text) =>
-  call('/tasks', { method: 'POST', body: { text }, token });
+export const addTask = (token, text, assignee = null) =>
+  call('/tasks', { method: 'POST', body: { text, assignee }, token });
 
 export const addItem = (token, slug, section, name) =>
   call(`/catalogue/${encodeURIComponent(slug)}/add`, {

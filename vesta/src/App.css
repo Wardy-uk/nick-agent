@@ -278,3 +278,24 @@ body {
 .cal__day--picked { background: var(--ember); border-color: var(--ember); color: #1a1208; font-weight: 600; }
 
 .day--picked { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+
+/* ── Task assignment ─────────────────────────────────────────────────────── */
+
+.composer--stacked { flex-direction: column; gap: 8px; }
+.composer__row { display: flex; gap: 8px; }
+.composer__who {
+  flex: 1;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 10px; padding: 0 10px; font-size: 16px; min-height: 44px;
+}
+/* Who it is for reads as a small badge, not another grey stat — it is the thing
+   scanned for on a shared list. */
+.task__who {
+  background: rgba(224, 138, 60, .14); color: var(--ember);
+  border-radius: 999px; padding: 2px 8px; font-size: 11px; white-space: nowrap;
+}
+/* Unassigned is stated, never blank: a blank is indistinguishable from a field
+   that failed to render. */
+.task__who--none { background: none; color: var(--ink-faint); padding: 2px 0; }
+.task__from { flex-basis: 100%; color: var(--ink-faint); font-size: 11px; margin-top: 2px; }
+.task { flex-wrap: wrap; }

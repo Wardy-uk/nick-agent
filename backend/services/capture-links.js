@@ -380,12 +380,49 @@ function _noteUse(username, now) {
   return { ok: true };
 }
 
+/**
+ * Who a household task can be FOR.
+ *
+ * The owner plus every household account. Derived from the accounts rather than
+ * typed out, the same rule the roster follows everywhere else in NEURO — a list
+ * kept here would drift the first time somebody is added or revoked.
+ *
+ * ⚠ `null` (unassigned) is deliberately NOT in this list. It is the absence of a
+ * choice, not a person, and offering it as one invites code that treats
+ * "unassigned" as an identity it can compare against.
+ */
+const OWNER_ID = 'nick';
+
+function people() {
+  return [
+    { id: OWNER_ID, label: 'Nick' },
+    ..._load()
+      .filter((a) => a.enabled !== false)
+      .map((a) => ({ id: a.username, label: a.label })),
+  ];
+}
+
+/**
+ * Resolve a requested assignee to something storable. PURE-ish (reads accounts).
+ *
+ * ⚠ An unrecognised name becomes NULL — unassigned — rather than being stored as
+ * given. A typo must not create a person, and a stored assignee that matches
+ * nobody would render as a task belonging to a ghost, which is worse than one
+ * plainly belonging to nobody.
+ */
+function resolveAssignee(requested) {
+  const want = String(requested || '').trim().toLowerCase();
+  if (!want) return null;
+  const match = people().find((p) => p.id.toLowerCase() === want);
+  return match ? match.id : null;
+}
+
 /** The task source that marks a row as belonging to one account. */
 function sourceFor(account) {
   return `capture:${account.label}`;
 }
 
-function submit(account, text, { now = new Date() } = {}) {
+function submit(account, text, { now = new Date(), assignee = null } = {}) {
   const clean = String(text || '').trim().slice(0, MAX_TEXT);
   if (!clean) return { ok: false, status: 400, error: 'nothing to add' };
 
@@ -397,9 +434,12 @@ function submit(account, text, { now = new Date() } = {}) {
     text: clean,
     domain: account.domain,
     source: sourceFor(account),
+    // Whoever it is FOR, which is a different question from who typed it.
+    // Unrecognised resolves to null rather than being stored as given.
+    assignee: resolveAssignee(assignee),
   });
 
-  return { ok: true, id, text: clean, created };
+  return { ok: true, id, text: clean, created, assignee: resolveAssignee(assignee) };
 }
 
 /**
@@ -416,13 +456,39 @@ function submit(account, text, { now = new Date() } = {}) {
  */
 function submissions(account, { limit = 50 } = {}) {
   const taskStore = require('./task-store');
-  const rows = taskStore.listTasks({ status: 'all', includeDone: true, source: sourceFor(account) });
+  const db = require('../db/database');
+
+  // ⚠ THE `shared-tasks` SCOPE, which until now was a name in a list and
+  // nothing else — it could be ticked and changed absolutely nothing.
+  //
+  // Without it: only what THIS account sent, exactly as before.
+  //
+  // With it: the whole VESTA household pool — every task captured through any
+  // household account. Scoped by a `source` PREFIX in the QUERY, never by
+  // filtering a fuller list in the caller or the page.
+  //
+  // ⚠ The pool is deliberately NOT "every personal task". Nick's own personal
+  // list is personal-domain too, and sweeping it in is exactly the boundary this
+  // feature must not cross — a household surface shows what the household put
+  // into it, not everything of his that happens not to be work.
+  const shared = hasScope(account, 'shared-tasks');
+  const rows = shared
+    ? taskStore.listTasks({ status: 'all', includeDone: true, sourcePrefix: 'capture:' })
+    : taskStore.listTasks({ status: 'all', includeDone: true, source: sourceFor(account) });
   // Newest first. listTaskRows orders by MoSCoW and priority, which is the right
   // order for Nick's own triage screen and meaningless here — she wants the
   // thing she sent this morning at the top, not the one NEURO ranks highest.
   const newest = [...rows].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  const who = people();
   return newest.slice(0, limit).map((r) => ({
     text: r.text,
+    // Who it is FOR. `null` is unassigned and is a real answer — the UI says
+    // "anyone" rather than quietly attributing it to whoever typed it.
+    assignee: r.assignee || null,
+    assigneeLabel: r.assignee ? (who.find((p) => p.id === r.assignee) || {}).label || r.assignee : null,
+    // Who SENT it, which only means anything once more than one person can.
+    // Derived from the source rather than stored twice.
+    from: shared ? String(r.source || '').replace(/^capture:/, '') || null : null,
     // Collapsed to three words a non-user of NEURO understands. 'dropped' is
     // reported honestly as "not doing" rather than hidden or dressed up as
     // done — she asked for something and deserves to know it was declined.
@@ -439,6 +505,9 @@ module.exports = {
   list,
   create,
   setScopes,
+  people,
+  resolveAssignee,
+  OWNER_ID,
   scopesOf,
   hasScope,
   normaliseScopes,

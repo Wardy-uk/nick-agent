@@ -275,6 +275,7 @@ function createTask(input = {}) {
       patch.moscow_proposed = input.moscowProposed ? 1 : 0;
     }
     if (input.priority && !existing.priority) patch.priority = normPriority(input.priority);
+    if (input.assignee && !existing.assignee) patch.assignee = input.assignee;
     if (input.origin_path && !existing.origin_path) {
       patch.origin_path = input.origin_path;
       patch.origin_line = input.origin_line == null ? null : input.origin_line;
@@ -307,6 +308,8 @@ function createTask(input = {}) {
     context,
     domain,
     notes: input.notes || null,
+    // VESTA household assignment. NULL is unassigned and is a real answer.
+    assignee: input.assignee || null,
     ms_id: input.ms_id || null,
     estimate_minutes: normEstimate(
       input.estimateMinutes ?? input.estimate_minutes,

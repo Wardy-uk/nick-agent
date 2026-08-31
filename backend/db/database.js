@@ -102,6 +102,21 @@ async function init() {
       db.exec('ALTER TABLE tasks ADD COLUMN ms_source TEXT');
       console.log('[DB] tasks.ms_source added');
     }
+    // Migration: tasks.assignee — who a VESTA household task is FOR.
+    //
+    // NULL is a real answer and the default: "nobody has said whose this is",
+    // which is different from assigning it to the person who typed it. The two
+    // must stay apart or "unassigned" quietly becomes "mine" and the shared list
+    // stops meaning anything.
+    //
+    // Holds `nick` for the owner or a capture-account USERNAME. Not a foreign
+    // key: an account can be revoked, and a task that outlives the person who
+    // was given it should keep saying who that was rather than silently
+    // becoming unassigned.
+    if (taskColumns.length && !taskColumns.includes('assignee')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN assignee TEXT');
+      console.log('[DB] tasks.assignee added');
+    }
     // Migration: tasks.ms_plan — the Planner board or To Do list a linked
     // Microsoft task sits on, so the card can say which one. Display only; the
     // completion push reads ms_source, not this. NULL means "we don't know",
@@ -1357,8 +1372,9 @@ const TASK_FIELDS = [
 function createTaskRow(task) {
   const info = run(
     `INSERT INTO tasks (text, status, moscow, moscow_proposed, priority, due_date, source,
-                        origin_path, origin_line, context, domain, notes, ms_id, estimate_minutes, dedupe_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        origin_path, origin_line, context, domain, notes, ms_id, estimate_minutes,
+                        assignee, dedupe_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       task.text, task.status || 'open', task.moscow || null,
       task.moscow_proposed ? 1 : 0, task.priority || null,
@@ -1370,6 +1386,8 @@ function createTaskRow(task) {
       task.domain || 'work',
       task.notes || null, task.ms_id || null,
       task.estimate_minutes == null ? null : task.estimate_minutes,
+      // NULL is unassigned and is a real answer, not a missing one.
+      task.assignee || null,
       task.dedupe_key,
     ]
   );
@@ -1396,6 +1414,11 @@ function listTaskRows(filters = {}) {
   }
   if (filters.moscow) { where.push('moscow = ?'); params.push(filters.moscow); }
   if (filters.source) { where.push('source = ?'); params.push(filters.source); }
+  // The whole VESTA household pool — every task captured through any household
+  // account, and NOTHING else. Deliberately a prefix on `source` rather than a
+  // domain filter: `domain = 'personal'` would sweep in Nick's own private
+  // personal tasks, which is precisely the boundary this feature must not cross.
+  if (filters.sourcePrefix) { where.push('source LIKE ?'); params.push(`${filters.sourcePrefix}%`); }
   // Absent means EVERY domain, not 'work'. A default here would silently hide
   // personal tasks from every existing caller — including the exports and the
   // counts — which is the invisible half of the asymmetry task-domain describes.

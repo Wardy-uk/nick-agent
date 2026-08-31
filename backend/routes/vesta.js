@@ -88,6 +88,10 @@ router.get('/home', requireAccount, (req, res) => {
   // ── Tasks ────────────────────────────────────────────────────────────────
   try {
     out.tasks = capture.submissions(req.account);
+    // Who a task can be assigned to. From the service so the page never keeps
+    // its own list of the household — that is how a picker comes to offer
+    // somebody who has been revoked.
+    out.people = capture.people();
   } catch (e) {
     out.tasks = null;
     out.gaps.push({ block: 'tasks', why: e.message });
@@ -187,7 +191,11 @@ router.get('/calendar', requireAccount, (req, res) => {
 // length cap and the personal-domain rule all still apply unchanged.
 router.post('/tasks', requireAccount, (req, res) => {
   try {
-    const result = capture.submit(req.account, req.body && req.body.text);
+    const result = capture.submit(req.account, req.body && req.body.text, {
+      // Who it is FOR. Resolved against the real household in the service; an
+      // unrecognised name lands as unassigned rather than being stored as given.
+      assignee: (req.body || {}).assignee,
+    });
     if (!result.ok) return res.status(result.status || 400).json(result);
     res.json(result);
   } catch (e) {

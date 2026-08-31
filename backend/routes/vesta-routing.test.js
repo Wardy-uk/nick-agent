@@ -117,8 +117,9 @@ test('a task she adds comes back on her home screen', async () => {
   assert.ok(texts.includes('pick up a prescription'), 'the task she just added must be on her screen');
 
   const row = json.tasks.find(t => t.text === 'pick up a prescription');
-  // The thin shape is the boundary: none of Nick's own triage fields.
-  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'dueDate', 'status', 'text']);
+  // The thin shape IS the boundary: none of Nick's own triage fields. The three
+  // additions are household facts (who it is for, who sent it), not his notes.
+  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'assignee', 'assigneeLabel', 'dueDate', 'from', 'status', 'text']);
   assert.equal(row.status, 'to do');
 });
 

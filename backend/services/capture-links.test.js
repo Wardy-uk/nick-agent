@@ -181,7 +181,17 @@ test('a submission carries only what she needs to see', () => {
   const row = capture.submissions(account)[0];
   // No MoSCoW, no priority, no score, no origin path — those are Nick's own
   // working notes about his own list, and none of them is her business.
-  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'dueDate', 'status', 'text']);
+  //
+  // ⚠ This list is the boundary and every addition to it is a decision. The
+  // three household fields say who a task is FOR and who sent it, which is what
+  // makes a shared list readable; nothing here describes Nick's triage.
+  assert.deepEqual(Object.keys(row).sort(), ['addedAt', 'assignee', 'assigneeLabel', 'dueDate', 'from', 'status', 'text']);
+  // Unassigned by default — never quietly attributed to whoever typed it.
+  assert.equal(row.assignee, null);
+  assert.equal(row.assigneeLabel, null);
+  // `from` is null without the shared scope: it only means anything once more
+  // than one person's tasks can appear in the same list.
+  assert.equal(row.from, null);
 });
 
 test('the account decides the domain, and a personal one cannot create work', () => {
