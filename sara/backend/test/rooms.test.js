@@ -122,11 +122,43 @@ test('watch in another room shows the clock, and names the room', () => {
   assert.match(d.say, /kitchen/);
 });
 
-test('away from home locks, and that is the ONLY thing that locks', () => {
-  const arb = resolveRoom({ 'living-room': report() }, NOW);
-  // Note: present in this very room, and it still locks. Geolocation outranks
-  // the watch, because a watch left on a worktop is not Nick.
+test('away from home locks when the watch cannot be heard', () => {
+  const arb = resolveRoom({ 'living-room': report({ status: 'absent' }) }, NOW);
   assert.equal(displayState('living-room', arb, { away: true }).state, 'locked');
+});
+
+// ⚠ The live bug, as a test. zone.home is a 100m circle centred 90m from where
+// Nick sits, so HA said not_home while he was at home with both sensors hearing
+// the watch. Locking there reproduces the original complaint via GPS.
+test('a watch that IS audible refuses the lock, and says so out loud', () => {
+  const arb = resolveRoom({
+    'living-room': report({ rssiMedian: -68 }),
+    kitchen: report({ rssiMedian: -75 }),
+  }, NOW);
+  const d = displayState('living-room', arb, { away: true, zone: 'not_home' });
+  assert.equal(d.state, 'full', 'he is audible in this very room');
+  assert.equal(d.reason, 'home-contradicted');
+  assert.match(d.contradiction, /Trusting the watch/);
+});
+
+test('a contradicted lock still respects WHICH room he is in', () => {
+  const arb = resolveRoom({
+    'living-room': report({ rssiMedian: -80 }),
+    kitchen: report({ rssiMedian: -55 }),
+  }, NOW);
+  const d = displayState('living-room', arb, { away: true });
+  assert.equal(d.state, 'clock', 'audible, but in the kitchen');
+  assert.match(d.say, /kitchen/);
+});
+
+// The other half: the rule must not become a way to never lock at all.
+test('deaf sensors do NOT rescue the lock — absence of evidence is not evidence', () => {
+  const arb = resolveRoom({
+    'living-room': report({ status: 'unknown', healthy: false }),
+    kitchen: report({ at: new Date(NOW.getTime() - 90_000).toISOString() }),
+  }, NOW);
+  assert.equal(displayState('living-room', arb, { away: true }).state, 'locked',
+    'not_home is a positive statement; a deaf sensor is only the absence of one');
 });
 
 // ⚠ The rule the old design got wrong. Losing the watch cost Nick his display.

@@ -133,8 +133,37 @@ function resolveRoom(reports = {}, now = new Date(), { staleMs = SENSOR_STALE_MS
  */
 function displayState(thisRoom, arbitration, home) {
   const away = home && home.away;
+  const heard = !!(arbitration && arbitration.status === 'present');
 
   if (away === true) {
+    // ⚠ GEOLOCATION DOES NOT GET TO LOCK A SCREEN A SENSOR CAN HEAR HIM AT.
+    //
+    // Measured 31 Aug 2026: `zone.home` is a 100m circle whose centre is 90m
+    // from where Nick actually sits, so he lives on its edge and ordinary GPS
+    // jitter flips him to `not_home` while he is at home — HA said `not_home`
+    // with the phone on the home wifi, geocoded to his own address, and both
+    // room sensors hearing the watch. Without this rule the display blanks
+    // while he is sitting in front of it, which IS the original complaint,
+    // moved from BLE to GPS.
+    //
+    // A watch heard at -68 dB in this house is better evidence of being home
+    // than a boundary fix, so the two sensors are resolved towards NOT doing
+    // the harmful thing. The cost is stated rather than hidden: a watch left
+    // at home on charge holds the screen unlocked while Nick is out. He wears
+    // it overnight, so it leaves when he does.
+    //
+    // The lock still works for the case it exists for — actually leaving, with
+    // the watch on the wrist, so both sensors agree. And a watch that cannot be
+    // heard (absent, or every sensor deaf) does NOT rescue it: `not_home` is a
+    // positive statement, where a deaf sensor is only ever an absence of one.
+    if (heard) {
+      return {
+        state: arbitration.room === thisRoom ? 'full' : 'clock',
+        reason: 'home-contradicted',
+        say: arbitration.room === thisRoom ? null : `In the ${arbitration.room}.`,
+        contradiction: `Home Assistant says not home, but the watch is audible in the ${arbitration.room}. Trusting the watch.`,
+      };
+    }
     return {
       state: 'locked',
       reason: 'not-home',

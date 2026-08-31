@@ -143,6 +143,10 @@ router.get('/display', (req, res) => {
     state: display.state,          // full | clock | locked
     reason: display.reason,
     say: display.say,
+    // Non-null when two sensors disagreed and the watch won. Surfaced rather
+    // than swallowed: a screen staying on despite HA saying "away" must be
+    // explainable, or it reads as the lock being broken.
+    contradiction: display.contradiction || null,
     watch: {
       status: arbitration.status,  // present | absent | unknown
       room: arbitration.room,
