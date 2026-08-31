@@ -205,11 +205,84 @@ async function getBlockTree(blockId, { depth = 0, maxDepth = 3 } = {}) {
   return blocks;
 }
 
+// ── What Notion will actually accept in a code block ────────────────────────
+//
+// ⚠ Notion validates `code.language` against a closed enum and answers 400 for
+// anything else — it does not fall back. Obsidian's vault is full of fences
+// Notion has never heard of: measured here, `dataview` (811), `tasks` (272),
+// `ics`, `query`, plus aliases like `ts` and `tsx`. Four MOCs failed to publish
+// on the first real run for exactly this.
+//
+// The list is COPIED FROM NOTION'S OWN ERROR RESPONSE, not from memory or the
+// docs — this repo has been bitten twice by an invented identifier
+// (`sleep_core_hours`, `meeting_alert`), and a guessed enum here fails the same
+// silent way.
+//
+// ⚠ Clamped HERE, at the API boundary, and deliberately NOT in blocks.js. The
+// converter's contract is round-trip stability, and rewriting `dataview` to
+// `plain text` during parsing would make a note containing one churn forever.
+// Notion's constraint belongs where Notion is.
+const NOTION_LANGUAGES = new Set([
+  'abap', 'abc', 'agda', 'arduino', 'ascii art', 'assembly',
+  'bash', 'basic', 'bnf', 'c', 'c#', 'c++',
+  'clojure', 'coffeescript', 'coq', 'css', 'dart', 'dhall',
+  'diff', 'docker', 'ebnf', 'elixir', 'elm', 'erlang',
+  'f#', 'flow', 'fortran', 'gherkin', 'glsl', 'go',
+  'graphql', 'groovy', 'haskell', 'hcl', 'html', 'idris',
+  'java', 'java/c/c++/c#', 'javascript', 'json', 'julia', 'kotlin',
+  'latex', 'less', 'lisp', 'livescript', 'llvm ir', 'lua',
+  'makefile', 'markdown', 'markup', 'mathematica', 'matlab', 'mermaid',
+  'nix', 'notion formula', 'objective-c', 'ocaml', 'pascal', 'perl',
+  'php', 'plain text', 'powershell', 'prolog', 'protobuf', 'purescript',
+  'python', 'r', 'racket', 'reason', 'ruby', 'rust',
+  'sass', 'scala', 'scheme', 'scss', 'shell', 'smalltalk',
+  'solidity', 'sql', 'swift', 'toml', 'typescript', 'vb.net',
+  'verilog', 'vhdl', 'visual basic', 'webassembly', 'xml', 'yaml',
+]);
+
+// Common aliases worth keeping rather than flattening to plain text.
+const LANGUAGE_ALIASES = {
+  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+  sh: 'shell', zsh: 'shell', yml: 'yaml', py: 'python', md: 'markdown',
+  'c++': 'c++', cs: 'c#', ps1: 'powershell', text: 'plain text', txt: 'plain text',
+};
+
+function notionLanguage(raw) {
+  const lang = String(raw || '').trim().toLowerCase();
+  if (!lang) return 'plain text';
+  if (NOTION_LANGUAGES.has(lang)) return lang;
+  const alias = LANGUAGE_ALIASES[lang];
+  if (alias && NOTION_LANGUAGES.has(alias)) return alias;
+  // An unknown fence is still a code block — the content is what matters, and
+  // losing the highlight is a far smaller loss than failing to publish at all.
+  return 'plain text';
+}
+
+/**
+ * Make a block tree safe to send. Recurses into children.
+ *
+ * Mutates a copy, never the caller's blocks — the same tree is re-read by the
+ * state stash, and rewriting it there would change what a later push restores.
+ */
+function sanitiseForNotion(blocks) {
+  return (blocks || []).map((block) => {
+    const copy = { ...block };
+    if (copy.type === 'code' && copy.code) {
+      copy.code = { ...copy.code, language: notionLanguage(copy.code.language) };
+    }
+    const data = copy[copy.type];
+    if (data && Array.isArray(data.children)) {
+      copy[copy.type] = { ...data, children: sanitiseForNotion(data.children) };
+    }
+    return copy;
+  });
+}
+
 async function createPage({ parentPageId, title, blocks = [] }) {
   const page = await request('POST', '/pages', {
     parent: { page_id: parentPageId },
     properties: { title: { title: [{ type: 'text', text: { content: title } }] } },
-    children: blocks.slice(0, APPEND_CHUNK),
+    children: sanitiseForNotion(blocks.slice(0, APPEND_CHUNK)),
   });
   if (blocks.length > APPEND_CHUNK) await appendChildren(page.id, blocks.slice(APPEND_CHUNK));
   return page;
@@ -217,7 +290,9 @@ async function createPage({ parentPageId, title, blocks = [] }) {
 
 async function appendChildren(blockId, blocks) {
   for (let i = 0; i < blocks.length; i += APPEND_CHUNK) {
-    await request('PATCH', `/blocks/${blockId}/children`, { children: blocks.slice(i, i + APPEND_CHUNK) });
+    await request('PATCH', `/blocks/${blockId}/children`, {
+      children: sanitiseForNotion(blocks.slice(i, i + APPEND_CHUNK)),
+    });
   }
 }
 
@@ -304,6 +379,8 @@ module.exports = {
   request,
   paged,
   titleOf,
+  notionLanguage,
+  sanitiseForNotion,
   getPage,
   getBlockTree,
   createPage,

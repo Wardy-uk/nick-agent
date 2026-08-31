@@ -214,3 +214,62 @@ test('a code span drops competing annotations rather than nesting them illegibly
   // which is the only property that matters here.
   assertStable([para(rt('x', { code: true, bold: true }))], 'code+bold');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Notion's code-language enum.
+//
+// ⚠ Clamped at the API boundary (notion-api), NOT here. blocks.js's contract is
+// round-trip stability, and rewriting `dataview` to `plain text` during parsing
+// would make every note containing one churn between the two systems for ever.
+// These tests assert BOTH halves of that split.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const notionApi = require('./notion-api');
+
+test('an Obsidian-only fence survives the markdown round trip untouched', () => {
+  // `dataview` appears 811 times in this vault. The converter must not rewrite it.
+  const blocks = [block('code', { rich_text: [rt('TABLE file.name')], language: 'dataview' })];
+  const { markdown } = blocksToMarkdown(blocks);
+  assert.match(markdown, /```dataview/);
+  const back = markdownToBlocks(markdown);
+  assert.equal(back[0].code.language, 'dataview', 'the converter must preserve it verbatim');
+  assertStable(blocks, 'dataview fence');
+});
+
+test('the API boundary clamps an unknown language rather than failing the publish', () => {
+  // Notion 400s on anything outside its enum — it does not fall back. Four MOCs
+  // failed to publish on the first real run for exactly this.
+  assert.equal(notionApi.notionLanguage('dataview'), 'plain text');
+  assert.equal(notionApi.notionLanguage('tasks'), 'plain text');
+  assert.equal(notionApi.notionLanguage(''), 'plain text');
+});
+
+test('common aliases are kept rather than flattened', () => {
+  assert.equal(notionApi.notionLanguage('ts'), 'typescript');
+  assert.equal(notionApi.notionLanguage('tsx'), 'typescript');
+  assert.equal(notionApi.notionLanguage('js'), 'javascript');
+  assert.equal(notionApi.notionLanguage('sh'), 'shell');
+  assert.equal(notionApi.notionLanguage('yml'), 'yaml');
+});
+
+test('a language Notion does support is passed through unchanged', () => {
+  for (const lang of ['sql', 'bash', 'json', 'mermaid', 'powershell', 'typescript', 'markdown']) {
+    assert.equal(notionApi.notionLanguage(lang), lang);
+  }
+});
+
+test('sanitiseForNotion recurses into children and does not mutate the input', () => {
+  const original = [
+    { object: 'block',
+      type: 'bulleted_list_item',
+      bulleted_list_item: {
+        rich_text: [rt('parent')],
+        children: [block('code', { rich_text: [rt('x')], language: 'dataview' })],
+      } },
+  ];
+  const cleaned = notionApi.sanitiseForNotion(original);
+  assert.equal(cleaned[0].bulleted_list_item.children[0].code.language, 'plain text');
+  // The caller's tree is re-read by the state stash; rewriting it there would
+  // change what a later push restores.
+  assert.equal(original[0].bulleted_list_item.children[0].code.language, 'dataview');
+});
