@@ -234,6 +234,25 @@ function assess(input = {}, now = new Date()) {
   // it — dropping it is how a reading becomes a diagnosis.
   if (signals) {
     for (const f of (signals.findings || [])) {
+      // ⚠ A STOPPED SENSOR IS AN UNKNOWN, NOT AN OBSERVATION.
+      //
+      // `health-signals` reports both trends ("resting heart rate up for three
+      // days") and quiet sensors ("blood pressure stopped arriving in April"),
+      // and both are worth having — but only the first is a fact about TODAY.
+      // Caught on the first live run: all four observation slots were filled by
+      // quiet-sensor findings, three more were dropped to the cap, and every one
+      // of them would have rendered identically every day for ever. That is the
+      // screen nobody reads by week two, and it was crowding out the trends this
+      // exists to surface.
+      //
+      // They belong in `unknowns`, which is exactly what they are — "I can't see
+      // your blood pressure any more" — so they stay visible without pretending
+      // to be news. The stopped-sensor report has a proper home on the Health
+      // panel, where it is a data-quality question rather than an ambient one.
+      if (String(f.id || '').startsWith('quiet:')) {
+        unknowns.push({ input: `health:${f.id}`, why: f.detail || f.title });
+        continue;
+      }
       observations.push({
         kind: 'health-signal',
         level: f.level === 'warn' ? 'notice' : 'info',

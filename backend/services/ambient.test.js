@@ -255,3 +255,28 @@ test('loggingHabit is honest about the difference between none and a few', () =>
   const live = ambient.loggingHabit([{ day: 'a', value: 1 }, { day: 'b', value: 1 }], { label: 'food' });
   assert.equal(live.live, true);
 });
+
+test('a stopped sensor is an UNKNOWN, not an observation', () => {
+  // Caught on the first live run: all four observation slots were filled by
+  // quiet-sensor findings — blood pressure stopped in April, glucose in
+  // September, diet in March — with three more dropped to the cap. Every one
+  // would have rendered identically every day for ever, crowding out the trends
+  // this feature exists to surface. They are not facts about today; they are
+  // things SARA can no longer see, which is what `unknowns` means.
+  const r = ambient.assess({
+    phone: livePhone({ activitySince: iso(5) }),
+    signals: {
+      findings: [
+        { id: 'quiet:blood_glucose', level: 'warn', title: 'blood_glucose stopped arriving', detail: 'Last reading 2025-09-19.', caveat: 'x' },
+        { id: 'quiet:2026-03-30', level: 'warn', title: '15 metrics stopped arriving', detail: '154 days ago.', caveat: 'x' },
+        { id: 'rhr-elevated', level: 'warn', title: 'Resting heart rate up for 3 days', detail: '82bpm.', caveat: 'y' },
+      ],
+      unknowns: [],
+    },
+  }, NOW);
+
+  assert.deepEqual(kinds(r), ['health-signal'], 'only the trend survives as an observation');
+  assert.equal(r.observations[0].text, 'Resting heart rate up for 3 days');
+  // Still visible, just not pretending to be news.
+  assert.equal(r.unknowns.filter(u => String(u.input).startsWith('health:quiet:')).length, 2);
+});
