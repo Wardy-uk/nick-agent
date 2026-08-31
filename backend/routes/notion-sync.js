@@ -32,6 +32,9 @@ router.get('/', (req, res) => {
       vaultFolders: folders.folders,
       vaultReadable: folders.known,
       lastRun: sync.lastRun(),
+      // A stuck lock means every pass is silently refused — from the outside
+      // indistinguishable from a sync with nothing to do.
+      lock: sync.lockStatus(),
       // What a `generated` mapping can be pointed at.
       generators: Object.entries(require('../services/notion-sync/generators').GENERATORS)
         .map(([key, g]) => ({ key, label: g.label })),
@@ -142,6 +145,17 @@ router.put('/mappings', (req, res) => {
     console.error('[notion-sync] save failed:', e.message);
     res.status(500).json({ ok: false, errors: [e.message] });
   }
+});
+
+/**
+ * POST /api/notion-sync/unlock — release a lock left by a killed run.
+ *
+ * The stale window (15 min) already recovers this on its own; this is for when
+ * waiting it out is silly, which on a box that redeploys several times a day is
+ * most of the time.
+ */
+router.post('/unlock', (req, res) => {
+  res.json(sync.releaseLockManually());
 });
 
 /** POST /api/notion-sync/run — dry run by default; `?apply=1` writes. */

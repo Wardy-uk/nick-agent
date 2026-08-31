@@ -522,7 +522,13 @@ async function run({ dryRun = false } = {}) {
     if (!dryRun) { saveState(state); releaseLock(); }
   }
 
-  db.setState('notion_sync_last_run', JSON.stringify({
+  // ⚠ A DRY RUN MUST NOT OVERWRITE THE RECORD OF THE LAST REAL SYNC. It was
+  // unconditional, so opening the panel and hitting "Preview changes" replaced
+  // "what the sync last did" with "what a preview would have done" — a run that
+  // wrote nothing, reported as the last run, with counts that look like work.
+  // Caught by a lock held at 12:15 sitting beside a lastRun stamped 12:17: they
+  // could not be the same run, because a dry run takes no lock.
+  db.setState(dryRun ? 'notion_sync_last_preview' : 'notion_sync_last_run', JSON.stringify({
     at: report.ranAt, ok: report.ok, counts: report.counts, gaps: report.gaps.slice(0, 10),
   }));
   return report;
@@ -535,6 +541,30 @@ function lastRun() {
   catch { return { known: false, reason: 'last-run record unreadable' }; }
 }
 
+/**
+ * Is a run holding the lock, and for how long?
+ *
+ * ⚠ Worth surfacing rather than leaving implicit. A run killed mid-flight — a
+ * deploy restarting the backend is the normal way this happens here, and it
+ * happened twice today — never reaches its `finally`, so the lock stays held
+ * and every pass is refused until it goes stale. That is 15 minutes of the sync
+ * silently doing nothing, which from the outside looks exactly like a sync with
+ * nothing to do.
+ */
+function lockStatus(now = Date.now()) {
+  const held = Number(db.getState(LOCK_KEY) || 0);
+  if (!held) return { held: false, ageMs: 0, stale: false };
+  const ageMs = now - held;
+  return { held: true, ageMs, stale: ageMs >= LOCK_STALE_MS, clearsInMs: Math.max(0, LOCK_STALE_MS - ageMs) };
+}
+
+/** Release a stuck lock by hand, for when waiting out the stale window is silly. */
+function releaseLockManually() {
+  const before = lockStatus();
+  releaseLock();
+  return { ok: true, wasHeld: before.held, ageMs: before.ageMs };
+}
+
 /** Clear the pairing record for a note so the next pass re-pairs it from scratch. */
 function forget(notionPageId) {
   const state = loadState();
@@ -544,4 +574,6 @@ function forget(notionPageId) {
   return true;
 }
 
-module.exports = { run, lastRun, forget, loadState, STATE_KEY, LOCK_KEY };
+module.exports = {
+  run, lastRun, forget, loadState, lockStatus, releaseLockManually, STATE_KEY, LOCK_KEY,
+};

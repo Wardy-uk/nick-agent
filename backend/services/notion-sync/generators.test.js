@@ -119,3 +119,31 @@ test('a generated page is small — it is a briefing, not a database dump', asyn
       `${name} produced ${asBlocks.length} blocks — too long to be useful context`);
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠ A preview must not be recorded as a sync.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('a dry run writes to last_preview, never to last_run', () => {
+  // It was unconditional, so hitting "Preview changes" replaced "what the sync
+  // last did" with "what a preview would have done" — a run that wrote nothing,
+  // reported with counts that look like work. Found because a lock held at 12:15
+  // sat beside a lastRun stamped 12:17, and a dry run takes no lock, so they
+  // could not be the same run.
+  const fs2 = require('fs');
+  const path2 = require('path');
+  const src = fs2.readFileSync(path2.join(__dirname, 'index.js'), 'utf8');
+  assert.match(src, /dryRun \? 'notion_sync_last_preview' : 'notion_sync_last_run'/,
+    'the run record must be keyed on whether it actually wrote');
+});
+
+test('the lock is inspectable and releasable', () => {
+  // A run killed mid-flight (a deploy restarting the backend is the normal way
+  // here) never reaches its finally, so the lock stays held and every pass is
+  // refused for 15 minutes while looking exactly like "nothing to do".
+  const sync = require('./index');
+  assert.equal(typeof sync.lockStatus, 'function');
+  assert.equal(typeof sync.releaseLockManually, 'function');
+  const status = sync.lockStatus();
+  assert.ok('held' in status && 'stale' in status);
+});
