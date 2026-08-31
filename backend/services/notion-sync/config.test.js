@@ -154,4 +154,115 @@ test('an unreadable vault reports known:false, not an empty folder list', () => 
   } finally { process.env.OBSIDIAN_VAULT_PATH = saved; }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The `page` kind — one vault NOTE is one Notion page BODY.
+//
+// Added because Nick's actual Notion tree is ~30 curated topic pages with their
+// content in the page body and no child pages at all. Mapping those as `tree`
+// syncs nothing on pull and buries content a level down on push.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const pageRow = (over = {}) => ({
+  kind: 'page',
+  notionPageId: '00000000000000000000000000000001',
+  vaultNote: 'Team/_Team Overview.md',
+  mode: 'push-only',
+  enabled: true,
+  ...over,
+});
+
+test('a page mapping validates against the NOTE, not a folder', () => {
+  fs.mkdirSync(path.join(root, 'Team'), { recursive: true });
+  assert.deepEqual(config.validate([{ ...pageRow(), id: 'r0' }]), []);
+});
+
+test('a missing .md extension is added rather than rejected', () => {
+  assert.equal(config.normaliseNotePath('Team/_Team Overview'), 'Team/_Team Overview.md');
+  assert.equal(config.normaliseNotePath('Team/_Team Overview.md'), 'Team/_Team Overview.md');
+});
+
+test('a note inside the sensitive folder is refused, same as the folder is', () => {
+  // The guard must not be sidestuck by mapping one file instead of its folder.
+  const refusal = config.noteRefusal('Personal/OH Report.md');
+  assert.ok(refusal);
+  assert.match(refusal, /occupational health|HR|medical/i);
+});
+
+test('a note inside an excluded folder is refused', () => {
+  assert.ok(config.noteRefusal('Archive/Old Plan.md'));
+  assert.ok(config.noteRefusal('Templates/Note.md'));
+});
+
+test('something that is not a note is refused', () => {
+  assert.ok(config.noteRefusal(''));
+  assert.ok(config.noteRefusal('Team/notes.txt'));
+});
+
+test('the same note cannot be mapped to two pages', () => {
+  const errors = config.validate([
+    { ...pageRow(), id: 'r0' },
+    { ...pageRow(), id: 'r1', notionPageId: '00000000000000000000000000000002' },
+  ]);
+  assert.ok(errors.some((e) => /already mapped/i.test(e)));
+});
+
+test('⚠ a note mapped 1:1 that ALSO sits inside a mapped folder is refused', () => {
+  // Two writers on one note: it would sync through both mappings, land as two
+  // Notion pages, and an edit would ping-pong between them.
+  const errors = config.validate([
+    { id: 'r0', kind: 'tree', notionPageId: '00000000000000000000000000000001', vaultFolder: 'Team', mode: 'two-way' },
+    { ...pageRow(), id: 'r1', notionPageId: '00000000000000000000000000000002' },
+  ]);
+  assert.ok(errors.some((e) => /sync twice/i.test(e)), 'the overlap must be caught');
+});
+
+test('the cross-kind overlap check does not depend on row order', () => {
+  const errors = config.validate([
+    { ...pageRow(), id: 'r0', notionPageId: '00000000000000000000000000000002' },
+    { id: 'r1', kind: 'tree', notionPageId: '00000000000000000000000000000001', vaultFolder: 'Team', mode: 'two-way' },
+  ]);
+  assert.ok(errors.some((e) => /sync twice/i.test(e)), 'folder declared AFTER the note must still be seen');
+});
+
+test('a note in a DIFFERENT folder from the mapped one is fine', () => {
+  fs.mkdirSync(path.join(root, 'Areas'), { recursive: true });
+  const errors = config.validate([
+    { id: 'r0', kind: 'tree', notionPageId: '00000000000000000000000000000001', vaultFolder: 'Areas', mode: 'two-way' },
+    { ...pageRow(), id: 'r1', notionPageId: '00000000000000000000000000000002' },
+  ]);
+  assert.deepEqual(errors, []);
+});
+
+test('switching kind blanks the field the other kind used', () => {
+  // A stale vaultFolder left on a page mapping is a live-looking value some
+  // later reader would act on.
+  const asPage = config.coerce({
+    kind: 'page',
+    notionPageId: '00000000000000000000000000000001',
+    vaultNote: 'Team/_Team Overview.md',
+    vaultFolder: 'Team',
+    mode: 'push-only',
+  }, 0);
+  assert.equal(asPage.vaultFolder, '', 'a page mapping must not carry a live-looking folder');
+  assert.equal(asPage.vaultNote, 'Team/_Team Overview.md');
+
+  const asTree = config.coerce({
+    kind: 'tree',
+    notionPageId: '00000000000000000000000000000001',
+    vaultFolder: 'Team',
+    vaultNote: 'Team/_Team Overview.md',
+    mode: 'push-only',
+  }, 0);
+  assert.equal(asTree.vaultNote, '');
+  assert.equal(asTree.vaultFolder, 'Team');
+
+  // An unknown kind defaults to tree rather than being stored as-is.
+  assert.equal(config.coerce({ kind: 'nonsense', vaultFolder: 'Team' }, 0).kind, 'tree');
+});
+
+test('targetOf names the vault side whichever kind it is', () => {
+  assert.equal(config.targetOf({ kind: 'page', vaultNote: 'a/b.md', vaultFolder: '' }), 'a/b.md');
+  assert.equal(config.targetOf({ kind: 'tree', vaultFolder: 'a', vaultNote: '' }), 'a');
+});
+
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));

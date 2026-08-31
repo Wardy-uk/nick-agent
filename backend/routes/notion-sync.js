@@ -67,6 +67,15 @@ router.get('/pages', async (req, res) => {
 });
 
 /**
+ * GET /api/notion-sync/notes?folder=X — notes in one folder, for the page picker.
+ *
+ * Declared above the parameterised routes, like every literal path here.
+ */
+router.get('/notes', (req, res) => {
+  res.json(config.vaultNotes(config.normaliseFolder(req.query.folder)));
+});
+
+/**
  * POST /api/notion-sync/token — store the integration token.
  *
  * Stored in `agent_state`, following the OpenRouter key in `routes/ai-settings.js`

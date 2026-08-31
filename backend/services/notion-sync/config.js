@@ -18,6 +18,18 @@ const { isExcludedDir, isSensitivePath, SENSITIVE_DIRS } = require('../vault-exc
 const STATE_KEY = 'notion_sync_mappings';
 const MODES = new Set(['two-way', 'pull-only', 'push-only']);
 
+// ── The two shapes a mapping can have ───────────────────────────────────────
+//
+// `tree` — a Notion page is a CONTAINER: its child pages are notes in a vault
+//          folder. Right for a collection (Memory Inbox, a set of sessions).
+//
+// `page` — a Notion page is a DOCUMENT: its body is one vault note. Right for
+//          Nick's actual structure, which is ~30 curated topic pages with their
+//          content in the page body and no children at all. Mapping those as
+//          `tree` syncs nothing on pull and buries content one level down on
+//          push, which is the mismatch that made the first cut unusable.
+const KINDS = new Set(['tree', 'page']);
+
 function vaultPath() {
   return process.env.OBSIDIAN_VAULT_PATH || '';
 }
@@ -56,6 +68,37 @@ function normaliseFolder(input) {
     .map((s) => s.trim())
     .filter((s) => s && s !== '.')
     .join('/');
+}
+
+/** Vault-relative path to a single note. Same rules as a folder, plus `.md`. */
+function normaliseNotePath(input) {
+  const cleaned = normaliseFolder(input);
+  if (!cleaned) return '';
+  return cleaned.toLowerCase().endsWith('.md') ? cleaned : `${cleaned}.md`;
+}
+
+/**
+ * Why a NOTE may not be published. Reuses the folder rules on its directory, so
+ * the sensitive and excluded guards cannot be sidestepped by mapping a single
+ * file inside a folder that is itself refused.
+ */
+function noteRefusal(notePath) {
+  if (!notePath) return 'Pick a vault note.';
+  if (!notePath.toLowerCase().endsWith('.md')) return 'That is not a markdown note.';
+
+  const parts = notePath.split('/');
+  const dir = parts.slice(0, -1).join('/');
+  // A note at the vault root has no directory to check, so only the shared
+  // path-safety rules apply; folderRefusal on '' would reject it wrongly.
+  if (dir) {
+    const refusal = folderRefusal(dir);
+    if (refusal) return refusal;
+  } else {
+    const root = vaultPath();
+    if (!root) return 'OBSIDIAN_VAULT_PATH is not set, so the vault cannot be checked.';
+    if (parts.some((seg) => seg === '..')) return 'Note path may not contain "..".';
+  }
+  return null;
 }
 
 /**
@@ -104,27 +147,44 @@ function folderRefusal(folder) {
 function validate(mappings) {
   const errors = [];
   const seenFolders = new Map();
+  const seenNotes = new Map();
   const seenPages = new Map();
 
   mappings.forEach((m, index) => {
-    const where = m.vaultFolder || m.notionPageId || `row ${index + 1}`;
+    const where = targetOf(m) || m.notionPageId || `row ${index + 1}`;
 
     if (!m.notionPageId) errors.push(`${where}: no Notion page.`);
     if (!MODES.has(m.mode)) errors.push(`${where}: unknown mode "${m.mode}".`);
+    // ⚠ `validate` must not assume its input has been through `coerce`. It is
+    // exported and called directly (by tests, and by anything wanting to check a
+    // draft), and an undefined `kind` silently skipped the folder-overlap branch
+    // entirely — so two overlapping folders validated clean. Default here rather
+    // than requiring every caller to remember.
+    const kind = KINDS.has(m.kind) ? m.kind : 'tree';
+    if (m.kind !== undefined && !KINDS.has(m.kind)) {
+      errors.push(`${where}: unknown kind "${m.kind}".`);
+    }
 
-    const refusal = folderRefusal(m.vaultFolder);
+    const refusal = kind === 'page' ? noteRefusal(m.vaultNote) : folderRefusal(m.vaultFolder);
     if (refusal) errors.push(`${where}: ${refusal}`);
 
-    // Two mappings writing into one folder tree would each see the other's files
-    // as unpaired and create duplicate Notion pages for them, forever.
-    for (const [other] of seenFolders) {
-      if (m.vaultFolder === other
-        || m.vaultFolder.startsWith(`${other}/`)
-        || other.startsWith(`${m.vaultFolder}/`)) {
-        errors.push(`${where}: overlaps the folder already mapped at "${other}".`);
+    if (kind === 'tree') {
+      // Two mappings writing into one folder tree would each see the other's
+      // files as unpaired and create duplicate Notion pages for them, forever.
+      for (const [other] of seenFolders) {
+        if (m.vaultFolder === other
+          || m.vaultFolder.startsWith(`${other}/`)
+          || other.startsWith(`${m.vaultFolder}/`)) {
+          errors.push(`${where}: overlaps the folder already mapped at "${other}".`);
+        }
       }
+      if (m.vaultFolder) seenFolders.set(m.vaultFolder, index);
+    } else if (m.vaultNote) {
+      if (seenNotes.has(m.vaultNote)) {
+        errors.push(`${where}: this note is already mapped to "${seenNotes.get(m.vaultNote)}".`);
+      }
+      seenNotes.set(m.vaultNote, m.notionTitle || m.notionPageId);
     }
-    if (m.vaultFolder) seenFolders.set(m.vaultFolder, index);
 
     if (m.notionPageId && seenPages.has(m.notionPageId)) {
       errors.push(`${where}: this Notion page is already mapped to "${seenPages.get(m.notionPageId)}".`);
@@ -132,21 +192,46 @@ function validate(mappings) {
     if (m.notionPageId) seenPages.set(m.notionPageId, m.vaultFolder);
   });
 
+  // ⚠ Cross-kind overlap, checked AFTER every folder is known so it does not
+  // depend on row order. A note mapped 1:1 that also sits inside a mapped folder
+  // is synced by BOTH mappings — two writers, two Notion pages, and an edit that
+  // ping-pongs between them.
+  for (const m of mappings) {
+    if ((KINDS.has(m.kind) ? m.kind : 'tree') !== 'page' || !m.vaultNote) continue;
+    for (const [folder] of seenFolders) {
+      if (m.vaultNote.startsWith(`${folder}/`)) {
+        errors.push(`${m.vaultNote}: sits inside the folder already mapped at "${folder}", `
+          + 'so it would sync twice. Map the folder or the note, not both.');
+      }
+    }
+  }
+
   return errors;
 }
 
 function coerce(input, index) {
+  const kind = KINDS.has(input.kind) ? input.kind : 'tree';
   return {
     id: String(input.id || `map-${index + 1}-${normalisePageId(input.notionPageId) || 'new'}`),
+    kind,
     notionPageId: normalisePageId(input.notionPageId),
     // Display only, refreshed from Notion on each sync. Kept so the panel can
     // name a page without a live API call, and so a mapping whose page becomes
     // unreachable still reads as something rather than a bare uuid.
     notionTitle: String(input.notionTitle || '').trim() || null,
-    vaultFolder: normaliseFolder(input.vaultFolder),
+    // Only one of these is meaningful, decided by `kind`. The other is blanked
+    // rather than carried, so a mapping switched from tree to page cannot keep a
+    // stale folder that some later reader treats as live.
+    vaultFolder: kind === 'tree' ? normaliseFolder(input.vaultFolder) : '',
+    vaultNote: kind === 'page' ? normaliseNotePath(input.vaultNote) : '',
     mode: MODES.has(input.mode) ? input.mode : 'two-way',
     enabled: input.enabled !== false,
   };
+}
+
+/** The vault side of a mapping, whichever kind it is. For messages and overlap. */
+function targetOf(mapping) {
+  return mapping.kind === 'page' ? mapping.vaultNote : mapping.vaultFolder;
 }
 
 function list() {
@@ -267,6 +352,35 @@ function vaultFolders({ maxDepth = 3 } = {}) {
   return { known: true, folders: folders.sort(), reason: null };
 }
 
+/**
+ * Notes inside one folder, for the `page` picker.
+ *
+ * Scoped to a folder deliberately: the vault holds 6,771 notes and a flat list
+ * of all of them is not a picker, it is a wall. The panel asks folder-then-note,
+ * which is two bounded choices instead of one impossible one.
+ *
+ * Non-recursive — a note in a subfolder belongs to that subfolder's list, and
+ * flattening would reintroduce the wall for folders like Projects/.
+ */
+function vaultNotes(folder) {
+  const root = vaultPath();
+  if (!root) return { known: false, notes: [], reason: 'vault not readable' };
+  if (folderRefusal(folder)) return { known: false, notes: [], reason: folderRefusal(folder) };
+
+  const dir = path.join(root, folder);
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+  catch { return { known: false, notes: [], reason: 'folder not readable' }; }
+
+  const notes = entries
+    .filter((e) => e.isFile() && e.name.endsWith('.md') && !e.name.startsWith('.'))
+    // A conflict copy is not a note anyone means to publish.
+    .filter((e) => !/\.sync-conflict-/i.test(e.name))
+    .map((e) => `${folder}/${e.name}`)
+    .sort();
+  return { known: true, notes, reason: null };
+}
+
 module.exports = {
   STATE_KEY,
   MODES,
@@ -281,6 +395,14 @@ module.exports = {
   IGNORED_KEY,
   validate,
   vaultFolders,
+  vaultNotes,
+  targetOf,
+  // Exported so the normalisation rules (kind defaulting, blanking the field the
+  // other kind uses) can be pinned without a database — `save` writes.
+  coerce,
+  noteRefusal,
+  normaliseNotePath,
+  KINDS,
   folderRefusal,
   normalisePageId,
   normaliseFolder,

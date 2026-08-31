@@ -91,10 +91,75 @@ function pageChoicePrompt(pages, state) {
 // the naming box opens.
 const NEW_FOLDER = '__NEW_FOLDER__';
 
+/**
+ * Which folder's notes to offer for a `page` mapping.
+ *
+ * A page row reuses the folder select above as the FIRST step, so the folder is
+ * read back off the chosen note once one is set — otherwise changing kind would
+ * lose the folder and the picker would go blank under you.
+ */
+function noteFolderOf(row) {
+  if (row.vaultFolder) return row.vaultFolder;
+  if (row.vaultNote && row.vaultNote.includes('/')) {
+    return row.vaultNote.slice(0, row.vaultNote.lastIndexOf('/'));
+  }
+  return '';
+}
+
+/** The second step of the page picker: notes inside the chosen folder. */
+function NotePicker({ folder, value, onPick }) {
+  const [state, setState] = useState({ loading: false, notes: [], reason: null });
+
+  useEffect(() => {
+    if (!folder) { setState({ loading: false, notes: [], reason: null }); return; }
+    let cancelled = false;
+    setState({ loading: true, notes: [], reason: null });
+    fetch(apiUrl(`/api/notion-sync/notes?folder=${encodeURIComponent(folder)}`))
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setState({ loading: false, notes: d.notes || [], reason: d.reason }); })
+      .catch((e) => { if (!cancelled) setState({ loading: false, notes: [], reason: e.message }); });
+    return () => { cancelled = true; };
+  }, [folder]);
+
+  const prompt = !folder ? 'Choose a folder above first'
+    : state.loading ? 'Loading notes…'
+    : state.reason ? state.reason
+    : state.notes.length ? 'Choose a note…'
+    : 'No notes directly in that folder';
+
+  return (
+    <select value={value || ''} onChange={(e) => onPick(e.target.value)}>
+      <option value="">{prompt}</option>
+      {/* Same rule as everywhere else here: a stored value that is not in the
+          list must stay selectable, or saving silently repoints the mapping. */}
+      {value && !state.notes.includes(value) && (
+        <option value={value}>{value} — not in that folder</option>
+      )}
+      {state.notes.map((n) => (
+        <option key={n} value={n}>{n.slice(n.lastIndexOf('/') + 1)}</option>
+      ))}
+    </select>
+  );
+}
+
 const blankRow = () => ({
   id: `new-${Math.random().toString(36).slice(2, 8)}`,
-  notionPageId: '', notionTitle: '', vaultFolder: '', mode: 'two-way', enabled: true,
+  kind: 'tree', notionPageId: '', notionTitle: '',
+  vaultFolder: '', vaultNote: '', mode: 'two-way', enabled: true,
 });
+
+const KINDS = [
+  {
+    id: 'page',
+    label: 'One note → this page',
+    hint: 'The Notion page IS the note. Right for a topic page that holds its content in the body.',
+  },
+  {
+    id: 'tree',
+    label: 'Folder → child pages',
+    hint: 'The Notion page is a container; each note becomes a child page inside it.',
+  },
+];
 
 export default function NotionSyncPanel() {
   const [state, setState] = useState(null);
@@ -219,7 +284,14 @@ export default function NotionSyncPanel() {
 
   // Mapped folders are listed even if they are not in vaultFolders() — a folder
   // named for a pull mapping does not exist until the first sync creates it.
-  const mappedFolderSet = new Set((state.mappings || []).map((m) => m.vaultFolder).filter(Boolean));
+  // A page mapping occupies its note's FOLDER for coverage purposes — the folder
+  // is not fully mapped, but saying "not mapped" over a folder you publish from
+  // would read as a gap it is not.
+  const mappedFolderSet = new Set(
+    (state.mappings || [])
+      .map((m) => m.vaultFolder || (m.vaultNote || '').split('/').slice(0, -1).join('/'))
+      .filter(Boolean),
+  );
   const mappedFolders = [...mappedFolderSet].sort();
   const unmappedFolders = (state.vaultFolders || []).filter((f) => !mappedFolderSet.has(f));
 
@@ -322,7 +394,7 @@ export default function NotionSyncPanel() {
               <span className="ns-arrow" aria-hidden="true">↔</span>
 
               <label className="ns-field">
-                <span>Obsidian parent folder</span>
+                <span>{(row.kind || 'tree') === 'page' ? 'Obsidian note' : 'Obsidian parent folder'}</span>
                 {namingFolderFor === row.id ? (
                   // ⚠ A pull-only mapping's destination USUALLY DOES NOT EXIST
                   // yet — Hiking, Aquarium and the Memory Inbox live only in
@@ -380,10 +452,27 @@ export default function NotionSyncPanel() {
                     <option value={NEW_FOLDER}>+ New folder…</option>
                   </select>
                 )}
+
+                {/* A `page` mapping needs a NOTE, and the vault holds 6,771 of
+                    them — a flat list is not a picker, it is a wall. Folder
+                    first, then the notes inside it: two bounded choices. */}
+                {(row.kind || 'tree') === 'page' && (
+                  <NotePicker
+                    folder={noteFolderOf(row)}
+                    value={row.vaultNote}
+                    onPick={(notePath) => update(row.id, { vaultNote: notePath })}
+                  />
+                )}
               </label>
             </div>
 
             <div className="ns-row-controls">
+              <select
+                value={row.kind || 'tree'}
+                onChange={(e) => update(row.id, { kind: e.target.value })}
+              >
+                {KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+              </select>
               <select value={row.mode} onChange={(e) => update(row.id, { mode: e.target.value })}>
                 {MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
               </select>
@@ -403,7 +492,10 @@ export default function NotionSyncPanel() {
               </button>
             </div>
 
-            <small className="ns-hint">{MODES.find((m) => m.id === row.mode)?.hint}</small>
+            <small className="ns-hint">
+              {KINDS.find((k) => k.id === (row.kind || 'tree'))?.hint}{' '}
+              {MODES.find((m) => m.id === row.mode)?.hint}
+            </small>
           </div>
         ))}
       </section>
@@ -463,7 +555,7 @@ export default function NotionSyncPanel() {
                 <span className="ns-cov-title">{c.page.path || c.page.title}</span>
                 {c.kind === 'mapped' && (
                   <span className="ns-cov-detail">
-                    → <code>{c.mapping.vaultFolder}</code>{' '}
+                    → <code>{c.mapping.vaultNote || c.mapping.vaultFolder}</code>{' '}
                     {MODES.find((m) => m.id === c.mapping.mode)?.label}
                     {!c.mapping.enabled && ' · disabled'}
                   </span>

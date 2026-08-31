@@ -18,6 +18,15 @@ const LOCK_KEY = 'notion_sync_lock';
 const LOCK_STALE_MS = 15 * 60 * 1000;
 const MAX_PAGES_PER_RUN = Number(process.env.NOTION_SYNC_MAX_PAGES || 300);
 
+// ⚠ A hard ceiling on what one page may hold, and it REFUSES rather than
+// truncating. Notion caps appends at 100 blocks a call, so a very large note is
+// slow rather than impossible — but a silently half-published page is worse than
+// an unpublished one, because it looks finished. Measured against the real
+// candidates: the largest note anyone wanted to publish is 197 KB (the NEURO
+// Feature Tracker), which is thousands of blocks and is not context anybody
+// needs; everything genuinely wanted is under 12 KB.
+const MAX_PUSH_BLOCKS = Number(process.env.NOTION_SYNC_MAX_BLOCKS || 900);
+
 function vaultRoot() {
   return process.env.OBSIDIAN_VAULT_PATH || '';
 }
@@ -142,6 +151,16 @@ async function pushNote(page, absolute, note, state, now) {
   // silently deleting a block we promised to preserve.
   const body = blocks.markdownToBlocks(note.body, { keep: record?.keep || [] });
 
+  // ⚠ REFUSE, never truncate. A half-published page looks finished, which is the
+  // worse failure: nobody goes looking for the missing half. The note stays
+  // unpublished and the reason is reported.
+  if (body.length > MAX_PUSH_BLOCKS) {
+    return {
+      skipped: `too large to publish — ${body.length} blocks, limit ${MAX_PUSH_BLOCKS}. `
+        + 'Nothing was written; split the note or leave it unmapped.',
+    };
+  }
+
   await notion.replaceChildren(page.id, body);
   const after = await notion.getPage(page.id);
 
@@ -187,6 +206,61 @@ function writeConflictCopy(absolute, page, tree, now) {
     { source: 'notion-sync-conflict', notion_page_id: page.id, notion_last_edited: page.lastEdited },
   ));
   return path.basename(target);
+}
+
+/**
+ * One mapping of kind `page`: a single vault note IS a single Notion page body.
+ *
+ * Deliberately reuses `decide()` unchanged — a note pair is the simple case of
+ * what the reconciler already answers, so the conflict rule, the "both sides
+ * moved" refusal and the never-delete guarantees all hold with no new logic.
+ */
+async function syncPageMapping(mapping, state, now, { dryRun }) {
+  const root = vaultRoot();
+  const relPath = mapping.vaultNote;
+  const absolute = path.join(root, relPath);
+
+  let page = null;
+  const live = await notion.getPage(mapping.notionPageId);
+  page = {
+    id: live.id,
+    title: notion.titleOf(live),
+    lastEdited: live.last_edited_time,
+    archived: Boolean(live.archived || live.in_trash),
+    relPath,
+  };
+
+  const note = vault.readNote(absolute);
+  const last = state[mapping.notionPageId] || null;
+
+  const { action, reason } = decide({
+    vault: note ? { hash: note.hash, path: relPath } : null,
+    notion: page,
+    last,
+    mode: mapping.mode,
+  });
+
+  const entry = { path: relPath, action, reason };
+  if (dryRun || action === ACTIONS.NOOP || action === ACTIONS.SKIP
+      || action === ACTIONS.ORPHAN_VAULT || action === ACTIONS.ORPHAN_NOTION) {
+    return entry;
+  }
+
+  if (action === ACTIONS.PULL || action === ACTIONS.CREATE_IN_VAULT) {
+    await pullPage(page, absolute, state, now);
+  } else if (action === ACTIONS.PUSH) {
+    // ⚠ A page mapping never CREATES a Notion page — the page is the thing Nick
+    // chose in the picker, and creating one would put a second copy beside it.
+    // A missing vault note is therefore an orphan, not a creation, which
+    // `decide()` already returns.
+    const { skipped } = await pushNote(page, absolute, note, state, now, mapping);
+    if (skipped) entry.reason = skipped;
+    entry.pushed = !skipped;
+  } else if (action === ACTIONS.CONFLICT) {
+    const tree = await notion.getBlockTree(page.id);
+    entry.conflictCopy = writeConflictCopy(absolute, page, tree, now);
+  }
+  return entry;
 }
 
 // ── The run ─────────────────────────────────────────────────────────────────
@@ -241,6 +315,31 @@ async function run({ dryRun = false } = {}) {
     for (const mapping of mappings) {
       const summary = { id: mapping.id, folder: mapping.vaultFolder, mode: mapping.mode, notes: [], error: null };
       report.mappings.push(summary);
+
+      summary.kind = mapping.kind;
+      summary.target = config.targetOf(mapping);
+
+      // A `page` mapping is one note against one page body — no tree walk.
+      if (mapping.kind === 'page') {
+        try {
+          const entry = await syncPageMapping(mapping, state, now, { dryRun });
+          summary.notes.push(entry);
+          const bucket = {
+            [ACTIONS.PULL]: 'pulled',
+            [ACTIONS.PUSH]: 'pushed',
+            [ACTIONS.CREATE_IN_VAULT]: 'created',
+            [ACTIONS.CONFLICT]: 'conflicts',
+            [ACTIONS.NOOP]: 'unchanged',
+          }[entry.action] || 'skipped';
+          if (!dryRun || entry.action === ACTIONS.NOOP) report.counts[bucket] += 1;
+          if (!dryRun) saveState(state);
+        } catch (error) {
+          summary.error = error.message;
+          report.gaps.push(`${config.targetOf(mapping)}: ${error.message}`);
+          report.ok = false;
+        }
+        continue;
+      }
 
       let pages;
       try {
