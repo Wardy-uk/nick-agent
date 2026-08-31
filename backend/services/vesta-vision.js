@@ -44,7 +44,6 @@
 
 const db = require('../db/database');
 
-const FLAG = 'VESTA_PHOTO_ENABLED';
 const STATE_KEY = 'vesta_scan_usage';
 
 // A generous day of honest use and nowhere near a runaway. Deliberately small:
@@ -58,8 +57,17 @@ const MAX_BYTES = 4 * 1024 * 1024;
 
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
+/**
+ * ⚠ Asked of `feature-flags`, NOT of `process.env` directly, so the switch is
+ * reachable from NEURO Settings instead of an SSH session and a pm2 restart.
+ * That registry still lets `VESTA_PHOTO_ENABLED` win when it IS set in the
+ * environment — an env var is an operator overriding the UI, and the panel
+ * disables the control and says so rather than offering a toggle that silently
+ * does nothing. Unset, as it is on the Pi, the stored value decides and the
+ * default is still FALSE.
+ */
 function isEnabled() {
-  return String(process.env[FLAG] || '').toLowerCase() === 'true';
+  return require('./feature-flags').isEnabled('vesta_photo');
 }
 
 // ── The rules, pure ──────────────────────────────────────────────────────────

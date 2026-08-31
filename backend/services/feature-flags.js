@@ -67,6 +67,17 @@ const FLAGS = [
       + 'ChatMessage.Send scope is consented by a tenant admin.',
   },
   {
+    key: 'vesta_photo',
+    env: 'VESTA_PHOTO_ENABLED',
+    default: false,
+    label: 'Read the fridge from a photo',
+    description: 'Lets the household surface turn a photograph of a shelf into a proposed '
+      + 'list somebody confirms. It writes nothing on its own. The condition was to '
+      + 'prove the typed path first — and it is the only route on the public mount that '
+      + 'spends money, so it is capped per account per day.',
+    impact: 'costs money per photo',
+  },
+  {
     key: 'dnd_vault_read_only',
     env: 'DND_VAULT_READ_ONLY',
     default: false,
