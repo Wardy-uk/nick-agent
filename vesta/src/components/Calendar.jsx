@@ -5,6 +5,10 @@ import * as api from '../api';
 /**
  * Today's agenda, and a month to pick any other day from.
  *
+ * ⚠ The copy NAMES Nick — never "his". Nick, 31 Aug 2026. VESTA is a shared
+ * surface two people read, and a third-person pronoun makes it sound like a
+ * system talking about somebody who is not there.
+ *
  * Nick, 31 Aug 2026: today's agenda, and the rest behind a date picker. The
  * first cut showed a rolling three days as one flat list, which was neither
  * thing — too long to scan at a glance and too short to plan against.
@@ -100,7 +104,7 @@ export default function Calendar({ events, gap, todayKey }) {
   const [py, pm, pd] = (picked || '').split('-').map(Number);
 
   return (
-    <Section title="His diary" gap={gap}>
+    <Section title="Nick's calendar" gap={gap}>
       <h3 className="day__label">Today</h3>
       <EventList events={events || []} />
 
@@ -146,8 +150,12 @@ export default function Calendar({ events, gap, todayKey }) {
 
       {/* Said once, quietly, rather than repeated on every grey row. Without it
           a screen full of "Busy" reads as a system that knows nothing, instead
-          of one deliberately not telling. */}
-      <p className="day__note">&ldquo;Busy&rdquo; is work &mdash; the details stay at work.</p>
+          of one deliberately not telling.
+
+          ⚠ Nick, 31 Aug 2026: VESTA names him, it never says "his". This is a
+          shared surface used by two people, and third-person pronouns make it
+          read as a system describing somebody who is not in the room. */}
+      <p className="day__note">&ldquo;Busy&rdquo; is Nick&rsquo;s work &mdash; the details stay at work.</p>
     </Section>
   );
 }
