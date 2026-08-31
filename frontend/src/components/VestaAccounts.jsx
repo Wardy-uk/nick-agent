@@ -144,12 +144,12 @@ export default function VestaAccounts() {
                   type="text"
                   value={newPin}
                   onChange={e => setNewPin(e.target.value)}
-                  placeholder="new PIN (6+)"
+                  placeholder="new PIN or passphrase (4+)"
                   style={{ flex: 1 }}
                 />
                 <button
                   className="admin-ms-connect-btn"
-                  disabled={newPin.trim().length < 6}
+                  disabled={newPin.trim().length < 4}
                   onClick={() => act(a.username, async () => {
                     await send(`/api/capture-links/${a.username}/pin`, { pin: newPin.trim() });
                     setResetting(null);
@@ -205,7 +205,7 @@ export default function VestaAccounts() {
             <input
               value={form.pin}
               onChange={e => setForm({ ...form, pin: e.target.value })}
-              placeholder="PIN (6+ characters)"
+              placeholder="PIN or passphrase (4+, letters allowed)"
             />
 
             <div style={row}>
@@ -226,7 +226,7 @@ export default function VestaAccounts() {
               <button
                 className="admin-ms-connect-btn"
                 disabled={
-                  busy === 'new' || !form.label.trim() || !form.username.trim() || form.pin.trim().length < 6
+                  busy === 'new' || !form.label.trim() || !form.username.trim() || form.pin.trim().length < 4
                 }
                 onClick={() => act('new', async () => {
                   await send('/api/capture-links', {
@@ -245,8 +245,13 @@ export default function VestaAccounts() {
             {/* The PIN is hashed on write and returned by no endpoint in any
                 form, so this is genuinely the only moment it exists in readable
                 shape. Saying so beats them discovering it later. */}
+            {/* ⚠ Both halves matter. The PIN is unrecoverable, AND letters are
+                allowed — the sign-in field used to show a numeric keypad on a
+                phone, which made an alphanumeric PIN impossible to type and
+                looked exactly like a wrong password. */}
             <div style={{ fontSize: '12px', opacity: 0.7 }}>
               Tell them the PIN now — it is hashed on save and can never be read back, only reset.
+              Letters are allowed; they can reveal it as they type when signing in.
             </div>
           </div>
         </div>

@@ -13,6 +13,7 @@ import * as api from '../api';
 export default function SignIn({ onSignedIn }) {
   const [username, setUsername] = useState('');
   const [pin, setPin] = useState('');
+  const [reveal, setReveal] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -56,16 +57,30 @@ export default function SignIn({ onSignedIn }) {
 
         <label className="field">
           <span className="field__label">PIN</span>
-          <input
-            className="field__input"
-            type="password"
-            value={pin}
-            onChange={e => setPin(e.target.value)}
-            // A numeric keypad on a phone, without forbidding a longer PIN.
-            inputMode="numeric"
-            autoComplete="current-password"
-            enterKeyHint="go"
-          />
+          <div className="field__withreveal">
+            <input
+              className="field__input"
+              type={reveal ? 'text' : 'password'}
+              value={pin}
+              onChange={e => setPin(e.target.value)}
+              /* ⚠ NO inputMode="numeric". A PIN here is any 4+ characters — the
+                 server sets no charset — and an alphanumeric one is exactly what
+                 the Settings screen invites. A numeric keypad on a phone has no
+                 letters on it, so that attribute made a perfectly correct PIN
+                 IMPOSSIBLE to type, and the masked field hid the fact. It cost
+                 an afternoon of "username or PIN is not right". */
+              autoComplete="current-password"
+              enterKeyHint="go"
+            />
+            {/* And a way to SEE it. A field you cannot read is a field you
+                cannot debug, which is the other half of the same afternoon. */}
+            <button
+              type="button"
+              className="field__reveal"
+              onClick={() => setReveal(r => !r)}
+              aria-label={reveal ? 'Hide PIN' : 'Show PIN'}
+            >{reveal ? 'Hide' : 'Show'}</button>
+          </div>
         </label>
 
         <button className="btn btn--primary" disabled={busy || !username || !pin}>

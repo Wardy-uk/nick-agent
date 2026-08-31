@@ -231,3 +231,21 @@ body {
 
 .proposal__actions { display: flex; gap: 10px; align-items: center; }
 .proposal__actions .btn--primary { width: auto; flex: 1; }
+
+/* The PIN field, with a way to see it.
+   A masked field you cannot read is a field you cannot debug — and the sign-in
+   screen is exactly where a typo is invisible and reads as a wrong password. */
+.field__withreveal { display: flex; gap: 8px; align-items: stretch; }
+.field__withreveal .field__input { flex: 1; }
+.field__reveal {
+  appearance: none;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--ink-dim);
+  border-radius: 10px;
+  padding: 0 14px;
+  font-size: 14px;
+  min-height: 44px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
