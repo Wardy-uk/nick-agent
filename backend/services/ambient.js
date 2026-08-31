@@ -91,6 +91,34 @@ const EVENING_HOUR = 20;    // after this, a missed water target is history
 
 const WATER_TARGET_ML = 1500;
 
+// ── The Apple Watch stand read ───────────────────────────────────────────────
+//
+// ⚠ RAW ACCELEROMETER IS NOT AVAILABLE and never will be from here. HealthKit
+// exposes no raw motion type; the Watch's CoreMotion stream is reachable only by
+// an app running ON the watch and is never written to Health. So "can SARA read
+// the accelerometer" is no — but Apple has already done the processing, and
+// `apple_stand_time` IS the accelerometer-derived answer to the question that
+// was actually being asked.
+//
+// Shape, measured: HOURLY buckets, value = minutes stood in that hour, and an
+// hour with no standing has NO ROW AT ALL. ⚠ That absence is the trap — it means
+// "did not stand" and "watch was off charging" identically.
+//
+// `heartRate` is the corroboration. Measured over 32 live hours it arrives
+// 13-19 samples an hour, continuously, including all night (he sleeps in the
+// watch — hence the sleep stages and wrist temperature). So a missing stand hour
+// WITH heart rate in it is a real hour of sitting; a missing stand hour with no
+// heart rate is a watch that was off, and is unknown rather than sedentary.
+//
+// This outranks the phone's `activity` for one plain reason: the watch is on his
+// body and the phone might be on a desk in another room. Live proof on the day
+// this was built — the watch reported at 09:00 while the phone was 14 hours
+// stale. The phone stays as a fallback, and which source answered is always
+// named.
+const STAND_MINUTES_FLOOR = 1;   // a row at all means he got up
+const STAND_QUIET_HOURS = 2;     // Apple's own reminder fires at 1h; don't compete with it
+const HR_SAMPLES_WORN = 3;       // below this the watch was not on the wrist
+
 const MAX_OBSERVATIONS = 4;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -129,6 +157,64 @@ function loggingHabit(days = [], { required = LOGGING_DAYS_REQUIRED, label = 'th
       ? `nothing logged for ${label} in the last ${days.length} days — can't tell a missed day from a missed habit`
       : `only ${logged.length} of the last ${days.length} days logged for ${label} — not enough to read a gap`,
   };
+}
+
+/**
+ * How many completed hours he has been sitting, per the Watch. PURE.
+ *
+ * `hours` is newest-first `[{ hour, standMinutes, hrSamples, asleep }]`, one
+ * entry per clock hour, INCLUDING hours with no stand data (standMinutes 0) —
+ * the caller must fill those in, because an absent row is the whole signal and
+ * a gappy array cannot be told from a short one.
+ *
+ * Walks back from the last COMPLETED hour. The current hour is partial: it may
+ * be four minutes old, and reading a partial hour as "no standing" would report
+ * a sedentary run at one minute past every hour.
+ *
+ * Returns `{ known, hours, why }`. Three distinct answers, and keeping them
+ * apart is the point:
+ *   known:true,  hours:N  — he sat for N hours and the watch was on for all of them
+ *   known:true,  hours:0  — he got up; nothing to say
+ *   known:false, why      — the watch was off, or there is no data to read
+ */
+function standStillness(hours = [], now = new Date()) {
+  if (!hours.length) return { known: false, hours: 0, why: 'no stand data' };
+
+  const currentHourKey = _hourKey(now);
+  let counted = 0;
+
+  for (const h of hours) {
+    if (!h || h.hour === currentHourKey) continue;   // skip the partial hour
+
+    // Asleep is not sitting. Skipped entirely rather than counted or treated as
+    // unknown — it is simply not the question, and counting a night in bed as
+    // eight hours of sitting is the most obvious way to make this useless.
+    if (h.asleep) {
+      // A night BREAKS the run: the morning is a fresh start, not a
+      // continuation of yesterday evening.
+      if (counted > 0) break;
+      continue;
+    }
+
+    // ⚠ Was the watch even on? Without this a watch left on charge reads as
+    // perfect stillness, which is the same failure as a switched-off phone
+    // reporting `Still`.
+    if (!(Number(h.hrSamples) >= HR_SAMPLES_WORN)) {
+      if (counted > 0) break;   // the run ends where the evidence ends
+      return { known: false, hours: 0, why: `the watch was not being worn at ${h.hour}` };
+    }
+
+    if (Number(h.standMinutes) >= STAND_MINUTES_FLOOR) break;  // he got up
+    counted += 1;
+  }
+
+  return { known: true, hours: counted };
+}
+
+/** `YYYY-MM-DD HH`, matching the SQL substring the hourly rollup is keyed on. */
+function _hourKey(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}`;
 }
 
 // ── The judgement ────────────────────────────────────────────────────────────
@@ -173,26 +259,51 @@ function assess(input = {}, now = new Date()) {
 
   // ── Sat still a long time ─────────────────────────────────────────────────
   //
-  // ⚠ Requires `Still` AND a live phone AND a long-enough unchanged run. Focus
-  // mode vetoes it outright: he has explicitly told the phone to leave him
-  // alone, which is a stronger and more current statement than anything this
-  // file can infer.
-  if (phoneLive && phone.focusMode !== true) {
+  // TWO sources, and the WATCH is preferred: it is on his body, and the phone
+  // might be on a desk in another room. Which one answered is always named — a
+  // reading whose provenance is invisible cannot be argued with.
+  //
+  // ⚠ Focus mode vetoes the nudge whichever source found it. He has explicitly
+  // told the phone to leave him alone, and that is a more current and more
+  // deliberate statement than anything this file can infer from his wrist.
+  const stand = standStillness(input.standHours || [], now);
+  if (!stand.known) unknowns.push({ input: 'watch', why: stand.why });
+
+  const focusVeto = phone?.focusMode === true;
+  let sat = null;
+
+  if (stand.known && stand.hours >= STAND_QUIET_HOURS) {
+    sat = {
+      text: `You've been sitting for ${stand.hours} hours.`,
+      because: `your watch has logged no standing for ${stand.hours} full hours`,
+      evidence: [{ source: 'watch', ref: 'apple_stand_time', detail: `${stand.hours}h with no stand minutes` }],
+    };
+  } else if (!stand.known && phoneLive) {
+    // Fallback only. The phone answers the same question worse, so it is asked
+    // second and only when the watch could not answer at all.
     const stillFor = phone.activity === 'Still' ? _minutesSince(phone.activitySince, now) : null;
     if (stillFor != null && stillFor >= SEDENTARY_MINUTES) {
-      observations.push({
-        kind: 'sedentary',
-        level: 'nudge',
-        // Says what it saw, not what he should feel about it.
+      sat = {
         text: `You've been sitting for ${_phrase(stillFor)}.`,
-        suggestion: input.duty?.onDuty === false
-          ? 'Worth getting up — a walk, or something round the house.'
-          : 'Worth standing up for a few minutes.',
-        because: `the phone has read Still since ${phone.activitySince}`,
+        because: `the phone has read Still since ${phone.activitySince} — your watch didn't answer`,
         evidence: [{ source: 'ha', ref: 'sensor.activity', observedAt: phone.activitySince, detail: `Still for ${stillFor} min` }],
-        weight: 2,
-      });
+      };
     }
+  }
+
+  if (sat && !focusVeto) {
+    observations.push({
+      kind: 'sedentary',
+      level: 'nudge',
+      // Says what it saw, not what he should feel about it.
+      text: sat.text,
+      suggestion: input.duty?.onDuty === false
+        ? 'Worth getting up — a walk, or something round the house.'
+        : 'Worth standing up for a few minutes.',
+      because: sat.because,
+      evidence: sat.evidence,
+      weight: 2,
+    });
   }
 
   // ── Not exercised in a while ──────────────────────────────────────────────
@@ -376,11 +487,14 @@ async function build({ now = new Date(), context = null } = {}) {
     gaps.push({ source: 'health-signals', why: e.message });
   }
 
+  const standHours = _standHours(now, gaps);
+
   const dietEnergy = _dailyTotals('dietary_energy_consumed', DIET_WINDOW_DAYS, now, gaps);
   const water = _dailyTotals('dietary_water', DIET_WINDOW_DAYS, now, gaps);
 
   const assessed = assess({
     phone,
+    standHours,
     days,
     dietEnergy,
     water,
@@ -397,6 +511,67 @@ async function build({ now = new Date(), context = null } = {}) {
     // means "I could not look", not "there is nothing to say".
     complete: gaps.length === 0,
   };
+}
+
+/**
+ * The last 12 hours as `{ hour, standMinutes, hrSamples, asleep }`, newest first.
+ *
+ * ⚠ EVERY hour is emitted, including the ones with no stand row — the absence IS
+ * the signal, and a sparse array cannot be told from a short one by the pure
+ * reader. Twelve hours is comfortably more than any run worth reporting and
+ * keeps the query small.
+ */
+function _standHours(now, gaps) {
+  try {
+    const db = require('../db/database');
+    const since = new Date(now.getTime() - 13 * 3600000).toISOString();
+
+    const bucket = (metric) => {
+      const out = new Map();
+      for (const r of (db.getHealthSamples(metric, since, 20000) || [])) {
+        const t = new Date(r.recorded_at);
+        if (Number.isNaN(t.getTime())) continue;
+        const key = _hourKey(t);
+        out.set(key, (out.get(key) || 0) + (Number(r.value) || 0));
+      }
+      return out;
+    };
+    const count = (metric) => {
+      const out = new Map();
+      for (const r of (db.getHealthSamples(metric, since, 20000) || [])) {
+        const t = new Date(r.recorded_at);
+        if (Number.isNaN(t.getTime())) continue;
+        const key = _hourKey(t);
+        out.set(key, (out.get(key) || 0) + 1);
+      }
+      return out;
+    };
+
+    const standBy = bucket('apple_stand_time');
+    const hrBy = count('heartRate');
+    // Any sleep stage in the hour means he was in bed for some of it, which is
+    // enough — a part-slept hour is not an hour of sitting at a desk.
+    const asleepBy = new Map();
+    for (const m of ['sleep_asleep_core_hours', 'sleep_asleep_deep_hours', 'sleep_asleep_rem_hours', 'sleep_asleep_unspecified_hours']) {
+      for (const [k, v] of bucket(m)) if (v > 0) asleepBy.set(k, true);
+    }
+
+    const out = [];
+    for (let i = 0; i < 12; i += 1) {
+      const d = new Date(now.getTime() - i * 3600000);
+      const key = _hourKey(d);
+      out.push({
+        hour: key,
+        standMinutes: standBy.get(key) || 0,
+        hrSamples: hrBy.get(key) || 0,
+        asleep: asleepBy.get(key) === true,
+      });
+    }
+    return out;
+  } catch (e) {
+    gaps.push({ source: 'apple_stand_time', why: e.message });
+    return [];
+  }
 }
 
 /** Trailing per-day totals for one health metric, newest first. */
@@ -431,6 +606,7 @@ function _dailyTotals(metric, windowDays, now, gaps) {
 module.exports = {
   assess,
   loggingHabit,
+  standStillness,
   build,
   PHONE_FRESH_MINUTES,
   SEDENTARY_MINUTES,
@@ -440,4 +616,6 @@ module.exports = {
   LOGGING_DAYS_REQUIRED,
   WATER_TARGET_ML,
   MAX_OBSERVATIONS,
+  STAND_QUIET_HOURS,
+  HR_SAMPLES_WORN,
 };

@@ -40,6 +40,16 @@ const loggedDays = (value, { skipToday = true } = {}) =>
 
 const kinds = r => r.observations.map(o => o.kind);
 
+const HOUR = back => {
+  const d = new Date(NOW.getTime() - back * 3600000);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}`;
+};
+// `back: 0` is the CURRENT (partial) hour. Worn watch, awake, no standing.
+const hrs = (spec) => spec.map((o, i) => ({
+  hour: HOUR(i), standMinutes: 0, hrSamples: 15, asleep: false, ...o,
+}));
+
 // ── The rule the file turns on ───────────────────────────────────────────────
 
 test('NOT LOGGED is not NOT EATEN — the whole design turns on this', () => {
@@ -197,6 +207,11 @@ test('a health finding outranks a glass of water', () => {
 test('nothing to say is a correct answer and is not padded', () => {
   const r = ambient.assess({
     phone: livePhone({ activity: 'Walking', activitySince: iso(10) }),
+    // He got up in the last full hour, so the watch has nothing to report AND
+    // nothing it could not read — which is what makes this a real all-clear.
+    standHours: [0, 1, 2].map(i => ({
+      hour: HOUR(i), standMinutes: 6, hrSamples: 15, asleep: false,
+    })),
     days: exerciseDays(Array.from({ length: 28 }, () => 40)),
     dietEnergy: loggedDays(2100, { skipToday: false }),
     water: loggedDays(2000, { skipToday: false }),
@@ -279,4 +294,118 @@ test('a stopped sensor is an UNKNOWN, not an observation', () => {
   assert.equal(r.observations[0].text, 'Resting heart rate up for 3 days');
   // Still visible, just not pretending to be news.
   assert.equal(r.unknowns.filter(u => String(u.input).startsWith('health:quiet:')).length, 2);
+});
+
+
+// ── The Apple Watch stand read ───────────────────────────────────────────────
+//
+// ⚠ Raw accelerometer is NOT readable — HealthKit exposes no raw motion type and
+// the Watch's CoreMotion stream never leaves the watch. `apple_stand_time` is
+// Apple's own accelerometer-derived answer to the same question, and these pin
+// the shape it actually arrives in: HOURLY buckets of minutes stood, where an
+// hour with no standing has NO ROW AT ALL.
+
+test('consecutive hours with no standing are counted', () => {
+  const r = ambient.standStillness(hrs([{}, {}, {}, { standMinutes: 12 }]), NOW);
+  assert.equal(r.known, true);
+  // Four entries, but the first is the CURRENT hour and is skipped, and the
+  // fourth is where he stood. Two full hours of sitting.
+  assert.equal(r.hours, 2);
+});
+
+test('the CURRENT hour never counts — it is only minutes old', () => {
+  // Without this the run reports "1 hour sitting" at one minute past every hour.
+  const r = ambient.standStillness(hrs([{}, { standMinutes: 9 }]), NOW);
+  assert.equal(r.hours, 0);
+});
+
+test('getting up ends the run', () => {
+  const r = ambient.standStillness(hrs([{}, {}, { standMinutes: 4 }, {}, {}]), NOW);
+  assert.equal(r.hours, 1, 'and the earlier sitting before he got up does not carry over');
+});
+
+test('a watch left on charge is UNKNOWN, never perfect stillness', () => {
+  // Same failure as a switched-off phone reporting `Still`: no heart rate means
+  // the watch was not on the wrist, and an absent stand row then says nothing.
+  const r = ambient.standStillness(hrs([{}, { hrSamples: 0 }, {}]), NOW);
+  assert.equal(r.known, false);
+  assert.match(r.why, /not being worn/);
+});
+
+test('a run ENDS where the evidence ends rather than being thrown away', () => {
+  // Two solid hours, then the watch comes off. Two hours is still true.
+  const r = ambient.standStillness(hrs([{}, {}, {}, { hrSamples: 0 }, {}]), NOW);
+  assert.equal(r.known, true);
+  assert.equal(r.hours, 2, 'two hours is still true even though the watch came off after them');
+});
+
+test('a night in bed is not eight hours of sitting', () => {
+  // The most obvious way to make this useless.
+  const r = ambient.standStillness(hrs([{}, { asleep: true }, { asleep: true }, { asleep: true }]), NOW);
+  assert.equal(r.hours, 0);
+});
+
+test('sleep BREAKS the run — this morning is not last night continued', () => {
+  const r = ambient.standStillness(hrs([{}, {}, { asleep: true }, {}, {}]), NOW);
+  assert.equal(r.hours, 1);
+});
+
+test('no data at all is unknown, not zero', () => {
+  const r = ambient.standStillness([], NOW);
+  assert.equal(r.known, false);
+  assert.match(r.why, /no stand data/);
+});
+
+// ── Which source answered ────────────────────────────────────────────────────
+
+test('the WATCH is preferred over the phone — it is the one on his body', () => {
+  const r = ambient.assess({
+    // Phone says he has been still for a while too, but the watch is the source
+    // that should be quoted.
+    phone: livePhone({ activitySince: iso(200) }),
+    standHours: hrs([{}, {}, {}, { standMinutes: 10 }]),
+  }, NOW);
+  const sat = r.observations.find(o => o.kind === 'sedentary');
+  assert.ok(sat);
+  assert.match(sat.text, /2 hours/);
+  assert.match(sat.because, /your watch/);
+  assert.equal(sat.evidence[0].source, 'watch');
+});
+
+test('the phone is the FALLBACK, and says so when it answers', () => {
+  const r = ambient.assess({
+    phone: livePhone({ activitySince: iso(200) }),
+    standHours: hrs([{}, { hrSamples: 0 }]),   // watch could not answer
+  }, NOW);
+  const sat = r.observations.find(o => o.kind === 'sedentary');
+  assert.ok(sat);
+  assert.match(sat.because, /watch didn't answer/, 'provenance is stated, not hidden');
+  assert.equal(sat.evidence[0].source, 'ha');
+});
+
+test('the watch answering "he got up" is not a licence for the phone to disagree', () => {
+  // The watch is on his wrist and says he stood. A phone on a desk reading
+  // `Still` must NOT override that — otherwise the fallback quietly becomes the
+  // primary whenever it is more pessimistic.
+  const r = ambient.assess({
+    phone: livePhone({ activitySince: iso(300) }),
+    standHours: hrs([{}, { standMinutes: 8 }, { standMinutes: 6 }]),
+  }, NOW);
+  assert.equal(kinds(r).includes('sedentary'), false);
+});
+
+test('Focus mode vetoes the watch reading too', () => {
+  const r = ambient.assess({
+    phone: livePhone({ focusMode: true }),
+    standHours: hrs([{}, {}, {}, {}]),
+  }, NOW);
+  assert.equal(kinds(r).includes('sedentary'), false);
+});
+
+test('one hour sitting does not compete with the watch own stand reminder', () => {
+  // Apple nudges at 50 minutes past. Firing at one hour would be SARA repeating
+  // a notification he has already had, on a device he is already wearing.
+  const r = ambient.assess({ standHours: hrs([{}, {}, { standMinutes: 5 }]) }, NOW);
+  assert.equal(kinds(r).includes('sedentary'), false);
+  assert.equal(ambient.STAND_QUIET_HOURS, 2);
 });
