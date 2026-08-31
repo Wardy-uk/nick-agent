@@ -35,3 +35,12 @@ sara/logs/
 
 # One-off migration staging blob (patch + tarball)
 /_incoming-daypilot-sara/
+
+# Core dumps. `/proc/sys/kernel/core_pattern` is the bare string `core`, so a
+# dump lands in the process's CWD — which for the backend is this working tree.
+# A core is the backend's process MEMORY: the PIN, the API token, the OpenRouter
+# key, live Graph tokens. This repo is PUBLIC and `git add -A` has swept files up
+# here before, so an ignore rule is the belt to the pm2 unit's braces
+# (`LimitCORE=0`, set 31 Aug 2026 after 63 dumps / 3.0 GB from one restart loop).
+core
+core.[0-9]*
