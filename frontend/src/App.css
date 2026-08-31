@@ -1,3 +1,11 @@
+/* ⚠ ONE definition of how tall the bottom nav is, used by the nav itself and by
+   the padding that keeps content clear of it. They were two numbers before (56px
+   and 60px) and nothing tied them together, so they were free to drift — and the
+   drift is invisible until content goes missing under the bar. */
+:root {
+  --bottom-nav-h: 56px;
+}
+
 .app-layout {
   display: flex;
   flex-direction: column;
@@ -24,6 +32,39 @@
 .main-panel > * {
   width: 100%;
   max-width: 960px;
+  /* ⚠ THE fix for the app being wider than the phone screen.
+     `.main-panel` is a flex container, and a flex item's default `min-width` is
+     `auto` — meaning it refuses to shrink below its content's intrinsic width.
+     So one long unbreakable string anywhere (a URL, a Notion page id, a code
+     block, a file path) pushed this item wider than the viewport, and because
+     `.main-panel` has `overflow-y: auto` the x-axis computes to `auto` too, so
+     the WHOLE APP gained a horizontal scroll. Measured first: no CSS rule in the
+     app declares a width that cannot fit a 390px screen, so the cause was always
+     content, not a declared size. */
+  min-width: 0;
+}
+
+/* The other half of the same problem: let long strings wrap rather than
+   demanding width. `anywhere` (not `break-word`) so it also shrinks the
+   intrinsic minimum, which is what actually stops the overflow. */
+.main-panel {
+  overflow-wrap: anywhere;
+}
+
+/* Nothing inside a panel may be wider than the panel. A chart, a table or a
+   fenced block that genuinely needs the room scrolls in ITS OWN box rather than
+   taking the page with it. */
+.main-panel img,
+.main-panel svg,
+.main-panel video,
+.main-panel canvas {
+  max-width: 100%;
+}
+
+.main-panel pre,
+.main-panel table {
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .chat-panel {
@@ -78,7 +119,11 @@
   }
 
   .main-panel {
-    padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px)); /* space for bottom nav + safe area */
+    /* Derived from the nav's own height, plus the safe-area inset the nav grows
+       by, plus a little slack so the last line is not flush against the bar.
+       This is what makes the bottom of a long page reachable — the "show all"
+       link at the end of My Health was sitting under the nav. */
+    padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + 16px);
   }
 }
 
@@ -94,7 +139,12 @@
     bottom: 0;
     left: 0;
     right: 0;
-    height: 56px;
+    /* ⚠ `min-height`, not `height`. Global `box-sizing: border-box` means a fixed
+       `height: 56px` INCLUDES the safe-area padding, so on a phone with a 34px
+       home-indicator inset the buttons were squeezed into 22px and the bar's real
+       height no longer matched what the content reserved for it. Growing by the
+       inset is the correct behaviour. */
+    min-height: var(--bottom-nav-h);
     background: var(--bg-secondary);
     border-top: 1px solid rgba(255, 255, 255, 0.06);
     z-index: 50;

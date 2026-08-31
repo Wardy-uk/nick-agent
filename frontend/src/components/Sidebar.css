@@ -156,7 +156,9 @@
     transition: transform 0.2s ease;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+    /* Same shared variable as the main panel — the sidebar scrolls past the
+       bottom nav too, and its last item was reachable only by luck. */
+    padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + 16px);
   }
 
   .sidebar.sidebar-open {
