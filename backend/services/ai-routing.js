@@ -72,6 +72,10 @@ const LATENCY_SENSITIVE_TASKS = new Set([
  */
 const CAPABILITY_TASKS = new Set([
   'profile_seed',
+  // Nick is sitting there talking, so this is latency-sensitive as well — but it
+  // would belong here on capability alone: a 1.5B model cannot hold an
+  // interview, follow what he actually said, and decide what is worth recording.
+  'profile_interview',
 ]);
 
 // Everything that should reach for cloud FIRST, for either reason. Kept under

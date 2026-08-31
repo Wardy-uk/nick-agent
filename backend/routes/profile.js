@@ -81,4 +81,36 @@ router.post('/facts', (req, res) => {
   res.json({ ok: true, added: result.added, duplicates: result.duplicates });
 });
 
+// ── The get-to-know-you conversation ─────────────────────────────────────────
+
+const interview = require('../services/profile-interview');
+
+router.get('/interview', (req, res) => {
+  const session = interview.load();
+  res.json({ ok: true, ...interview.status(), messages: session ? session.messages : [] });
+});
+
+router.post('/interview/start', async (req, res) => {
+  try {
+    // ⚠ Restarting is EXPLICIT. An accidental restart throws away a conversation
+    // he has already given an hour to.
+    const session = await interview.start({ restart: (req.body || {}).restart === true });
+    res.json({ ok: true, ...interview.status(), messages: session.messages });
+  } catch (e) {
+    // 503 + retryable, with the session intact, so the client can try again
+    // without him retyping — standup-session's rule.
+    res.status(503).json({ ok: false, retryable: true, error: e.message });
+  }
+});
+
+router.post('/interview/reply', async (req, res) => {
+  try {
+    const session = await interview.reply((req.body || {}).message);
+    res.json({ ok: true, ...interview.status(), messages: session.messages });
+  } catch (e) {
+    const retryable = /provider/i.test(e.message);
+    res.status(retryable ? 503 : 400).json({ ok: false, retryable, error: e.message, messages: (interview.load() || {}).messages || [] });
+  }
+});
+
 module.exports = router;

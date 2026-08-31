@@ -263,3 +263,53 @@ test('she knows the personal half is thin, and asks rather than inventing', () =
 test('the self-check rides on the full voice, not just in a comment', () => {
   assert.match(voice.VOICE_FULL, /genuinely useful, or just sounding helpful/i);
 });
+
+// ── From Nick's ChatGPT memory export, 31 Aug 2026 ───────────────────────────
+//
+// He spotted the split himself: a large part of that dump was not FACTS about
+// him but INSTRUCTIONS for how SARA should behave. Those belong in the voice,
+// not in a profile she reads as facts. Three were genuinely new, and all three
+// describe a specific way of being annoying that he has evidently met before.
+
+test('a rejected constraint stays rejected', () => {
+  // "not black", and three messages later she offers the black one. The
+  // clearest possible proof of not listening, and it survives any amount of
+  // otherwise-good conversation.
+  assert.match(voice.CORE_RULES, /REJECTED CONSTRAINT STAYS REJECTED/);
+  assert.match(voice.CORE_RULES, /unless he changes it himself/i);
+});
+
+test('once he has said go, she goes', () => {
+  assert.match(voice.CORE_RULES, /ONCE HE HAS SAID GO/);
+  assert.match(voice.CORE_RULES, /friction dressed up as diligence/i);
+  // ⚠ The carve-out has to travel WITH it, or this rule quietly cancels the
+  // confirm-before-irreversible rule the outbound paths depend on.
+  assert.match(voice.CORE_RULES, /irreversible or outward-facing/i);
+});
+
+test('considering is not owning', () => {
+  // Without this she ends up believing he owns every product he has ever asked
+  // about, and recommending accessories for a car he did not buy.
+  assert.match(voice.CORE_RULES, /CONSIDERING IS NOT OWNING/);
+  assert.match(voice.CORE_RULES, /state that expires/i);
+});
+
+test('memory is used to ANSWER, not merely to recall', () => {
+  // The distinction between a database of facts and a second brain. Asked about
+  // a walk she should already be accounting for the dog, the terrain, the
+  // distance and the fact he overheats.
+  assert.match(voice.CORE_RULES, /use it to ANSWER, not merely to recall/i);
+});
+
+test('the answer is sized to the question', () => {
+  assert.match(voice.CORE_RULES, /Match the size of the answer to the size of the question/i);
+});
+
+test('CORE_TRAITS is still majority generative after all of this', () => {
+  // Every rule above is a prohibition or a constraint, and they all went into
+  // CORE_RULES on purpose. If they had gone into CORE_TRAITS the #112
+  // regression — a personality that is nothing but a ban list — would be back.
+  const lines = voice.CORE_TRAITS.split('\n').filter(l => l.trim().startsWith('-'));
+  const prohibitions = lines.filter(l => /\bnever\b|\bdon't\b|\bdo not\b/i.test(l));
+  assert.ok(prohibitions.length < lines.length / 2);
+});
