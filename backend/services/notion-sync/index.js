@@ -82,13 +82,24 @@ function releaseLock() {
  * to the mapping's folder itself and is not written as a note — it is the
  * container Nick chose, not content.
  */
-async function readNotionTree(rootPageId, folder, { depth = 0, out = [], seen = new Set() } = {}) {
+async function readNotionTree(rootPageId, folder, { depth = 0, out = [], seen = new Set(), ownedElsewhere = new Set() } = {}) {
   if (seen.has(rootPageId) || out.length >= MAX_PAGES_PER_RUN || depth > 4) return out;
   seen.add(rootPageId);
 
   const children = await notion.getBlockTree(rootPageId, { maxDepth: 0 });
   for (const block of children) {
     if (block.type !== 'child_page') continue;
+
+    // ⚠ A child page that has its OWN mapping is not this tree's to sync.
+    // Without this, `Nick / Current Priorities` was owned twice — once by the
+    // `generated` mapping that writes it, and once by the `Nick` tree mapping
+    // that pulls its children into the vault. The generated push rewrote the
+    // page, the tree pulled it back as a note, and the next pass reported a
+    // change it could not act on. Two writers on one page, which is the thing
+    // every other guard here exists to prevent — but the validator cannot see
+    // Notion ancestry, so it has to be caught at RUN time.
+    if (ownedElsewhere.has(block.id)) continue;
+
     const title = block.child_page?.title || 'Untitled';
     const name = vault.safeFileName(title);
     const page = await notion.getPage(block.id).catch((error) => {
@@ -104,7 +115,7 @@ async function readNotionTree(rootPageId, folder, { depth = 0, out = [], seen = 
       archived: Boolean(page.archived || page.in_trash),
       relPath: `${folder}/${name}.md`,
     });
-    await readNotionTree(block.id, `${folder}/${name}`, { depth: depth + 1, out, seen });
+    await readNotionTree(block.id, `${folder}/${name}`, { depth: depth + 1, out, seen, ownedElsewhere });
   }
   return out;
 }
@@ -365,6 +376,9 @@ async function run({ dryRun = false } = {}) {
   }
 
   const state = loadState();
+  // Every page that is a mapping in its own right. A tree must not also claim
+  // one of these as a child — see readNotionTree.
+  const ownedElsewhere = new Set(mappings.map((m) => m.notionPageId));
   try {
     for (const mapping of mappings) {
       const summary = { id: mapping.id, folder: mapping.vaultFolder, mode: mapping.mode, notes: [], error: null };
@@ -417,7 +431,7 @@ async function run({ dryRun = false } = {}) {
 
       let pages;
       try {
-        pages = await readNotionTree(mapping.notionPageId, mapping.vaultFolder);
+        pages = await readNotionTree(mapping.notionPageId, mapping.vaultFolder, { ownedElsewhere });
       } catch (error) {
         // A mapping that cannot be read is a GAP, never an empty tree — an empty
         // tree would orphan or delete-side every note under it.

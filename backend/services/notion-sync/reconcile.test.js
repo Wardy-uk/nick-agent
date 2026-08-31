@@ -154,3 +154,29 @@ test('every decision carries a reason', () => {
     assert.ok(r.reason && r.reason.length > 5, `bare reason for ${JSON.stringify(input)}`);
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠ Two mappings must never own one page.
+//
+// `Nick / Current Priorities` is written by a `generated` mapping AND is a child
+// of the `Nick` tree mapping. The generated push rewrote the page, the tree
+// pulled it back into the vault as a note, and the next pass reported a change
+// it could not act on. The validator cannot see Notion ancestry, so this is
+// caught at run time in readNotionTree — asserted here on the source, because
+// exercising it needs a live workspace.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('a tree skips a child page that has its own mapping', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+
+  assert.match(src, /ownedElsewhere\.has\(block\.id\)/,
+    'readNotionTree must skip a child page owned by another mapping');
+  assert.match(src, /new Set\(mappings\.map\(\(m\) => m\.notionPageId\)\)/,
+    'the owned set must be built from every mapping, not just the generated ones');
+
+  // Positive control: if the walk stops looking at child_page at all, the guard
+  // above is meaningless.
+  assert.match(src, /block\.type !== 'child_page'/);
+});
