@@ -36,6 +36,7 @@ const fs = require('fs');
 const express = require('express');
 const ha = require('../telemetry/homeAssistant');
 const store = require('../presence/store');
+const history = require('../presence/history');
 const { resolveRoom, displayState } = require('../presence/rooms');
 
 const router = express.Router();
@@ -50,6 +51,9 @@ const SENSOR_TOKEN = (process.env.SARA_SENSOR_TOKEN || '').trim();
 // the readings themselves; a restart simply means the next poll picks the
 // loudest room outright, which is the correct cold-start answer.
 let lastRoom = null;
+// Per-room, the last display verdict we handed out — so a change is logged once
+// when it happens rather than on every poll.
+const lastDisplay = new Map();
 
 // Read per-request, not at module load, so the mode can be flipped by editing .env and
 // restarting SARA alone — no code change, and nothing else in the process caches it.
@@ -128,6 +132,16 @@ router.post('/sensor', express.json({ limit: '16kb' }), (req, res) => {
   return res.json(r);
 });
 
+// GET /api/presence/history — every room and display change, newest last, with
+// the RSSI of EVERY room at the moment it changed. The losing rooms' numbers are
+// the point: a switch at 15 dB and a switch at 1 dB look identical afterwards if
+// only the winner was recorded.
+router.get('/history', (req, res) => {
+  const limit = Number(req.query.limit) || 200;
+  const entries = history.all(limit);
+  res.json({ entries, count: entries.length, checkedAt: new Date().toISOString() });
+});
+
 // GET /api/presence/display?room=living-room — what a screen here should show.
 //
 // ⚠ The ROOM DECIDES NOTHING. It is told `full` / `clock` / `locked` and the
@@ -144,13 +158,27 @@ router.get('/display', (req, res) => {
   // each screen keep its own idea of it is how two surfaces come to disagree
   // about where he is standing.
   const arbitration = resolveRoom(store.all(), now, { previousRoom: lastRoom });
+  const wasRoom = lastRoom;
   if (arbitration.status === 'present') lastRoom = arbitration.room;
   // Only forget the incumbent once he is positively elsewhere. An unreadable
   // moment must not reset the hysteresis, or a single deaf poll re-opens the
   // flapping this exists to stop.
   else if (arbitration.status === 'absent') lastRoom = null;
+
+  if (lastRoom !== wasRoom) {
+    history.note('room', wasRoom, lastRoom, arbitration.rooms, {
+      status: arbitration.status,
+      note: arbitration.why || null,
+    });
+  }
   const home = homePresence(ha.getTelemetry());
   const display = displayState(room, arbitration, home);
+
+  if (lastDisplay.get(room) !== display.state) {
+    history.note('display:' + room, lastDisplay.get(room) || null, display.state,
+      arbitration.rooms, { why: display.reason, note: display.contradiction || null });
+    lastDisplay.set(room, display.state);
+  }
 
   res.json({
     room,
