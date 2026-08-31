@@ -115,9 +115,22 @@ router.get('/home', requireAccount, async (req, res) => {
   if (capture.hasScope(req.account, 'presence')) {
     try {
       const roomPresence = require('../services/room-presence');
+      const whereabouts = require('../services/whereabouts');
       const r = await roomPresence.read();
-      out.presence = r.known
-        ? { known: true, room: r.room, subject: r.subject || 'watch' }
+      // Town scale, for when the house sensors cannot see him. ⚠ Only a NAMED
+      // zone — `home`/`not_home` are refused upstream because that geofence is
+      // 90m off centre and would tell her he had gone out while he sat here.
+      let zone = null;
+      try {
+        const ha = require('../services/ha');
+        if (ha.isConfigured()) {
+          const phone = await ha.getPhoneStatus();
+          zone = phone && phone.presence ? phone.presence : null;
+        }
+      } catch { /* coarser answer, never an error */ }
+      const w = whereabouts.describe(r, zone);
+      out.presence = w.known
+        ? { known: true, label: w.label, kind: w.kind, room: w.room, subject: w.subject }
         // The classifier's own reason, generalised — it can name sensors and
         // calibration state, which is Nick's business and not hers.
         : { known: false, why: "can't tell which room" };

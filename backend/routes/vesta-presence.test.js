@@ -59,8 +59,12 @@ test('nothing but the room name can reach her', () => {
     assert.ok(!code.includes(leak), `${leak} must not reach the public mount`);
   }
   // Positive control: the thing that IS meant to be there still is, so this
-  // cannot pass by having scanned the wrong slice of the file.
-  assert.ok(code.includes('room: r.room'), 'the room name itself is sent');
+  // cannot pass by having scanned the wrong slice of the file. It has already
+  // earned its keep once — it caught `room: r.room` becoming `room: w.room`
+  // when the whereabouts layer landed, which a leak-only scan would have waved
+  // through while silently checking nothing.
+  assert.ok(code.includes('room: w.room'), 'the room itself is sent');
+  assert.ok(code.includes('label: w.label'), 'and the phrase she actually reads');
 });
 
 test('an unreadable room is a named gap, never a guessed room', () => {

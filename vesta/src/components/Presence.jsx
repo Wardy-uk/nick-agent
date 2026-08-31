@@ -25,9 +25,9 @@ import Section from './Section.jsx';
  * history, no timestamps. There is deliberately nothing else here to render.
  */
 
-// Rooms read better with the article the house uses for them. Unknown names
-// fall through unchanged rather than being mangled into a guess.
-const PHRASING = {
+// Rooms read better with the article the house uses for them. Anything not
+// listed falls through unchanged rather than being mangled into a guess.
+const IN_ROOM = {
   'living-room': 'the living room',
   kitchen: 'the kitchen',
   bedroom: 'the bedroom',
@@ -53,14 +53,26 @@ export default function Presence({ presence }) {
     return (
       <Section title="Nick">
         <p className="presence__unknown">
-          I can&rsquo;t tell which room he&rsquo;s in.{' '}
-          <span className="presence__note">That isn&rsquo;t the same as him being out.</span>
+          I can&rsquo;t tell which room Nick is in.{' '}
+          <span className="presence__note">That isn&rsquo;t the same as Nick being out.</span>
         </p>
       </Section>
     );
   }
 
-  const where = PHRASING[presence.room] || presence.room;
+  // ⚠ A ZONE IS NOT A ROOM, and the sentence has to change with it. "Last
+  // picked up in At Work" is what you get from treating one phrasing as
+  // universal — and the watch caveat is wrong there too, because a zone comes
+  // from the phone, not the watch.
+  if (presence.kind === 'zone') {
+    return (
+      <Section title="Nick">
+        <p className="presence__room"><strong>{presence.label}</strong>.</p>
+      </Section>
+    );
+  }
+
+  const where = IN_ROOM[presence.room] || presence.label || presence.room;
 
   return (
     <Section title="Nick">
@@ -70,7 +82,7 @@ export default function Presence({ presence }) {
       {/* Said plainly and once. She should know what the house is actually
           measuring, so that a watch left on a windowsill is a thing she can
           work out rather than a mystery. */}
-      <p className="presence__note">From his watch, so it&rsquo;s where that is.</p>
+      <p className="presence__note">From Nick&rsquo;s watch, so it&rsquo;s where that is.</p>
     </Section>
   );
 }

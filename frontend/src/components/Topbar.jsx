@@ -26,7 +26,10 @@ function useRoom(apiUrlFn) {
         });
         if (!res.ok) throw new Error('bad status');
         const d = await res.json();
-        if (alive) setRoom(d && d.known && d.room ? d.room : null);
+        // ⚠ The LABEL, composed server-side. The banner does not build a
+        // phrase from the room id any more, because "At Work" is not a room and
+        // three surfaces inventing their own wording is how they drift.
+        if (alive) setRoom(d && d.known && d.label ? d.label : null);
       } catch {
         if (alive) setRoom(null);
       }
@@ -39,14 +42,6 @@ function useRoom(apiUrlFn) {
   return room;
 }
 
-// "living-room" is a sensor id, not something to show a person.
-function roomLabel(room) {
-  if (!room) return null;
-  return room
-    .split('-')
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
-}
 
 function QuickAdd({ apiUrl: apiUrlFn }) {
   const [open, setOpen] = React.useState(false);
@@ -146,7 +141,7 @@ function QuickAdd({ apiUrl: apiUrlFn }) {
 
 export default function Topbar({ status, onMenuToggle, onChatToggle, chatOpen, weekend, onWeekendOverride, weekendOverride, children }) {
   const itIsWeekend = new Date().getDay() === 0 || new Date().getDay() === 6;
-  const roomHere = roomLabel(useRoom(apiUrl));
+  const roomHere = useRoom(apiUrl);
 
   // AI provider status
   const ai = status?.ai || {};

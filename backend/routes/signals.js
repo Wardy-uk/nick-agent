@@ -36,11 +36,24 @@ router.get('/', (req, res) => {
 router.get('/room', async (req, res) => {
   try {
     const roomPresence = require('../services/room-presence');
+    const whereabouts = require('../services/whereabouts');
     const r = await roomPresence.read();
-    // `known: false` with a reason is a 200, not an error: not being able to
-    // place him is a normal state of the world, and a 500 here would light up
-    // as a fault every time he stands in the hall.
-    res.json(r);
+
+    // The town-scale answer, for when the house-scale one cannot see him — the
+    // office zone is 150m wide and twenty miles away, so unlike `home` it has no
+    // boundary problem and can be trusted.
+    let zone = null;
+    try {
+      const ha = require('../services/ha');
+      if (ha.isConfigured()) {
+        const phone = await ha.getPhoneStatus();
+        zone = phone && phone.presence ? phone.presence : null;
+      }
+    } catch { /* a missing zone is simply a coarser answer, never an error */ }
+
+    const w = whereabouts.describe(r, zone);
+    return res.json({ ...r, label: w.label, kind: w.kind, known: w.known, why: w.why });
+
   } catch (e) {
     res.status(500).json({ known: false, room: null, why: e.message });
   }
