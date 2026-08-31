@@ -24,10 +24,15 @@
   gap: 0.75rem;
 }
 
-/* Read from a metre, not from the hand. The one thing the two surfaces
-   genuinely differ on — PresenceView.css has said so since 30 Aug. */
+/* ⚠ PADDING STAYS 1rem — it is a CONTRACT, not a taste. `Surface.css` pulls the
+   field out over it with `margin: -1rem` and compensates with
+   `min-height: calc(100% + 2rem)`, so that the substrate bleeds to the screen
+   edge rather than sitting in a box with a margin round it. Any other value
+   here and the field is inset on one side and clipped on the other.
+   Read-from-a-metre is handled by TYPE SIZE instead, which is the thing that
+   actually differs between a phone in the hand and a panel on a desk. */
 .app__view {
-  padding: 1.25rem;
+  padding: 1rem;
   font-size: 1.05rem;
 }
 
