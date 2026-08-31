@@ -35,8 +35,16 @@
 const fs = require('fs');
 const express = require('express');
 const ha = require('../telemetry/homeAssistant');
+const store = require('../presence/store');
+const { resolveRoom, displayState } = require('../presence/rooms');
 
 const router = express.Router();
+
+// Sensors push here. A token is required only when one is configured: these Pis
+// talk over the tailnet on a port that is not published, and refusing to start
+// without a shared secret would mean a sensor that is silently useless the first
+// time someone forgets to set it. When it IS set, it is enforced.
+const SENSOR_TOKEN = (process.env.SARA_SENSOR_TOKEN || '').trim();
 
 // Read per-request, not at module load, so the mode can be flipped by editing .env and
 // restarting SARA alone — no code change, and nothing else in the process caches it.
@@ -100,6 +108,52 @@ function homePresence(telemetry) {
   }
   return { away: null, reason: 'no-location-signal', basis: null, zone: null };
 }
+
+// ── Room sensors ────────────────────────────────────────────────────────────
+
+// POST /api/presence/sensor — one room sensor's latest reading.
+router.post('/sensor', express.json({ limit: '16kb' }), (req, res) => {
+  if (SENSOR_TOKEN && req.get('X-Sara-Sensor-Token') !== SENSOR_TOKEN) {
+    return res.status(401).json({ ok: false, reason: 'bad sensor token' });
+  }
+  const r = store.record(req.body);
+  // A rejected reading answers 400 and SAYS why. A sensor that cannot tell a
+  // refusal from an acceptance will happily report into a hole for a fortnight.
+  if (!r.ok) return res.status(400).json(r);
+  return res.json(r);
+});
+
+// GET /api/presence/display?room=living-room — what a screen here should show.
+//
+// ⚠ The ROOM DECIDES NOTHING. It is told `full` / `clock` / `locked` and the
+// reason, so the phone, the kiosk and anything else added later cannot each
+// invent their own idea of what a missing watch means. Same rule as the
+// attention payload's pre-composed `speech`.
+router.get('/display', (req, res) => {
+  const room = String(req.query.room || '').trim();
+  if (!room) return res.status(400).json({ ok: false, reason: 'room is required' });
+
+  const now = new Date();
+  const arbitration = resolveRoom(store.all(), now);
+  const home = homePresence(ha.getTelemetry());
+  const display = displayState(room, arbitration, home);
+
+  res.json({
+    room,
+    state: display.state,          // full | clock | locked
+    reason: display.reason,
+    say: display.say,
+    watch: {
+      status: arbitration.status,  // present | absent | unknown
+      room: arbitration.room,
+      rooms: arbitration.rooms,
+      unreadable: arbitration.unreadable,
+      why: arbitration.why,
+    },
+    home: { away: home.away, zone: home.zone, basis: home.basis, reason: home.reason },
+    checkedAt: now.toISOString(),
+  });
+});
 
 router.get('/', (_req, res) => {
   const mode = presenceSource();
