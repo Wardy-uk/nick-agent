@@ -397,3 +397,24 @@ test('no sustained reading at all behaves exactly as before', () => {
       { room: 'living-room', confidence: 'sure' }, s).state, 'full');
   }
 });
+
+// ⚠ Every branch must name what decided it. The `home-contradicted` branch had
+// no `decidedBy` and it is the one that runs most of the time, because the home
+// geofence reports not_home while Nick is at home — so the field added to make a
+// wrong screen attributable was null in exactly the case worth investigating.
+test('every display verdict names what decided it', () => {
+  const arb = resolveRoom({
+    'living-room': report({ inRoom: true }),
+    bedroom: report({ inRoom: false, rate: 0.2, rssiMedian: -88 }),
+  }, NOW);
+  const sure = { room: 'living-room', confidence: 'sure' };
+  const cases = [
+    ['at home',        displayState('living-room', arb, { away: false }, sure)],
+    ['geofence wrong', displayState('living-room', arb, { away: true }, sure)],
+    ['home unknown',   displayState('living-room', arb, { away: null }, sure)],
+    ['no fingerprint', displayState('living-room', arb, { away: false }, null)],
+  ];
+  for (const [label, d] of cases) {
+    assert.ok(d.decidedBy, `${label}: verdict "${d.reason}" says nothing about what decided it`);
+  }
+});

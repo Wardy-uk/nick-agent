@@ -260,6 +260,11 @@ function displayState(thisRoom, arbitration, home, inferred = null, sustained = 
         state: here ? 'full' : 'clock',
         reason: 'home-contradicted',
         say: here ? null : `In the ${sureRoom || arbitration.room}.`,
+        // ⚠ This branch was missing `decidedBy` and it is the one that runs most
+        // of the time, because the home geofence reports not_home while Nick is
+        // at home. So the field added to make a wrong screen attributable was
+        // null in exactly the case anyone would be investigating.
+        decidedBy,
         contradiction: `Home Assistant says not home, but the watch is audible in the ${arbitration.room}. Trusting the watch.`,
       };
     }
