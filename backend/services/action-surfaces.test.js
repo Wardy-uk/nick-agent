@@ -27,7 +27,11 @@ const path = require('path');
 const surfaces = require('../../shared/action-surfaces.cjs');
 const { resolveSaraLitePlan, resolveSaraLiteTab } = surfaces;
 
-const APP_JSX = path.join(__dirname, '..', '..', 'sara', 'app', 'src', 'App.jsx');
+// ⚠ The registry MOVED out of App.jsx on 31 Aug 2026 into `sara/shared-ui`,
+// where the Pi kiosk mounts the same list. Reading it here rather than in
+// App.jsx is what keeps this test covering BOTH shells: a tab id missing from
+// SARA_LITE_TABS is exactly as silent on the kiosk as on the phone.
+const TABS_JSX = path.join(__dirname, '..', '..', 'sara', 'shared-ui', 'tabs.jsx');
 
 // Pull the tab ids straight out of the TABS array literal. Reading the source
 // is the point — a test that re-declared the list would agree with itself
@@ -35,7 +39,7 @@ const APP_JSX = path.join(__dirname, '..', '..', 'sara', 'app', 'src', 'App.jsx'
 function tabIdsFromApp() {
   // The vault and this repo are Windows-authored and mixed CRLF/LF; `.` does not
   // match \r, so normalise before any line-anchored matching.
-  const src = fs.readFileSync(APP_JSX, 'utf8').replace(/\r\n/g, '\n');
+  const src = fs.readFileSync(TABS_JSX, 'utf8').replace(/\r\n/g, '\n');
   // Phase 2 split the single TABS literal into PRIMARY (the three modes always
   // on screen) and SECONDARY (everything else, behind "More"). Both are read:
   // a notification routes to either, so an id missing from SARA_LITE_TABS is
@@ -43,9 +47,9 @@ function tabIdsFromApp() {
   const ids = [];
   for (const name of ['const PRIMARY = [', 'const SECONDARY = [']) {
     const start = src.indexOf(name);
-    assert.ok(start !== -1, `could not find ${name.trim()} in App.jsx`);
+    assert.ok(start !== -1, `could not find ${name.trim()} in tabs.jsx`);
     const end = src.indexOf('\n];', start);
-    assert.ok(end !== -1, `could not find the end of ${name.trim()} in App.jsx`);
+    assert.ok(end !== -1, `could not find the end of ${name.trim()} in tabs.jsx`);
     ids.push(...[...src.slice(start, end).matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]));
   }
   assert.ok(ids.length >= 8, `expected the full tab list, parsed ${ids.length}`);
@@ -73,16 +77,16 @@ function isRegisteredTab(id) {
   return resolveSaraLiteTab({ tab: id }) === id;
 }
 
-test('every tab in App.jsx is registered in SARA_LITE_TABS', () => {
+test('every tab in the shared registry is registered in SARA_LITE_TABS', () => {
   for (const id of tabIdsFromApp()) {
     assert.ok(
       isRegisteredTab(id),
-      `tab '${id}' exists in App.jsx but not in SARA_LITE_TABS — notifications for it fall back to Focus silently`
+      `tab '${id}' exists in the shared tab registry but not in SARA_LITE_TABS — notifications for it fall back to Focus silently`
     );
   }
 });
 
-test('every id SARA_LITE_TABS accepts has a tab in App.jsx', () => {
+test('every id SARA_LITE_TABS accepts has a tab in the shared registry', () => {
   const ids = tabIdsFromApp();
   // The set is private, so drive the check from the other side: anything the
   // resolver hands back as a tab must be mountable.
@@ -91,7 +95,7 @@ test('every id SARA_LITE_TABS accepts has a tab in App.jsx', () => {
     const resolved = resolveSaraLiteTab({ tab: candidate });
     assert.ok(
       ids.includes(resolved),
-      `resolveSaraLiteTab('${candidate}') returned '${resolved}', which App.jsx cannot mount`
+      `resolveSaraLiteTab('${candidate}') returned '${resolved}', which the shared tab registry cannot mount`
     );
   }
 });

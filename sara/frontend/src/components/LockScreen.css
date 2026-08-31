@@ -11,9 +11,11 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  background: rgba(244, 247, 248, 0.72);
-  -webkit-backdrop-filter: blur(28px) saturate(1.2);
-  backdrop-filter: blur(28px) saturate(1.2);
+  /* ⚠ Was a frosted WHITE panel. The field is drawn on SARA's own ground
+     (#0b0f14) and its scrim is dark, so on white it read as a grey smear. The
+     lock is now the same room she is in everywhere else. Still fully opaque —
+     this is a PRIVACY screen and nothing may leak behind it. */
+  background: #06080c;
   animation: lock-in 0.18s ease;
 }
 @keyframes lock-in {
@@ -25,7 +27,10 @@
   }
 }
 
+/* Above the field, which is `inset: 0` at z 0. */
 .lock__panel {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -38,39 +43,21 @@
   font-weight: 700;
   letter-spacing: 6px;
   font-size: 22px;
-  color: var(--ink-dim);
+  color: #8b98a8;
 }
 
-.lock__orb {
-  width: 76px;
-  height: 76px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 50% 45%, #ffffff 0%, var(--accent-soft) 42%, transparent 64%);
-  border: 4px solid var(--accent);
-  box-shadow: 0 0 0 6px rgba(94, 193, 202, 0.16), inset 0 0 14px rgba(94, 193, 202, 0.5);
-  animation: lock-pulse 2.6s ease-in-out infinite;
-}
-@keyframes lock-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 6px rgba(94, 193, 202, 0.16), inset 0 0 14px rgba(94, 193, 202, 0.5);
-  }
-  50% {
-    box-shadow: 0 0 0 12px rgba(94, 193, 202, 0.06), inset 0 0 14px rgba(94, 193, 202, 0.5);
-  }
-}
 
 .lock__time {
   font-size: 56px;
   font-weight: 600;
-  color: var(--ink);
+  color: #e6edf3;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
 
 .lock__reason {
   font-size: 16px;
-  color: var(--ink-dim);
+  color: #8b98a8;
 }
 
 .lock__hint {

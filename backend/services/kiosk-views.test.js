@@ -26,6 +26,9 @@ const VIEWS = path.join(KIOSK, 'state', 'views.js');
 const PRESENCE = path.join(KIOSK, 'screens', 'presence', 'PresenceView.jsx');
 // The surface both apps render. Shared on purpose — see AttentionSurface.jsx.
 const SHARED = path.join(__dirname, '..', '..', 'sara', 'shared-ui', 'AttentionSurface.jsx');
+// Every OTHER kiosk surface that says the word "SARA" to Nick. See the field test.
+const LOCK = path.join(KIOSK, 'components', 'LockScreen.jsx');
+const CLOCK = path.join(KIOSK, 'components', 'ClockScreen.jsx');
 
 function read(file) {
   // Mixed CRLF/LF repo — normalise before any line-anchored matching.
@@ -146,4 +149,37 @@ test('⚠ Presence always renders SOMETHING — silence is not a screen', () => 
   // And the three silences must stay three, in the one place they are defined.
   assert.match(shared, /Nothing pressing/, 'the genuinely-quiet line is gone');
   assert.match(shared, /Staying out of the way|context\?\.summary/, 'the in-a-meeting line is gone');
+});
+
+test('⚠ the field renders in EVERY state SARA is seen in', () => {
+  // Nick, 31 Aug 2026: "crucially the nebulous connected nodes must be present
+  // whenever I see SARA." They were not. `Field` was reachable only from inside
+  // `AttentionSurface`, so it drew when the feed was GOOD and vanished in the
+  // three states where the kiosk still says the word SARA to him:
+  //
+  //   * Presence, waking, and Presence with no feed — the two branches where
+  //     she cannot see the brain, i.e. the moment the substrate is most
+  //     informative, rendered as a plain error page.
+  //   * The lock screen, which drew a pulsing ORB — a single bright point you
+  //     could call "where SARA is", which MANIFESTATION.md deprecates
+  //     permanently.
+  //   * The clock screen, the one he walks back in on.
+  //
+  // Asserted POSITIVELY per file, the rule this suite already follows: a
+  // negative ("no file lacks a Field") passes on a broken scan.
+  for (const [label, file] of [['Presence', PRESENCE], ['LockScreen', LOCK], ['ClockScreen', CLOCK]]) {
+    const src = read(file);
+    assert.match(src, /from '(\.\.\/)+shared-ui\/Field'/, `${label} no longer imports the shared Field`);
+    assert.ok(src.includes('<Field'), `${label} imports the Field but never renders it`);
+  }
+
+  // The Presence screen has TWO blind branches, not one, and both had text and
+  // no field. One <Field/> in the file would satisfy the check above while the
+  // waking branch stayed bare.
+  const src2 = read(PRESENCE);
+  assert.ok(src2.split('<Field').length - 1 >= 2,
+    'both blind branches in Presence must draw the field, not just one');
+
+  // And the orb must not come back.
+  assert.doesNotMatch(read(LOCK), /lock__orb/, 'the deprecated orb is back on the lock screen');
 });

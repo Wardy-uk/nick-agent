@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Field from './Field';
+import Dashboard from './Dashboard';
 import './AttentionSurface.css';
 
 // AttentionSurface — the attention feed, rendered.
@@ -52,6 +53,11 @@ export default function AttentionSurface({
   onOpen,
   onAct,
   onNavigate,
+  // What Nick could SAY next. Each utterance carries a structured intent, so no
+  // shell ever parses language — see `backend/services/sara-surface.js`.
+  // Omitting it falls back to the original buttons, which is what keeps a
+  // failed composition from emptying the screen.
+  onSay,
   // Slots. Each shell brings its own chrome; none of them is required.
   crownExtra = null,
   beforeSay = null,
@@ -80,9 +86,16 @@ export default function AttentionSurface({
   const {
     context, primary, secondary = [], dropped = [], quiet,
     rationale, poolAvailable, gaps = [], transition = null, ambient = null,
+    dashboard = null, utterances = [],
   } = data;
 
   const act = (card, action, opts) => onAct && onAct(card, action, opts);
+
+  // ⚠ The sentences REPLACE the button row only when the brain composed them
+  // AND the shell knows how to act on one. Either missing falls through to the
+  // original buttons: a framing layer must never be able to leave the screen
+  // with no way to answer it.
+  const speaks = Boolean(onSay) && Array.isArray(utterances) && utterances.length > 0;
 
   return (
     <div className={rootClassName}>
@@ -163,7 +176,7 @@ export default function AttentionSurface({
             <>
               <p className="surface__saylead">{primary.title}</p>
               {primary.say && <p className="surface__saysub">{primary.say}</p>}
-              {primary.kind === 'item' && onAct && (
+              {primary.kind === 'item' && onAct && !speaks && (
                 <>
                   <div className="surface__acts">
                     <button
@@ -248,6 +261,44 @@ export default function AttentionSurface({
             </>
           ))}
         </div>
+
+        {/* ── What she's showing ────────────────────────────────────────────
+            Nick, 31 Aug 2026: SARA is "a series of dashboards", and the
+            dashboard is an ANSWER, not a destination — it changed because the
+            situation changed or because he asked, never because he went
+            looking. Which one to show is composed server-side beside `say`,
+            `speech` and `tab`, so three surfaces cannot disagree about which
+            moment this is.
+
+            ⚠ BELOW her words, always. The sentence is the product; this is what
+            the sentence is about. */}
+        {!hideSecondary && dashboard && <Dashboard dashboard={dashboard} />}
+
+        {/* ── What he could say ─────────────────────────────────────────────
+            ⚠ EVERY ONE OF THESE IS A SENTENCE HE COULD HAVE SAID OUT LOUD, and
+            that is the whole design: the buttons exist for when he can't speak,
+            so they must be the same words rather than a second vocabulary of UI
+            verbs competing with the first. The intent travels with each one, so
+            nothing here parses language.
+
+            The escape hatch is always the last of them and is never dropped —
+            an ambient surface that is sometimes wrong must always have a way
+            round it. */}
+        {speaks && (
+          <div className="surface__says">
+            {utterances.map((u, i) => (
+              <button
+                key={`${u.say}-${i}`}
+                type="button"
+                className={`surface__say-btn${u.intent && u.intent.kind === 'reveal' ? ' surface__say-btn--quiet' : ''}`}
+                disabled={busy}
+                onClick={() => onSay(u, primary)}
+              >
+                {u.say}
+              </button>
+            ))}
+          </div>
+        )}
 
         {!hideSecondary && secondary.length > 0 && (
           <ul className="surface__rest">

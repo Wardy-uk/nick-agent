@@ -4,20 +4,10 @@ import { usePushSubscription } from './hooks/usePushSubscription';
 import { useWakeLock } from './hooks/useWakeLock';
 import LockScreen from './components/LockScreen';
 import NotificationActionCard from './components/NotificationActionCard';
-import Surface from './views/Surface';
-import Capture from './views/Capture';
-import Now from './views/Now';
-import Review from './views/Review';
 import { startAutoFlush } from './mobile/outbox';
-import Focus from './views/Focus';
-import Today from './views/Today';
-import Tasks from './views/Tasks';
-import Chat from './views/Chat';
-import MeetingPrep from './views/MeetingPrep';
-import Standup from './views/Standup';
-import BrainManagement from './views/BrainManagement';
-import Controls from './views/Controls';
 import actionSurfaces from '../../../shared/action-surfaces.cjs';
+import Field from '../../shared-ui/Field';
+import { PRIMARY, SECONDARY, TABS, VALID_TABS, DEFAULT_TAB } from '../../shared-ui/tabs';
 import DeploymentGuard from './components/DeploymentGuard';
 import { readRuntime } from './runtime';
 import './App.css';
@@ -50,36 +40,14 @@ import './App.css';
 // unchanged; the strip below just no longer leads with ten equal choices.
 // Retrieval (Chat, Brain) stays available and deliberately does not compete
 // with the three above for the primary row.
-const PRIMARY = [
-  { id: 'capture', label: 'Capture', icon: '➕', Component: Capture },
-  { id: 'now', label: 'Now', icon: '◉', Component: Now },
-  { id: 'review', label: 'Review', icon: '◐', Component: Review },
-];
+// ⚠ THE SCREEN SET MOVED to `sara/shared-ui/tabs.jsx` (31 Aug 2026), where the
+// Pi kiosk mounts the SAME list. Nick: "make the Pi version of SARA the same as
+// the phone app." Two registries over two backends was the drift that
+// `AttentionSurface` and `voiceUtils` each had to be undone from, one level up;
+// there is one now. The three primary modes, the rule that everything else is
+// secondary rather than deleted, and what each screen is FOR are all documented
+// there.
 
-const SECONDARY = [
-  // The ambient SARA feed. Still the destination for notification routing.
-  { id: 'surface', label: 'SARA', icon: '✦', Component: Surface },
-  { id: 'today', label: 'Today', icon: '☀', Component: Today },
-  { id: 'focus', label: 'Focus', icon: '🎯', Component: Focus },
-  { id: 'tasks', label: 'Tasks', icon: '✓', Component: Tasks },
-  { id: 'voice', label: 'Voice', icon: '🎙️', Component: Capture }, // jumps straight into recording
-  { id: 'chat', label: 'Chat', icon: '💬', Component: Chat },
-  { id: 'prep', label: 'Prep', icon: '📅', Component: MeetingPrep },
-  // #26 — the standup was reachable ONLY by tapping a notification, and what
-  // that opened was the retired stepper. Handles EOD too; the view picks which
-  // is outstanding and shows a toggle either way.
-  { id: 'standup', label: 'Ritual', icon: '📝', Component: Standup },
-  { id: 'brain', label: 'Brain', icon: '🧠', Component: BrainManagement },
-  // How loud SARA is allowed to be, and what she has already done. Secondary on
-  // purpose: it is a screen Nick visits to change his mind, not one he works
-  // from — but it must be findable, because a system you cannot turn down is one
-  // you eventually turn off.
-  { id: 'controls', label: 'Controls', icon: '⚙', Component: Controls },
-];
-
-const TABS = [...PRIMARY, ...SECONDARY];
-
-const VALID_TABS = new Set(TABS.map((tab) => tab.id));
 const { resolveSaraLitePlan, resolveSaraLiteTab } = actionSurfaces;
 
 function readLaunchIntent() {
@@ -138,7 +106,7 @@ export default function App() {
   // A launch INTENT still wins, and must: tapping a notification has to land on
   // the thing that pinged him, not on the home screen. This is only the default
   // when he opened the app himself.
-  const [active, setActive] = useState(() => readLaunchIntent()?.tab || 'surface');
+  const [active, setActive] = useState(() => readLaunchIntent()?.tab || DEFAULT_TAB);
   // The strip is revealed on request, and stays revealed while Nick is off the
   // Surface — otherwise the one screen with no menu is also the only way back.
   const [navOpen, setNavOpen] = useState(false);
@@ -231,7 +199,10 @@ export default function App() {
   // below a conditional return changes the hook count between renders, which
   // React rejects outright ("rendered more hooks than during the previous render").
   const ActiveView = useMemo(
-    () => TABS.find((t) => t.id === active)?.Component || Now,
+    // Falls back to the default tab's component rather than a named import, so
+    // the registry stays the only place that knows what a screen IS.
+    () => TABS.find((t) => t.id === active)?.Component
+      || TABS.find((t) => t.id === DEFAULT_TAB)?.Component,
     [active]
   );
   // The primary row is ALWAYS visible — three modes is navigation, not a menu.
@@ -246,6 +217,23 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* ⚠ SARA's substrate is present on EVERY screen (Nick, 31 Aug 2026), not
+          only on her own. It sits behind the whole shell rather than being
+          re-mounted per view, so switching tabs does not tear the field down
+          and rebuild it — the substrate would flicker on every tap.
+
+          It is driven `quiet`: dim and near-still. That is deliberate and it is
+          the honesty rule, not a look. The field's whole claim is that the
+          coherence on screen is the coherence of the READ, and the shell reads
+          nothing — only the Surface polls `/api/attention`. A confident settle
+          out here would be the field asserting a read that never happened.
+
+          Hence it is also SUPPRESSED on the Surface, which mounts its own,
+          driven by the real payload. Two stacked fields would double the
+          substrate and put a dishonest one under an honest one. */}
+      {active !== 'surface' && (
+        <div className="app__field" aria-hidden="true"><Field quiet confidenceLevel="low" /></div>
+      )}
       <header className="app__header">
         <span className="app__brand">SARA</span>
         <span className="app__sub">mobile</span>

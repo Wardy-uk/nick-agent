@@ -356,3 +356,45 @@
   opacity: 0.75;
   font-style: italic;
 }
+
+/* ── The sentences ─────────────────────────────────────────────────────────
+   Nick, 31 Aug 2026: "everything she can do should be achievable
+   conversationally... she isn't a click here to do this interface. We should
+   allow that when I can't speak to her."
+
+   So these are styled as SPEECH, not as controls — quotation marks, a pill
+   rather than a button face. They are the same words he would say, and looking
+   like a toolbar is how the fallback quietly becomes the primary. */
+.surface__says {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+
+.surface__say-btn {
+  font: inherit;
+  font-size: 0.87rem;
+  color: #b7c2d0;
+  background: rgba(255, 255, 255, 0.062);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  padding: 0.34rem 0.85rem;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.surface__say-btn::before { content: '\201C'; color: #5d6b7a; }
+.surface__say-btn::after  { content: '\201D'; color: #5d6b7a; }
+
+.surface__say-btn:hover:not(:disabled) {
+  color: #e6edf3;
+  border-color: #5ec1ca;
+  background: rgba(94, 193, 202, 0.13);
+}
+.surface__say-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* The escape hatch is always available and never the loudest thing on screen —
+   it is the way round, not the way. */
+.surface__say-btn--quiet { color: #78899a; border-style: dashed; }
+.surface__say-btn--quiet::before,
+.surface__say-btn--quiet::after { content: ''; }

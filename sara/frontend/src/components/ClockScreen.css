@@ -40,3 +40,10 @@
   font-size: clamp(0.85rem, 2.2vw, 1.15rem);
   opacity: 0.4;
 }
+
+/* Above the field (`inset: 0`, z 0). The field is presence, the clock is the
+   only content this state carries. */
+.clockscreen > *:not(.field) {
+  position: relative;
+  z-index: 1;
+}

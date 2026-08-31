@@ -1,0 +1,129 @@
+/* The dashboard — beneath her words, never competing with them.
+   Sized so the same file reads in the hand and from a metre; the shells add
+   only what genuinely differs. */
+
+.dash {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.75rem 0.85rem 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.038);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  min-width: 0;
+}
+
+/* Nothing to show is a real state and it gets a real look — dashed, so an empty
+   panel reads as deliberate rather than as one that failed to load. */
+.dash--bare {
+  border-style: dashed;
+  background: transparent;
+}
+
+.dash__label {
+  font-size: 0.62rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #5d6b7a;
+}
+
+/* ── Rows ─────────────────────────────────────────────────────────────────
+   `when` / `what` / `meta` on one line, `note` wrapping underneath it. */
+.dash__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dash__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.05rem 0.65rem;
+  align-items: baseline;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.dash__row:last-child { border-bottom: none; padding-bottom: 0; }
+
+.dash__when {
+  font-size: 0.76rem;
+  color: #5ec1ca;
+  /* So the minutes do not jitter the column. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dash__row--warn .dash__when { color: #e0a850; }
+.dash__row--crit .dash__when { color: #e0726a; }
+
+.dash__what {
+  color: #e6edf3;
+  font-size: 0.92rem;
+  min-width: 0;
+  /* A long task title must wrap, not push the meta column off the panel. */
+  overflow-wrap: anywhere;
+}
+
+.dash__meta {
+  font-size: 0.7rem;
+  color: #5d6b7a;
+  white-space: nowrap;
+}
+
+.dash__note {
+  grid-column: 2 / -1;
+  font-size: 0.75rem;
+  color: #78899a;
+  line-height: 1.4;
+}
+
+.dash__note--wide {
+  grid-column: auto;
+  margin: 0;
+  font-size: 0.82rem;
+  color: #b7c2d0;
+}
+
+/* ── Figure ─────────────────────────────────────────────────────────────── */
+.dash__figure { display: flex; flex-direction: column; gap: 0.4rem; }
+
+.dash__fignum {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+.dash__fignum b {
+  font-size: 2.2rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #5ec1ca;
+  font-variant-numeric: tabular-nums;
+}
+.dash__fignum span { color: #8b98a8; font-size: 0.8rem; }
+
+.dash__meter {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+.dash__meter i {
+  display: block;
+  height: 100%;
+  background: #5ec1ca;
+  border-radius: 3px;
+}
+/* Over the planned time is not an error — it is a fact worth seeing. Amber
+   states it without the bar having to lie about its own scale. */
+.dash__meter--over i { background: #e0a850; }
+
+/* ── Gaps ─────────────────────────────────────────────────────────────────
+   Named, never counted. */
+.dash__gaps {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #e0a850;
+}

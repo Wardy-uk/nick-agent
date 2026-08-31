@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { setPin, clearPin, apiUrl } from '../api';
+import Field from '../../../shared-ui/Field';
 import './LockScreen.css';
 
 // PIN gate. Validates the PIN against the brain BEFORE unlocking, so a wrong PIN
@@ -36,6 +37,10 @@ export default function LockScreen({ onUnlock }) {
 
   return (
     <div className="lock">
+      {/* Nick, 31 Aug 2026 — the field must be present whenever he SEES SARA,
+          and the PIN gate carries her mark. Degraded: at this point she has not
+          been let in to anything, so there is nothing for her to resolve. */}
+      <Field confidenceLevel="low" degraded />
       <form className="lock__box" onSubmit={submit}>
         <div className="lock__brand">SARA</div>
         <p className="lock__hint">Enter your NEURO PIN</p>

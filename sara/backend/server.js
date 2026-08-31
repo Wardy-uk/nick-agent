@@ -44,6 +44,7 @@ const locationRoute = require('./src/routes/location');
 const cognitionGraphRoute = require('./src/routes/cognitionGraph');
 const captureRoute = require('./src/routes/capture');
 const attentionRoute = require('./src/routes/attention');
+const neuroProxyRoute = require('./src/routes/neuroProxy');
 const { RUNTIME_LABEL } = require('./src/state/stateEngine');
 const ha = require('./src/telemetry/homeAssistant');
 const neuro = require('./src/integrations/neuroSnapshot');
@@ -78,6 +79,16 @@ app.use('/api/capture', captureRoute);
 // Gate 2 — a read-only passthrough to NEURO's attention feed. It stores nothing
 // and ranks nothing; NEURO owns the attention decision (docs/attention-contract.md).
 app.use('/api/attention', attentionRoute);
+
+// ⚠ MOUNTED LAST, and the order is the mechanism. Every named door above wins;
+// this catches what is left and forwards it to NEURO with SARA's credential, so
+// the kiosk can render the SAME views the phone does without a NEURO token
+// sitting in a browser on an always-on desk screen.
+//
+// It is an ALLOWLIST, not an open proxy — see the header of neuroProxy.js for
+// what is deliberately NOT reachable (anything that leaves the building, and
+// anything that manages an account or a credential).
+app.use('/api', neuroProxyRoute);
 
 // --- Static frontend (production) ---
 // Vite builds to ../frontend/dist. If it exists, serve it with SPA fallback so

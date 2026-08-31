@@ -1,3 +1,4 @@
+import Field from '../../../shared-ui/Field';
 import './LockScreen.css';
 
 // LockScreen — privacy lock overlay for the Pi wall display (WS2-WP3).
@@ -29,9 +30,15 @@ function formatTime(date) {
 export default function LockScreen({ reason, now }) {
   return (
     <div className="lock" aria-label="SARA locked — away from home">
+      {/* ⚠ This replaces a pulsing ORB, which `MANIFESTATION.md` deprecates
+          permanently: SARA is not an object and has no single bright point you
+          could call "where she is". The field is what she looks like everywhere
+          else, and the lock screen is a place Nick SEES her — so it is the
+          field here too, degraded, because in this state she genuinely cannot
+          see anything. */}
+      <Field confidenceLevel="low" degraded />
       <div className="lock__panel">
         <span className="lock__mark">SARA</span>
-        <span className="lock__orb" aria-hidden="true" />
         {now && <span className="lock__time">{formatTime(now)}</span>}
         <span className="lock__reason">{REASON_TEXT[reason] || 'Locked'}</span>
       </div>

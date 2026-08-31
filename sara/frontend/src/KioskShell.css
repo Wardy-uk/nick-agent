@@ -1,0 +1,37 @@
+/* Only what genuinely differs between the desk panel and the phone.
+   Loaded LAST, after the phone's App.css, so these win.
+
+   Everything else — the header, the view box, both nav rows, the tab buttons —
+   is the phone's sheet, unmodified. Two stylesheets for one shell is how the
+   two apps came to look different in the first place. */
+
+/* The phone caps the column at 720px, which is right in the hand and
+   letterboxes a 1280x720 panel read from a metre away. The field would then
+   only cover the column, which is worse than not drawing it at all. */
+.app {
+  max-width: 100%;
+  height: 100vh;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* No safe-area insets on a Pi touchscreen — the phone's max(0.8rem, env(...))
+   resolves to its floor here anyway, so this is only about a desk panel wanting
+   a little more room around the words. */
+.app__header {
+  padding: 0.8rem 1.25rem;
+  gap: 0.75rem;
+}
+
+/* Read from a metre, not from the hand. The one thing the two surfaces
+   genuinely differ on — PresenceView.css has said so since 30 Aug. */
+.app__view {
+  padding: 1.25rem;
+  font-size: 1.05rem;
+}
+
+/* Fingers on glass, not thumbs. */
+.navbtn {
+  padding: 0.7rem 0.5rem;
+}

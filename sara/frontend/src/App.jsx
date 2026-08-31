@@ -1,107 +1,154 @@
+import { useMemo, useState } from 'react';
 import { SaraStateProvider, useSaraState } from './state/saraState';
 import { useDisplayState } from './state/useDisplayState';
-import { SARA_VIEWS, normalizeViewId } from './state/views';
-import ViewSwitcher from './components/ViewSwitcher';
-import ViewRouter from './components/ViewRouter';
+import { PRIMARY, SECONDARY, TABS, DEFAULT_TAB } from '../../shared-ui/tabs';
+import Field from '../../shared-ui/Field';
 import ExitButton from './components/ExitButton';
 import LockScreen from './components/LockScreen';
 import ClockScreen from './components/ClockScreen';
 import ConnectionStatus from './components/ConnectionStatus';
+import './App.css';
+// ⚠ Imported AFTER the kiosk's own sheet, deliberately. `App.css` above carries
+// the THEME (`:root` tokens, the body wash) the remaining chrome is built on;
+// this one carries the SHELL — `.app`, `.app__view`, `.app__nav`, `.navbtn` —
+// and where the two collide the phone's must win, because the whole point is
+// that the two shells are one shell. `KioskShell.css` loads last and holds only
+// what genuinely differs: a desk panel is 1280px wide, has no safe-area insets,
+// and is read from a metre rather than from the hand.
+import '../../app/src/App.css';
+import './KioskShell.css';
 
-// SARA app shell (WS2-WP1; inference strip WS5-WP1; Exit + auto-lock WS2-WP2/WP3).
+// SARA on the Pi — the same app as the phone.
 //
-// The shell provides the shared-state context for every screen, the manual view switcher
-// (proof of the many-views architecture), SARA's advisory context inference, an Exit
-// control, and a privacy auto-lock. The lock + clock live in an inner component so they
-// can read the shared clock from context; the provider itself wraps everything.
+// ⚠ WHAT THIS REPLACED, and why. Nick, 31 Aug 2026: "make the Pi version of
+// SARA the same as phone app - same for the desktop." It was not. The kiosk had
+// its own fourteen-screen registry rendering `sara/backend`'s state model,
+// while the phone had thirteen rendering NEURO's own contracts, and exactly ONE
+// kiosk screen (Presence) had ever read the attention feed. Two screen sets
+// over two backends is the drift `AttentionSurface` and `voiceUtils` each had
+// to be undone from, one level up — so there is now ONE registry
+// (`sara/shared-ui/tabs.jsx`) and both shells mount it.
+//
+// The DESKTOP comes free: `sara/desktop-electron` loads this same frontend from
+// `SARA_URL`, so it is the same app by construction rather than by a third port.
+//
+// ── What is still the kiosk's own, and why ──────────────────────────────────
+// The screens are shared; the chrome is not, exactly as `AttentionSurface`
+// splits them. The kiosk brings the provenance banner, the Exit control, and
+// the two display states NEURO composes for it — clock (at home, not in this
+// room) and lock (out of the house). The phone brings a PIN gate, push
+// registration and a wake lock, none of which mean anything on a screen that is
+// simply on and has nobody to log in.
+//
+// ⚠ THE KIOSK HOLDS NO NEURO CREDENTIAL. The shared views call `/api/*`
+// same-origin; `sara/backend` answers its own named routes and forwards the
+// rest through an ALLOWLIST (`src/routes/neuroProxy.js`), attaching the
+// credential server-side. That was always the reason the two apps could not be
+// one, and it turned out to be a fact about the BROWSER, not about the screens.
 function AppShell() {
-  const { now, currentView } = useSaraState();
-  // Fast watch-driven lock: poll 2s, lock on the first away report. The presence
-  // service already does noise-smoothing (7/10 over ~5s), so a second streak layer
-  // here would only add latency — awayStreak:1 keeps end-to-end lock ~5-6s.
-  // Watch-presence is the primary lock trigger; idle is a long safety-net (15 min) so a
-  // glance-display doesn't keep locking itself while you're nearby.
-  // ⚠ The kiosk no longer decides when to hide itself. `usePresenceLock` did,
-  // and it had two faults that only showed on the wall: unlock was MANUAL, so
-  // Nick came home from an evening out to a locked screen that had to be
-  // tapped; and it locked on IDLE, which measures the wrong thing entirely for
-  // a display that is looked at rather than touched. Neither was in his spec:
-  // watch here -> SARA, watch elsewhere -> clock, out of the house -> off.
-  //
-  // NEURO composes the verdict now, so this screen, the phone and the widget
-  // cannot each invent their own idea of what a missing watch means.
+  const { now } = useSaraState();
+  const [active, setActive] = useState(DEFAULT_TAB);
+  const [navOpen, setNavOpen] = useState(false);
+
+  // ⚠ The kiosk no longer decides when to hide itself. NEURO composes the
+  // verdict, so this screen, the phone and the widget cannot each invent their
+  // own idea of what a missing watch means: watch here → SARA, watch elsewhere
+  // → clock, out of the house → off.
   const { state: displayState, detail: displayDetail } = useDisplayState();
   const locked = displayState === 'locked';
   const showClock = displayState === 'clock';
 
-  // Some views are full-bleed: they draw their OWN nav, header and footer, so the shell
-  // hides its chrome (ViewSwitcher + SARA-thinks strip) to avoid doubling up. The Briefing
-  // (JARVIS) and the Cognition Environment are both full-bleed. Every other view keeps the
-  // shared shell chrome.
-  const view = normalizeViewId(currentView);
-  const fullBleed = view === SARA_VIEWS.BRIEFING || view === SARA_VIEWS.COGNITION;
-  // The Cognition Environment owns its own bottom bar and presence affordances, so the
-  // shell's floating lock/power column would collide with it. Auto-lock still runs (the
-  // hook + lock overlay are unconditional), so only the manual buttons are hidden there.
-  const showFloatingSys = view === SARA_VIEWS.BRIEFING;
-
-  // ⚠ The pause and manual-lock buttons went with the self-deciding lock. Both
-  // controlled a thing that no longer exists here: there is no auto-lock timer
-  // to pause, and "lock now" would be overruled by the next poll four seconds
-  // later, which is worse than no button at all. Locking is NEURO's decision
-  // and the backlight's job. ExitButton stays — leaving the kiosk is a real
-  // thing a person at this screen may want to do.
-  const sysControls = (
-    <div className="app__sys">
-      <ExitButton />
-    </div>
+  const ActiveView = useMemo(
+    // Falls back to the default tab's component rather than a named import, so
+    // the registry stays the only place that knows what a screen IS.
+    () => TABS.find((t) => t.id === active)?.Component
+      || TABS.find((t) => t.id === DEFAULT_TAB)?.Component,
+    [active]
   );
 
-  if (fullBleed) {
-    return (
-      <div className="app app--bleed">
-        {/* JARVIS view fills everything and owns its own nav/header/footer. The shell
-            still provides the global lock/power controls (fixed) and the lock overlay. */}
-        {/* Even a full-bleed view that owns its own chrome must carry the provenance
-            banner: "this is demo data" and "nothing here is current" are not chrome. */}
-        <div className="app__connstatus app__connstatus--pinned">
-          <ConnectionStatus />
-        </div>
-        <main className="app__bleed-view">
-          <ViewRouter />
-        </main>
-        {showFloatingSys && <div className="app__sys app__sys--floating">{sysControls.props.children}</div>}
-        {showClock && <ClockScreen now={now} say={displayDetail?.say} />}
-        {locked && <LockScreen reason={displayDetail?.reason} now={now} />}
-      </div>
-    );
+  // Same rule as the phone: the primary row is always there, the secondary row
+  // is revealed on request AND stays revealed while he is on one of its
+  // screens, or the way back is only through the way he came.
+  const isSecondary = SECONDARY.some((t) => t.id === active);
+  const moreVisible = navOpen || isSecondary;
+
+  function goTab(tab) {
+    if (!tab) return;
+    setActive(tab);
+    if (PRIMARY.some((t) => t.id === tab)) setNavOpen(false);
   }
 
   return (
     <div className="app">
-      <div className="app__main">
-        <div className="app__nav">
-          <ViewSwitcher />
-          {sysControls}
-        </div>
-        <main className="app__view">
-          <div className="app__connstatus">
-            <ConnectionStatus />
-          </div>
-          <ViewRouter />
-        </main>
-      </div>
-      {/* ⚠ The "SARA thinks" strip was REMOVED on 30 Aug 2026 (Gate 2).
-          It rendered `model.inference` — the retired inference layer — as a
-          persistent overlay, so the kiosk carried TWO accounts of Nick's state
-          at once. Caught on the panel: it read "You're set up for focused work
-          — Suggested view: Focus, High 0.75" directly beneath NEURO saying
-          "Not a working day. It's the weekend."
+      {/* Her substrate, behind the whole shell — present on every screen, not
+          only on her own (Nick, 31 Aug 2026). Suppressed on the Surface, which
+          mounts its own driven by the real attention payload; two stacked
+          fields would put a `quiet` placeholder under an honest one. */}
+      {active !== 'surface' && (
+        <div className="app__field" aria-hidden="true"><Field quiet confidenceLevel="low" /></div>
+      )}
 
-          Consumers render NEURO's attention decision; they do not independently
-          rerank work, invent urgency, or phrase the same state differently.
-          An advisory "suggested view" is also a menu, which is the one thing
-          SARA is not. */}
+      <header className="app__header">
+        <span className="app__brand">SARA</span>
+        {/* Not chrome. "This is demo data" and "nothing here is current" are
+            facts about everything below, and this is the surface with nobody
+            standing at it to ask. Silent when live. */}
+        <ConnectionStatus />
+        <ExitButton />
+      </header>
+
+      <main className="app__view">
+        {/* `key` forces a fresh mount when switching Capture↔Voice so
+            `autoRecord` re-fires — the phone's rule, and the same component. */}
+        <ActiveView
+          key={active}
+          autoRecord={active === 'voice'}
+          onNavigate={goTab}
+          onShowAll={() => setNavOpen(true)}
+        />
+      </main>
+
+      {/* ⚠ `.app__nav[hidden]{display:none}` in the phone's sheet is
+          load-bearing — the rule above it is `display:flex`, which beats the
+          bare `hidden` attribute. Without it this row renders permanently
+          open. */}
+      <nav className="app__nav app__nav--more" aria-label="Everything else" hidden={!moreVisible}>
+        {SECONDARY.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`navbtn${active === t.id ? ' navbtn--on' : ''}`}
+            onClick={() => goTab(t.id)}
+          >
+            <span className="navbtn__icon" aria-hidden="true">{t.icon}</span>
+            <span className="navbtn__label">{t.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      <nav className="app__nav" aria-label="SARA">
+        {PRIMARY.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`navbtn${active === t.id ? ' navbtn--on' : ''}`}
+            onClick={() => goTab(t.id)}
+          >
+            <span className="navbtn__icon" aria-hidden="true">{t.icon}</span>
+            <span className="navbtn__label">{t.label}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          className={`navbtn${moreVisible ? ' navbtn--on' : ''}`}
+          aria-expanded={moreVisible}
+          onClick={() => setNavOpen((open) => !open)}
+        >
+          <span className="navbtn__icon" aria-hidden="true">⋯</span>
+          <span className="navbtn__label">More</span>
+        </button>
+      </nav>
+
       {showClock && <ClockScreen now={now} say={displayDetail?.say} />}
       {locked && <LockScreen reason={displayDetail?.reason} now={now} />}
     </div>

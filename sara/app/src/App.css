@@ -21,6 +21,7 @@ body {
 }
 
 .app {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100dvh;
@@ -28,7 +29,17 @@ body {
   margin: 0 auto;
 }
 
+/* Behind the whole shell. `Field` is `inset: 0` at z 0 and catches no taps, so
+   only the chrome needs lifting off it. */
+.app__field {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
 .app__header {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
@@ -71,12 +82,16 @@ body {
 }
 
 .app__view {
+  position: relative;
+  z-index: 1;
   flex: 1;
   overflow-y: auto;
   padding: 1rem;
 }
 
 .app__nav {
+  position: relative;
+  z-index: 1;
   display: flex;
   border-top: 1px solid var(--line);
   background: var(--panel);

@@ -1,4 +1,8 @@
+/* `position: relative` so the field, which is `inset: 0`, is bounded by the
+   gate rather than the document; the box is lifted above it. */
 .lock {
+  position: relative;
+  background: #0b0f14;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7,6 +11,8 @@
 }
 
 .lock__box {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;

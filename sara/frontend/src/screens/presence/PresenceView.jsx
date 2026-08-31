@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSaraState } from '../../state/saraState';
 import AttentionSurface from '../../../../shared-ui/AttentionSurface';
+import Field from '../../../../shared-ui/Field';
 import './PresenceView.css';
 
 // Presence — SARA on the desk, and the screen the kiosk opens on.
@@ -119,6 +120,7 @@ export default function PresenceView() {
   if (status === 'connecting' && !feedOk) {
     return (
       <section className="presence presence--bare">
+        <Field confidenceLevel="low" degraded />
         <p className="presence__line">Waking…</p>
       </section>
     );
@@ -128,6 +130,12 @@ export default function PresenceView() {
     const why = feed && feed.reason ? feed.reason : null;
     return (
       <section className="presence presence--bare">
+        {/* ⚠ The field renders in EVERY state SARA is seen in, not only when the
+            feed is good. These two branches drew nothing but text, so the one
+            moment the substrate is most informative — she cannot see the brain —
+            was the one moment it was absent, and a broken read looked like a
+            plain error page rather than like SARA unable to resolve. */}
+        <Field confidenceLevel="low" quiet={!degraded && !partial} degraded={degraded} />
         <span className="presence__mark">SARA</span>
         {degraded ? (
           <p className="presence__line presence__line--degraded">

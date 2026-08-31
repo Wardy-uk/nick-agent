@@ -583,7 +583,25 @@ async function gather(now = new Date()) {
     const active = session && session.status === 'active' && !session.stale ? session : null;
     inputs.focusSession = {
       known: true,
-      active: active ? { taskTitle: active.text || null, startedAt: active.startedAt || null } : null,
+      // ⚠ Widened for the session DASHBOARD (`sara-surface.js`). `current()`
+      // already computed every one of these, so this is a projection, not a
+      // second calculation — the elapsed figure in particular must stay the
+      // one focus-session owns, because it is FOCUS time with paused stretches
+      // excluded, and a surface re-deriving it from `startedAt` would quietly
+      // show wall clock and be wrong the moment Nick is pulled away.
+      active: active ? {
+        taskTitle: active.text || null,
+        startedAt: active.startedAt || null,
+        elapsedMinutes: active.elapsedMinutes ?? null,
+        plannedMinutes: active.plannedMinutes ?? null,
+        // Carried, never dropped: "thirty minutes" and "half an hour because
+        // nobody said" are different claims and only one of them is a measurement.
+        plannedAssumed: active.plannedAssumed === true,
+        remainingMinutes: active.remainingMinutes ?? null,
+        overrun: active.overrun === true,
+        shrinkCount: Array.isArray(active.shrinks) ? active.shrinks.length : 0,
+        stepAways: Array.isArray(active.stepAways) ? active.stepAways.length : 0,
+      } : null,
     };
   } catch (e) {
     gaps.push({ input: 'focusSession', why: e.message });
@@ -945,6 +963,32 @@ async function build({ now = new Date(), view = null } = {}) {
     transition = null;
   }
 
+  // ⚠ Composed LAST, from the payload this function has just assembled, and
+  // deliberately never allowed to fail the feed. SARA showing the wrong
+  // dashboard is a bad afternoon; SARA showing nothing is the outage the whole
+  // honesty model exists to make visible, and a framing layer must not be able
+  // to cause one. A null `surface` reads to every client as "render the feed the
+  // way you did before this existed", which is exactly the right degradation.
+  let framed = null;
+  try {
+    const draft = {
+      context,
+      weeklyTarget,
+      ...gated,
+      agenda: agendaFor(inputs.calendar, now, 4, _tomorrowEvents(), {
+        personal: context.duty ? context.duty.onDuty === false : false,
+      }),
+      poolAvailable: poolError === null,
+      gaps,
+    };
+    framed = require('./sara-surface').compose(draft, {
+      session: inputs.focusSession && inputs.focusSession.active ? inputs.focusSession.active : null,
+    });
+  } catch (e) {
+    console.warn('[Attention] surface composition failed:', e.message);
+    framed = null;
+  }
+
   return {
     generatedAt: now.toISOString(),
     context,
@@ -953,6 +997,19 @@ async function build({ now = new Date(), view = null } = {}) {
     transition,
     ambient,
     ...gated,
+    // ── What she SHOWS, and what he could SAY ────────────────────────────
+    // Nick, 31 Aug 2026: SARA is a manifestation, not a menu — "a series of
+    // dashboards, and everything she can do should be achievable
+    // conversationally". Both halves are composed server-side beside `say`,
+    // `speech` and `tab`, for the same reason those are: three surfaces render
+    // one decision and must not each invent a fourth thing about it.
+    //
+    // ⚠ ADDITIVE. Every field this payload returned before is unchanged, so the
+    // Scriptable widget — which reads `say`/`speech`/`tab` and nothing else —
+    // keeps working untouched.
+    surface: framed ? framed.surface : null,
+    dashboard: framed ? framed.dashboard : null,
+    utterances: framed ? framed.utterances : [],
     // The lifecycle view of the same decision. Additive: every field this
     // payload returned before is unchanged and still means the same thing, which
     // is what lets the widget and the kiosk be migrated separately.

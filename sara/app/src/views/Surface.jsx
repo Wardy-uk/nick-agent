@@ -239,6 +239,69 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
     if (tab) onNavigate?.(tab);
   }
 
+  /**
+   * A sentence Nick said — or tapped, which is the same sentence.
+   *
+   * ⚠ THE INTENT IS STRUCTURED AND IS NEVER PARSED HERE. The brain composed
+   * both the words and what they mean (`backend/services/sara-surface.js`), for
+   * the same reason it composes `say`, `speech` and `tab`: the moment a client
+   * works out what a sentence means, there are two answers to that question and
+   * they are free to drift.
+   *
+   * ⚠ The kinds are a CLOSED set and an unrecognised one does nothing rather
+   * than guessing. A surface that falls through to a default action on a verb
+   * it does not understand is how a tap comes to do something nobody asked for.
+   */
+  async function onSay(utterance, card) {
+    const intent = utterance && utterance.intent;
+    if (!intent) return;
+
+    switch (intent.kind) {
+      case 'act':
+        // The record is the identity, and the brain named it. `card` is only a
+        // fallback for the legacy route inside `act`.
+        return act(
+          intent.recordId ? { ...card, kind: 'item', recordId: intent.recordId } : card,
+          intent.action,
+          { minutes: intent.minutes, reason: intent.reason },
+        );
+
+      case 'session':
+        // ⚠ A DIFFERENT API from `act`. Shrink, step-away and finish live on
+        // `/api/session/*`; the attention lifecycle refuses all three, so
+        // sending them there would be a sentence NEURO cannot honour.
+        setBusy(true);
+        try {
+          await apiFetch(`/api/session/${intent.action}`, { method: 'POST', body: JSON.stringify({}) });
+          await load({ quiet: true });
+        } catch { /* left on screen — a card that vanishes on an error is one
+                     Nick believes he has dealt with */ }
+        finally { setBusy(false); }
+        return undefined;
+
+      case 'navigate':
+        if (intent.tab) onNavigate?.(intent.tab);
+        return undefined;
+
+      case 'ask':
+        // Straight into the passing question — the same ephemeral exchange the
+        // mic uses. Chat owns conversation and history; this owns the one
+        // question, and two surfaces keeping two versions of one thread is the
+        // drift that split avoids.
+        return ask(intent.text || utterance.say);
+
+      case 'refresh':
+        return load();
+
+      case 'reveal':
+        onShowAll?.();
+        return undefined;
+
+      default:
+        return undefined;
+    }
+  }
+
   const { loading, error, data } = state;
   // The bare states keep their own words — a cold start and an unreachable
   // brain are not the same fact, and neither is the shared component's job.
@@ -278,6 +341,7 @@ export default function Surface({ onNavigate, onShowAll, arrivedFrom, onClearArr
       rootClassName="surface"
       onOpen={open}
       onAct={act}
+      onSay={onSay}
       onNavigate={(tab) => onNavigate?.(tab)}
       hideSecondary={Boolean(exchange)}
       crownExtra={(

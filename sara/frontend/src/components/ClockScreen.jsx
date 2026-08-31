@@ -1,3 +1,4 @@
+import Field from '../../../shared-ui/Field';
 import './ClockScreen.css';
 
 // The middle state: Nick is at home, but not in this room.
@@ -22,6 +23,13 @@ export default function ClockScreen({ now, say }) {
 
   return (
     <div className="clockscreen" aria-label="SARA is idle — you are not in this room">
+      {/* ⚠ Presence, not content. The rule above — "it shows the time and
+          nothing else" — is about CONTENT displayed to an empty room, and the
+          field is neither content nor something to deal with: it is what SARA
+          looks like, and Nick walking back in sees her before the verdict
+          flips. Driven `quiet`, so it is dim and near-still and stops dead when
+          the page is hidden. */}
+      <Field quiet confidenceLevel="low" />
       <div className="clockscreen__time">{time}</div>
       <div className="clockscreen__date">{date}</div>
       {/* Where he is, in NEURO's words, not ours — and only when it knows.
