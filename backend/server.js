@@ -90,6 +90,20 @@ app.use('/api', (req, res, next) => {
   // admin mount cannot be reached through this branch by prefix.
   if (req.path.startsWith('/c/')) return next();
 
+  // VESTA — the shared home surface (vesta.nickward.co.uk). Same reasoning as
+  // /api/c above and the same credential system (capture-links accounts, PINs,
+  // throttle, sessions), but it READS as well as writes, which is a real step up
+  // in blast radius: his partner sees shared tasks, the kitchen, and his diary.
+  //
+  // ⚠ So every read is gated on a per-account SCOPE that DEFAULTS CLOSED, and
+  // the calendar is redacted in services/vesta.js before it reaches the route —
+  // a work subject never enters routes/vesta.js at all.
+  //
+  // ⚠ `/v/` not `/v`, so the prefix cannot reach anything else — and note it
+  // sits one letter from `/v1/` (the FreeReps health wire, exempted below for
+  // an entirely different reason). Same care as /c/ versus /capture-links.
+  if (req.path.startsWith('/v/')) return next();
+
   // Allow the FreeReps iOS app's wire API (#40). Same reason as the exemptions
   // above — the client cannot send a header. This one is not a limitation of the
   // browser but of the app: its config model has no credential field at all, so
@@ -211,6 +225,8 @@ app.use('/api/attention', require('./routes/attention'));
 app.use('/api/ambient', require('./routes/ambient'));
 app.use('/api/desktop', require('./routes/desktop'));
 app.use('/api/signals', require('./routes/signals'));
+app.use('/api/catalogues', require('./routes/catalogue'));
+app.use('/api/v', require('./routes/vesta'));
 app.use('/api/weekly-risk', require('./routes/weekly-risk'));
 app.use('/api/tasks', require('./routes/tasks'));
 // Its own mount, deliberately NOT under /api/tasks — a sibling registered after

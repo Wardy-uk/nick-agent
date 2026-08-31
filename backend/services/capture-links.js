@@ -46,6 +46,50 @@ const { domainOrDefault } = require('../../shared/task-domain.cjs');
 
 const STATE_KEY = 'capture_links';
 
+// ── What an account may SEE (VESTA, 31 Aug 2026) ─────────────────────────────
+//
+// The original rule here was absolute: an account sees ONLY its own
+// submissions, and "nothing else about Nick's day is reachable — not his other
+// tasks, not counts, not the calendar." VESTA deliberately widens that for one
+// person: his partner gets a shared home surface with his diary (redacted), the
+// kitchen and shared tasks on it.
+//
+// ⚠ So it is a per-account CAPABILITY and it DEFAULTS CLOSED. Widening the rule
+// globally would silently hand every existing account sight of his calendar,
+// which is the exact shape of accident this whole file exists to prevent. An
+// account created before this has no `scopes` key at all and therefore gets
+// `['tasks']` — precisely what it could do yesterday.
+//
+// `tasks` is implicit and always granted: it is what an account IS.
+const SCOPES = ['tasks', 'calendar', 'kitchen', 'shared-tasks'];
+const DEFAULT_SCOPES = ['tasks'];
+
+/** Normalise a requested scope list. Unknown scopes are DROPPED, never passed
+ *  through — a typo must not become a permission, and a future scope name must
+ *  not be grantable by an old client that has not been updated. */
+function normaliseScopes(requested) {
+  const asked = Array.isArray(requested) ? requested : DEFAULT_SCOPES;
+  const kept = asked
+    .map((x) => String(x || '').trim().toLowerCase())
+    .filter((x) => SCOPES.includes(x));
+  // `tasks` is not optional — an account with no scopes at all would be a login
+  // that can do nothing, which is a confusing way to spell "disabled".
+  if (!kept.includes('tasks')) kept.unshift('tasks');
+  return [...new Set(kept)];
+}
+
+/** What this account may see. An account predating scopes gets the old
+ *  behaviour, never the new one. */
+function scopesOf(account) {
+  if (!account) return [];
+  return Array.isArray(account.scopes) ? normaliseScopes(account.scopes) : [...DEFAULT_SCOPES];
+}
+
+function hasScope(account, scope) {
+  return scopesOf(account).includes(scope);
+}
+
+
 const MAX_TEXT = 500;
 
 // Submissions per account per hour. Generous for a person, useless for anything
@@ -124,6 +168,7 @@ function list() {
     label: a.label,
     username: a.username,
     domain: a.domain,
+    scopes: scopesOf(a),
     enabled: a.enabled !== false,
     createdAt: a.createdAt || null,
     lastSeenAt: a.lastSeenAt || null,
@@ -135,7 +180,7 @@ function list() {
   }));
 }
 
-function create({ label, username, pin, domain = 'personal' } = {}) {
+function create({ label, username, pin, domain = 'personal', scopes = null } = {}) {
   const cleanLabel = String(label || '').trim().slice(0, 40);
   const cleanUser = String(username || '').trim().toLowerCase().slice(0, 40);
   const cleanPin = String(pin || '').trim();
@@ -162,6 +207,8 @@ function create({ label, username, pin, domain = 'personal' } = {}) {
     // construction rather than by a classifier guessing at the wording — and a
     // compromised account can only ever create personal tasks.
     domain: domainOrDefault(domain),
+    // Defaults closed. See the SCOPES note above.
+    scopes: normaliseScopes(scopes),
     enabled: true,
     createdAt: new Date().toISOString(),
     lastSeenAt: null,
@@ -190,6 +237,20 @@ function setPin(username, pin) {
   account.lockedUntil = null;
   _save(accounts);
   return { ok: true };
+}
+
+/**
+ * Change what an account may see. Admin-side only (behind the PIN), never
+ * reachable from the public mount — an account that could widen its own scope
+ * would make the whole model decorative.
+ */
+function setScopes(username, scopes) {
+  const accounts = _load();
+  const account = _findByUsername(accounts, String(username || '').toLowerCase());
+  if (!account) return { ok: false, error: 'no such account' };
+  account.scopes = normaliseScopes(scopes);
+  _save(accounts);
+  return { ok: true, username: account.username, scopes: account.scopes };
 }
 
 function revoke(username) {
@@ -377,6 +438,12 @@ function submissions(account, { limit = 50 } = {}) {
 module.exports = {
   list,
   create,
+  setScopes,
+  scopesOf,
+  hasScope,
+  normaliseScopes,
+  SCOPES,
+  DEFAULT_SCOPES,
   setPin,
   revoke,
   login,
