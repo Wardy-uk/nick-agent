@@ -34,9 +34,20 @@ const PHRASING = {
 };
 
 export default function Presence({ presence }) {
-  // No block at all rather than an empty one: the server did not send it, which
-  // for this section means it was not asked for.
-  if (!presence) return null;
+  // ⚠ THE SCOPE IS GRANTED AND THE SERVER SENT NOTHING. That is not "no
+  // permission" — the caller already checked the scope before mounting this —
+  // so it is a stale client talking to a server that does not send the block, or
+  // a server that failed to build it. Rendering null was the first version and
+  // it is exactly the failure this app is built to refuse: an empty screen that
+  // looks identical to a working one with nothing to say. Caught in the wild
+  // within the hour, hunting a section that was silently absent.
+  if (!presence) {
+    return (
+      <Section title="Nick" gap="I asked where he is and got no answer. Try reloading.">
+        {null}
+      </Section>
+    );
+  }
 
   if (!presence.known) {
     return (
