@@ -87,3 +87,67 @@
   font-weight: 600;
   color: var(--ink-dim);
 }
+
+/* ── In the bottom nav (variant="nav") ──────────────────────────────────────
+   Nick, 31 Aug 2026: moved out of the top bar, styled like the tabs. The
+   BUTTON itself is a plain `.navbtn` — the phone's own class, not a copy of it,
+   so it cannot drift from the tabs it sits beside. Only the confirm popover is
+   this file's. */
+
+.exitnav {
+  /* Matches a tab's share of the row, so the bar stays evenly divided. */
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  /* Anchors the popover above the bar. */
+  position: relative;
+}
+
+.exitnav > .navbtn { width: 100%; }
+
+/* ⚠ Above the bar, not inside it. Three controls cannot share one tab-width
+   slot, and shrinking the confirm to fit is how a two-step guard quietly
+   becomes a one-tap quit — on the only way out of a keyboardless kiosk. */
+.exitnav__confirm {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem 0.75rem;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #182029;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+}
+
+.exitnav__ask {
+  font-size: 0.82rem;
+  color: #e6edf3;
+}
+
+.exitnav__acts { display: flex; gap: 0.4rem; }
+
+.exitnav__act {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #b7c2d0;
+  cursor: pointer;
+}
+
+/* Cancel is the WIDER of the two on purpose: the safe answer should be the
+   easier one to hit with a thumb on glass. */
+.exitnav__act--no { flex: 1; }
+
+.exitnav__act--yes {
+  border-color: rgba(224, 114, 106, 0.5);
+  color: #e0726a;
+}
+.exitnav__act--yes:hover { background: rgba(224, 114, 106, 0.14); }

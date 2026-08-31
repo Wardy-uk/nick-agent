@@ -94,7 +94,6 @@ function AppShell() {
             facts about everything below, and this is the surface with nobody
             standing at it to ask. Silent when live. */}
         <ConnectionStatus />
-        <ExitButton />
       </header>
 
       <main className="app__view">
@@ -147,6 +146,11 @@ function AppShell() {
           <span className="navbtn__icon" aria-hidden="true">⋯</span>
           <span className="navbtn__label">More</span>
         </button>
+        {/* ⚠ In the nav rather than the top bar (Nick, 31 Aug 2026), and LAST —
+            it is the only way out of a keyboardless kiosk, so it must be
+            findable, but it is not somewhere to go. Its two-step confirm is
+            kept: a stray palm must not close SARA. */}
+        <ExitButton variant="nav" />
       </nav>
 
       {showClock && <ClockScreen now={now} say={displayDetail?.say} />}
