@@ -21,12 +21,69 @@ let chain = Promise.resolve();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// ── Where the credential lives ──────────────────────────────────────────────
+//
+// `.env` FIRST, then the DB. Both, deliberately — and the DB is the one that
+// matters, because the alternative was an SSH session, a `read -rsp`, an append
+// to .env and a pm2 restart to set one value. That is six steps of friction for
+// a config change, on the system whose whole premise is that Nick's bottleneck
+// is initiation. NEURO already had the answer: the OpenRouter key lives in
+// `agent_state` and is pasted into a panel (`routes/ai-settings.js`), so this
+// follows that rather than inventing a second, worse way.
+//
+// Read at CALL time, not bootstrapped into process.env at startup, so pasting a
+// token takes effect immediately instead of at the next restart. `.env` still
+// wins where it is set, so a deployment that pins the credential in the
+// environment is never quietly overridden by something typed into a browser.
+const TOKEN_KEY = 'notion_sync_token';
+
 function token() {
-  return process.env.NOTION_TOKEN || '';
+  if (process.env.NOTION_TOKEN) return process.env.NOTION_TOKEN;
+  try {
+    // Lazily required: this module is loaded before the DB is initialised.
+    return require('../../db/database').getState(TOKEN_KEY) || '';
+  } catch { return ''; }
 }
 
 function isConfigured() {
   return Boolean(token());
+}
+
+/**
+ * WHERE the credential came from — never what it is.
+ *
+ * The `/api/health` rule from the SARA bridge: report whether a credential is
+ * set and which source answered, so "not configured" and "configured but wrong"
+ * stay distinguishable, without the value ever leaving the server.
+ */
+function credentialSource() {
+  if (process.env.NOTION_TOKEN) return 'env';
+  try {
+    return require('../../db/database').getState(TOKEN_KEY) ? 'stored' : null;
+  } catch { return null; }
+}
+
+/**
+ * Store a token typed into the panel.
+ *
+ * Shape-checked only — Notion's own tokens are `ntn_…` (and historically
+ * `secret_…`). A wrong-but-well-formed token is caught by the first real call,
+ * which reports 401 honestly; guessing harder here would only reject valid
+ * future formats.
+ */
+function setStoredToken(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return { ok: false, error: 'No token given.' };
+  if (!/^(ntn_|secret_)[A-Za-z0-9]/.test(trimmed)) {
+    return { ok: false, error: 'That does not look like a Notion integration token (expected it to start with "ntn_").' };
+  }
+  require('../../db/database').setState(TOKEN_KEY, trimmed);
+  return { ok: true };
+}
+
+function clearStoredToken() {
+  require('../../db/database').setState(TOKEN_KEY, '');
+  return { ok: true, stillInEnv: Boolean(process.env.NOTION_TOKEN) };
 }
 
 /**
@@ -206,7 +263,11 @@ async function searchPages(query = '') {
 
 module.exports = {
   NOTION_VERSION,
+  TOKEN_KEY,
   isConfigured,
+  credentialSource,
+  setStoredToken,
+  clearStoredToken,
   isRetryable,
   request,
   paged,

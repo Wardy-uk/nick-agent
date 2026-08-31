@@ -68,6 +68,17 @@ function pickUpdatedAt(states, entityId) {
   return e ? (e.last_updated || e.last_changed || null) : null;
 }
 
+/**
+ * When the entity last CHANGED VALUE, which is a different question from when
+ * it last reported. HA keeps both, and the difference is the whole answer to
+ * "how long has he been sitting still": `last_updated` moves on every report,
+ * `last_changed` only when Still stopped being Walking.
+ */
+function pickChangedAt(states, entityId) {
+  const e = states.find(s => s.entity_id === entityId);
+  return e ? (e.last_changed || e.last_updated || null) : null;
+}
+
 function isUsable(v) {
   return v && !['unavailable', 'unknown', 'none'].includes(String(v).toLowerCase());
 }
@@ -231,6 +242,22 @@ async function getPhoneStatus() {
     floorsAscended: isUsable(floors) ? Number(floors) : null,
     audioOutput: isUsable(audioOutput) ? audioOutput : null,
     focusMode: isUsable(focus) ? focus === 'on' : null,
+
+    // How long the CURRENT activity has been the current activity. Null when the
+    // sensor is absent — a duration of zero would read as "he just sat down".
+    activitySince: pickChangedAt(states, E('sensor', 'activity')),
+
+    // ⚠ When ANY phone entity last reported, which is the liveness signal a
+    // sedentary read cannot work without: a phone that is off and a phone
+    // reporting `Still` look identical if you only read the activity value.
+    // Battery is included deliberately — it reports on a timer rather than on
+    // movement, so it keeps ticking while he genuinely is not moving.
+    lastReportAt: [
+      pickUpdatedAt(states, E('sensor', 'battery_level')),
+      pickUpdatedAt(states, E('sensor', 'activity')),
+      pickUpdatedAt(states, E('sensor', 'steps')),
+      pickUpdatedAt(states, E('device_tracker', null)),
+    ].filter(Boolean).sort().pop() || null,
 
     // Which entity family answered, and when it last said anything. Carried on
     // the payload so a caller can tell a quiet phone from a phone NEURO cannot

@@ -182,6 +182,32 @@ function enabled() {
   return list().filter((m) => m.enabled && m.notionPageId && m.vaultFolder);
 }
 
+// ── The scheduled pass, switchable without a restart ────────────────────────
+//
+// `NOTION_SYNC_ENABLED` was read once when the scheduler registered its crons,
+// so turning the automatic sync on meant editing .env and restarting the
+// backend. Same friction as the token, same fix: the flag lives in the DB and is
+// read on every tick, so the toggle in the panel takes effect at the next
+// quarter hour. The env var still FORCES it on where set, so a deployment can
+// pin the behaviour and a browser cannot quietly turn it off.
+const AUTO_KEY = 'notion_sync_auto';
+
+/** Should the 15-minute cron actually do anything? Defaults FALSE. */
+function autoSyncEnabled() {
+  if (process.env.NOTION_SYNC_ENABLED === 'true') return true;
+  return db.getState(AUTO_KEY) === 'true';
+}
+
+function setAutoSync(on) {
+  db.setState(AUTO_KEY, on ? 'true' : 'false');
+  return autoSyncEnabled();
+}
+
+/** Whether the env var is forcing it, so the panel can say the toggle is moot. */
+function autoSyncForcedByEnv() {
+  return process.env.NOTION_SYNC_ENABLED === 'true';
+}
+
 /**
  * Vault folders offered in the picker.
  *
@@ -215,6 +241,9 @@ module.exports = {
   list,
   save,
   enabled,
+  autoSyncEnabled,
+  setAutoSync,
+  autoSyncForcedByEnv,
   validate,
   vaultFolders,
   folderRefusal,

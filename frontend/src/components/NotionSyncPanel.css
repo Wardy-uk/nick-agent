@@ -20,6 +20,47 @@
 .ns-warn ul { margin: 6px 0 0; padding-left: 18px; }
 .ns-warn code { background: var(--bg-secondary); padding: 1px 4px; border-radius: 3px; }
 
+/* --------------------------------------------------------------- token */
+
+.ns-token { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.ns-token input {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: inherit;
+  font: inherit;
+  padding: 7px 9px;
+  flex: 1 1 300px;
+  min-width: 0;
+}
+.ns-token button {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: inherit;
+  font: inherit;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.ns-token button:disabled { opacity: 0.45; cursor: default; }
+.ns-token-error { flex: 1 1 100%; color: var(--danger); }
+.ns-warn p { margin: 6px 0; }
+.ns-warn a { color: inherit; }
+
+.ns-connected {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  color: var(--text-muted);
+}
+/* A quiet confirmation, not a green badge — a permanent status banner is one
+   nobody reads by week two. */
+.ns-connected::before { content: '●'; color: var(--success); }
+
+.ns-auto { margin-top: 12px; }
+.ns-auto input:disabled + span { opacity: 0.55; }
+
 /* ------------------------------------------------------------- mappings */
 
 .ns-rows { display: flex; flex-direction: column; gap: 12px; }

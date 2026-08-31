@@ -19,6 +19,12 @@ router.get('/', (req, res) => {
     res.json({
       ok: true,
       configured: notion.isConfigured(),
+      // WHERE the credential came from, never what it is. 'env' means the panel
+      // cannot change it, which the UI needs to say rather than offering a field
+      // that silently does nothing.
+      credentialSource: notion.credentialSource(),
+      autoSync: config.autoSyncEnabled(),
+      autoSyncForcedByEnv: config.autoSyncForcedByEnv(),
       mappings: config.list(),
       vaultFolders: folders.folders,
       vaultReadable: folders.known,
@@ -55,6 +61,41 @@ router.get('/pages', async (req, res) => {
     console.error('[notion-sync] page search failed:', e.message);
     res.status(502).json({ ok: false, error: e.message });
   }
+});
+
+/**
+ * POST /api/notion-sync/token — store the integration token.
+ *
+ * Stored in `agent_state`, following the OpenRouter key in `routes/ai-settings.js`
+ * rather than inventing a second way. It is read at call time, so it takes effect
+ * immediately — no restart, and no SSH to set one value.
+ *
+ * ⚠ The token is NEVER returned by any route, including this one. The response
+ * says only that it landed and which source is now answering.
+ */
+router.post('/token', (req, res) => {
+  const result = notion.setStoredToken(req.body?.token);
+  if (!result.ok) return res.status(400).json(result);
+  res.json({ ok: true, configured: notion.isConfigured(), credentialSource: notion.credentialSource() });
+});
+
+/** DELETE /api/notion-sync/token — forget a stored token. */
+router.delete('/token', (req, res) => {
+  const result = notion.clearStoredToken();
+  // `stillInEnv` matters: clearing the stored copy does NOT disconnect when the
+  // environment also sets one, and a UI that claimed otherwise would be lying.
+  res.json({ ...result, configured: notion.isConfigured(), credentialSource: notion.credentialSource() });
+});
+
+/** POST /api/notion-sync/auto — turn the 15-minute pass on or off. */
+router.post('/auto', (req, res) => {
+  if (config.autoSyncForcedByEnv()) {
+    return res.status(409).json({
+      ok: false,
+      error: 'NOTION_SYNC_ENABLED=true in the environment is forcing automatic sync on; the toggle cannot override it.',
+    });
+  }
+  res.json({ ok: true, autoSync: config.setAutoSync(req.body?.enabled === true) });
 });
 
 /**

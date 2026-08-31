@@ -193,27 +193,31 @@ function start() {
   //
   // Deliberately NOT a TRACKED_JOBS catch-up job: the sync compares live state on
   // both sides every pass, so a missed run self-corrects on the next one and
-  // there is nothing to replay (the `wins` and `bank-holidays` call). Gated on
-  // NOTION_SYNC_ENABLED, which defaults FALSE — this writes to a real external
-  // workspace, so switching it on is a decision, not a default.
-  if (process.env.NOTION_SYNC_ENABLED === 'true') {
-    cron.schedule('*/15 * * * *', async () => {
-      try {
-        const r = await require('./notion-sync').run({ dryRun: false });
-        const c = r.counts;
-        if (c.pulled || c.pushed || c.created || c.conflicts) {
-          console.log(`[Scheduler] Notion sync: ${c.pulled} pulled, ${c.pushed} pushed, `
-            + `${c.created} created, ${c.conflicts} conflict(s)`);
-        }
-        // A gap is logged loudly whatever else happened — a sync reporting zero
-        // because it could not read a side is the bug, not a quiet day.
-        for (const gap of r.gaps) console.warn(`[Scheduler] Notion sync gap: ${gap}`);
-      } catch (e) {
-        console.error(`[Scheduler] Notion sync failed: ${e.message}`);
+  // there is nothing to replay (the `wins` and `bank-holidays` call). Defaults
+  // OFF — this writes to a real external workspace, so switching it on is a
+  // decision, not a default.
+  //
+  // ⚠ The cron is registered UNCONDITIONALLY and the switch is checked INSIDE
+  // the tick. Reading the flag out here meant turning the sync on required an
+  // .env edit and a pm2 restart — six steps of SSH for a boolean, on the system
+  // whose stated premise is that Nick's bottleneck is initiation. The toggle now
+  // lives in the DB beside the token and takes effect at the next quarter hour.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      if (!require('./notion-sync/config').autoSyncEnabled()) return;
+      const r = await require('./notion-sync').run({ dryRun: false });
+      const c = r.counts;
+      if (c.pulled || c.pushed || c.created || c.conflicts) {
+        console.log(`[Scheduler] Notion sync: ${c.pulled} pulled, ${c.pushed} pushed, `
+          + `${c.created} created, ${c.conflicts} conflict(s)`);
       }
-    });
-    console.log('[Scheduler] Notion sync scheduled (every 15 min)');
-  }
+      // A gap is logged loudly whatever else happened — a sync reporting zero
+      // because it could not read a side is the bug, not a quiet day.
+      for (const gap of r.gaps) console.warn(`[Scheduler] Notion sync gap: ${gap}`);
+    } catch (e) {
+      console.error(`[Scheduler] Notion sync failed: ${e.message}`);
+    }
+  });
 
   // Every 20 min in working hours — offer NOVA any 1-2-1 transcript that has landed in
   // the vault. Frequent because Nick processes a recording and then goes looking for it

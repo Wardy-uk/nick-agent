@@ -17,6 +17,53 @@ const MODES = [
   { id: 'push-only', label: 'Vault → Notion', hint: 'The vault is the source. Notion is a read-only window on it.' },
 ];
 
+/**
+ * Paste-the-token field.
+ *
+ * A password input, and the value is never read back from the server — the
+ * routes report only WHETHER a credential is set and which source answered.
+ */
+function TokenField({ onSaved }) {
+  const [value, setValue] = useState('');
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch(apiUrl('/api/notion-sync/token'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: value }),
+      });
+      const data = await r.json();
+      if (data.ok) { setValue(''); onSaved(); }
+      else setError(data.error || 'Could not save the token.');
+    } catch (e) {
+      setError(e.message);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="ns-token">
+      <input
+        type="password"
+        value={value}
+        placeholder="ntn_…"
+        autoComplete="off"
+        spellCheck="false"
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && value && submit()}
+      />
+      <button className="ns-primary" onClick={submit} disabled={!value || busy}>
+        {busy ? 'Connecting…' : 'Connect'}
+      </button>
+      {error && <small className="ns-token-error">{error}</small>}
+    </div>
+  );
+}
+
 const blankRow = () => ({
   id: `new-${Math.random().toString(36).slice(2, 8)}`,
   notionPageId: '', notionTitle: '', vaultFolder: '', mode: 'two-way', enabled: true,
@@ -102,8 +149,41 @@ export default function NotionSyncPanel() {
 
       {!state.configured && (
         <div className="ns-warn">
-          <strong>Not connected.</strong> Set <code>NOTION_TOKEN</code> in <code>backend/.env</code> and
-          share the pages you want synced with the NEURO integration.
+          <strong>Not connected.</strong>
+          <p>
+            Create an integration at{' '}
+            <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer">
+              notion.so/my-integrations
+            </a>{' '}
+            with read, update and insert content capabilities, then paste its token here.
+          </p>
+          <TokenField onSaved={load} />
+          <p className="ns-muted">
+            Then share each parent page with it in Notion: <strong>⋯ → Connections → your
+            integration</strong>. The token on its own grants access to nothing.
+          </p>
+        </div>
+      )}
+
+      {state.configured && (
+        <div className="ns-connected">
+          <span>
+            Connected
+            {state.credentialSource === 'env' && ' — token set in the environment'}
+          </span>
+          {/* An env-set token cannot be changed from here, so no field is offered
+              rather than one that silently does nothing. */}
+          {state.credentialSource === 'stored' && (
+            <button
+              className="ns-remove"
+              onClick={async () => {
+                await fetch(apiUrl('/api/notion-sync/token'), { method: 'DELETE' });
+                load();
+              }}
+            >
+              Disconnect
+            </button>
+          )}
         </div>
       )}
       {state.vaultReadable === false && (
@@ -218,6 +298,28 @@ export default function NotionSyncPanel() {
           <button onClick={() => runSync(true)} disabled={busy || dirty}>Sync now</button>
         </div>
         {dirty && <small className="ns-muted">Save your mappings before running a sync.</small>}
+
+        {/* The cron switch. Checked on every tick rather than at boot, so this
+            takes effect at the next quarter hour with no restart. */}
+        <label className="ns-toggle ns-auto">
+          <input
+            type="checkbox"
+            checked={state.autoSync}
+            disabled={state.autoSyncForcedByEnv || !state.configured}
+            onChange={async (e) => {
+              await fetch(apiUrl('/api/notion-sync/auto'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: e.target.checked }),
+              });
+              load();
+            }}
+          />
+          <span>
+            Sync automatically every 15 minutes
+            {state.autoSyncForcedByEnv && ' — forced on by NOTION_SYNC_ENABLED'}
+          </span>
+        </label>
 
         {/* Last run, from the server — so a panel left open never implies a
             sync happened more recently than it did. */}
