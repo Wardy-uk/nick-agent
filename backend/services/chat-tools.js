@@ -351,18 +351,29 @@ const HANDLERS = {
   create_task({ text, moscow, due_date }) {
     if (!text || !String(text).trim()) return { ok: false, error: 'text is required' };
     const taskStore = require('./task-store');
-    const { id, created, task } = taskStore.createTask({
+    const { id, created, task, similar } = taskStore.createTask({
       text: String(text).trim(),
       moscow: moscow || null,
       due_date: due_date || null,
       source: 'chat',
+      // The exact-key fold below only catches identical wording. This is what
+      // catches "Consult Annabelle for insights" arriving on top of "Nick Ward
+      // will consult Annabelle, who is further ahead in this process" — the shape
+      // that put eleven duplicate pairs in the live list. It REPORTS: the task is
+      // still created, because refusing on a matcher's say-so loses a commitment.
+      checkSimilar: true,
     });
     return {
       ok: true,
       task_id: id,
       created,
       text: task.text,
-      note: created ? 'Task created.' : 'A task with this text already existed — folded into it rather than duplicating.',
+      similar: similar || null,
+      note: created
+        ? (similar
+            ? `Task created — but #${similar.id} looks like the same job ("${similar.text}"). Say so, and offer to merge them on the Tasks screen rather than assuming.`
+            : 'Task created.')
+        : 'A task with this text already existed — folded into it rather than duplicating.',
     };
   },
 

@@ -159,7 +159,7 @@ router.post('/todo', (req, res) => {
 
   try {
     const taskStore = require('../services/task-store');
-    const { id, created, task } = taskStore.createTask({
+    const { id, created, task, similar } = taskStore.createTask({
       text,
       priority,
       moscow,
@@ -167,6 +167,11 @@ router.post('/todo', (req, res) => {
       source: source || 'capture',
       // Provenance the other way: the task points back at the line in the vault.
       origin_path: vaultRecord ? vaultRecord.relativePath : null,
+      // Reported, never enforced. A capture is always saved — the whole point of
+      // this route is that a thought never gets refused — but if it reads like a
+      // task already open, saying so at the moment of capture is the one chance
+      // to stop the pair before it has to be found again later.
+      checkSimilar: true,
     });
     if (vaultRecord) captureStore.stampTaskCaptureId(vaultRecord.relativePath, captureId, id);
     console.log(`[Capture] Todo ${created ? 'created' : 'folded into'} task #${id} (vault: ${vault.written ? 'yes' : 'no'})`);
@@ -177,6 +182,7 @@ router.post('/todo', (req, res) => {
       text: task.text,
       captureId,
       vault,
+      similar: similar || null,
       // What the UI is allowed to SAY happened, per step, rather than one word
       // covering two writes that can fail independently.
       steps: {

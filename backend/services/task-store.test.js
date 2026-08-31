@@ -127,3 +127,52 @@ test('drain clears the file — a capture line must never linger as a second sto
   // Second drain of an empty file is a no-op rather than a duplicate.
   assert.equal(drain.drainCaptureFile({ force: true }).drained, 0);
 });
+
+// ── findSimilar — the gap dedupe_key cannot close ────────────────────────────
+//
+// `dedupe_key` is the first 80 characters of normalised text, so it folds a
+// re-import of identical wording and nothing else. These pairs are verbatim from
+// the live list on 31 Aug 2026, where eleven of them were standing open.
+
+test('a reworded second capture of the same job is reported, not folded', () => {
+  const first = taskStore.createTask({ text: 'Consult Annabelle for insights' });
+  const second = taskStore.createTask({
+    text: 'Nick Ward will consult Annabelle, who is further ahead in this process, for insights',
+    checkSimilar: true,
+  });
+
+  assert.equal(second.created, true, 'the capture is ALWAYS saved — refusing loses a commitment');
+  assert.notEqual(second.id, first.id, 'and it is a real second row, not a silent fold');
+  assert.ok(second.similar, 'but the caller is told');
+  assert.equal(second.similar.id, first.id);
+  assert.ok(second.similar.score >= 0.65);
+});
+
+test('the check is opt-in — bulk paths pay nothing and get nothing', () => {
+  taskStore.createTask({ text: 'Send current slides to Damon Bullimore' });
+  const bulk = taskStore.createTask({ text: 'Nick Ward will send the current slides to Damon Bullimore' });
+  assert.equal(bulk.similar, null, 'no checkSimilar, no check');
+});
+
+test('an unrelated task reports nothing rather than the nearest thing', () => {
+  taskStore.createTask({ text: 'Rebuild the SLA dashboard for the leadership pack' });
+  const other = taskStore.createTask({ text: 'Book the dentist', checkSimilar: true });
+  assert.equal(other.similar, null);
+});
+
+test('findSimilar can be asked directly, and never matches a task against itself', () => {
+  const t = taskStore.createTask({ text: 'Reconcile the accumulated task list and produce a definitive to-do list' });
+  assert.equal(taskStore.findSimilar(t.task.text, { excludeId: t.id }), null,
+    'with itself excluded and nothing else like it, there is no match');
+  assert.equal(taskStore.findSimilar('', {}), null, 'empty text is not a query');
+});
+
+test('a done task is not offered as the duplicate of a new one', () => {
+  const done = taskStore.createTask({ text: 'Publish the Q3 support capacity review to the leadership channel' });
+  taskStore.updateTask(done.id, { status: 'done' });
+  const fresh = taskStore.createTask({
+    text: 'Publish a Q3 support capacity review to the leadership channel',
+    checkSimilar: true,
+  });
+  assert.equal(fresh.similar, null, 'finished work is not a duplicate — it is finished');
+});

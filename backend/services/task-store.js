@@ -176,6 +176,63 @@ function counts() {
  * Create a task, or fold into the existing one when the text already exists.
  * Returns { id, created, task }.
  */
+/**
+ * The open task that most likely says the same thing as `text`, or null.
+ *
+ * `dedupeKey` above is the only thing that has ever answered "do I already have
+ * this?", and it is the first 80 characters of normalised text: it catches a
+ * re-import of identical wording and nothing else. Measured on the live list on
+ * 31 Aug 2026, that left ELEVEN duplicate pairs standing among 201 open tasks —
+ * one commitment captured out of two wordings of the same meeting, four of them
+ * scoring 1.000 on the fuzzy matcher.
+ *
+ * Deliberately a REPORT, never a fold. The asymmetry is the one `action-candidates`
+ * measured and `task-dedupe` is built on: a missed match leaves a visible, cheap
+ * duplicate, while a wrong one silently loses a commitment in the place Nick goes
+ * to find out what he owes. So this changes no behaviour on its own — a caller
+ * gets told, and a person decides.
+ *
+ * `task-dedupe` is required lazily because it requires this module back; the
+ * cycle is real and resolving it at call time is how `action-candidates` handles
+ * the same pair.
+ */
+function findSimilar(text, { excludeId = null, minScore = null } = {}) {
+  const query = String(text || '').trim();
+  if (!query) return null;
+  try {
+    const dedupe = require('./task-dedupe');
+    // Open AND in-progress. A task Nick has started is the one a second copy most
+    // needs to be recognised against, and the one whose duplicate gets worked twice.
+    // NOTE the filter, not `includeDone: false`: listTaskRows ignores that flag
+    // whenever `status` is 'all', so the flag alone would pull in done and
+    // dropped rows and offer finished work as the duplicate of new work.
+    const rows = db.listTaskRows({ status: 'all', includeDone: false })
+      .filter(r => r.id !== excludeId && (r.status === 'open' || r.status === 'in-progress'));
+    if (!rows.length) return null;
+
+    const hit = dedupe.findEquivalent(query, rows.map(r => r.text), {
+      minScore: minScore == null ? dedupe.INTERNAL_MIN_SCORE : minScore,
+    });
+    if (!hit) return null;
+
+    const row = rows[hit.index];
+    return {
+      id: row.id,
+      text: row.text,
+      status: row.status,
+      due_date: row.due_date || null,
+      moscow: row.moscow || null,
+      score: hit.score,
+      sharedWords: (hit.shared || []).map(w => w.token),
+    };
+  } catch (e) {
+    // Not knowing must never cost the capture. A create that fails because the
+    // duplicate CHECK broke is the failure this whole area exists to prevent.
+    console.warn('[TaskStore] Similar-task check failed:', e.message);
+    return null;
+  }
+}
+
 function createTask(input = {}) {
   const text = String(input.text || '').trim();
   if (!text) throw new Error('text is required');
@@ -226,6 +283,11 @@ function createTask(input = {}) {
     return { id: existing.id, created: false, task: db.getTaskRow(existing.id) };
   }
 
+  // Asked for, never automatic: it costs a pass over the open list, and the bulk
+  // paths (task-import, the capture drain) create in loops and have nobody to
+  // tell. Opt-in keeps the cost where a person is actually going to read it.
+  const similar = input.checkSimilar ? findSimilar(text) : null;
+
   const context = input.context || todoIntelligence.triageTodo({
     text,
     sourcePath: input.origin_path || null,
@@ -255,7 +317,7 @@ function createTask(input = {}) {
 
   revision++;
   if (input.skipExport !== true) scheduleExport();
-  return { id, created: true, task: db.getTaskRow(id) };
+  return { id, created: true, task: db.getTaskRow(id), similar };
 }
 
 function normMoscow(value) {
@@ -444,6 +506,7 @@ module.exports = {
   activeTodos,
   counts,
   createTask,
+  findSimilar,
   dedupeKey,
   deleteTask,
   doneTodos,

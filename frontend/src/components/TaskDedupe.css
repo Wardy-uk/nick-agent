@@ -325,3 +325,30 @@
     justify-self: start;
   }
 }
+
+/* Group headings — the panel now has two populations in it, and a card that does
+   not say which one it belongs to reads as a Microsoft pair by habit. */
+.dedupe-group {
+  margin-bottom: 4px;
+}
+
+.dedupe-group-head {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary, #8b93a7);
+  margin: 10px 0 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.dedupe-group-note {
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-tertiary, #6b7280);
+}

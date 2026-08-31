@@ -31,8 +31,19 @@ function microsoftTasks() {
     }));
 }
 
+/**
+ * Open AND in-progress. `status: 'open'` is a literal column match, so a task Nick
+ * has actually started was invisible to de-duplication — which is backwards: a
+ * started task is the one a second copy most needs to be folded into, and the one
+ * whose duplicate is most likely to be worked twice. Matches `activeTodos()`.
+ */
 function neuroTasks() {
-  return taskStore.listTasks({ status: 'open' });
+  // Filtered here, not by `includeDone: false`: listTaskRows ignores that flag
+  // when `status` is 'all', so passing it alone would put done and dropped tasks
+  // into the pool — and a dropped task is usually one HALF of a pair already
+  // merged, which would come straight back as a fresh suggestion.
+  return taskStore.listTasks({ status: 'all', includeDone: false })
+    .filter(t => t.status === 'open' || t.status === 'in-progress');
 }
 
 // GET /api/task-dedupe/candidates — ?minScore= to look under the line deliberately
@@ -56,17 +67,41 @@ router.get('/candidates', (req, res) => {
       minScore,
     });
 
+    // NEURO against itself. A separate floor, and a much higher one: these are all
+    // Nick's own wording, so the stock vocabulary is shared almost completely and
+    // 0.42 fills the screen with pairs that are plainly different jobs. Measured
+    // separation is in the service. A caller asking for a weaker tier gets it on
+    // BOTH halves, because looking under the line is a deliberate act either way.
+    const internalMinScore = Number.isFinite(asked)
+      ? Math.min(Math.max(asked, 0.15), 1)
+      : dedupe.INTERNAL_MIN_SCORE;
+    const internal = dedupe.rankInternalCandidates({
+      tasks: neuro,
+      dismissed: dedupe.dismissedKeySet(),
+      minScore: internalMinScore,
+    });
+
     res.json({
       candidates,
+      internal,
       minScore,
+      internalMinScore,
       defaultMinScore: dedupe.MIN_SCORE,
+      defaultInternalMinScore: dedupe.INTERNAL_MIN_SCORE,
       strongScore: dedupe.STRONG_SCORE,
       // Counts so an empty list is readable. "No duplicates found" and "Microsoft
       // is unreachable so there was nothing to compare" look identical otherwise,
       // and only one of them means the screen is telling the truth.
-      compared: { neuro: neuro.length, microsoft: ms.length, pairs: neuro.length * ms.length },
+      compared: {
+        neuro: neuro.length,
+        microsoft: ms.length,
+        pairs: neuro.length * ms.length,
+        // n(n-1)/2 — the internal half is every pair of NEURO tasks, scored once.
+        internalPairs: (neuro.length * (neuro.length - 1)) / 2,
+      },
       microsoftAvailable: ms.length > 0,
       links: dedupe.listLinks(),
+      merges: dedupe.listMerges(),
       dismissedCount: dedupe.dismissedKeySet().size,
     });
   } catch (e) {
@@ -161,6 +196,53 @@ router.post('/undismiss', (req, res) => {
   try {
     const { taskId, msId } = req.body || {};
     const result = dedupe.undismissPair(taskId, msId);
+    if (!result.ok) return res.status(404).json(result);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// POST /api/task-dedupe/merge — { keepId, dropId } — one NEURO task, written twice.
+// The kept row absorbs what the other knew; the other is marked `dropped`, never
+// deleted, and /unmerge puts it back.
+router.post('/merge', (req, res) => {
+  try {
+    const { keepId, dropId } = req.body || {};
+    const result = dedupe.mergeInternalPair(keepId, dropId);
+    if (!result.ok) return res.status(409).json(result);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// POST /api/task-dedupe/unmerge — { dropId } — reopen a task that was merged away
+router.post('/unmerge', (req, res) => {
+  try {
+    const result = dedupe.unmergeInternalPair((req.body || {}).dropId);
+    if (!result.ok) return res.status(404).json(result);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// POST /api/task-dedupe/internal-dismiss — { aId, bId, reason } — NOT the same task
+router.post('/internal-dismiss', (req, res) => {
+  try {
+    const { aId, bId, reason } = req.body || {};
+    res.json(dedupe.dismissInternalPair(aId, bId, reason || null));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// POST /api/task-dedupe/internal-undismiss — { aId, bId } — put a rejected pair back
+router.post('/internal-undismiss', (req, res) => {
+  try {
+    const { aId, bId } = req.body || {};
+    const result = dedupe.undismissInternalPair(aId, bId);
     if (!result.ok) return res.status(404).json(result);
     res.json(result);
   } catch (e) {

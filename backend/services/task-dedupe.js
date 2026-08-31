@@ -284,6 +284,153 @@ function pairKey(taskId, msId) {
   return `${taskId}::${msId}`;
 }
 
+// ── NEURO against itself ─────────────────────────────────────────────────────
+//
+// The gap this closes, found 31 Aug 2026 by measuring the live list rather than
+// by a failure: `rankCandidates` above compares NEURO against MICROSOFT, and
+// NOTHING has ever compared NEURO tasks against each other. The only guard on
+// that side is `task-store.dedupeKey` — the first 80 characters of normalised
+// text, UNIQUE — which matches a re-import of the same wording and nothing else.
+// So two captures of one commitment, worded differently, are two rows for ever.
+//
+// Measured over the 143 open NEURO tasks on the Pi (10,153 pairs):
+//
+//   1.000  "Prepare MyAudience vs iMail price comparisons (for Chris -> SLT)"
+//          "Nick to prepare price comparisons between MyAudience and iMail..."
+//   1.000  "Consult Annabelle for insights"
+//          "Nick Ward will consult Annabelle, who is further ahead..., for insights"
+//   1.000  "Continue phone-answering coaching; complete session with remaining..."
+//          "Continue coaching on phone answering; complete the planned session..."
+//   1.000  "Nick will consult with Annabelle, who is further ahead in this process"
+//          "Nick Ward will consult Annabelle, who is further ahead..., for insights"
+//   0.867  "Get support \"ring every ticket\" trial results from Zoe and evaluate"
+//          "Chris/Nick to obtain support trial results from Zoe and evaluate..."
+//   0.708  "Flight risks identified and mitigated"
+//          "Flight risks identified and documented with action plans."
+//   -- the gap --
+//   0.584  "Career progression pathways defined by Day 45"          <- DIFFERENT
+//          "Kayleigh Russell - career progression plans for DD team by Day 30"
+//   0.533  "Provide timescales for LSL and EXP dashboards"          <- DIFFERENT
+//          "Compile list of EXP/LSL dashboard users to grant access"
+//
+// INTERNAL_MIN_SCORE is 0.65, in that gap. It is NOT task-dedupe's 0.42, for the
+// same reason `action-candidates.FOLD_SCORE` is not: 0.42 was measured on two
+// INDEPENDENTLY WORDED lists (NEURO against Microsoft), and this corpus is the
+// opposite — every row is Nick's own vocabulary, mostly extracted from his own
+// meetings, so the stock words are shared almost completely and the floor has to
+// sit higher. At 0.42 the list carries eight pairs that are plainly different
+// jobs, which is the failure that matters: a screen of coincidences stops being
+// read, and then the four real ones are lost too.
+//
+// Nothing here merges. Same rule as the Microsoft half: a wrong auto-merge hides
+// a real task behind an unrelated one, silently, in the one place Nick goes to
+// find out what he owes.
+
+const INTERNAL_MIN_SCORE = 0.65;
+
+/** Internal pairs are stored in the same rejection map as the Microsoft ones, so
+ *  the key has to be unmistakable. Lowest id first, so a pair has ONE key however
+ *  the two tasks are ordered when they are scored. */
+function internalPairKey(aId, bId) {
+  const [lo, hi] = [Number(aId), Number(bId)].sort((x, y) => x - y);
+  return `task:${lo}::task:${hi}`;
+}
+
+/**
+ * Rank duplicate pairs WITHIN the NEURO task list. PURE.
+ *
+ * tasks:     [{ id, text, due_date, source, origin_path, created_at, moscow, status }]
+ * dismissed: the same Set `rankCandidates` takes — internal keys cannot collide
+ *            with `${taskId}::${msId}` because they carry the `task:` prefix.
+ *
+ * Each pair is scored once, not twice: the IDF is built over the whole list, and
+ * the upper triangle is walked so a pair cannot appear as both (a,b) and (b,a).
+ * The OLDER task is presented as the one to keep — it is the row other things
+ * may already point at (a focus session, a block, a Microsoft link) — but that is
+ * a default for the screen to render, not a decision taken here.
+ */
+function rankInternalCandidates({ tasks = [], dismissed = new Set(), minScore = INTERNAL_MIN_SCORE } = {}) {
+  const rows = tasks
+    .map(t => ({ task: t, tokens: tokenize(t.text) }))
+    .filter(t => t.tokens.size > 0);
+
+  const idf = buildIdf(rows.map(r => r.tokens));
+
+  const pairs = [];
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      const a = rows[i];
+      const b = rows[j];
+      if (dismissed.has(internalPairKey(a.task.id, b.task.id))) continue;
+      const scored = scorePair(a.tokens, b.tokens, idf);
+      if (scored.score < minScore) continue;
+
+      // Older first. A task that has been around is the one with history hanging
+      // off it; dropping it in favour of a fresh capture of the same words loses
+      // whatever was attached.
+      const [keep, drop] = orderByAge(a.task, b.task);
+
+      pairs.push({
+        pairKey: internalPairKey(a.task.id, b.task.id),
+        score: scored.score,
+        confidence: scored.score >= STRONG_SCORE ? 'strong' : 'possible',
+        matchedOn: scored.containment >= scored.jaccard ? 'containment' : 'overlap',
+        sharedWords: distinctiveShared(scored.shared, idf),
+        notes: internalPairNotes(keep, drop),
+        keep: internalTaskView(keep),
+        drop: internalTaskView(drop),
+      });
+    }
+  }
+
+  pairs.sort((x, y) => y.score - x.score || x.keep.id - y.keep.id);
+  return pairs;
+}
+
+function orderByAge(a, b) {
+  const at = a.created_at || '';
+  const bt = b.created_at || '';
+  if (at && bt && at !== bt) return at < bt ? [a, b] : [b, a];
+  return a.id <= b.id ? [a, b] : [b, a];
+}
+
+function internalTaskView(t) {
+  return {
+    id: t.id,
+    text: t.text,
+    status: t.status || null,
+    due_date: t.due_date || null,
+    moscow: t.moscow || null,
+    source: t.source || null,
+    origin_path: t.origin_path || null,
+    created_at: t.created_at || null,
+    ms_id: t.ms_id || null,
+  };
+}
+
+/** Facts about the pair beyond the words. None of them move the score — a due
+ *  date agreeing is corroboration for Nick to read, not evidence. */
+function internalPairNotes(keep, drop) {
+  const notes = [];
+  if (keep.due_date && drop.due_date) {
+    notes.push(keep.due_date === drop.due_date
+      ? `Same due date (${keep.due_date})`
+      : `Due dates differ — #${keep.id} ${keep.due_date}, #${drop.id} ${drop.due_date}`);
+  } else if (keep.due_date || drop.due_date) {
+    const which = keep.due_date ? keep : drop;
+    notes.push(`Only #${which.id} has a due date (${which.due_date})`);
+  }
+  if (keep.ms_id && drop.ms_id) {
+    notes.push('Both are linked to Microsoft — unlink one before merging');
+  } else if (keep.ms_id || drop.ms_id) {
+    notes.push(`#${(keep.ms_id ? keep : drop).id} is linked to Microsoft`);
+  }
+  if (keep.moscow && drop.moscow && keep.moscow !== drop.moscow) {
+    notes.push(`Rated differently — #${keep.id} ${keep.moscow}, #${drop.id} ${drop.moscow}`);
+  }
+  return notes;
+}
+
 /**
  * Score arbitrary texts against the open task list. PURE apart from the tasks
  * passed in.
@@ -488,6 +635,142 @@ function unlinkPair(taskId) {
   return { ok: true, task: db.getTaskRow(id) };
 }
 
+/**
+ * Nick says these two NEURO tasks are the same job.
+ *
+ * The kept row absorbs whatever the other one knew and the other is marked
+ * `dropped` — a real status, reversible, and NOT a delete. Deleting would throw
+ * away the wording that says why the duplicate existed, and this is a matcher
+ * making a judgement, so it has to be possible to disagree with it afterwards.
+ *
+ * Filling blanks follows `createTask`'s rule exactly: a second sighting of the
+ * same action is a chance to fill in what is missing, never to overwrite a
+ * decision Nick has already made. So a due date or a MoSCoW rating on the dropped
+ * row lands only where the kept row has none.
+ *
+ * It REFUSES rather than guessing in the one case that loses something: a dropped
+ * row carrying a Microsoft link. Moving the link across would make the kept task
+ * responsible for pushing completion to a board it was never matched against, and
+ * silently — so the answer is "unlink it first, or merge the other way round".
+ */
+function mergeInternalPair(keepId, dropId) {
+  const keep = Number(keepId);
+  const drop = Number(dropId);
+  if (!Number.isInteger(keep) || !Number.isInteger(drop)) throw new Error('keepId and dropId are required');
+  if (keep === drop) return { ok: false, reason: 'same_task' };
+
+  const keepRow = db.getTaskRow(keep);
+  const dropRow = db.getTaskRow(drop);
+  if (!keepRow) return { ok: false, reason: 'keep_not_found' };
+  if (!dropRow) return { ok: false, reason: 'drop_not_found' };
+  if (dropRow.status === 'dropped') return { ok: false, reason: 'already_dropped' };
+  if (dropRow.status === 'done') return { ok: false, reason: 'drop_is_done' };
+  if (dropRow.ms_id) return { ok: false, reason: 'drop_is_linked_to_microsoft', linkedTo: dropRow.ms_id };
+
+  const patch = {};
+  if (dropRow.due_date && !keepRow.due_date) patch.due_date = dropRow.due_date;
+  if (dropRow.moscow && !keepRow.moscow) patch.moscow = dropRow.moscow;
+  if (dropRow.priority && !keepRow.priority) patch.priority = dropRow.priority;
+  if (dropRow.estimate_minutes && !keepRow.estimate_minutes) patch.estimate_minutes = dropRow.estimate_minutes;
+  if (dropRow.origin_path && !keepRow.origin_path) {
+    patch.origin_path = dropRow.origin_path;
+    patch.origin_line = dropRow.origin_line == null ? null : dropRow.origin_line;
+  }
+  if (Object.keys(patch).length) db.updateTaskRow(keep, patch);
+
+  db.updateTaskRow(drop, { status: 'dropped' });
+
+  // The record is what makes this reversible AND what keeps the other wording
+  // readable — the whole reason for folding rather than deleting is that the
+  // second sighting said something, and it should not vanish with the row.
+  const merges = loadMerges();
+  merges[String(drop)] = {
+    keptId: keep,
+    droppedText: dropRow.text,
+    keptText: keepRow.text,
+    filled: Object.keys(patch),
+    at: new Date().toISOString(),
+  };
+  saveMerges(merges);
+
+  // A merged pair should not also sit in the rejected pile.
+  try { undismissInternalPair(keep, drop); } catch {}
+
+  taskStore.scheduleExport();
+  return { ok: true, keep: db.getTaskRow(keep), dropped: db.getTaskRow(drop), filled: Object.keys(patch) };
+}
+
+/** The way back. Reopens the dropped task and forgets the merge — it does NOT
+ *  undo the blanks that were filled on the kept row, because those may have been
+ *  edited since and a blind revert would overwrite a decision. */
+function unmergeInternalPair(dropId) {
+  const drop = Number(dropId);
+  const merges = loadMerges();
+  const record = merges[String(drop)];
+  if (!record) return { ok: false, reason: 'not_merged' };
+
+  const row = db.getTaskRow(drop);
+  if (!row) return { ok: false, reason: 'drop_not_found' };
+  if (row.status === 'dropped') db.updateTaskRow(drop, { status: 'open' });
+
+  delete merges[String(drop)];
+  saveMerges(merges);
+  taskStore.scheduleExport();
+  return { ok: true, task: db.getTaskRow(drop), wasMergedInto: record.keptId };
+}
+
+const MERGE_KEY = 'task_internal_merges';
+
+function loadMerges() {
+  try {
+    const raw = db.getState(MERGE_KEY);
+    if (!raw) return {};
+    return typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch (e) {
+    console.error('[TaskDedupe] Could not read merges:', e.message);
+    return {};
+  }
+}
+
+function saveMerges(map) {
+  db.setState(MERGE_KEY, JSON.stringify(map));
+}
+
+/** Every merge, for the review screen's "already merged" list and its undo. */
+function listMerges() {
+  const merges = loadMerges();
+  return Object.entries(merges).map(([droppedId, record]) => ({
+    droppedId: Number(droppedId),
+    keptId: record.keptId,
+    droppedText: record.droppedText || null,
+    keptText: record.keptText || null,
+    filled: record.filled || [],
+    at: record.at || null,
+  })).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+}
+
+/** Nick says these two NEURO tasks are NOT the same. Remembered in the same map
+ *  as the Microsoft rejections — the `task:` prefix keeps them apart. */
+function dismissInternalPair(aId, bId, reason = null) {
+  const a = Number(aId);
+  const b = Number(bId);
+  if (!Number.isInteger(a) || !Number.isInteger(b)) throw new Error('both task ids are required');
+  if (a === b) throw new Error('a task cannot be a duplicate of itself');
+  const map = loadDismissed();
+  map[internalPairKey(a, b)] = { at: new Date().toISOString(), reason: reason || null };
+  saveDismissed(map);
+  return { ok: true, dismissed: internalPairKey(a, b) };
+}
+
+function undismissInternalPair(aId, bId) {
+  const map = loadDismissed();
+  const key = internalPairKey(Number(aId), Number(bId));
+  if (!(key in map)) return { ok: false, reason: 'not_dismissed' };
+  delete map[key];
+  saveDismissed(map);
+  return { ok: true };
+}
+
 /** 'MS Planner' / 'MS ToDo' from the vault section heading, kept as a hint for the
  *  completion push. Without it completeMicrosoftTask tries Planner first and pays a
  *  wasted Graph read on every To Do task. Unknown stays null rather than guessing —
@@ -574,20 +857,28 @@ function findEquivalent(text, others = [], { minScore = MIN_SCORE } = {}) {
 
 module.exports = {
   MIN_SCORE,
+  INTERNAL_MIN_SCORE,
   STRONG_SCORE,
   buildIdf,
   findEquivalent,
+  dismissInternalPair,
   dismissPair,
   dismissedKeySet,
+  internalPairKey,
   linkPair,
   linkedMsIds,
   listLinks,
+  listMerges,
+  mergeInternalPair,
   matchText,
   normaliseMsSource,
   pairKey,
   rankCandidates,
+  rankInternalCandidates,
   scorePair,
   tokenize,
+  undismissInternalPair,
   undismissPair,
   unlinkPair,
+  unmergeInternalPair,
 };

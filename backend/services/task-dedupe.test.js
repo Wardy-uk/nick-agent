@@ -354,3 +354,146 @@ test('matchText ignores text with no content tokens rather than matching everyth
 test.after(() => {
   try { fs.rmSync(scratchDir, { recursive: true, force: true }); } catch {}
 });
+
+// ── Pure: NEURO against itself ───────────────────────────────────────────────
+//
+// Every one of these is verbatim from the live task list on 31 Aug 2026, scored
+// against the whole 143-task pool (which is what sets the IDF and therefore the
+// scores). The negatives are what put INTERNAL_MIN_SCORE at 0.65 rather than at
+// task-dedupe's 0.42: this corpus is all Nick's own wording, so the stock
+// vocabulary is shared almost completely and the floor has to sit higher.
+
+const LIVE_TASKS = [
+  { id: 1, text: 'Prepare MyAudience vs iMail price comparisons (for Chris -> SLT)', created_at: '2026-07-01T09:00:00Z' },
+  { id: 2, text: 'Nick to prepare price comparisons between MyAudience and iMail (or similar); Chris to bring to SLT', created_at: '2026-08-01T09:00:00Z' },
+  { id: 3, text: 'Consult Annabelle for insights', created_at: '2026-07-02T09:00:00Z' },
+  { id: 4, text: 'Nick Ward will consult Annabelle, who is further ahead in this process, for insights', created_at: '2026-08-02T09:00:00Z' },
+  { id: 5, text: 'Get support ring every ticket trial results from Zoe and evaluate (with Chris)', created_at: '2026-07-03T09:00:00Z' },
+  { id: 6, text: 'Chris/Nick to obtain support trial results from Zoe and evaluate effectiveness of ringing every ticket', created_at: '2026-08-03T09:00:00Z' },
+  // The two clearest false positives on the live data - different jobs that share
+  // his stock vocabulary. Both must stay OUT.
+  { id: 7, text: 'Career progression pathways defined by **Day 45**', created_at: '2026-07-04T09:00:00Z' },
+  { id: 8, text: 'Kayleigh Russell - career progression plans for DD team by Day 30 (17 April)', created_at: '2026-08-04T09:00:00Z' },
+  { id: 9, text: 'Compile list of EXP/LSL dashboard users to grant access', created_at: '2026-07-05T09:00:00Z' },
+  { id: 10, text: 'Provide timescales for LSL and EXP dashboards - due 2026-07-14', created_at: '2026-08-05T09:00:00Z' },
+  { id: 11, text: 'Review skills matrix - note gaps, missing agents, empty sheets', created_at: '2026-07-06T09:00:00Z' },
+  { id: 12, text: 'Book the dentist', created_at: '2026-07-07T09:00:00Z' },
+];
+
+function internalPairsFor(ids, opts = {}) {
+  return dedupe.rankInternalCandidates({ tasks: LIVE_TASKS, ...opts })
+    .filter(p => ids.includes(p.keep.id) && ids.includes(p.drop.id));
+}
+
+test('the reworded duplicates dedupe_key cannot see are found', () => {
+  const pairs = dedupe.rankInternalCandidates({ tasks: LIVE_TASKS });
+  const found = new Set(pairs.map(p => [p.keep.id, p.drop.id].sort((a, b) => a - b).join('-')));
+  assert.ok(found.has('1-2'), 'the MyAudience/iMail price comparison pair');
+  assert.ok(found.has('3-4'), 'the Annabelle pair');
+  assert.ok(found.has('5-6'), 'the Zoe trial-results pair');
+});
+
+test('two different jobs sharing stock vocabulary are NOT offered', () => {
+  // 0.584 and 0.533 on the live pool. If either of these ever appears, the floor
+  // has been lowered past the point where the screen is worth reading.
+  assert.equal(internalPairsFor([7, 8]).length, 0, 'career progression: two different deadlines and owners');
+  assert.equal(internalPairsFor([9, 10]).length, 0, 'dashboards: compile a user list vs provide timescales');
+});
+
+test('an unrelated task matches nothing', () => {
+  const pairs = dedupe.rankInternalCandidates({ tasks: LIVE_TASKS });
+  assert.equal(pairs.filter(p => p.keep.id === 12 || p.drop.id === 12).length, 0);
+});
+
+test('a pair is scored ONCE, not twice with the sides swapped', () => {
+  const pairs = dedupe.rankInternalCandidates({ tasks: LIVE_TASKS });
+  const keys = pairs.map(p => p.pairKey);
+  assert.equal(new Set(keys).size, keys.length);
+});
+
+test('the older task is the one offered to keep - it is the one with history on it', () => {
+  const [pair] = internalPairsFor([3, 4]);
+  assert.equal(pair.keep.id, 3);
+  assert.equal(pair.drop.id, 4);
+});
+
+test('a rejected internal pair is never offered again', () => {
+  const key = dedupe.internalPairKey(4, 3);
+  assert.equal(key, dedupe.internalPairKey(3, 4), 'the key must not depend on the order');
+  assert.equal(internalPairsFor([3, 4], { dismissed: new Set([key]) }).length, 0);
+});
+
+test('an internal rejection key cannot be mistaken for a Microsoft one', () => {
+  assert.ok(dedupe.internalPairKey(3, 4).startsWith('task:'));
+  assert.notEqual(dedupe.internalPairKey(3, 4), dedupe.pairKey(3, 4));
+});
+
+test('looking under the line is possible, and is what surfaces the near misses', () => {
+  assert.equal(internalPairsFor([7, 8], { minScore: 0.5 }).length, 1);
+});
+
+// ── Stateful: merging ────────────────────────────────────────────────────────
+
+test('merging keeps one task, drops the other, and fills only the blanks', () => {
+  const keep = taskStore.createTask({ text: 'Consult Annabelle for insights' });
+  const drop = taskStore.createTask({
+    text: 'Nick Ward will consult Annabelle, who is further ahead in this process, for insights',
+    due_date: '2026-09-10',
+    moscow: 'must',
+  });
+
+  const result = dedupe.mergeInternalPair(keep.id, drop.id);
+  assert.equal(result.ok, true);
+  assert.equal(result.dropped.status, 'dropped', 'never deleted - dropped, so it can come back');
+  assert.equal(result.keep.status, 'open');
+  assert.equal(result.keep.due_date, '2026-09-10', 'the blank was filled from the second sighting');
+  assert.equal(result.keep.moscow, 'must');
+
+  const merges = dedupe.listMerges();
+  assert.ok(merges.some(m => m.droppedId === drop.id && m.keptId === keep.id));
+  assert.ok(merges.find(m => m.droppedId === drop.id).droppedText.includes('further ahead'),
+    'the other wording survives the merge');
+});
+
+test('merging never overwrites a decision Nick has already made', () => {
+  const keep = taskStore.createTask({ text: 'Draft the Q4 capacity model', due_date: '2026-09-01', moscow: 'should' });
+  const drop = taskStore.createTask({ text: 'Draft a Q4 capacity model for the support chapter', due_date: '2026-12-25', moscow: 'wont' });
+  const result = dedupe.mergeInternalPair(keep.id, drop.id);
+  assert.equal(result.keep.due_date, '2026-09-01');
+  assert.equal(result.keep.moscow, 'should');
+});
+
+test('a merge can be undone and the task comes back open', () => {
+  const keep = taskStore.createTask({ text: 'Write the incident review template' });
+  const drop = taskStore.createTask({ text: 'Write an incident review template for the team' });
+  dedupe.mergeInternalPair(keep.id, drop.id);
+  const undo = dedupe.unmergeInternalPair(drop.id);
+  assert.equal(undo.ok, true);
+  assert.equal(undo.task.status, 'open');
+  assert.equal(dedupe.listMerges().some(m => m.droppedId === drop.id), false);
+});
+
+test('merging away a Microsoft-linked task is REFUSED rather than moving the link', () => {
+  const keep = taskStore.createTask({ text: 'Sort out the out of hours support rota' });
+  const drop = taskStore.createTask({ text: 'Sort the OOH support rota out properly' });
+  dedupe.linkPair(drop.id, 'ms-ooh', 'MS Planner');
+  const result = dedupe.mergeInternalPair(keep.id, drop.id);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'drop_is_linked_to_microsoft');
+  assert.equal(taskStore.getTask(drop.id).status, 'open', 'and the task is untouched');
+});
+
+test('a task cannot be merged into itself, or merged twice', () => {
+  const t = taskStore.createTask({ text: 'Renew the SSL certificate for the portal' });
+  const other = taskStore.createTask({ text: 'Renew SSL certificates for the customer portal' });
+  assert.equal(dedupe.mergeInternalPair(t.id, t.id).reason, 'same_task');
+  dedupe.mergeInternalPair(t.id, other.id);
+  assert.equal(dedupe.mergeInternalPair(t.id, other.id).reason, 'already_dropped');
+});
+
+test('an internal rejection persists and round-trips', () => {
+  dedupe.dismissInternalPair(3, 4, 'different meetings');
+  assert.ok(dedupe.dismissedKeySet().has(dedupe.internalPairKey(3, 4)));
+  assert.equal(dedupe.undismissInternalPair(3, 4).ok, true);
+  assert.equal(dedupe.dismissedKeySet().has(dedupe.internalPairKey(3, 4)), false);
+});
