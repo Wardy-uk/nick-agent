@@ -184,7 +184,40 @@ export default function NotionSyncPanel() {
     } finally { setBusy(false); }
   };
 
+  const setIgnore = async (pageId, ignoredOn, note) => {
+    await fetch(apiUrl('/api/notion-sync/ignore'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pageId, ignored: ignoredOn, note }),
+    });
+    load();
+  };
+
   if (!state) return <div className="notion-sync"><p className="ns-muted">Loading…</p></div>;
+
+  // ── Coverage, derived from what is already on screen ───────────────────────
+  //
+  // Computed from the SAVED mappings (state.mappings), not the edited rows: this
+  // answers "what is actually syncing", and showing unsaved edits here would
+  // report coverage the server does not have.
+  const ignored = state.ignoredPages || [];
+  const ignoredById = new Map(ignored.map((e) => [e.id, e]));
+  const savedByPage = new Map((state.mappings || []).map((m) => [m.notionPageId, m]));
+
+  const coverageRows = (pages?.pages || []).map((page) => {
+    const mapping = savedByPage.get(page.id);
+    if (mapping) return { page, kind: 'mapped', mapping };
+    const ig = ignoredById.get(page.id);
+    if (ig) return { page, kind: 'ignored', note: ig.note };
+    return { page, kind: 'unmapped' };
+  // Gaps first — the column worth acting on should not be below the noise.
+  }).sort((a, b) => {
+    const rank = { unmapped: 0, mapped: 1, ignored: 2 };
+    return rank[a.kind] - rank[b.kind] || a.page.title.localeCompare(b.page.title);
+  });
+
+  const mapped = coverageRows.filter((c) => c.kind === 'mapped');
+  const unmapped = coverageRows.filter((c) => c.kind === 'unmapped');
 
   return (
     <div className="notion-sync">
@@ -402,6 +435,60 @@ export default function NotionSyncPanel() {
         </div>
       )}
 
+
+      {/* ── Coverage ────────────────────────────────────────────────────────
+          What is mapped and what is not. The unmapped column is the point: a
+          page nobody has mapped is invisible otherwise, and the whole reason
+          this exists is that a tree can be silently owned by something else.
+          An IGNORED page is shown separately from an unmapped one, because
+          "handled elsewhere" and "a gap" need opposite reactions. */}
+      {state.configured && pages?.ok && pages.shared && (
+        <section className="ns-coverage">
+          <h3>Coverage — {mapped.length} mapped, {unmapped.length} not mapped
+            {ignored.length > 0 && `, ${ignored.length} ignored`}</h3>
+
+          <ul className="ns-cov-list">
+            {coverageRows.map((c) => (
+              <li key={c.page.id} className={`ns-cov ns-cov--${c.kind}`}>
+                <span className="ns-cov-title">{c.page.title}</span>
+                {c.kind === 'mapped' && (
+                  <span className="ns-cov-detail">
+                    → <code>{c.mapping.vaultFolder}</code>{' '}
+                    {MODES.find((m) => m.id === c.mapping.mode)?.label}
+                    {!c.mapping.enabled && ' · disabled'}
+                  </span>
+                )}
+                {c.kind === 'ignored' && (
+                  <span className="ns-cov-detail">
+                    not mapped on purpose{c.note ? ` — ${c.note}` : ''}
+                    <button className="ns-remove" onClick={() => setIgnore(c.page.id, false)}>Un-ignore</button>
+                  </span>
+                )}
+                {c.kind === 'unmapped' && (
+                  <span className="ns-cov-detail">
+                    <button
+                      onClick={() => {
+                        setDirty(true);
+                        setRows((prev) => [...prev, {
+                          ...blankRow(), notionPageId: c.page.id, notionTitle: c.page.title,
+                        }]);
+                      }}
+                    >
+                      Map this
+                    </button>
+                    <button
+                      className="ns-remove"
+                      onClick={() => setIgnore(c.page.id, true, 'handled elsewhere')}
+                    >
+                      Ignore
+                    </button>
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="ns-run">
         <div className="ns-actions">

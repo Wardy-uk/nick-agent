@@ -24,6 +24,9 @@ router.get('/', (req, res) => {
       // that silently does nothing.
       credentialSource: notion.credentialSource(),
       autoSync: config.autoSyncEnabled(),
+      // Pages deliberately not mapped, so a coverage list can tell "a gap" from
+      // "handled somewhere else" — the D&D tree being the case in point.
+      ignoredPages: config.ignoredPages(),
       autoSyncForcedByEnv: config.autoSyncForcedByEnv(),
       mappings: config.list(),
       vaultFolders: folders.folders,
@@ -85,6 +88,19 @@ router.delete('/token', (req, res) => {
   // `stillInEnv` matters: clearing the stored copy does NOT disconnect when the
   // environment also sets one, and a UI that claimed otherwise would be lying.
   res.json({ ...result, configured: notion.isConfigured(), credentialSource: notion.credentialSource() });
+});
+
+/**
+ * POST /api/notion-sync/ignore — mark a Notion page as deliberately not mapped.
+ *
+ * A coverage list is only worth reading if "not mapped" means "a gap". Without
+ * this, the D&D tree — which the standalone notion-dnd-sync service owns — would
+ * sit in the unmapped column for ever, inviting exactly the mistake it must not
+ * invite: mapping it here and putting two writers on one page tree.
+ */
+router.post('/ignore', (req, res) => {
+  const result = config.setIgnored(req.body?.pageId, req.body?.ignored !== false, req.body?.note);
+  res.status(result.ok ? 200 : 400).json(result);
 });
 
 /** POST /api/notion-sync/auto — turn the 15-minute pass on or off. */

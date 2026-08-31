@@ -203,6 +203,38 @@ function setAutoSync(on) {
   return autoSyncEnabled();
 }
 
+// ── Pages deliberately NOT mapped ───────────────────────────────────────────
+//
+// A coverage list is only useful if "not mapped" means "a gap". Some pages are
+// legitimately handled somewhere else and must stop reading as gaps, or the list
+// trains you to ignore it — and the one time that matters is the one time it is
+// right.
+//
+// ⚠ The case this exists for: the D&D tree is exported by the STANDALONE
+// notion-dnd-sync service into Projects/D&D/Notion. Mapping it here would put
+// two writers on one page tree. Nick forgot that and deleted the vault copy;
+// the exporter rebuilt it (it never deletes), but the near miss is the point.
+const IGNORED_KEY = 'notion_sync_ignored';
+
+function ignoredPages() {
+  const raw = db.getState(IGNORED_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+/** @param {string} pageId @param {boolean} on @param {string} [note] why */
+function setIgnored(pageId, on, note = '') {
+  const id = normalisePageId(pageId);
+  if (!id) return { ok: false, error: 'Not a Notion page id.' };
+  const current = ignoredPages().filter((e) => e.id !== id);
+  if (on) current.push({ id, note: String(note || '').slice(0, 200) });
+  db.setState(IGNORED_KEY, JSON.stringify(current));
+  return { ok: true, ignored: current };
+}
+
 /** Whether the env var is forcing it, so the panel can say the toggle is moot. */
 function autoSyncForcedByEnv() {
   return process.env.NOTION_SYNC_ENABLED === 'true';
@@ -244,6 +276,9 @@ module.exports = {
   autoSyncEnabled,
   setAutoSync,
   autoSyncForcedByEnv,
+  ignoredPages,
+  setIgnored,
+  IGNORED_KEY,
   validate,
   vaultFolders,
   folderRefusal,
