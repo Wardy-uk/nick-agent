@@ -75,72 +75,97 @@ function isUsable(v) {
 // --- Which entities are actually the phone? -------------------------------
 //
 // ⚠ The Companion app did NOT stop reporting (31 Aug 2026). It re-registered,
-// HA created a SECOND device, and every sensor moved to a `_2` suffix —
-// `sensor.nicks_iphone_battery_level` became `sensor.nicks_iphone_battery_level_2`.
+// HA created a SECOND set of entities, and Home Assistant disambiguated them by
+// appending `_2` to the ENTITY ID — not to the device prefix:
+//
+//     sensor.nicks_iphone_battery_level    ->  sensor.nicks_iphone_battery_level_2
+//     sensor.nicks_iphone_activity         ->  sensor.nicks_iphone_activity_2
+//     device_tracker.nicks_iphone          ->  device_tracker.nicks_iphone_2
+//
 // Measured live: of everything matching `nicks_iphone`, exactly TWO entities
 // carry no suffix and both are `unavailable` camera entities, while 28 suffixed
-// ones were updating normally (newest reading last night).
+// ones update normally. So the entities this file asked for did not merely hold
+// stale values, they did not EXIST — every read returned null for five weeks
+// while the data sat in HA, and the comment above `pickUpdatedAt` blamed the
+// phone. That staleness detection is GOOD and stays: it was right that the old
+// entities were frozen and wrong about why.
 //
-// So every read in this file resolved to a non-existent entity and returned
-// null, for five weeks, while the data sat in HA the whole time. NEURO reported
-// "presence: could not read" and the comment above `pickUpdatedAt` blamed the
-// phone. The staleness detection it describes is GOOD and stays — it was right
-// that the old entities were frozen, and wrong about why.
+// ⚠ Note `device_tracker.nicks_iphone_2` — for the tracker, whose entity id IS
+// the device name, the suffix looks exactly like a longer prefix. That is what
+// makes "just set HA_PHONE_PREFIX=nicks_iphone_2" so tempting, and it is wrong:
+// it resolves the tracker and breaks every sensor, because those want
+// `sensor.nicks_iphone_battery_level_2`, not `sensor.nicks_iphone_2_battery_level`.
+// The Pi's .env had been set that way, which is why presence still answered
+// while battery, wifi and location stayed null.
 //
-// The fix is discovery, not a new hardcoded guess: `_2` would be wrong again the
-// next time the phone re-registers, and it would fail exactly as silently. The
-// family that is actually REPORTING is the phone, and which one answered is
-// always named (`working-days.status()`'s rule) so a surprise is visible rather
-// than absorbed.
+// So what is resolved is a SUFFIX, decided once from the battery anchor and
+// applied to every entity — resolving per sensor would let two registrations
+// mix on one payload. Discovery rather than a hardcoded `_2`, because the next
+// re-registration would break it again and would do so just as silently.
 
-// PURE. Takes the states array and the configured base, returns which entity
-// family to read and how that was decided. No network, no clock beyond the
-// timestamps in the data.
-function resolvePhonePrefix(states = [], base = PHONE_PREFIX) {
-  const families = new Map();
+// PURE. Returns the suffix to append to every phone entity id, and how that was
+// decided. No network, no clock beyond the timestamps in the data.
+function resolvePhoneEntities(states = [], configured = PHONE_PREFIX) {
+  // Tolerate an .env already pointing at a suffixed name: `nicks_iphone_2` is a
+  // reasonable thing for a person to have set, and it is the wrong shape rather
+  // than a typo, so it is corrected instead of refused.
+  const base = String(configured || '').replace(/_\d+$/, '');
 
+  // `_battery_level` is the anchor: every Companion install reports it, it is
+  // never `unavailable` on a live phone, and it cannot collide with an
+  // unrelated entity the way a bare device_tracker can.
+  const re = new RegExp(`^sensor\\.${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_battery_level(_\\d+)?$`);
+
+  const found = [];
   for (const e of states) {
     if (!e || typeof e.entity_id !== 'string') continue;
-    // `_battery_level` is the anchor: every Companion install reports it, it is
-    // never `unavailable` on a live phone, and it cannot collide with an
-    // unrelated entity the way a bare device_tracker can.
-    const m = /^sensor\.(.+)_battery_level$/.exec(e.entity_id);
+    const m = re.exec(e.entity_id);
     if (!m) continue;
-    const prefix = m[1];
-    if (prefix !== base && !prefix.startsWith(`${base}_`)) continue;
+    // HA serves a dead entity's last known value identically to a live one, so
+    // "it exists" is not "it is reporting".
     if (!isUsable(e.state)) continue;
-    const at = Date.parse(e.last_updated || e.last_changed || '') || 0;
-    families.set(prefix, Math.max(families.get(prefix) || 0, at));
+    found.push({
+      suffix: m[1] || '',
+      at: Date.parse(e.last_updated || e.last_changed || '') || 0,
+      entityId: e.entity_id,
+    });
   }
 
-  if (!families.size) {
-    // Nothing matched. Fall back to the configured name so behaviour is exactly
-    // what it was, and SAY so — "we could not find the phone" must not read the
-    // same as "the phone is quiet".
-    return { prefix: base, source: 'none', reportingAt: null, candidates: [] };
+  if (!found.length) {
+    // "We could not find the phone" must not read the same as "the phone is
+    // quiet". Fall back to the bare base so behaviour is the historical one.
+    return { base, suffix: '', source: 'none', reportingAt: null, candidates: [] };
   }
 
-  const ranked = [...families.entries()].sort((a, b) => b[1] - a[1]);
-  const [prefix, at] = ranked[0];
+  found.sort((a, b) => b.at - a.at);
+  const best = found[0];
   return {
-    prefix,
-    source: prefix === base ? 'configured' : 'discovered',
-    reportingAt: at ? new Date(at).toISOString() : null,
-    candidates: ranked.map(([name, t]) => ({ prefix: name, at: t ? new Date(t).toISOString() : null })),
+    base,
+    suffix: best.suffix,
+    source: best.suffix === '' && base === configured ? 'configured' : 'discovered',
+    reportingAt: best.at ? new Date(best.at).toISOString() : null,
+    candidates: found.map(f => ({ entityId: f.entityId, at: f.at ? new Date(f.at).toISOString() : null })),
   };
+}
+
+/** The full entity id for one phone sensor, under the resolved suffix. */
+function phoneEntity(resolved, domain, name) {
+  const stem = name ? `${resolved.base}_${name}` : resolved.base;
+  return `${domain}.${stem}${resolved.suffix}`;
 }
 
 // Logged once per changed answer rather than per call — this runs on every chat
 // turn and every context read, and a line per call would bury it.
-let _lastPrefixLogged = null;
-function phonePrefix(states) {
-  const r = resolvePhonePrefix(states);
-  if (r.prefix !== _lastPrefixLogged) {
-    _lastPrefixLogged = r.prefix;
+let _lastResolutionLogged = null;
+function phoneResolution(states) {
+  const r = resolvePhoneEntities(states);
+  const key = `${r.base}${r.suffix}:${r.source}`;
+  if (key !== _lastResolutionLogged) {
+    _lastResolutionLogged = key;
     if (r.source === 'discovered') {
-      console.log(`[HA] Phone entities resolved to "${r.prefix}" (configured "${PHONE_PREFIX}" is not reporting) — ${r.candidates.length} candidate(s)`);
+      console.log(`[HA] Phone entities resolved to "${r.base}*${r.suffix}" (configured "${PHONE_PREFIX}") — ${r.candidates.length} candidate(s), newest ${r.reportingAt}`);
     } else if (r.source === 'none') {
-      console.warn(`[HA] No reporting phone entities found for "${PHONE_PREFIX}" — presence and phone sensors will read null`);
+      console.warn(`[HA] No reporting phone entities found for "${PHONE_PREFIX}" — phone sensors will read null`);
     }
   }
   return r;
@@ -153,37 +178,37 @@ async function getPhoneStatus() {
   const states = await getStates();
   if (!states.length) return null;
 
-  const resolved = phonePrefix(states);
-  const P = resolved.prefix;
+  const resolved = phoneResolution(states);
+  const E = (domain, name) => phoneEntity(resolved, domain, name);
 
   const presence = pick(states, `person.${PERSON_ID}`)
-    || pick(states, `device_tracker.${P}`);
-  const battery = pick(states, `sensor.${P}_battery_level`);
-  const batteryState = pick(states, `sensor.${P}_battery_state`);
-  const ssid = pick(states, `sensor.${P}_ssid`);
-  const connection = pick(states, `sensor.${P}_connection_type`);
-  const geocoded = pick(states, `sensor.${P}_geocoded_location`);
+    || pick(states, E('device_tracker', null));
+  const battery = pick(states, E('sensor', 'battery_level'));
+  const batteryState = pick(states, E('sensor', 'battery_state'));
+  const ssid = pick(states, E('sensor', 'ssid'));
+  const connection = pick(states, E('sensor', 'connection_type'));
+  const geocoded = pick(states, E('sensor', 'geocoded_location'));
 
   // Sensors the Companion app has always reported and NEURO has never read.
   // `activity` is the CoreMotion classification — Still / Walking / Running /
-  // Automotive / Cycling — which is the accelerometer-derived answer to "what is
-  // he physically doing", and it is the input half of SARA's examples need.
-  // Read here, consumed nowhere yet: plumbing first, behaviour as its own
-  // decision, or this becomes a nudge machine built on an unverified feed.
-  const activity = pick(states, `sensor.${P}_activity`);
-  const steps = pick(states, `sensor.${P}_steps`);
-  const distance = pick(states, `sensor.${P}_distance`);
-  const floors = pick(states, `sensor.${P}_floors_ascended`);
-  const audioOutput = pick(states, `sensor.${P}_audio_output`);
+  // Automotive / Cycling — the accelerometer-derived answer to "what is he
+  // physically doing", and the input half of what SARA needs to speak up at the
+  // right moment. Read here, consumed NOWHERE yet: plumbing first, behaviour as
+  // its own decision, or this becomes a nudge machine on an unverified feed.
+  const activity = pick(states, E('sensor', 'activity'));
+  const steps = pick(states, E('sensor', 'steps'));
+  const distance = pick(states, E('sensor', 'distance'));
+  const floors = pick(states, E('sensor', 'floors_ascended'));
+  const audioOutput = pick(states, E('sensor', 'audio_output'));
   // Focus mode — Nick has explicitly told the phone to leave him alone, which is
-  // a stronger and more current signal than any inference SARA could make.
-  const focus = pick(states, `binary_sensor.${P}_focus`);
+  // stronger and more current than any inference SARA could make.
+  const focus = pick(states, E('binary_sensor', 'focus'));
 
   // How old the presence reading is. Reported, never enforced here — what
   // counts as "too old" depends on the question being asked, so the caller
   // decides. This module's job is to stop pretending it doesn't matter.
   const presenceUpdatedAt = pickUpdatedAt(states, `person.${PERSON_ID}`)
-    || pickUpdatedAt(states, `device_tracker.${P}`);
+    || pickUpdatedAt(states, E('device_tracker', null));
   const ageMs = presenceUpdatedAt ? Date.now() - new Date(presenceUpdatedAt).getTime() : null;
 
   return {
@@ -200,7 +225,7 @@ async function getPhoneStatus() {
     // stand-in — "we did not read it" and "he is not moving" are opposite facts
     // and only one of them licenses SARA to say anything.
     activity: isUsable(activity) ? activity : null,
-    activityUpdatedAt: pickUpdatedAt(states, `sensor.${P}_activity`),
+    activityUpdatedAt: pickUpdatedAt(states, E('sensor', 'activity')),
     steps: isUsable(steps) ? Number(steps) : null,
     distanceM: isUsable(distance) ? Number(distance) : null,
     floorsAscended: isUsable(floors) ? Number(floors) : null,
@@ -211,7 +236,8 @@ async function getPhoneStatus() {
     // the payload so a caller can tell a quiet phone from a phone NEURO cannot
     // find — the distinction that hid this bug for five weeks.
     source: {
-      prefix: resolved.prefix,
+      base: resolved.base,
+      suffix: resolved.suffix,
       resolvedBy: resolved.source,
       configuredPrefix: PHONE_PREFIX,
       reportingAt: resolved.reportingAt,
@@ -241,7 +267,7 @@ async function getLocationPoints(fromIso, toIso) {
   // `device_tracker.nicks_iphone`, which has not existed since the phone
   // re-registered, so the history call returned an empty series every time and
   // the caller correctly read that as "this source had nothing".
-  const entity = `device_tracker.${phonePrefix(await getStates()).prefix}`;
+  const entity = phoneEntity(phoneResolution(await getStates()), 'device_tracker', null);
   const url = `${HA_URL}/api/history/period/${encodeURIComponent(fromIso)}`
     + `?filter_entity_id=${encodeURIComponent(entity)}`
     + (toIso ? `&end_time=${encodeURIComponent(toIso)}` : '');
@@ -308,7 +334,8 @@ async function getHaContextBlock() {
 
 module.exports = {
   isConfigured,
-  resolvePhonePrefix,
+  resolvePhoneEntities,
+  phoneEntity,
   getStates,
   getEntity,
   getPhoneStatus,

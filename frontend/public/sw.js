@@ -1,6 +1,9 @@
 // SARA / NEURO Service Worker — offline shell caching + push notifications
 // Version — bump this string to force cache invalidation on next deploy
-const CACHE_VERSION = 'neuro-v7';
+// v8 — purges entries poisoned by the SPA fallback serving index.html (200) for
+// missing hashed chunks. Those were cached under the chunk's own URL, so the bad
+// response survived the server-side fix until the cache was dropped.
+const CACHE_VERSION = 'neuro-v8';
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 
 // App shell files to precache on install
@@ -66,8 +69,17 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(event.request)
       .then(response => {
-        // Cache valid responses for offline fallback
-        if (response && response.status === 200) {
+        // Cache valid responses for offline fallback.
+        //
+        // ⚠ Never cache HTML under a script/style request. A stale hashed chunk
+        // used to be answered by the SPA fallback with index.html and a 200, and
+        // caching that poisoned the entry: the browser kept being handed HTML
+        // where it expected a module, so the screen stayed broken even after the
+        // server was fixed. The server now 404s these, but this guard is what
+        // stops any future fallback change re-creating the same trap.
+        const isDocumentBody = (response.headers.get('content-type') || '').includes('text/html');
+        const wantsCode = event.request.destination === 'script' || event.request.destination === 'style';
+        if (response && response.status === 200 && !(wantsCode && isDocumentBody)) {
           const clone = response.clone();
           caches.open(SHELL_CACHE).then(cache => cache.put(event.request, clone));
         }

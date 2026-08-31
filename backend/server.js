@@ -316,9 +316,27 @@ const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
 // Hashed assets (js/css) — long cache. Everything else — no cache.
 app.use('/assets', express.static(path.join(frontendDist, 'assets'), { maxAge: '1y', immutable: true }));
 app.use(express.static(frontendDist, { maxAge: 0, etag: false }));
-// SPA fallback — any non-API route serves index.html with no-cache
+// SPA fallback — any non-API route serves index.html with no-cache.
+//
+// ⚠ A request that looks like a FILE must 404 here, never fall through to the
+// shell. `express.static` calls next() on a miss, so before this guard a request
+// for a hashed chunk that no longer exists — which is every asset in a browser
+// holding an index.html from before the last deploy — was answered with
+// index.html and a 200. The browser then tried to parse HTML as a JS module and
+// reported "importing a module script failed", naming neither the file nor the
+// real cause.
+//
+// Harmless while the whole app was one bundle (a stale index.html referenced a
+// bundle that was still there, or the page simply reloaded). It became reachable
+// the moment the panels were code-split: every menu click is now a chunk fetch,
+// and a chunk fetch answered with HTML is a dead screen. The honest 404 is what
+// lets the client recover — see `chunkReload` in main.jsx.
+const LOOKS_LIKE_A_FILE = /\.[a-z0-9]{2,8}$/i;
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
+  if (req.path.startsWith('/assets/') || LOOKS_LIKE_A_FILE.test(req.path)) {
+    return res.status(404).type('text/plain').send('Not found');
+  }
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.set('Pragma', 'no-cache');
   res.sendFile(path.join(frontendDist, 'index.html'));
