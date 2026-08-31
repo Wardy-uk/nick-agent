@@ -81,6 +81,16 @@ function pageChoicePrompt(pages, state) {
   return 'Choose a page…';
 }
 
+// Sentinel for the "+ New folder…" option.
+//
+// Deliberately NOT a NUL byte, which is the airtight choice and makes the whole
+// file read as binary to grep and to exact-match editing — the wart
+// vault-hygiene.js already carries and nobody enjoys. The picker only ever lists
+// real vault folders and this is compared exactly, so a collision is not
+// reachable; if a folder somehow were named this, the only consequence is that
+// the naming box opens.
+const NEW_FOLDER = '__NEW_FOLDER__';
+
 const blankRow = () => ({
   id: `new-${Math.random().toString(36).slice(2, 8)}`,
   notionPageId: '', notionTitle: '', vaultFolder: '', mode: 'two-way', enabled: true,
@@ -94,6 +104,10 @@ export default function NotionSyncPanel() {
   const [pages, setPages] = useState(null);
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState(null);
+  // Naming a folder that does not exist yet — see the field for why.
+  const [namingFolderFor, setNamingFolderFor] = useState(null);
+  const [newFolder, setNewFolder] = useState('');
+  const [newFolders, setNewFolders] = useState([]);
 
   const load = useCallback(async () => {
     try {
@@ -127,6 +141,19 @@ export default function NotionSyncPanel() {
   const update = (id, patch) => {
     setDirty(true);
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  };
+
+  // A folder named before it exists. Tracked locally only so the option can be
+  // labelled "will be created" rather than "no longer in the vault" — the server
+  // is still the one that validates it (inside the vault, not sensitive, not
+  // overlapping another mapping).
+  const commitNewFolder = (rowId) => {
+    const folder = newFolder.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!folder) return;
+    setNewFolders((prev) => (prev.includes(folder) ? prev : [...prev, folder]));
+    update(rowId, { vaultFolder: folder });
+    setNamingFolderFor(null);
+    setNewFolder('');
   };
 
   const save = async () => {
@@ -253,21 +280,63 @@ export default function NotionSyncPanel() {
 
               <label className="ns-field">
                 <span>Obsidian parent folder</span>
-                <select
-                  value={row.vaultFolder}
-                  onChange={(e) => update(row.id, { vaultFolder: e.target.value })}
-                >
-                  <option value="">
-                    {state.vaultReadable === false ? 'Vault not readable' : 'Choose a folder…'}
-                  </option>
-                  {/* Same trap: a folder that has been renamed or removed since
-                      the mapping was made must stay selectable, or saving would
-                      quietly repoint the mapping. */}
-                  {row.vaultFolder && !(state.vaultFolders || []).includes(row.vaultFolder) && (
-                    <option value={row.vaultFolder}>{row.vaultFolder} — no longer in the vault</option>
-                  )}
-                  {(state.vaultFolders || []).map((f) => <option key={f} value={f}>{f}</option>)}
-                </select>
+                {namingFolderFor === row.id ? (
+                  // ⚠ A pull-only mapping's destination USUALLY DOES NOT EXIST
+                  // yet — Hiking, Aquarium and the Memory Inbox live only in
+                  // Notion. Making the field a dropdown quietly removed the
+                  // ability to name a folder before it exists, which is the one
+                  // thing those mappings need. The sync creates it on first pull.
+                  <div className="ns-newfolder">
+                    <input
+                      autoFocus
+                      value={newFolder}
+                      placeholder="Notion/Hiking"
+                      onChange={(e) => setNewFolder(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitNewFolder(row.id);
+                        if (e.key === 'Escape') { setNamingFolderFor(null); setNewFolder(''); }
+                      }}
+                    />
+                    <button onClick={() => commitNewFolder(row.id)} disabled={!newFolder.trim()}>Use</button>
+                    <button
+                      className="ns-remove"
+                      onClick={() => { setNamingFolderFor(null); setNewFolder(''); }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <select
+                    value={row.vaultFolder}
+                    onChange={(e) => {
+                      if (e.target.value === NEW_FOLDER) {
+                        setNewFolder('');
+                        setNamingFolderFor(row.id);
+                        return;
+                      }
+                      update(row.id, { vaultFolder: e.target.value });
+                    }}
+                  >
+                    <option value="">
+                      {state.vaultReadable === false ? 'Vault not readable' : 'Choose a folder…'}
+                    </option>
+                    {/* Same trap as the page select: a folder that has been
+                        renamed, or one named here before it exists, must stay
+                        selectable or saving would quietly repoint the mapping.
+                        The two cases are labelled differently because they mean
+                        opposite things — one is a mistake, one is intended. */}
+                    {row.vaultFolder && !(state.vaultFolders || []).includes(row.vaultFolder) && (
+                      <option value={row.vaultFolder}>
+                        {row.vaultFolder}
+                        {newFolders.includes(row.vaultFolder)
+                          ? ' — will be created on first sync'
+                          : ' — no longer in the vault'}
+                      </option>
+                    )}
+                    {(state.vaultFolders || []).map((f) => <option key={f} value={f}>{f}</option>)}
+                    <option value={NEW_FOLDER}>+ New folder…</option>
+                  </select>
+                )}
               </label>
             </div>
 

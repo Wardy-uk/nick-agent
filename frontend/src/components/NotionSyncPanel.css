@@ -110,6 +110,28 @@
    like a real choice. */
 .ns-field select option[value=""] { color: var(--text-muted); }
 
+.ns-newfolder { display: flex; gap: 6px; align-items: center; }
+.ns-newfolder input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent, var(--success));
+  border-radius: var(--radius-sm, 6px);
+  color: inherit;
+  font: inherit;
+  padding: 7px 9px;
+}
+.ns-newfolder button {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: inherit;
+  font: inherit;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.ns-newfolder button:disabled { opacity: 0.45; cursor: default; }
+
 .ns-arrow { color: var(--text-muted); padding-bottom: 9px; flex: 0 0 auto; }
 
 .ns-row-controls {
