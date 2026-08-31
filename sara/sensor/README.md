@@ -117,3 +117,33 @@ dongle on the Pi 3 would restore parity and remove the caveat.
 | living-room | pi-dev (Pi 4) | active | also the kiosk display + the backlight agent |
 | kitchen | pi5 | active | HA's `bluetooth` integration disabled here to free the radio |
 | bedroom | pi3 (Pi 3B+) | **passive** | LAN only — no Tailscale, so it pushes to pi5's `192.168.1.16` |
+
+## Room inference (fingerprinting)
+
+Ranking rooms by RSSI does not work, and it failed twice on the day it was
+built. `sara/backend/src/presence/fingerprint.js` replaces it: a room is
+identified by the WHOLE PATTERN across every sensor, so "the kitchen hears me
+9 dB louder than the living room does" stops being an error and becomes part of
+what the living room LOOKS like. A constant hardware offset appears in every
+profile and cancels; body shadowing is learned if calibration spans a few
+orientations.
+
+Calibrate a room by standing in it for ~2 minutes, **turning round several
+times** — that is what teaches it the watch being on the shielded arm:
+
+```bash
+curl -X POST http://100.100.28.58:3005/api/presence/calibrate/start \
+     -H 'Content-Type: application/json' -d '{"room":"living-room"}'
+# ... move about, turn, sit, stand ...
+curl -X POST http://100.100.28.58:3005/api/presence/calibrate/finish
+```
+
+Profiles persist to disk. A run under 10 samples is REFUSED rather than saved:
+near-zero deviation makes one sensor overwhelming and produces confident
+nonsense.
+
+`GET /api/presence/room` is what automation should read — `sure` / `unsure` /
+`none`, with every candidate's score. `GET /api/presence/history` records every
+room change **with the RSSI of every room at that moment**, because a switch at
+15 dB and one at 1 dB are indistinguishable afterwards if only the winner is
+kept.
