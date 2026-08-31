@@ -42,8 +42,12 @@ proves it compiles and nothing more.
 ### 2. `chunkReload` in `frontend/src/main.jsx` — **belongs to another session**
 The SPA-fallback fix (`server.js` + `sw.js` v8 + `ErrorBoundary.jsx` + `routes/spa-fallback.test.js`) landed on 31 Aug and its comment references a `chunkReload` in `main.jsx` **that does not exist**. The server now honestly 404s a missing hashed chunk instead of answering with `index.html`, which is strictly better than the dead-menu bug it replaced — but the client-side recovery is missing. **Check with the other session before writing it.**
 
-### 3. NOVA's team-availability bridge needs an IIS deploy
-`services/team-availability.js` and `GET /api/nudges/availability` are built and correct. NOVA's half ships on the **`nova-codex`** branch and has not been deployed. Until it is, NEURO correctly reports `known:false, "never fetched"` and keeps nudging through his leave. Nothing to build in this repo — it is a deploy.
+### 3. ~~NOVA's team-availability bridge needs an IIS deploy~~ — **ALREADY DONE**
+⚠ Corrected 31 Aug 2026 by calling the endpoint instead of believing this note. It is deployed and
+working: `known:true`, `matchedBy:"id"`, roster of 13, 20 absence days, fetched minutes ago, and it
+correctly had a colleague on annual leave that day. `CLAUDE.md`'s "needs an IIS deploy" line dates
+from 27 Aug and was stale; I repeated it twice before checking. **Nothing to do here** — and the
+general lesson is rule 5 below, which I had written at the bottom of this very file.
 
 ### 4. Backups — two items outstanding from #59
 - Store the rclone **crypt password + salt off the Pi**. Right now a total loss of the Pi loses the ability to decrypt the off-site backups.
