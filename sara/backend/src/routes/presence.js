@@ -46,6 +46,11 @@ const router = express.Router();
 // time someone forgets to set it. When it IS set, it is enforced.
 const SENSOR_TOKEN = (process.env.SARA_SENSOR_TOKEN || '').trim();
 
+// Which room won last time, for the arbitration's hysteresis. In-memory like
+// the readings themselves; a restart simply means the next poll picks the
+// loudest room outright, which is the correct cold-start answer.
+let lastRoom = null;
+
 // Read per-request, not at module load, so the mode can be flipped by editing .env and
 // restarting SARA alone — no code change, and nothing else in the process caches it.
 //
@@ -134,7 +139,16 @@ router.get('/display', (req, res) => {
   if (!room) return res.status(400).json({ ok: false, reason: 'room is required' });
 
   const now = new Date();
-  const arbitration = resolveRoom(store.all(), now);
+  // The incumbent room, so the hysteresis has something to hold on to. Shared
+  // across callers on purpose: which room Nick is in is one fact, and letting
+  // each screen keep its own idea of it is how two surfaces come to disagree
+  // about where he is standing.
+  const arbitration = resolveRoom(store.all(), now, { previousRoom: lastRoom });
+  if (arbitration.status === 'present') lastRoom = arbitration.room;
+  // Only forget the incumbent once he is positively elsewhere. An unreadable
+  // moment must not reset the hysteresis, or a single deaf poll re-opens the
+  // flapping this exists to stop.
+  else if (arbitration.status === 'absent') lastRoom = null;
   const home = homePresence(ha.getTelemetry());
   const display = displayState(room, arbitration, home);
 

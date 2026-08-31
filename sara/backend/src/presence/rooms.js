@@ -34,6 +34,20 @@
 // past a hiccup, and well inside the time it takes to walk to another room.
 const SENSOR_STALE_MS = 30_000;
 
+// How much louder a challenger must be before it takes the room off the
+// incumbent. MEASURED, not picked (31 Aug 2026, Nick sat in the living room):
+//
+//   living-room -68..-74, kitchen -73..-76   -> gap 1-5 dB, and the WINNER
+//                                               FLIPPED to the kitchen once
+//   Nick actually near the kitchen           -> kitchen -66, living -83 = 17 dB
+//
+// So the noise between two rooms with him in one of them reaches 5 dB, while
+// genuinely walking to the other room is worth 17. Six sits in that gap. Without
+// it the screen alternates between full SARA and the clock while he sits still -
+// the flapping the sensor layer was rebuilt to remove, reappearing one floor up
+// because two medians a decibel apart is a coin toss.
+const SWITCH_MARGIN_DB = 6;
+
 function ageOf(report, now) {
   const t = report && report.at ? Date.parse(report.at) : NaN;
   if (!Number.isFinite(t)) return null;
@@ -54,7 +68,11 @@ function ageOf(report, now) {
  * taken at the same moment is a fair comparison in a way that comparing one
  * median to a fixed threshold is not.
  */
-function resolveRoom(reports = {}, now = new Date(), { staleMs = SENSOR_STALE_MS } = {}) {
+function resolveRoom(reports = {}, now = new Date(), {
+  staleMs = SENSOR_STALE_MS,
+  previousRoom = null,
+  switchMarginDb = SWITCH_MARGIN_DB,
+} = {}) {
   const rooms = [];
   const unreadable = [];
 
@@ -122,7 +140,17 @@ function resolveRoom(reports = {}, now = new Date(), { staleMs = SENSOR_STALE_MS
     return b.rssi - a.rssi;   // -64 beats -70
   })[0];
 
-  return { room: best.room, status: 'present', why: null, rooms, unreadable };
+  // Hysteresis. The incumbent keeps the room unless beaten by a real margin —
+  // and only while it can still hear him at all, so this can never pin the
+  // answer to a room he has left.
+  const incumbent = previousRoom ? present.find(r => r.room === previousRoom) : null;
+  if (incumbent && best.room !== incumbent.room
+      && incumbent.rssi !== null && best.rssi !== null
+      && best.rssi < incumbent.rssi + switchMarginDb) {
+    return { room: incumbent.room, status: 'present', why: null, held: true, rooms, unreadable };
+  }
+
+  return { room: best.room, status: 'present', why: null, held: false, rooms, unreadable };
 }
 
 /**
@@ -196,4 +224,4 @@ function displayState(thisRoom, arbitration, home) {
   };
 }
 
-module.exports = { resolveRoom, displayState, SENSOR_STALE_MS };
+module.exports = { resolveRoom, displayState, SENSOR_STALE_MS, SWITCH_MARGIN_DB };

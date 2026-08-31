@@ -43,6 +43,53 @@ test('rate breaks a tie, because RSSI alone cannot', () => {
   assert.equal(r.room, 'living-room');
 });
 
+// ── Hysteresis ──────────────────────────────────────────────────────────────
+// Measured live: with Nick sat still in the living room the two rooms sit 1-5 dB
+// apart and the raw winner FLIPPED to the kitchen. Walking to the kitchen is
+// worth 17 dB. Six sits in that gap.
+
+test('a challenger within the noise does NOT take the room', () => {
+  const r = resolveRoom({
+    'living-room': report({ rssiMedian: -74 }),
+    kitchen: report({ rssiMedian: -75 }),
+  }, NOW, { previousRoom: 'living-room' });
+  assert.equal(r.room, 'living-room');
+
+  // The exact flip seen live: kitchen a single dB louder.
+  const flipped = resolveRoom({
+    'living-room': report({ rssiMedian: -75 }),
+    kitchen: report({ rssiMedian: -74 }),
+  }, NOW, { previousRoom: 'living-room' });
+  assert.equal(flipped.room, 'living-room', 'one dB is a coin toss, not a move');
+  assert.equal(flipped.held, true);
+});
+
+test('actually walking to the other room DOES take it', () => {
+  const r = resolveRoom({
+    'living-room': report({ rssiMedian: -83 }),
+    kitchen: report({ rssiMedian: -66 }),
+  }, NOW, { previousRoom: 'living-room' });
+  assert.equal(r.room, 'kitchen', '17 dB is a move, not noise');
+  assert.equal(r.held, false);
+});
+
+// ⚠ Hysteresis must never pin the answer to a room he has left.
+test('the incumbent loses the room the moment it cannot hear him', () => {
+  const r = resolveRoom({
+    'living-room': report({ status: 'absent', rssiMedian: null }),
+    kitchen: report({ rssiMedian: -70 }),
+  }, NOW, { previousRoom: 'living-room' });
+  assert.equal(r.room, 'kitchen');
+});
+
+test('with no incumbent the loudest simply wins', () => {
+  const r = resolveRoom({
+    'living-room': report({ rssiMedian: -75 }),
+    kitchen: report({ rssiMedian: -74 }),
+  }, NOW, { previousRoom: null });
+  assert.equal(r.room, 'kitchen');
+});
+
 test('nothing present anywhere is `absent`, and it says WHICH rooms it checked', () => {
   const r = resolveRoom({
     'living-room': report({ status: 'absent', rssiMedian: null, rate: 0 }),
