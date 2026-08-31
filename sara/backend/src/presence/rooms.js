@@ -162,7 +162,13 @@ function resolveRoom(reports = {}, now = new Date(), {
  */
 function displayState(thisRoom, arbitration, home) {
   const away = home && home.away;
-  const heard = !!(arbitration && arbitration.status === 'present');
+  // ⚠ "Audible somewhere" is too weak to overrule geolocation. Caught the
+  // moment Nick left the house: every sensor had lost him except the bedroom,
+  // which still heard a faint -87 — enough for `status: present`, and the lock
+  // was refused for a man who had gone out. Refusing a lock is a claim that he
+  // is HERE, so it takes a sensor willing to say he is in ITS room.
+  const heard = !!(arbitration && arbitration.rooms
+    && arbitration.rooms.some(r => r.readable && r.inRoom === true));
 
   // ⚠ THIS ROOM'S OWN SENSOR DECIDES WHETHER HE IS IN THIS ROOM. Not the
   // arbitration, which ranks rooms by RSSI and therefore compares different

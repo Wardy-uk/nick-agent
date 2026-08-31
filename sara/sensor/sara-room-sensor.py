@@ -213,10 +213,15 @@ class Sensor:
         # one a screen in this room actually cares about. Null when unknown -
         # never False, which would read as "he is not here" on a deaf radio.
         median = int(statistics.median(rssis)) if rssis else None
-        # Null, never False, when there is nothing to judge on: "I could not
-        # tell" must not read as "he is not here" and hide SARA from someone
-        # standing in front of her.
-        in_room = None if (status == "unknown" or median is None) else median >= IN_ROOM_RSSI
+        # ⚠ Null ONLY when the radio could not answer. A HEALTHY sensor hearing
+        # nothing is a real answer — "he is not in this room" — not an absence
+        # of one, and returning null there makes the screen fall back to the
+        # cross-room ranking exactly when its own sensor has the better
+        # information. Deaf (`unknown`) is the only genuine "I could not tell".
+        if status == "unknown":
+            in_room = None
+        else:
+            in_room = median is not None and median >= IN_ROOM_RSSI
 
         return {
             "room": ROOM,

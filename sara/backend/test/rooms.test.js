@@ -246,6 +246,18 @@ test('a contradicted lock still respects WHICH room he is in', () => {
   assert.match(d.say, /kitchen/);
 });
 
+// ⚠ Caught live the moment Nick went out: every sensor had lost him except the
+// bedroom, still hearing a faint -87 — enough for `status: present`, and the
+// lock was refused for a man who had left the house.
+test('faintly audible is NOT enough to refuse a lock', () => {
+  const arb = resolveRoom({
+    'living-room': report({ status: 'absent', inRoom: false, rate: 0, rssiMedian: null }),
+    bedroom: report({ status: 'present', inRoom: false, rate: 0.35, rssiMedian: -87 }),
+  }, NOW);
+  assert.equal(displayState('living-room', arb, { away: true }).state, 'locked',
+    'refusing a lock claims he is HERE — it takes a sensor saying he is in its room');
+});
+
 // The other half: the rule must not become a way to never lock at all.
 test('deaf sensors do NOT rescue the lock — absence of evidence is not evidence', () => {
   const arb = resolveRoom({
