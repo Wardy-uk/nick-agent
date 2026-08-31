@@ -385,7 +385,21 @@ async function extractFacts(text) {
     const result = await aiRouting.runTask('profile_seed', prompt, { maxTokens: 4000 });
     const body = typeof result === 'string' ? result : (result && (result.text || result.content)) || '';
     const match = body.match(/\[[\s\S]*\]/);
-    if (!match) return { ok: false, why: 'the model did not return a JSON array' };
+    if (!match) {
+      // ⚠ Say WHAT came back. "the model did not return a JSON array" sent me
+      // round three separate wrong diagnoses (routing, the cloud gate, the AI
+      // mode) before the actual answer — an empty string, because every
+      // provider had declined — was visible. An error that does not carry the
+      // evidence is an error that costs an hour.
+      const provider = (result && result.provider) || 'unknown';
+      const reason = (result && result.reason) || null;
+      return {
+        ok: false,
+        why: body
+          ? `${provider} replied but not with a JSON array: "${body.slice(0, 200)}"`
+          : `no model answered (provider: ${provider}${reason ? `, ${reason}` : ''})`,
+      };
+    }
     const parsed = JSON.parse(match[0]);
     if (!Array.isArray(parsed)) return { ok: false, why: 'not an array' };
     return {
