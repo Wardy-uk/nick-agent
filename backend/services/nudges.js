@@ -836,17 +836,43 @@ function check121Nudges() {
  * untouched and this sends nothing — a push at 5pm saying "how was your day?"
  * into a chat he is already in reads as SARA not listening.
  */
-async function triggerEodNudge() {
+async function triggerEodNudge({ retry = false } = {}) {
+  // ⚠ THE EOD IS EXEMPT FROM THE WORKING-DAY CHECK, and only the EOD is.
+  //
+  // It runs EVERY day now (Nick, 31 Aug 2026), and that follows from what it
+  // became earlier the same day: a reflection rather than a status report. A
+  // Saturday is still a day worth closing, and suppressing it because nobody was
+  // at work would be the old work-shaped EOD reasserting itself through the
+  // scheduler.
+  //
+  // LEAVE still suppresses it. That is Nick — by the manual flag or by People HR
+  // — saying he is away, which is a different statement from "it is a weekend"
+  // and is the one thing that check exists for.
   const away = nudgeSuppression();
-  if (away.suppressed) { console.log(`[Nudge] EOD skipped — ${away.reason}`); return; }
+  if (away.suppressed && away.reason !== 'weekend' && !/holiday|bank/i.test(away.reason || '')) {
+    console.log(`[Nudge] EOD skipped — ${away.reason}`);
+    return;
+  }
 
   const dailyNote = obsidian.readTodayDailyNote();
   if (dailyNote && (dailyNote.includes('## EOD') ||
       (dailyNote.includes('## Wins Today') && !dailyNote.match(/## Wins Today\s*\n-\s*\n/)))) return;
   const dateKey = todayKey();
   const stateKey = `eod_nudge_${dateKey}`;
-  if (db.getState(stateKey)) return;
-  db.setState(stateKey, new Date().toISOString());
+
+  if (retry) {
+    // ⚠ The retry fires ONLY if he actually snoozed. Without that this is a
+    // second unasked-for interruption an hour after the first, which is exactly
+    // the nudge-volume problem the whole system is careful about.
+    const snoozedUntil = Number(db.getState('snooze_eod'));
+    if (!Number.isFinite(snoozedUntil) || snoozedUntil <= 0) {
+      return;
+    }
+    db.setState('snooze_eod', '0');
+  } else {
+    if (db.getState(stateKey)) return;
+    db.setState(stateKey, new Date().toISOString());
+  }
 
   let msg = null;
   try {
@@ -880,8 +906,37 @@ async function triggerEodNudge() {
     msg = `${opener}End of day. Before you close the laptop: one win, one thing that didn't go to plan, how you're feeling. 2 minutes. Standup tab → EOD.`;
   }
 
-  broadcast({ type: 'nudge', nudge_type: 'eod', message: msg, nag_count: 0 });
-  webpush.sendToAll('SARA', msg, { type: 'eod', url: '/standup' }).catch(() => {});
+  broadcast({ type: 'nudge', nudge_type: 'eod', message: msg, nag_count: 0, snoozeUntil: retry ? null : 'nine' });
+  webpush.sendToAll('SARA', msg, {
+    type: 'eod',
+    url: '/standup',
+    // The client offers "Not now — ask me at nine" on the first ask only. A
+    // second snooze from the retry would push it past 22:00, which is inside
+    // quiet hours: the governor would swallow it and the offer would be a lie.
+    snooze: retry ? null : 'nine',
+  }).catch(() => {});
+}
+
+/**
+ * Snooze the EOD until nine tonight. PURE apart from the write.
+ *
+ * ⚠ Until NINE, not "for an hour". Snoozing at 20:05 should ask again at 21:00,
+ * not 21:05 — he picked a time, not a duration, and drifting the target by
+ * however long he took to reach for his phone is the sort of small dishonesty
+ * that makes a feature feel unreliable.
+ *
+ * Returns `{ ok:false }` past nine rather than scheduling something in the past
+ * or silently rolling to tomorrow.
+ */
+function snoozeEodUntilNine(now = new Date()) {
+  const nine = new Date(now);
+  nine.setHours(21, 0, 0, 0);
+  const minutes = Math.round((nine.getTime() - now.getTime()) / 60000);
+  if (minutes <= 0) return { ok: false, reason: 'it is already past nine' };
+  db.setState('snooze_eod', String(nine.getTime()));
+  broadcast({ type: 'nudge_snoozed', nudge_type: 'eod', until: nine.getTime(), minutes });
+  console.log(`[Nudge] EOD snoozed until 21:00 (${minutes}m)`);
+  return { ok: true, until: nine.toISOString(), minutes };
 }
 
 /** Has he already said something in this session? PURE.
@@ -982,6 +1037,7 @@ module.exports = {
   getSnoozeState,
   check121Nudges,
   triggerEodNudge,
+  snoozeEodUntilNine,
   markEodDone,
   _alreadyTalking,
   _openingLine,

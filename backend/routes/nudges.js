@@ -101,6 +101,17 @@ router.post('/:id/complete', (req, res) => {
   res.json({ success: true });
 });
 
+// POST /api/nudges/eod/snooze-till-nine — the one-tap on the 8pm prompt.
+//
+// ⚠ Registered ABOVE /:type/snooze. Express matches in registration order, and
+// declared after it this path would be read as the type "eod" with a literal
+// "snooze-till-nine" — the #70 trap, one route along.
+router.post('/eod/snooze-till-nine', (req, res) => {
+  const result = nudges.snoozeEodUntilNine();
+  if (!result.ok) return res.status(409).json({ success: false, error: result.reason });
+  res.json({ success: true, ...result });
+});
+
 // POST /api/nudges/:type/snooze — snooze a nudge. Body/query `minutes` (default 30).
 router.post('/:type/snooze', (req, res) => {
   const { type } = req.params;

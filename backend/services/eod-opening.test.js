@@ -148,3 +148,55 @@ test('⚠ an AI failure falls back to the old wording, never to silence', async 
   assert.match(sent[0].body, /End of day/, 'and it fell back to the wording that always worked');
   assert.equal(sent[0].title, 'SARA');
 });
+
+// ── 8pm daily, snooze to nine ────────────────────────────────────────────────
+
+test('the snooze targets NINE, not "an hour from now"', () => {
+  // He picked a time, not a duration. Snoozing at 20:05 should ask again at
+  // 21:00, not 21:05 — drifting the target by however long he took to reach for
+  // his phone is the small dishonesty that makes a feature feel unreliable.
+  const at2005 = nudges.snoozeEodUntilNine(new Date('2026-09-02T20:05:00'));
+  assert.equal(at2005.ok, true);
+  assert.equal(at2005.minutes, 55);
+  assert.match(new Date(at2005.until).toTimeString(), /^21:00/);
+
+  const at2045 = nudges.snoozeEodUntilNine(new Date('2026-09-02T20:45:00'));
+  assert.equal(at2045.minutes, 15, 'later press, same landing');
+});
+
+test('past nine it REFUSES rather than scheduling into the past', () => {
+  const late = nudges.snoozeEodUntilNine(new Date('2026-09-02T21:30:00'));
+  assert.equal(late.ok, false);
+  assert.match(late.reason, /past nine/);
+});
+
+test('the 9pm retry does NOTHING unless he actually snoozed', async () => {
+  // Otherwise this is a second unasked-for interruption an hour after the first,
+  // which is exactly the nudge-volume problem the whole system is careful about.
+  const webpush = require('./webpush');
+  const workingDays = require('./working-days');
+  const realSend = webpush.sendToAll;
+  const realHolidays = workingDays.holidaySet;
+  const sent = [];
+  webpush.sendToAll = async (t, b) => { sent.push({ t, b }); };
+  workingDays.holidaySet = () => new Set();
+  db.setState('snooze_eod', '0');
+
+  try {
+    await nudges.triggerEodNudge({ retry: true });
+  } finally {
+    webpush.sendToAll = realSend;
+    workingDays.holidaySet = realHolidays;
+  }
+  assert.equal(sent.length, 0);
+});
+
+test('a weekend does not suppress the EOD — but leave still does', () => {
+  // The EOD became a REFLECTION, so a Saturday is still a day worth closing.
+  // Leave is Nick saying he is away, which is a different statement entirely and
+  // is the one thing that check exists for.
+  const src = fs.readFileSync(path.join(__dirname, 'nudges.js'), 'utf-8');
+  const fn = src.slice(src.indexOf('async function triggerEodNudge'));
+  assert.match(fn.slice(0, 2000), /weekend/, 'the weekend carve-out is in the EOD trigger');
+  assert.match(fn.slice(0, 2000), /holiday\|bank/, 'and bank holidays with it');
+});

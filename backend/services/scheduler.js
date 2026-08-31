@@ -319,16 +319,37 @@ function start() {
     nudges.checkPlanMilestoneNudge();
   });
 
-  // 5pm weekdays — trigger EOD nudge
-  cron.schedule('0 17 * * 1-5', async () => {
-    console.log('[Scheduler] 5pm — SARA opens the EOD');
-    // Awaited and caught: it now starts a session and makes an AI call, so an
-    // unhandled rejection here would be a silent 5pm with no notification and
-    // nothing in the log to say why.
+  // 8pm, EVERY day — SARA opens the EOD.
+  //
+  // Moved from 5pm weekdays (Nick, 31 Aug 2026). Both halves of that follow from
+  // what the EOD became earlier the same day: a reflection rather than a status
+  // report. Five o'clock is the end of the WORKING day and the wrong moment to
+  // ask how the day was; and a Saturday is still a day worth closing, so the
+  // working-day suppression is deliberately not applied to this one nudge.
+  cron.schedule('0 20 * * *', async () => {
+    console.log('[Scheduler] 8pm — SARA opens the EOD');
+    // Awaited and caught: it starts a session and makes an AI call, so an
+    // unhandled rejection here would be a silent evening with no notification
+    // and nothing in the log to say why.
     try {
       await nudges.triggerEodNudge();
     } catch (e) {
       console.error('[Scheduler] EOD nudge failed:', e.message);
+    }
+  });
+
+  // 9pm — the snooze landing. Fires ONLY if he actually pressed "ask me at
+  // nine": `triggerEodNudge({retry:true})` returns immediately otherwise, so
+  // this is never a second unasked-for interruption.
+  //
+  // ⚠ There is no third ask. Nine is the last one — quiet hours start at 22:00,
+  // and a prompt at ten that the governor swallows is worse than no prompt,
+  // because nothing on screen would say it had been suppressed.
+  cron.schedule('0 21 * * *', async () => {
+    try {
+      await nudges.triggerEodNudge({ retry: true });
+    } catch (e) {
+      console.error('[Scheduler] EOD retry failed:', e.message);
     }
   });
 
