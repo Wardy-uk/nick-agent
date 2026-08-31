@@ -1,0 +1,24 @@
+[Unit]
+Description=SARA room sensor (Apple Watch BLE proximity, one room)
+After=bluetooth.target network-online.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+# The IRK lives in a local-only, root-readable file. NOT in git, and NEVER on a
+# command line: argv is world-readable through /proc, so `sudo env WATCH_IRK=...`
+# leaks the key to every user on the box (done once, 31 Aug 2026 — see
+# .claude/memory/mistakes.md).
+EnvironmentFile=/etc/sara-watch.env
+# Per-room config: SARA_ROOM, and optionally SARA_SENSOR_URL / SARA_SENSOR_TOKEN.
+# Optional (leading '-') so a sensor still starts, and still writes its local
+# status file, before it has anywhere to report to.
+EnvironmentFile=-/etc/sara-room.env
+ExecStart=/home/nickw/watch-irk/venv/bin/python -u /home/nickw/watch-irk/sara-room-sensor.py
+Restart=always
+RestartSec=5
+# root: the watchdog cycles the adapter and can restart bluetoothd.
+User=root
+
+[Install]
+WantedBy=multi-user.target
