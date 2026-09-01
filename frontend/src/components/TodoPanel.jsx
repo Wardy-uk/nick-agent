@@ -214,6 +214,18 @@ function MoscowReview({ onClose }) {
 // worksheet file. Now it is a plain DB write and the vault export follows.
 function TaskControls({ todo, onPatch, busy, onRefresh }) {
   const dueValue = todo.due_date ? todo.due_date.split('T')[0] : '';
+  // ⚠ The picker is a DRAFT until it holds a complete date.
+  //
+  // A `<input type="date">` reports an empty value while it is partially typed,
+  // so patching straight from onChange fired `due_date: null` on the first
+  // keystroke — a write, a refetch and a re-sorted list before the month had
+  // even been typed. Hand-entering a date was effectively impossible.
+  //
+  // Clearing is deliberately NOT inferred from that empty value: the Clear
+  // button says it explicitly, and an empty picker mid-typing is not a request
+  // to wipe the date.
+  const [dueDraft, setDueDraft] = useState(dueValue);
+  useEffect(() => { setDueDraft(dueValue); }, [dueValue]);
 
   return (
     <div className="todo-edit">
@@ -322,18 +334,24 @@ function TaskControls({ todo, onPatch, busy, onRefresh }) {
             key={p.id}
             className={`todo-edit-btn${dueValue === p.date ? ' active' : ''}`}
             disabled={busy}
-            onClick={() => onPatch({ due_date: p.date })}
+            onClick={() => { setDueDraft(p.date); onPatch({ due_date: p.date }); }}
           >{p.label}</button>
         ))}
         <input
           type="date"
           className="todo-edit-date"
-          value={dueValue}
+          value={dueDraft}
           disabled={busy}
-          onChange={(e) => onPatch({ due_date: e.target.value || null })}
+          onChange={(e) => {
+            const v = e.target.value;
+            setDueDraft(v);
+            // Only a complete date is a decision. Anything else is someone
+            // still typing.
+            if (/^\d{4}-\d{2}-\d{2}$/.test(v)) onPatch({ due_date: v });
+          }}
         />
         {dueValue && (
-          <button className="todo-edit-btn" disabled={busy} onClick={() => onPatch({ due_date: null })}>
+          <button className="todo-edit-btn" disabled={busy} onClick={() => { setDueDraft(''); onPatch({ due_date: null }); }}>
             Clear
           </button>
         )}
@@ -603,12 +621,37 @@ function MicrosoftTaskControls({ todo, onSaved }) {
 }
 
 // ── Shared todo item renderer ──
+/**
+ * A row's identity, stable across a refetch.
+ *
+ * ⚠ `todo.id` is a POSITIONAL INDEX — `/api/todos` assigns `id: i + 1` over the
+ * parsed list — and `listTaskRows` orders by due date with the undated last. So
+ * the moment a due date is set, that row jumps up the ordering, every index
+ * below it shifts by one, and a key built from `id` names a DIFFERENT task.
+ *
+ * That is what made the due date impossible to edit: pick a date, the list
+ * re-sorts, and the expanded row silently collapses or a neighbour opens
+ * instead — indistinguishable from the control not working. It applied to every
+ * control on the row; the date one just happens to be the one that moves the
+ * row it lives on.
+ *
+ * `task_id` is the real identity for anything NEURO owns. A file-backed mirror
+ * has none, so it falls back to where the line lives, and only then to the
+ * positional id — which is still unstable, but is the best a row with no
+ * identity of its own can offer.
+ */
+function rowKey(todo) {
+  if (todo.task_id) return `task:${todo.task_id}`;
+  if (todo.filePath) return `file:${todo.filePath}#${todo.lineNumber ?? ''}`;
+  return `pos:${todo.source}-${todo.id}`;
+}
+
 function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRefresh }) {
   const overdue = isOverdue(todo.due_date);
   const dueLabel = formatDue(todo.due_date);
   const toggleKey = todo.task_id ? `task:${todo.task_id}` : `${todo.filePath}:${todo.lineNumber}`;
   const isToggling = toggling[toggleKey];
-  const isExpanded = expanded === `${todo.source}-${todo.id}`;
+  const isExpanded = expanded === rowKey(todo);
   const editable = Boolean(todo.task_id);
 
   return (
@@ -619,7 +662,7 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
         disabled={isToggling || (!editable && !todo.filePath)}
         title="Mark done"
       />
-      <div className="todo-text-col" onClick={() => onExpand(isExpanded ? null : `${todo.source}-${todo.id}`)} style={{ cursor: 'pointer' }}>
+      <div className="todo-text-col" onClick={() => onExpand(isExpanded ? null : rowKey(todo))} style={{ cursor: 'pointer' }}>
         <span className={`todo-text ${isExpanded ? '' : 'todo-text-truncated'}`}>{todo.text}</span>
         <div className="todo-meta-row">
           {todo.source && <span className={`todo-source ${sourceClass(todo.source)}`}>{todo.source}</span>}
@@ -1360,7 +1403,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
             <div className="todo-list">
               {items.map(todo => (
                 <TodoItem
-                  key={`${todo.source}-${todo.id}`}
+                  key={rowKey(todo)}
                   todo={todo}
                   toggling={toggling}
                   onToggle={toggleTodo}
@@ -1649,7 +1692,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           )}
           {filtered.map(todo => (
             <TodoItem
-              key={`${todo.source}-${todo.id}`}
+              key={rowKey(todo)}
               todo={todo}
               toggling={toggling}
               onToggle={toggleTodo}
