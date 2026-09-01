@@ -549,3 +549,39 @@ test('an already-classified email is not sent to the model again', async () => {
     aiProvider.triageEmails = realTriage;
   }
 });
+
+// Pressing "Run Triage" must not re-buy verdicts. The first live press did:
+// 663 emails re-classified, and the categories moved on no new information.
+test('force skips the fingerprint check, not the classification cache', async () => {
+  const microsoft = require('./microsoft');
+  const aiProvider = require('./ai-provider');
+  const realFetch = microsoft.fetchRecentEmailsDetailed;
+  const realAuth = microsoft.isAuthenticated;
+  const realTriage = aiProvider.triageEmails;
+  const mail = inbox(3);
+  let calls = 0;
+  microsoft.isAuthenticated = async () => true;
+  microsoft.fetchRecentEmailsDetailed = async () => ({ emails: mail, complete: true });
+  aiProvider.triageEmails = async (prompt) => {
+    calls++;
+    const n = (prompt.match(/^\[\d+\] From:/gm) || []).length;
+    return {
+      provider: 'stub',
+      text: JSON.stringify(Array.from({ length: n }, (_, i) => ({ index: i, category: 'FYI', reason: 'stub' }))),
+    };
+  };
+  try {
+    seed([]);
+    db.setState('email_triage_input', '');
+    await emailTriage.runTriage({ force: true });
+    assert.equal(calls, 1);
+
+    const forced = await emailTriage.runTriage({ force: true });
+    assert.notEqual(forced.skipped, true, 'force must still re-run the pass');
+    assert.equal(calls, 1, 'but it must not pay for verdicts it already has');
+  } finally {
+    microsoft.fetchRecentEmailsDetailed = realFetch;
+    microsoft.isAuthenticated = realAuth;
+    aiProvider.triageEmails = realTriage;
+  }
+});

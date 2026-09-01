@@ -391,9 +391,15 @@ async function runTriage({ force = false } = {}) {
     }
 
     const priorById = new Map(stored.map(e => [e.id, e]));
-    // `force` means re-run properly, including paying the model again — it is
-    // what a manual "Run triage" and a `/triage/clear` both want.
-    const classified = await classifyEmails(emails, force ? new Map() : priorById);
+    // `force` skips the FINGERPRINT check, and only that. It deliberately does
+    // NOT re-buy classifications: an email's text has not changed, so the only
+    // things a re-ask produces are cost and churn. Measured on the button's
+    // first live press — 663 emails re-classified, and the categories moved
+    // (FYI 241 → 285, IGNORE 190 → 149) on no new information at all, which is
+    // a panel disagreeing with itself rather than a panel being refreshed.
+    // `/triage/clear` empties the store, so a genuine re-triage happens there
+    // by construction.
+    const classified = await classifyEmails(emails, priorById);
     db.setState(INPUT_KEY, fingerprint);
 
     // ── The merge ───────────────────────────────────────────────────────────
