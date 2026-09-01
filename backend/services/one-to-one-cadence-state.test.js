@@ -142,7 +142,8 @@ test('the stamp is left alone when the detector has nothing newer', () => {
   const fm = { 'last-1-2-1': '2026-08-04', 'next-1-2-1-due': '2026-08-18', cadence: 'fortnightly' };
   assert.deepEqual(foldDetected(fm, '2026-07-01'), { lastHeld: '2026-08-04', nextDue: '2026-08-18', booked: null });
   assert.deepEqual(foldDetected(fm, null), { lastHeld: '2026-08-04', nextDue: '2026-08-18', booked: null });
-  // Same date: the sync has already caught up, so nothing is recomputed.
+  // Same date: the sync has caught up. The due date IS recomputed from last + cadence
+  // (see the stale-stored-due test below), which here agrees with what was stored.
   assert.equal(foldDetected(fm, '2026-08-04').nextDue, '2026-08-18');
 });
 

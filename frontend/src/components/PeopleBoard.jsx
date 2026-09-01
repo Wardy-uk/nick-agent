@@ -95,13 +95,20 @@ function buildTeamSaraLine(teams, peopleData, personSummaries, oneToOnes) {
 // date is recomputed from it exactly as syncPeopleNotes will tonight; reading
 // the stale `next-1-2-1-due` would only trade "no note" for "overdue by 98d".
 function get121Status(frontmatter, detectedLast) {
-  const stamped = frontmatter?.['last-1-2-1'] || null;
-  const ahead = detectedLast && (!stamped || detectedLast > stamped);
-  const last = ahead ? detectedLast : stamped;
+  const stamped = isoDateOrNull(frontmatter?.['last-1-2-1']);
+  const detected = isoDateOrNull(detectedLast);
+  // ⚠ Folds on EQUAL as well as newer. Once the 22:00 sync stamps the same date the
+  // detector found, a strict `>` stops folding and hands back the STORED due date —
+  // which can be stale or, live on 1 Sep 2026, EARLIER than the 1-2-1 it is meant to
+  // follow (Isabel Busk: last 25 Aug, stored due 12 Aug, card read "Overdue by 20d" the
+  // week after the meeting). Recomputing from last + cadence is always at least as
+  // correct as trusting a number nothing maintains.
+  const ahead = detected && (!stamped || detected >= stamped);
+  const last = ahead ? detected : stamped;
   const due = ahead
     ? addDays(last, cadenceDays(frontmatter?.cadence))
-    : frontmatter?.['next-1-2-1-due'];
-  const booked = frontmatter?.['1-2-1-booked'];
+    : isoDateOrNull(frontmatter?.['next-1-2-1-due']);
+  const booked = isoDateOrNull(frontmatter?.['1-2-1-booked']);
 
   const dayDelta = (from) => {
     const d = new Date(`${from}T12:00:00`);
@@ -281,7 +288,25 @@ function latest121(oneToOnes, name) {
 
 /** Days per cadence. Mirrors CADENCES in services/one-to-one-detect.js. */
 function cadenceDays(raw) {
-  return { weekly: 7, 'bi-weekly': 14, monthly: 28, 'bi-monthly': 56 }[normaliseCadence(raw)] || 14;
+  return { weekly: 7, 'bi-weekly': 14, monthly: 28, 'six-weekly': 42, 'bi-monthly': 56 }[normaliseCadence(raw)] || 14;
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * An ISO date string, or null. Anything else — "Thu Jun 18", "", undefined — is null.
+ *
+ * ⚠ Dates here must be compared as DATES, never as strings. Several People notes carry
+ * `last-1-2-1: Thu Jun 18` (no year), and `"2026-08-20" > "Thu Jun 18"` is FALSE because
+ * "2" sorts before "T" — so a string compare silently discarded every detected 1-2-1 for
+ * those people and fell back to a stale `next-1-2-1-due`, showing a man seen twelve days
+ * ago as months overdue. An unparseable stamp is treated as ABSENT rather than guessed
+ * at: a date with no year cannot be placed on a timeline, and the detector always carries
+ * a real one. Mirrors isoDateOrNull() in services/one-to-one-detect.js.
+ */
+function isoDateOrNull(value) {
+  const v = String(value == null ? '' : value).trim();
+  return ISO_DATE_RE.test(v) ? v : null;
 }
 
 function addDays(iso, days) {
@@ -905,6 +930,7 @@ const CADENCE_OPTIONS = [
   { value: 'weekly', label: 'Weekly' },
   { value: 'bi-weekly', label: 'Bi-weekly (2 weeks)' },
   { value: 'monthly', label: 'Monthly (4 weeks)' },
+  { value: 'six-weekly', label: 'Six-weekly (6 weeks)' },
   { value: 'bi-monthly', label: 'Bi-monthly (8 weeks)' },
   { value: 'n/a', label: 'Not scheduled (n/a)' },
 ];
@@ -914,6 +940,9 @@ function normaliseCadence(raw) {
   const v = String(raw || '').toLowerCase().trim();
   if (!v || /^(n\/?a|none|-)$/.test(v)) return 'n/a';
   if (/bi[-\s]?month|two[-\s]month/.test(v)) return 'bi-monthly';
+  // ⚠ MUST sit above the bare /week/ rule below: "six weekly" contains "week", so a
+  // lower placement silently resolves it to WEEKLY (7 days) instead of 42.
+  if (/six[-\s]?week|6[-\s]?week/.test(v)) return 'six-weekly';
   if (/month/.test(v)) return 'monthly';
   if (/bi[-\s]?week|fortnight|two[-\s]week/.test(v)) return 'bi-weekly';
   if (/week/.test(v)) return 'weekly';

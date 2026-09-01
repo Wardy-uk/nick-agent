@@ -462,6 +462,9 @@ function addDays(dateStr, days) {
 // first and gave bi-monthly 28 days, i.e. exactly monthly.
 const CADENCES = [
   { value: 'bi-monthly', label: 'Bi-monthly (8 weeks)', days: 56, match: /bi[-\s]?month|two[-\s]month/i },
+  // ⚠ MUST sit above the bare /week/ rule below: "six weekly" contains "week",
+  // so a lower placement silently resolves it to WEEKLY (7 days) instead of 42.
+  { value: 'six-weekly', label: 'Six-weekly (6 weeks)', days: 42, match: /six[-\s]?week|6[-\s]?week/i },
   { value: 'monthly', label: 'Monthly (4 weeks)', days: 28, match: /month/i },
   { value: 'bi-weekly', label: 'Bi-weekly (2 weeks)', days: 14, match: /bi[-\s]?week|fortnight|two[-\s]week/i },
   { value: 'weekly', label: 'Weekly', days: 7, match: /week/i },
@@ -551,13 +554,37 @@ function effectiveCadenceFields(name, fm = {}) {
  * The fold itself — PURE, so it pins without a vault or a clock (the same split
  * as `pi-health.assess()` and `cadenceState()`).
  */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** An ISO date string, or null. Anything else — "Thu Jun 18", "", undefined — is null. */
+function isoDateOrNull(value) {
+  const v = String(value == null ? '' : value).trim();
+  return ISO_DATE_RE.test(v) ? v : null;
+}
+
 function foldDetected(fm = {}, detected = null) {
-  const stamped = fm['last-1-2-1'] || null;
+  // ⚠ A stamp is only usable if it is a REAL ISO date. Several People notes carry
+  // `last-1-2-1: Thu Jun 18` — no year — and the old code compared it to the detected
+  // date as a STRING: "2026-08-20" <= "Thu Jun 18" is TRUE, because "2" sorts before
+  // "T". So every detected 1-2-1 for those people was silently discarded and the card
+  // fell back to a stale `next-1-2-1-due`, reporting a man seen twelve days ago as
+  // months overdue. An unparseable stamp is treated as ABSENT, never guessed at: a date
+  // with no year cannot be placed on a timeline, and the detector always carries a real
+  // one.
+  const stamped = isoDateOrNull(fm['last-1-2-1']);
+  const detectedIso = isoDateOrNull(detected);
   const booked = fm['1-2-1-booked'] || null;
-  if (!detected || (stamped && detected <= stamped)) {
-    return { lastHeld: stamped, nextDue: fm['next-1-2-1-due'] || null, booked };
+
+  // ⚠ Folds on EQUAL as well as newer. Once the 22:00 sync stamps the same date the
+  // detector found, a strict comparison stops folding and hands back the STORED due
+  // date — which can be stale or, live on 1 Sep 2026, EARLIER than the 1-2-1 it is
+  // supposed to follow (Isabel Busk: last 25 Aug, stored due 12 Aug, card read "overdue
+  // by 20d" the week after the meeting). Recomputing from last + cadence is always at
+  // least as correct as trusting a number nothing maintains.
+  if (!detectedIso || (stamped && detectedIso < stamped)) {
+    return { lastHeld: stamped, nextDue: isoDateOrNull(fm['next-1-2-1-due']), booked };
   }
-  return { lastHeld: detected, nextDue: addDays(detected, cadenceDays(fm.cadence)), booked };
+  return { lastHeld: detectedIso, nextDue: addDays(detectedIso, cadenceDays(fm.cadence)), booked };
 }
 
 /** Whole days from `from` to `to`. Both are YYYY-MM-DD; -ve means `to` is past. */
@@ -665,6 +692,7 @@ module.exports = {
   cadenceState,
   effectiveCadenceFields,
   foldDetected,
+  isoDateOrNull,
   scan,
   refresh,
   getIndex,
