@@ -39,7 +39,11 @@ const APPLY = process.argv.includes('--apply');
 // for the one-off case of wanting the archive labelled too.
 const ALL_STATUSES = process.argv.includes('--all');
 
-function main() {
+async function main() {
+  // The DB is opened lazily; a script is not the server and nothing else has
+  // done this for it.
+  await db.init();
+
   const where = ALL_STATUSES ? '' : " AND status IN ('open','in-progress')";
   const rows = db.all(`SELECT id, text, source, origin_path, ms_source, due_date, status
                        FROM tasks WHERE origin IS NULL${where} ORDER BY id`);
@@ -98,4 +102,4 @@ function todayLocal(d = new Date()) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-main();
+main().catch(e => { console.error(e.message); process.exit(1); });
