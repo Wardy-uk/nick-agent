@@ -159,6 +159,29 @@ async function init() {
       const n = get('SELECT COUNT(*) AS n FROM tasks')?.n || 0;
       console.log(`[DB] tasks.domain added — ${n} existing task(s) stamped 'work'`);
     }
+
+    // Migration: tasks.origin — 'commitment' (somebody else is waiting on it) or
+    // 'improvement' (Nick's own idea). See shared/task-origin.cjs.
+    //
+    // ⚠ NO DEFAULT, unlike `domain` one block up, and the difference is the
+    // point: there is no value that is true of every existing row. Every task in
+    // the store arrived from a work source, so stamping 'work' was a fact; who
+    // WANTED each of these 110 tasks is not recorded anywhere, so stamping
+    // either value would be inventing an answer — and the answer is counted in a
+    // report that goes to the manager assessing Nick's PIP. Existing rows read
+    // NULL ("not classified"), which the report names as its own bucket rather
+    // than folding into either.
+    //
+    // The proposals are a separate, explicit pass: backend/scripts/backfill-task-origin.js.
+    if (taskColumns.length && !taskColumns.includes('origin')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN origin TEXT');
+      const n = get('SELECT COUNT(*) AS n FROM tasks')?.n || 0;
+      console.log(`[DB] tasks.origin added — ${n} existing task(s) left unclassified`);
+    }
+    if (taskColumns.length && !taskColumns.includes('origin_proposed')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN origin_proposed INTEGER NOT NULL DEFAULT 0');
+      console.log('[DB] tasks.origin_proposed added');
+    }
   } catch (e) {
     console.error('[DB] tasks migration check failed:', e.message);
   }
@@ -1406,16 +1429,18 @@ function deleteTaskMoscow(filePath, lineNumber, text) {
 // estimateMinutes once vanished from POST /api/tasks. Add to all three.
 const TASK_FIELDS = [
   'text', 'status', 'moscow', 'moscow_proposed', 'priority', 'due_date', 'source',
-  'origin_path', 'origin_line', 'context', 'domain', 'notes', 'ms_id', 'ms_source', 'ms_plan',
+  'origin_path', 'origin_line', 'context', 'domain', 'origin', 'origin_proposed',
+  'notes', 'ms_id', 'ms_source', 'ms_plan',
   'estimate_minutes', 'assignee', 'household',
 ];
 
 function createTaskRow(task) {
   const info = run(
     `INSERT INTO tasks (text, status, moscow, moscow_proposed, priority, due_date, source,
-                        origin_path, origin_line, context, domain, notes, ms_id, estimate_minutes,
+                        origin_path, origin_line, context, domain, origin, origin_proposed,
+                        notes, ms_id, estimate_minutes,
                         assignee, household, dedupe_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       task.text, task.status || 'open', task.moscow || null,
       task.moscow_proposed ? 1 : 0, task.priority || null,
@@ -1425,6 +1450,11 @@ function createTaskRow(task) {
       // shared/task-domain.cjs before it arrives, so an unrecognised value is
       // already a decision rather than a typo reaching the column.
       task.domain || 'work',
+      // NULL is "not classified" and is a real answer — never coerced to either
+      // value here, because both are decisions with consequences in a report
+      // that leaves the building. task-store resolves it on the way in.
+      task.origin || null,
+      task.origin_proposed ? 1 : 0,
       task.notes || null, task.ms_id || null,
       task.estimate_minutes == null ? null : task.estimate_minutes,
       // NULL is unassigned and is a real answer, not a missing one.
@@ -1466,6 +1496,11 @@ function listTaskRows(filters = {}) {
   // personal tasks from every existing caller — including the exports and the
   // counts — which is the invisible half of the asymmetry task-domain describes.
   if (filters.domain) { where.push('domain = ?'); params.push(filters.domain); }
+  // Absent means EVERY origin, including the unclassified pile — the same rule
+  // as `domain` above, and for the same reason: a default here would hide the
+  // very rows that most need looking at. `originUnset` asks for those alone.
+  if (filters.origin) { where.push('origin = ?'); params.push(filters.origin); }
+  if (filters.originUnset) { where.push('origin IS NULL'); }
   const sql = `SELECT * FROM tasks${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
      ORDER BY CASE moscow WHEN 'must' THEN 0 WHEN 'should' THEN 1 WHEN 'could' THEN 2
                           WHEN 'wont' THEN 3 ELSE 4 END,

@@ -16,6 +16,7 @@
 const db = require('../db/database');
 const todoIntelligence = require('./todo-intelligence');
 const { domainOrDefault, normaliseDomain } = require('../../shared/task-domain.cjs');
+const { normaliseOrigin, inferOrigin } = require('../../shared/task-origin.cjs');
 
 const VALID_MOSCOW = ['must', 'should', 'could', 'wont'];
 const VALID_STATUS = ['open', 'in-progress', 'done', 'dropped'];
@@ -107,6 +108,12 @@ function toTodoShape(row) {
     // arriving as undefined and being treated as "no domain" by one consumer
     // and as personal by another.
     domain: domainOrDefault(row.domain),
+    // Commitment (somebody else is waiting) or improvement (Nick's own idea).
+    // ⚠ Passed through RAW, with no default — unlike `domain` above. null means
+    // "not classified yet" and every consumer must be able to see that, because
+    // the weekly risk report counts it as its own bucket rather than guessing.
+    origin: normaliseOrigin(row.origin),
+    originProposed: Boolean(row.origin_proposed),
     notes: row.notes || null,
     filePath: null,
     lineNumber: null,
@@ -250,6 +257,19 @@ function createTask(input = {}) {
 
   const domain = domainOrDefault(input.domain);
 
+  // Whose idea is this? An explicit answer is a decision; otherwise ask the
+  // classifier, which reads provenance and returns null for most routes in. A
+  // guess is stamped `proposed` so it shows with a '?' and is never mistaken for
+  // a call Nick made — the same contract the 12 Aug MoSCoW import used.
+  const explicitOrigin = normaliseOrigin(input.origin);
+  const inferred = explicitOrigin ? null : inferOrigin({
+    source: input.source || 'manual',
+    msSource: input.ms_source || input.msSource || null,
+    originPath: input.origin_path || null,
+  });
+  const origin = explicitOrigin || (inferred ? inferred.origin : null);
+  const originProposed = !explicitOrigin && Boolean(inferred);
+
   // ── The cross-domain collision ─────────────────────────────────────────────
   //
   // `dedupe_key` is normalised text and UNIQUE across the WHOLE table, so
@@ -281,6 +301,16 @@ function createTask(input = {}) {
     if (input.moscow && !existing.moscow) {
       patch.moscow = normMoscow(input.moscow);
       patch.moscow_proposed = input.moscowProposed ? 1 : 0;
+    }
+    // A second sighting can fill in an origin nobody has set, and can UPGRADE a
+    // proposal into a decision — but it never overwrites a decided one, and a
+    // proposal never overwrites another proposal. Seeing the same commitment in
+    // a second meeting note is not new evidence about whose idea it was.
+    if (origin && !existing.origin) {
+      patch.origin = origin;
+      patch.origin_proposed = originProposed ? 1 : 0;
+    } else if (explicitOrigin && existing.origin === explicitOrigin && existing.origin_proposed) {
+      patch.origin_proposed = 0;
     }
     if (input.priority && !existing.priority) patch.priority = normPriority(input.priority);
     if (input.assignee && !existing.assignee) patch.assignee = input.assignee;
@@ -315,6 +345,8 @@ function createTask(input = {}) {
     origin_line: input.origin_line == null ? null : input.origin_line,
     context,
     domain,
+    origin,
+    origin_proposed: originProposed ? 1 : 0,
     notes: input.notes || null,
     // VESTA household assignment. NULL is unassigned and is a real answer.
     assignee: input.assignee || null,
@@ -430,6 +462,27 @@ function updateTask(id, fields = {}) {
     const next = normaliseDomain(fields.domain);
     if (!next) throw new Error(`domain must be 'work' or 'personal'`);
     patch.domain = next;
+  }
+  if ('origin' in fields) {
+    // Three-valued, and all three are meaningful: 'commitment' / 'improvement'
+    // are decisions, and null CLEARS the classification back to unclassified —
+    // which is a legitimate thing to want after disagreeing with a proposal
+    // without yet knowing the right answer. Anything else is refused rather than
+    // silently dropped, because a typo that quietly changed nothing would leave
+    // Nick believing he had classified a task that the report still counts as
+    // unclassified.
+    if (fields.origin === null || fields.origin === '') {
+      patch.origin = null;
+      patch.origin_proposed = 0;
+    } else {
+      const next = normaliseOrigin(fields.origin);
+      if (!next) throw new Error(`origin must be 'commitment' or 'improvement' (or null to clear)`);
+      patch.origin = next;
+      // Setting it by hand IS the decision — the proposal flag comes off, the
+      // same rule as MoSCoW above. Confirming a proposal unchanged still counts
+      // as making the call, which is exactly what the report needs to know.
+      patch.origin_proposed = 0;
+    }
   }
   if ('estimateMinutes' in fields || 'estimate_minutes' in fields) {
     // `estimateExact` says the number was typed, not picked off a preset — see

@@ -680,55 +680,139 @@ test('the real send and the test send render through the same function', () => {
   assert.match(weeklyRisk.testSend.toString(), /toEmailHtml/);
 });
 
-// ── Task position ────────────────────────────────────────────────────────────
+// ── Task position: commitments vs continual improvement ─────────────────────
+//
+// The split exists because counting the two together made the improvement
+// backlog PENALISE Nick: thirty of his own ideas, optimistically dated, read in
+// a compliance report exactly like thirty broken promises. Overdue counts
+// commitments only (Nick, 1 Sep 2026), and the third bucket — the rows nobody
+// has classified — is named rather than folded into either, because folding it
+// one way manufactures a broken promise and the other way hides one.
 
-function taskSnap(tasks) {
-  return baseSnapshot({ tasks: { available: true, lastWeek: { from: '2026-08-10', to: '2026-08-16' }, undated: 0, droppedLastWeek: 0, ...tasks } });
+function group(over = {}) {
+  return { available: true, open: 0, overdue: 0, undated: 0, closedLastWeek: 0, ...over };
 }
 
-test('the task section renders open, overdue and closed-last-week', () => {
-  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 92, overdue: 14, closedLastWeek: 23, undated: 40 })));
+function taskSnap(tasks) {
+  const t = {
+    available: true,
+    lastWeek: { from: '2026-08-10', to: '2026-08-16' },
+    open: 0, overdue: 0, undated: 0, closedLastWeek: 0, droppedLastWeek: 0,
+    proposedCount: 0,
+    commitments: group(), improvement: group(), unclassified: group(),
+    ...tasks,
+  };
+  return baseSnapshot({ tasks: t });
+}
+
+test('commitments and improvement work are reported as separate sections', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({
+    open: 92, overdue: 14, closedLastWeek: 23,
+    commitments: group({ open: 40, overdue: 6, undated: 12, closedLastWeek: 15 }),
+    improvement: group({ open: 52, overdue: 8, undated: 28, closedLastWeek: 8 }),
+  })));
   assert.match(md, /## 6\. My task position/);
-  assert.match(md, /\| Open tasks \| \*\*92\*\* \|/);
-  assert.match(md, /\| Overdue \| \*\*14\*\* \(15%\) \|/);
-  assert.match(md, /\| Closed w\/c 10 Aug 2026 \| \*\*23\*\* \|/);
-  assert.match(md, /\| No due date \| 40 \|/);
+  assert.match(md, /### Commitments — work others asked for or are waiting on/);
+  assert.match(md, /\| Open commitments \| \*\*40\*\* \|/);
+  assert.match(md, /\| \*\*Overdue\*\* \| \*\*6\*\* \(15%\) \|/);
+  assert.match(md, /### Continual improvement — work I set myself/);
+  assert.match(md, /\| Open improvement tasks \| 52 \|/);
+});
+
+test('improvement dates are never called overdue — they are self-set and nobody is waiting', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({
+    open: 30, overdue: 20,
+    improvement: group({ open: 30, overdue: 20 }),
+  })));
+  // The wording is doing real work: "overdue" in a compliance report invites
+  // these to be read as missed promises, which is exactly what they are not.
+  assert.match(md, /\| Past their target date \| 20/);
+  assert.match(md, /self-set target dates on work nobody is waiting for/);
+  assert.match(md, /not as a compliance measure/);
+});
+
+test('the overdue FINDING counts commitments only', () => {
+  // A backlog that is entirely Nick's own ideas must not be flagged to Chris.
+  const own = weeklyRisk.assess(taskSnap({
+    open: 100, overdue: 40,
+    improvement: group({ open: 100, overdue: 40 }),
+  }));
+  assert.equal(own.findings.find(x => x.kind === 'commitment-backlog'), undefined,
+    'his own improvement backlog is not a compliance finding');
+
+  const owed = weeklyRisk.assess(taskSnap({
+    open: 100, overdue: 40,
+    commitments: group({ open: 100, overdue: 40, closedLastWeek: 3 }),
+  }));
+  const f = owed.findings.find(x => x.kind === 'commitment-backlog');
+  assert.ok(f, 'expected a finding when 40% of the work others are waiting on is late');
+  assert.equal(f.severity, 'warn');
+  assert.match(f.title, /40 of 100 open commitments are overdue/);
+
+  const light = weeklyRisk.assess(taskSnap({ commitments: group({ open: 100, overdue: 5 }) }));
+  assert.equal(light.findings.find(x => x.kind === 'commitment-backlog'), undefined,
+    'flagging a small number every week trains him to skip the section');
+});
+
+test('NEGATIVE: unclassified overdue work is neither counted as a commitment nor written off', () => {
+  const a = weeklyRisk.assess(taskSnap({
+    open: 50, overdue: 9,
+    commitments: group({ open: 10, overdue: 0 }),
+    unclassified: group({ open: 40, overdue: 9 }),
+  }));
+  // Not folded into the commitment finding...
+  assert.equal(a.findings.find(x => x.kind === 'commitment-backlog'), undefined);
+  // ...and not silently dropped either. It gets its own finding.
+  const f = a.findings.find(x => x.kind === 'task-unclassified');
+  assert.ok(f, 'nine overdue unclassified tasks must be surfaced, not absorbed');
+  assert.match(f.title, /9 overdue tasks are not classified/);
+
+  const md = weeklyRisk.render(a);
+  assert.match(md, /### Not yet classified/);
+  assert.match(md, /\*\*40\*\* open tasks/);
+  assert.match(md, /Treat the commitment figure as a floor/);
+});
+
+test('a fully classified list SAYS so — the absence of a caveat is itself a fact', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({
+    open: 20, commitments: group({ open: 12 }), improvement: group({ open: 8 }),
+  })));
+  assert.match(md, /### Not yet classified/);
+  assert.match(md, /every open task is marked/);
+  assert.doesNotMatch(md, /Treat the commitment figure as a floor/);
+});
+
+test("a proposed classification is declared as a guess, not as Nick's call", () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({
+    open: 20, commitments: group({ open: 20, overdue: 1 }), proposedCount: 14,
+  })));
+  assert.match(md, /14 of the classifications above were proposed automatically/);
+  assert.match(md, /have not yet been confirmed/);
 });
 
 test('closed is the previous FULL week, not a rolling seven days', () => {
-  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 10, overdue: 1, closedLastWeek: 5 })));
-  assert.match(md, /previous full week \(10 Aug 2026 to 16 Aug 2026\)/);
-  assert.match(md, /not a rolling seven days/);
+  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 10, closedLastWeek: 5 })));
+  assert.match(md, /10 Aug 2026 to 16 Aug 2026/);
+  assert.match(md, /rather than a rolling seven days/);
 });
 
 test('dropped is reported separately from done — a clear-out is not a productive week', () => {
-  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 10, overdue: 1, closedLastWeek: 4, droppedLastWeek: 30 })));
-  assert.match(md, /\| Dropped w\/c 10 Aug 2026 \| 30 \|/);
+  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 10, closedLastWeek: 4, droppedLastWeek: 30 })));
+  assert.match(md, /30 dropped/);
   assert.match(md, /Dropped is counted separately from done/);
-});
-
-test('a heavily overdue backlog is a finding; a light one is not', () => {
-  const heavy = weeklyRisk.assess(taskSnap({ open: 100, overdue: 40, closedLastWeek: 3 }));
-  const f = heavy.findings.find(x => x.kind === 'task-backlog');
-  assert.ok(f, 'expected a task-backlog finding at 40%');
-  assert.equal(f.severity, 'warn');
-  assert.match(f.title, /40 of 100 open tasks are overdue/);
-
-  const light = weeklyRisk.assess(taskSnap({ open: 100, overdue: 5, closedLastWeek: 3 }));
-  assert.equal(light.findings.find(x => x.kind === 'task-backlog'), undefined,
-    'flagging a small number every week trains him to skip the section');
 });
 
 test('unavailable task counts say so rather than rendering zeros', () => {
   const md = weeklyRisk.render(weeklyRisk.assess(baseSnapshot({ tasks: { available: false } })));
   assert.match(md, /Task counts unavailable/);
-  assert.doesNotMatch(md, /\| Open tasks \| \*\*0\*\*/);
+  assert.doesNotMatch(md, /Open commitments/);
 });
 
 test('no divide-by-zero on an empty task list', () => {
-  assert.doesNotThrow(() => weeklyRisk.render(weeklyRisk.assess(taskSnap({ open: 0, overdue: 0, closedLastWeek: 0 }))));
-  const a = weeklyRisk.assess(taskSnap({ open: 0, overdue: 0, closedLastWeek: 0 }));
-  assert.equal(a.findings.find(x => x.kind === 'task-backlog'), undefined);
+  assert.doesNotThrow(() => weeklyRisk.render(weeklyRisk.assess(taskSnap({}))));
+  const a = weeklyRisk.assess(taskSnap({}));
+  assert.equal(a.findings.find(x => x.kind === 'commitment-backlog'), undefined);
+  assert.equal(a.findings.find(x => x.kind === 'task-unclassified'), undefined);
 });
 
 test('the underscore italic form converts — render() uses it for every aside', () => {

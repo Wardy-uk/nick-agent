@@ -178,12 +178,40 @@ function manualBlockers(manual, overtimeStatus = null) {
 // ── Task position ────────────────────────────────────────────────────────────
 
 /**
- * Open / overdue / closed-last-week, from the task store.
+ * Open / overdue / closed-last-week, from the task store — SPLIT BY ORIGIN.
  *
- * "Closed last week" is the PREVIOUS Monday-to-Sunday, not a rolling 7 days.
- * The report is a weekly artefact with a fixed week boundary, and a rolling
- * window would quietly change what it counted depending on the hour it ran —
- * which is the one thing a figure sent to a manager must not do.
+ * ── Why the split ───────────────────────────────────────────────────────────
+ *
+ * This section used to count every open task together and lead on one overdue
+ * number, and that number was misleading in the one direction that costs most.
+ * The list holds two populations with nothing in common but a due date:
+ *
+ *   • COMMITMENTS — work somebody else asked for, or is waiting on. Missing one
+ *     is a fact about Nick's reliability to other people, and it is what
+ *     competencies 3 and 4 are actually measured on.
+ *   • CONTINUAL IMPROVEMENT — work Nick set himself to make the department
+ *     better. Nobody is waiting. One slipping is a fact about his own ambition.
+ *
+ * Counting them together makes the improvement backlog PENALISE him: a man who
+ * writes down thirty ideas and dates them optimistically reads, in a compliance
+ * report, exactly like a man who has broken thirty promises. So **overdue counts
+ * commitments only** (Nick, 1 Sep 2026), and the improvement figures are
+ * reported beside it as what they are — work in hand, not a breach.
+ *
+ * ── The unclassified bucket is never folded away ────────────────────────────
+ *
+ * Most of the list has no classification, because nothing in the store records
+ * who wanted the work (see shared/task-origin.cjs). Those rows are counted and
+ * NAMED as their own third bucket. Folding them into improvement would hide a
+ * broken promise from the report whose job is to surface them; folding them into
+ * commitments would invent broken promises out of Nick's own ideas. An overdue
+ * task nobody has classified is reported as exactly that — a number Nick has to
+ * resolve before the headline figure means anything.
+ *
+ * "Closed last week" is the PREVIOUS Monday-to-Sunday, not a rolling 7 days: the
+ * report is a weekly artefact with a fixed week boundary, and a rolling window
+ * would quietly change what it counted depending on the hour it ran — the one
+ * thing a figure sent to a manager must not do.
  *
  * `dropped` is counted separately from `done`. Both leave the open list, but
  * only one of them is work completed, and folding them together would let a
@@ -200,11 +228,40 @@ function taskCounts(week = weekCommencing()) {
     try { return db.get(sql, params)?.c ?? null; } catch { return null; }
   };
 
-  const open = one("SELECT COUNT(*) c FROM tasks WHERE status IN ('open','in-progress')");
+  // SQL rather than a JS filter over listTaskRows: these are counts over the
+  // whole table and the report runs at 07:30 on a Pi.
+  const OPEN = "status IN ('open','in-progress')";
+  // ⚠ `origin IS NULL` is the unclassified bucket and must be written out
+  // explicitly at every call site. `origin != 'commitment'` would be true of
+  // NULL in most databases and false of it in SQLite's three-valued logic — the
+  // sort of quiet disagreement that would put unclassified rows in whichever
+  // bucket happened to be tested for.
+  const group = (originSql) => {
+    const open = one(`SELECT COUNT(*) c FROM tasks WHERE ${OPEN} AND ${originSql}`);
+    const overdue = one(
+      `SELECT COUNT(*) c FROM tasks WHERE ${OPEN} AND ${originSql} AND due_date IS NOT NULL AND due_date < ?`,
+      [today],
+    );
+    // An open task with no due date cannot be overdue, but it also cannot be
+    // chased. Reported so "3 overdue" is not read as "everything else is on time".
+    const undated = one(`SELECT COUNT(*) c FROM tasks WHERE ${OPEN} AND ${originSql} AND due_date IS NULL`);
+    const closed = one(
+      `SELECT COUNT(*) c FROM tasks WHERE status = 'done' AND ${originSql} AND completed_at IS NOT NULL AND DATE(completed_at) BETWEEN ? AND ?`,
+      [lastWeekStart, lastWeekEnd],
+    );
+    return { open, overdue, undated, closedLastWeek: closed, available: open !== null };
+  };
+
+  const commitments = group("origin = 'commitment'");
+  const improvement = group("origin = 'improvement'");
+  const unclassified = group('origin IS NULL');
+
+  const open = one(`SELECT COUNT(*) c FROM tasks WHERE ${OPEN}`);
   const overdue = one(
-    "SELECT COUNT(*) c FROM tasks WHERE status IN ('open','in-progress') AND due_date IS NOT NULL AND due_date < ?",
+    `SELECT COUNT(*) c FROM tasks WHERE ${OPEN} AND due_date IS NOT NULL AND due_date < ?`,
     [today],
   );
+  const undated = one(`SELECT COUNT(*) c FROM tasks WHERE ${OPEN} AND due_date IS NULL`);
   const closed = one(
     "SELECT COUNT(*) c FROM tasks WHERE status = 'done' AND completed_at IS NOT NULL AND DATE(completed_at) BETWEEN ? AND ?",
     [lastWeekStart, lastWeekEnd],
@@ -213,16 +270,24 @@ function taskCounts(week = weekCommencing()) {
     "SELECT COUNT(*) c FROM tasks WHERE status = 'dropped' AND completed_at IS NOT NULL AND DATE(completed_at) BETWEEN ? AND ?",
     [lastWeekStart, lastWeekEnd],
   );
-  // An open task with no due date cannot be overdue, but it also cannot be
-  // chased. Reported so "3 overdue" is not read as "everything else is on time".
-  const undated = one(
-    "SELECT COUNT(*) c FROM tasks WHERE status IN ('open','in-progress') AND due_date IS NULL",
-  );
+  // How much of the split is still NEURO's guess rather than Nick's call. A
+  // report that presented proposals as decisions would be stating a machine's
+  // inference as his own judgement to the person assessing him.
+  const proposed = one(`SELECT COUNT(*) c FROM tasks WHERE ${OPEN} AND origin IS NOT NULL AND origin_proposed = 1`);
 
   return {
+    // Kept at the top level for every existing consumer, and because the whole
+    // list is still a true figure — it is the OVERDUE headline that had to stop
+    // being a single number, not the size of the backlog.
     open, overdue, undated,
     closedLastWeek: closed,
     droppedLastWeek: dropped,
+    commitments, improvement, unclassified,
+    proposedCount: proposed,
+    // The headline the assessment actually asks for. Null (not zero) when the
+    // query failed, so the report says it could not measure rather than
+    // reporting a clean week it never read.
+    overdueCommitments: commitments.overdue,
     lastWeek: { from: lastWeekStart, to: lastWeekEnd },
     // null anywhere means the query failed, and the report says so rather than
     // rendering a zero it did not measure.
@@ -689,16 +754,33 @@ function assess(snap) {
     }
   }
 
-  // Nick's own task position. A finding only when the overdue share is large
-  // enough to be the story — a couple of overdue items in a hundred is noise,
-  // and a report that flags it every week trains him to skip the section.
+  // Nick's own task position, and ONLY the commitments — work somebody else is
+  // waiting on. His own continual-improvement backlog running late is not a
+  // finding for a compliance report: nobody is expecting those, and flagging
+  // them would turn his ambition into a weekly black mark. A finding only when
+  // the overdue share is large enough to be the story, because a report that
+  // flags a couple of items every week trains him to skip the section.
   const tasks = snap?.tasks || null;
-  if (tasks?.available && tasks.open > 0 && tasks.overdue / tasks.open > 0.25) {
+  const commitments = tasks?.commitments;
+  if (commitments?.available && commitments.open > 0 && commitments.overdue / commitments.open > 0.25) {
     findings.push({
       severity: 'warn',
-      kind: 'task-backlog',
-      title: `${tasks.overdue} of ${tasks.open} open tasks are overdue`,
-      detail: `${Math.round((tasks.overdue / tasks.open) * 100)}% of the open list is past its due date. ${tasks.closedLastWeek} closed last week${tasks.droppedLastWeek ? `, ${tasks.droppedLastWeek} dropped` : ''}.`,
+      kind: 'commitment-backlog',
+      title: `${commitments.overdue} of ${commitments.open} open commitments are overdue`,
+      detail: `${Math.round((commitments.overdue / commitments.open) * 100)}% of the work other people are waiting on is past its due date. ${commitments.closedLastWeek} commitment(s) closed last week.`,
+    });
+  }
+  // Unclassified overdue work is its own finding, and deliberately NOT folded
+  // into the one above. Until Nick says which of these are promises, the
+  // headline overdue figure is incomplete — and a report that quietly counted
+  // them as improvement would be hiding a broken promise from the person whose
+  // job is to look for one.
+  if (tasks?.unclassified?.available && tasks.unclassified.overdue > 0) {
+    findings.push({
+      severity: 'warn',
+      kind: 'task-unclassified',
+      title: `${tasks.unclassified.overdue} overdue task${tasks.unclassified.overdue === 1 ? ' is' : 's are'} not classified`,
+      detail: 'Not counted as an overdue commitment, and not dismissed as improvement work either — until each is marked, the overdue figure above is a floor rather than the whole picture.',
     });
   }
 
@@ -1057,17 +1139,60 @@ function render(a) {
   lines.push('');
   if (a.tasks?.available) {
     const t = a.tasks;
+    const pct = (n, of) => (of ? ` (${Math.round((n / of) * 100)}%)` : '');
+    // Commitments FIRST and alone in the headline. The two populations answer
+    // different questions and the one this report exists for is "what are other
+    // people still waiting on?" — see taskCounts for the full argument.
+    lines.push('### Commitments — work others asked for or are waiting on');
+    lines.push('');
     lines.push('| Measure | Count |');
     lines.push('|---|---|');
     lines.push([
-      `| Open tasks | **${t.open}** |`,
-      `| Overdue | **${t.overdue}**${t.open ? ` (${Math.round((t.overdue / t.open) * 100)}%)` : ''} |`,
-      `| No due date | ${t.undated} |`,
-      `| Closed w/c ${formatUk(t.lastWeek.from)} | **${t.closedLastWeek}** |`,
-      t.droppedLastWeek ? `| Dropped w/c ${formatUk(t.lastWeek.from)} | ${t.droppedLastWeek} |` : null,
-    ].filter(Boolean).join('\n'));
+      `| Open commitments | **${t.commitments.open}** |`,
+      `| **Overdue** | **${t.commitments.overdue}**${pct(t.commitments.overdue, t.commitments.open)} |`,
+      `| No due date | ${t.commitments.undated} |`,
+      `| Closed w/c ${formatUk(t.lastWeek.from)} | **${t.commitments.closedLastWeek}** |`,
+    ].join('\n'));
     lines.push('');
-    lines.push(`_Closed counts the previous full week (${formatUk(t.lastWeek.from)} to ${formatUk(t.lastWeek.to)}), not a rolling seven days. Dropped is counted separately from done — both leave the list, only one is work finished._`);
+
+    lines.push('### Continual improvement — work I set myself');
+    lines.push('');
+    lines.push('| Measure | Count |');
+    lines.push('|---|---|');
+    lines.push([
+      `| Open improvement tasks | ${t.improvement.open} |`,
+      `| Past their target date | ${t.improvement.overdue}${pct(t.improvement.overdue, t.improvement.open)} |`,
+      `| No target date | ${t.improvement.undated} |`,
+      `| Closed w/c ${formatUk(t.lastWeek.from)} | **${t.improvement.closedLastWeek}** |`,
+    ].join('\n'));
+    lines.push('');
+    // The wording is doing real work here: these dates are self-imposed, and
+    // calling them "overdue" in a compliance report invites them to be read as
+    // missed promises. They are not.
+    lines.push('_These are self-set target dates on work nobody is waiting for. They are reported as capacity and direction, not as a compliance measure._');
+    lines.push('');
+
+    // ⚠ Never silently omitted when zero. "Everything is classified" is a fact
+    // worth stating, because its absence is what makes the commitment figure
+    // above complete.
+    lines.push('### Not yet classified');
+    lines.push('');
+    if (t.unclassified.open > 0) {
+      lines.push(`**${t.unclassified.open}** open task${t.unclassified.open === 1 ? '' : 's'} ${t.unclassified.open === 1 ? 'has' : 'have'} not been marked as either, of which **${t.unclassified.overdue}** ${t.unclassified.overdue === 1 ? 'is' : 'are'} past its due date.`);
+      lines.push('');
+      lines.push('> ⚠️ These are **not** counted in the overdue commitment figure above, and are **not** being written off as improvement work. Nothing in the task store records who asked for a piece of work, so the split is only as complete as the classification. Treat the commitment figure as a floor until this is zero.');
+    } else {
+      lines.push('None — every open task is marked as a commitment or as improvement work, so the figures above are the whole picture.');
+    }
+    lines.push('');
+
+    lines.push(`_Whole open list ${t.open}; ${t.closedLastWeek} closed and ${t.droppedLastWeek} dropped w/c ${formatUk(t.lastWeek.from)} (${formatUk(t.lastWeek.from)} to ${formatUk(t.lastWeek.to)}), a fixed week rather than a rolling seven days. Dropped is counted separately from done — both leave the list, only one is work finished._`);
+    if (t.proposedCount) {
+      // A proposal is NEURO's inference from provenance, not Nick's judgement,
+      // and the difference matters in a document that is signed.
+      lines.push('');
+      lines.push(`_${t.proposedCount} of the classifications above were proposed automatically from where the task came from and have not yet been confirmed._`);
+    }
   } else {
     lines.push('_Task counts unavailable._');
   }

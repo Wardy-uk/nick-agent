@@ -1140,3 +1140,56 @@
 .todo-household { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
 .todo-household input { width: 16px; height: 16px; }
 .todo-household-error { color: var(--danger, #ef4444); font-size: 12px; margin-left: 8px; }
+
+/* ── Origin: commitment or continual improvement ──────────────────────────────
+   Two real values, both shown — unlike the domain chip, where only the
+   exception is marked. Which one a task is changes what missing it means, and
+   the weekly report to Chris counts overdue commitments only.
+
+   ⚠ The two are told apart by more than hue: the commitment chip carries a
+   solid left border and the improvement one does not, so the distinction
+   survives a colour-blind reader and a greyscale print of the report. */
+.todo-origin-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: #7c2d12;
+  background: rgba(234, 88, 12, 0.13);
+  border-left: 3px solid rgba(234, 88, 12, 0.75);
+}
+
+.todo-origin-badge.improvement {
+  color: #3730a3;
+  background: rgba(99, 102, 241, 0.13);
+  border-left: none;
+  padding-left: 6px;
+}
+
+/* A proposal is NEURO's inference, not Nick's call. Dashed, so it reads as
+   provisional at a glance rather than only via the trailing '?'. */
+.todo-origin-badge.proposed {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.todo-origin-hint {
+  font-size: 11px;
+  color: var(--text-dim, #94a3b8);
+  font-style: italic;
+  margin-left: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .todo-origin-badge {
+    color: #fdba74;
+    background: rgba(234, 88, 12, 0.18);
+    border-left-color: rgba(251, 146, 60, 0.8);
+  }
+  .todo-origin-badge.improvement {
+    color: #c7d2fe;
+    background: rgba(129, 140, 248, 0.18);
+  }
+}

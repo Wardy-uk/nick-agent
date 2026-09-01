@@ -4,6 +4,7 @@ import useCachedFetch from '../useCachedFetch';
 import { duePresets } from '../../../shared/due-dates.cjs';
 import { msPlanBadge, recurrenceLabel } from '../../../shared/ms-task.cjs';
 import { domainBadge } from '../../../shared/task-domain.cjs';
+import { originBadge, ORIGINS, SHORT_LABELS, DESCRIPTIONS, LABELS } from '../../../shared/task-origin.cjs';
 import TimeFitCard from './TimeFitCard';
 import TaskDedupe from './TaskDedupe';
 import TaskBlocks, { BlockTimeControl } from './TaskBlocks';
@@ -74,6 +75,11 @@ const DOMAIN_OPTIONS = [
   { key: 'work', label: 'Work', desc: 'Can be blocked into the work diary and can appear in a briefing' },
   { key: 'personal', label: 'Personal', desc: 'Never blocked into the work diary, never sent to a work system' },
 ];
+
+// Commitment or continual improvement. The vocabulary comes from
+// shared/task-origin.cjs, never a copy — a second list is how a screen offers a
+// value the backend refuses. Only the button wording is local.
+const ORIGIN_OPTIONS = ORIGINS.map(key => ({ key, label: SHORT_LABELS[key], desc: DESCRIPTIONS[key] }));
 
 function MoscowReview({ onClose }) {
   const [tasks, setTasks] = useState([]);
@@ -250,6 +256,45 @@ function TaskControls({ todo, onPatch, busy, onRefresh }) {
             {opt.label}
           </button>
         ))}
+      </div>
+
+      {/* Did somebody ask for this, or did you decide to do it?
+
+          This is the only place the question can be answered, and it has to be
+          one tap, because the weekly risk report to Chris counts overdue
+          COMMITMENTS only — an unclassified task sits in neither bucket and
+          holds the headline figure back from being complete.
+
+          ⚠ A THIRD state is offered on purpose. `origin` is genuinely
+          three-valued: unset is not "improvement", and Clear is how you
+          disagree with a proposal without yet knowing the right answer. A pair
+          of buttons with no way back would make a wrong tap permanent. */}
+      <div className="todo-edit-group">
+        <span className="todo-edit-label">{todo.originProposed ? 'Asked of me?' : 'Origin'}</span>
+        {ORIGIN_OPTIONS.map(opt => (
+          <button
+            key={opt.key}
+            className={`todo-edit-btn ${todo.origin === opt.key ? 'active' : ''}`}
+            disabled={busy}
+            title={opt.desc}
+            onClick={() => onPatch({ origin: opt.key })}
+          >
+            {opt.label}
+          </button>
+        ))}
+        {todo.origin && (
+          <button
+            className="todo-edit-btn"
+            disabled={busy}
+            title="Back to unclassified — the weekly report counts it separately until you decide"
+            onClick={() => onPatch({ origin: null })}
+          >
+            Clear
+          </button>
+        )}
+        {todo.originProposed && (
+          <span className="todo-origin-hint">NEURO&rsquo;s guess &mdash; tap to confirm</span>
+        )}
       </div>
 
       <div className="todo-edit-group">
@@ -597,6 +642,19 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
               className="todo-domain-badge"
               title="Personal — never blocked into the work diary, never sent to a work system"
             >{domainBadge(todo)}</span>
+          )}
+          {/* ⚠ Unlike the domain chip above, BOTH values are shown and the
+              silent case is the unclassified one. Which of the two a task is
+              changes what missing it means, and neither is the overwhelming
+              majority. A trailing '?' marks a proposal NEURO inferred from
+              where the task came from, so a guess never reads as Nick's call. */}
+          {originBadge(todo) && (
+            <span
+              className={`todo-origin-badge ${todo.origin}${todo.originProposed ? ' proposed' : ''}`}
+              title={todo.originProposed
+                ? `Proposed as "${LABELS[todo.origin]}" from where this came from — not confirmed`
+                : DESCRIPTIONS[todo.origin]}
+            >{originBadge(todo)}</span>
           )}
           {todo.taskPriority && <span className="todo-priority-num">P{todo.taskPriority}</span>}
           {dueLabel && <span className={`todo-due ${overdue ? 'due-overdue' : ''}`}>{dueLabel}</span>}

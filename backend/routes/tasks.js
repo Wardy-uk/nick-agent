@@ -26,6 +26,12 @@ router.get('/', (req, res) => {
       // Absent means BOTH domains — never a default of 'work', which would hide
       // personal tasks from every existing caller of this route without saying so.
       domain: req.query.domain || null,
+      // Absent means EVERY origin, including the unclassified pile. ?origin=none
+      // asks for the unclassified rows alone — which is the review queue for the
+      // weekly report's third bucket, and the one thing a plain `origin=` value
+      // cannot express.
+      origin: req.query.origin && req.query.origin !== 'none' ? req.query.origin : null,
+      originUnset: req.query.origin === 'none',
       includeDone: req.query.status === 'all',
     });
     const q = (req.query.q || '').toLowerCase().trim();
@@ -51,7 +57,7 @@ router.get('/untriaged', (req, res) => {
 // POST /api/tasks — create (route 2: NEURO direct)
 router.post('/', (req, res) => {
   try {
-    const { text, moscow, priority, due_date, source, notes, origin_path, origin_line, estimateMinutes, estimateExact, domain } = req.body;
+    const { text, moscow, priority, due_date, source, notes, origin_path, origin_line, estimateMinutes, estimateExact, domain, origin } = req.body;
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'text is required' });
     const result = taskStore.createTask({
       text, moscow, priority, due_date, notes, origin_path, origin_line,
@@ -60,6 +66,10 @@ router.post('/', (req, res) => {
       // every new task its estimate once already; a dropped domain would file
       // every personal task as work and look like it had worked.
       domain,
+      // Commitment or continual improvement. Omitted means "let the classifier
+      // look at the provenance", which usually means unclassified — never a
+      // silent default, because the weekly report counts these separately.
+      origin,
       // createTask has always accepted this; the route's whitelist did not pass
       // it, so an estimate given at creation was dropped in silence and only a
       // later PATCH could set one. It decides how long a calendar block is, so

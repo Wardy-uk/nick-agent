@@ -386,6 +386,18 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- shared/task-domain.cjs for why unknown fails towards the visible one.
   domain TEXT NOT NULL DEFAULT 'work' CHECK(domain IN ('work', 'personal')),
   notes TEXT,
+  -- Whose idea was this: 'commitment' (somebody else asked, or is waiting on it)
+  -- or 'improvement' (Nick's own). NULL means NOT YET CLASSIFIED and is a real,
+  -- reported state — deliberately NOT defaulted, unlike `domain` above. The two
+  -- mistakes point in opposite directions and both are expensive in a report
+  -- read by the person assessing a PIP: guessing 'commitment' manufactures
+  -- broken promises out of Nick's own stretch goals, guessing 'improvement'
+  -- hides a real one. See shared/task-origin.cjs.
+  origin TEXT CHECK(origin IS NULL OR origin IN ('commitment', 'improvement')),
+  -- 1 = inferred from provenance, not a call Nick has made. Same contract as
+  -- moscow_proposed: a proposal is shown with a '?' and never counted as a
+  -- decision he made.
+  origin_proposed INTEGER NOT NULL DEFAULT 0,
   ms_id TEXT,
   -- Roughly how long this takes, in minutes. NULL means NOT ESTIMATED, and is
   -- deliberately distinguishable from a small number: "what fits before my next

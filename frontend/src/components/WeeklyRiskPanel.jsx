@@ -429,23 +429,58 @@ export default function WeeklyRiskPanel() {
         <h3>My task position</h3>
         {report.tasks?.available ? (
           <>
+            {/* Commitments first and alone in the headline overdue figure.
+                ⚠ This panel and render() must agree: the panel is what Nick
+                reads before pressing send, so a single whole-list "Overdue"
+                stat here would contradict the document he is about to sign. */}
+            <p className="wr-hint" style={{ marginTop: 0 }}>
+              Work others asked for or are waiting on
+            </p>
             <div className="wr-stats">
-              <Stat label="Open tasks" value={report.tasks.open} />
+              <Stat label="Open commitments" value={report.tasks.commitments.open} />
               <Stat
-                label="Overdue" value={report.tasks.overdue}
-                tone={report.tasks.open && report.tasks.overdue / report.tasks.open > 0.25 ? 'bad' : report.tasks.overdue ? 'warn' : 'good'}
-                sub={report.tasks.open ? `${Math.round((report.tasks.overdue / report.tasks.open) * 100)}% of open` : null}
+                label="Overdue" value={report.tasks.commitments.overdue}
+                tone={report.tasks.commitments.open && report.tasks.commitments.overdue / report.tasks.commitments.open > 0.25
+                  ? 'bad' : report.tasks.commitments.overdue ? 'warn' : 'good'}
+                sub={report.tasks.commitments.open ? `${Math.round((report.tasks.commitments.overdue / report.tasks.commitments.open) * 100)}% of open` : null}
               />
               <Stat
-                label="Closed last week" value={report.tasks.closedLastWeek}
-                tone={report.tasks.closedLastWeek ? 'good' : 'neutral'}
-                sub={report.tasks.droppedLastWeek ? `${report.tasks.droppedLastWeek} dropped` : null}
+                label="Closed last week" value={report.tasks.commitments.closedLastWeek}
+                tone={report.tasks.commitments.closedLastWeek ? 'good' : 'neutral'}
               />
-              <Stat label="No due date" value={report.tasks.undated} tone="neutral" sub="cannot be chased" />
+              <Stat label="No due date" value={report.tasks.commitments.undated} tone="neutral" sub="cannot be chased" />
             </div>
+
+            {/* Deliberately NOT toned as a warning at any level. These dates are
+                self-imposed on work nobody is waiting for, and colouring them
+                red is the report disagreeing with its own caveat. */}
+            <p className="wr-hint" style={{ marginTop: 16 }}>
+              Continual improvement — work I set myself
+            </p>
+            <div className="wr-stats">
+              <Stat label="Open" value={report.tasks.improvement.open} tone="neutral" />
+              <Stat label="Past target date" value={report.tasks.improvement.overdue} tone="neutral" sub="not a compliance measure" />
+              <Stat label="Closed last week" value={report.tasks.improvement.closedLastWeek} tone={report.tasks.improvement.closedLastWeek ? 'good' : 'neutral'} />
+              <Stat label="No target date" value={report.tasks.improvement.undated} tone="neutral" />
+            </div>
+
+            {/* ⚠ Never hidden when zero — "everything is classified" is what
+                makes the commitment figure above complete, and its absence is
+                the reader's only clue that it is not. */}
+            <p className="wr-hint" style={{ marginTop: 16 }}>
+              {report.tasks.unclassified.open > 0
+                ? `${report.tasks.unclassified.open} open task${report.tasks.unclassified.open === 1 ? '' : 's'} not yet marked as either${report.tasks.unclassified.overdue ? `, ${report.tasks.unclassified.overdue} of them overdue` : ''}. These are counted in neither figure above — treat the overdue commitment count as a floor until this is zero.`
+                : 'Every open task is marked as a commitment or as improvement work, so the figures above are the whole picture.'}
+            </p>
+            {report.tasks.proposedCount > 0 && (
+              <p className="wr-hint" style={{ marginTop: 6, marginBottom: 0 }}>
+                {report.tasks.proposedCount} of those classifications were proposed automatically from where the task came from and have not been confirmed.
+              </p>
+            )}
+
             <p className="wr-hint" style={{ marginTop: 12, marginBottom: 0 }}>
-              Closed counts the previous full week ({fmtUk(report.tasks.lastWeek.from)} to {fmtUk(report.tasks.lastWeek.to)}), not a rolling seven days.
-              Dropped is counted separately — both leave the list, only one is work finished.
+              Whole open list {report.tasks.open}. Closed counts the previous full week ({fmtUk(report.tasks.lastWeek.from)} to {fmtUk(report.tasks.lastWeek.to)}), not a rolling seven days.
+              Dropped is counted separately{report.tasks.droppedLastWeek ? ` (${report.tasks.droppedLastWeek} dropped)` : ''} — both leave the list, only one is work finished.
             </p>
           </>
         ) : <p className="wr-empty">Task counts unavailable.</p>}
