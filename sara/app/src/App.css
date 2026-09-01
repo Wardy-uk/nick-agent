@@ -266,22 +266,32 @@ body {
 }
 
 /* ── The scrollbar ──────────────────────────────────────────────────────────
+   Nick, 1 Sep 2026: "if there is a scroll bar, at least make it look like its
+   part of SARA."
+
    ⚠ It is not spurious — the surface genuinely overflows once the agenda, the
    sentences, the held items and the ambient lines are all on screen, and
    scrolling is the correct answer to that. What was wrong is that it arrived as
-   a full-fat Windows scrollbar: a grey shaft with arrow buttons, drawn straight
-   over her field, roughly as loud as the words.
+   a full-fat Windows scrollbar: a grey shaft with stepper arrows, drawn over
+   her field, about as loud as the words.
 
-   So it is thinned rather than hidden. Hiding it would make a scrollable
-   surface look unscrollable, which is worse — this screen already asks Nick to
-   believe that what is on it is everything there is. */
+   So it is made of the FIELD rather than of the operating system: the thumb is
+   the same rgb(150,190,240) her nodes are drawn in, translucent, with no track
+   and no arrows — a brighter node in the substrate rather than a control
+   bolted to the edge of it.
+
+   ⚠ THINNED, NOT HIDDEN. Hiding it would make a scrollable surface look
+   unscrollable, which is worse on the one screen that already asks Nick to
+   believe what is on it is everything there is. */
 .app__view {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+  /* Firefox and the standard property: thumb, then track. `transparent` for the
+     track is what removes the grey shaft. */
+  scrollbar-color: rgba(150, 190, 240, 0.22) transparent;
 }
 
 .app__view::-webkit-scrollbar {
-  width: 8px;
+  width: 10px;
 }
 
 .app__view::-webkit-scrollbar-track {
@@ -289,21 +299,36 @@ body {
 }
 
 .app__view::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(150, 190, 240, 0.2);
   border-radius: 999px;
-  /* Inset from the edge so it floats over the field rather than butting
-     against the frame. */
-  border: 2px solid transparent;
+  /* A transparent border plus `background-clip: content-box` insets the thumb
+     from the frame, so it floats over the field rather than butting against the
+     edge. This is the trick that makes it read as part of the substrate. */
+  border: 3px solid transparent;
   background-clip: content-box;
 }
 
-.app__view::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.26);
+.app__view:hover::-webkit-scrollbar-thumb {
+  background: rgba(150, 190, 240, 0.34);
+  background-clip: content-box;
+}
+
+.app__view::-webkit-scrollbar-thumb:active {
+  background: rgba(150, 190, 240, 0.48);
   background-clip: content-box;
 }
 
 /* Chromium draws stepper arrows on Windows by default — two more grey boxes
-   nobody uses on a touch-first surface. */
+   nobody presses on a touch-first surface, and the loudest part of the whole
+   control. */
 .app__view::-webkit-scrollbar-button {
   display: none;
+  height: 0;
+  width: 0;
+}
+
+/* The little square where two scrollbars would meet. There is never a
+   horizontal one here, and left alone it renders as a grey chip in the corner. */
+.app__view::-webkit-scrollbar-corner {
+  background: transparent;
 }
