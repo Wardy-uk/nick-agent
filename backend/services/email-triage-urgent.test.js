@@ -585,3 +585,39 @@ test('force skips the fingerprint check, not the classification cache', async ()
     aiProvider.triageEmails = realTriage;
   }
 });
+
+// A provider that is down, refusing, or out of credit returns no text. That
+// used to become an empty array — indistinguishable from the model reading the
+// batch and classifying nothing — so whole runs came back unanswered with no
+// error anywhere (found live 1 Sep 2026: the Anthropic key had no credit).
+test('a provider that answers nothing is a failed batch, not an empty verdict', async () => {
+  const microsoft = require('./microsoft');
+  const aiProvider = require('./ai-provider');
+  const realFetch = microsoft.fetchRecentEmailsDetailed;
+  const realAuth = microsoft.isAuthenticated;
+  const realTriage = aiProvider.triageEmails;
+  microsoft.isAuthenticated = async () => true;
+  microsoft.fetchRecentEmailsDetailed = async () => ({ emails: inbox(2), complete: true });
+  try {
+    seed([]);
+    db.setState('email_triage_input', '');
+    aiProvider.triageEmails = async () => ({ text: '', provider: 'none' });
+    await emailTriage.runTriage({ force: true });
+    let stored = JSON.parse(db.getState('email_triage'));
+    assert.equal(stored.filter(e => e.aiClassified).length, 0);
+    assert.ok(stored.every(e => e.aiCategory === null), 'no answer is null, never a category');
+
+    // Truncated by the token budget: no closing bracket, so it is a cut-off
+    // answer rather than an empty one.
+    seed([]);
+    db.setState('email_triage_input', '');
+    aiProvider.triageEmails = async () => ({ text: '[{"index": 0, "category": "ACT', provider: 'stub' });
+    await emailTriage.runTriage({ force: true });
+    stored = JSON.parse(db.getState('email_triage'));
+    assert.equal(stored.filter(e => e.aiClassified).length, 0, 'half an answer is no answer');
+  } finally {
+    microsoft.fetchRecentEmailsDetailed = realFetch;
+    microsoft.isAuthenticated = realAuth;
+    aiProvider.triageEmails = realTriage;
+  }
+});

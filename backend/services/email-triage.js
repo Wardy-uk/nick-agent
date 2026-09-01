@@ -72,11 +72,25 @@ Respond with ONLY a JSON array. Format: [{"index": 0, "category": "ACTION", "rea
 
 Classify these ${batch.length} emails:\n\n${emailList}`
   );
-  if (!result.text) return [];
+  // Both of these used to return an EMPTY ARRAY, which is the silent failure
+  // this file keeps having to relearn: no answer and "the model read them and
+  // said nothing" are the same value, so a provider that is down, refusing or
+  // out of credit reads as a batch that was successfully classified as
+  // nothing. Throwing puts it through the failed-batch path instead, where it
+  // is counted and logged. Found live 1 Sep 2026: the Anthropic key is out of
+  // credit, so whole runs came back 663/663 unanswered with no error anywhere.
+  if (!result.text) {
+    throw new Error(`no text from ${result.provider || 'any provider'}`);
+  }
 
   const clean = result.text.replace(/```json|```/g, '').trim();
   const jsonMatch = clean.match(/\[[\s\S]*\]/);
-  const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : '[]');
+  // A reply truncated by the token budget has no closing bracket, so the match
+  // fails — that is a cut-off answer, not an empty one.
+  if (!jsonMatch) {
+    throw new Error(`unparseable answer from ${result.provider || 'unknown'} (${clean.length} chars)`);
+  }
+  const parsed = JSON.parse(jsonMatch[0]);
   console.log(`[EmailTriage] Classified ${batch.length} via ${result.provider}`);
   // Batch-local indices become global ones here, so the caller never has to
   // know the batching happened.
