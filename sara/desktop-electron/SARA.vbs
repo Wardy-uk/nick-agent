@@ -18,17 +18,22 @@
 '      launcher would flash its own window before hiding it, and a shortcut set
 '      to "Minimized" still puts an item in the taskbar.
 '
-' Environment is INHERITED, so SARA_URL is honoured exactly as it is from a
-' console — set it in the user environment (or in the shortcut) rather than
-' baking a URL in here, because this file is committed to a public repo and the
-' desktop shell points at whichever surface Nick wants that day.
+' ⚠ The URL is an ARGUMENT, not a constant. This file is committed to a public
+' repo and the desktop shell points at whichever surface Nick wants that day —
+' the phone build on sara.nickward.co.uk, or the kiosk on localhost:3005. A
+' shortcut cannot set an environment variable, which is exactly why the old one
+' went through `cmd /c "set SARA_URL=... && npm start"` and dragged a console
+' along with it. Taking it as an argument removes the reason cmd was there.
 '
-' Usage: double-click, or make a shortcut to it and give it
-'        `sara/desktop/sara-desktop.ico`.
+' Usage:
+'   wscript.exe "…\SARA.vbs"                          -> main.js default (:3005)
+'   wscript.exe "…\SARA.vbs" "https://sara.nickward.co.uk"
+'
+' Make a shortcut to that and give it `sara/desktop/sara-desktop.ico`.
 
 Option Explicit
 
-Dim shell, fso, here, electron, args
+Dim shell, fso, here, electron, args, url
 
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -51,8 +56,21 @@ If Not fso.FileExists(electron) Then
   WScript.Quit 1
 End If
 
-' `.` is the app directory — main.js sits beside this script.
+' ⚠ Set on the PROCESS environment, which the child inherits. This is the whole
+' trick: it does what `set SARA_URL=... &&` did in the old shortcut, without
+' needing a shell to do it in. Absent, main.js falls back to its own default.
+If WScript.Arguments.Count > 0 Then
+  url = Trim(WScript.Arguments(0))
+  If Len(url) > 0 Then
+    shell.Environment("PROCESS")("SARA_URL") = url
+  End If
+End If
+
+' `here` is the app directory — main.js sits beside this script.
 args = """" & electron & """ """ & here & """"
 
-' 0 = no window, False = do not wait. Both are load-bearing.
+' 0 = no window, False = do not wait. Both are load-bearing: 0 is why no console
+' is created, False is why this script exits instead of sitting there as a
+' parent process for as long as SARA is open — which is precisely what cmd.exe
+' was doing.
 shell.Run args, 0, False
