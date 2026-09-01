@@ -32,6 +32,22 @@ function todayDateString() {
 // parser did not recognise would arrive on a card as a literal plan name.
 const PLAN_UNKNOWN_HEADING = '(plan unknown)';
 
+// How often a Microsoft task recurs, carried onto its mirror line.
+//
+// ⚠ An HTML COMMENT, never text on the line — `parseTaskLine` strips comments
+// out of the display text, so this cannot land in the task's own wording and
+// from there in its dedupe key. That is the same rule the plan name follows by
+// living in a `### ` heading (17/27 Aug), for the same reason.
+//
+// Placed BEFORE the `<!--id:-->` comment, which several editors anchor to the
+// end of the line (`setTaskPercent`, `setTaskFields`). The token vocabulary is
+// `shared/ms-task.cjs`'s, so the writer here and every reader agree by
+// construction rather than by two copies staying in step.
+function recComment(recurrence) {
+  const token = require('../../shared/ms-task.cjs').recurrenceToken(recurrence);
+  return token ? ` <!--rec:${token}-->` : '';
+}
+
 // Daily notes
 function readTodayDailyNote() {
   const notePath = path.join(getVaultPath(), 'Daily', `${todayDateString()}.md`);
@@ -595,6 +611,12 @@ function parseTaskLine(line) {
   const msIdMatch = rawText.match(/<!--id:(.*?)-->/);
   if (msIdMatch) ms_id = msIdMatch[1];
 
+  // How often it recurs, if it does. Null is the common case and means "does not
+  // recur" — deliberately NOT the same as the `repeats` token, which means it
+  // comes back on a pattern NEURO could not name. See shared/ms-task.cjs.
+  const recMatch = rawText.match(/<!--rec:(.*?)-->/);
+  const recurrence = recMatch ? recMatch[1].trim() || null : null;
+
   // Clean up display text
   let text = rawText
     .replace(/<!--nuero-meta:\{.*?\}-->/g, '')            // Remove embedded task metadata
@@ -631,6 +653,7 @@ function parseTaskLine(line) {
     priority: triage.priority || null,
     due_date,
     ms_id,
+    recurrence,
     mustdo,
     source: null,
     meta,
@@ -1175,7 +1198,7 @@ function setTaskPercent(filePath, lineNumber, percent, expectedId = null) {
 
   // Everything from the due date or the id comment onward is the tail; the
   // marker goes before it.
-  const tailAt = body.search(/\s*(?:📅|<!--id:)/);
+  const tailAt = body.search(/\s*(?:📅|<!--rec:|<!--id:)/);
   const head = (tailAt === -1 ? body : body.slice(0, tailAt)).trimEnd();
   const tail = tailAt === -1 ? '' : body.slice(tailAt);
 
@@ -1240,6 +1263,14 @@ function setTaskFields(filePath, lineNumber, fields = {}, expectedId = null) {
   const idPart = idComment ? idComment[0].trim() : '';
   if (idComment) body = body.slice(0, idComment.index);
 
+  // The recurrence marker survives a rename the same way the id does. It is a
+  // fact about the Microsoft task, not about its wording — and `title` below
+  // strips every comment, so without pulling it out first an edit would silently
+  // drop it and the card would stop saying the task comes back.
+  const recComment = /\s*<!--rec:[^>]*?-->\s*$/.exec(body);
+  const recPart = recComment ? recComment[0].trim() : '';
+  if (recComment) body = body.slice(0, recComment.index);
+
   const dueMatch = /\s*📅\s*\d{4}-\d{2}-\d{2}/.exec(body);
   let duePart = dueMatch ? dueMatch[0].trim() : '';
   if (dueMatch) body = body.slice(0, dueMatch.index) + body.slice(dueMatch.index + dueMatch[0].length);
@@ -1267,7 +1298,7 @@ function setTaskFields(filePath, lineNumber, fields = {}, expectedId = null) {
     duePart = fields.dueDate ? `📅 ${fields.dueDate}` : '';
   }
 
-  const rebuilt = [title + pctPart + impPart, duePart, idPart].filter(Boolean).join(' ');
+  const rebuilt = [title + pctPart + impPart, duePart, recPart, idPart].filter(Boolean).join(' ');
   lines[lineNumber] = `${m[1]}${rebuilt}${cr}`;
 
   fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
@@ -1807,7 +1838,7 @@ async function syncMicrosoftTasks() {
           if (heldIds.has(t.id)) { heldSkipped++; continue; }
           const due = t.dueDateTime ? ` 📅 ${t.dueDateTime.split('T')[0]}` : '';
           const pct = t.percentComplete > 0 ? ` (${t.percentComplete}%)` : '';
-          lines.push(`- [ ] ${t.title}${pct}${due} <!--id:${t.id}-->`);
+          lines.push(`- [ ] ${t.title}${pct}${due}${recComment(t.recurrence)} <!--id:${t.id}-->`);
           plannerCount++;
         }
         lines.push('');
@@ -1846,7 +1877,7 @@ async function syncMicrosoftTasks() {
             if (heldIds.has(t.id)) { heldSkipped++; continue; }
             const due = t.dueDateTime?.dateTime ? ` 📅 ${t.dueDateTime.dateTime.split('T')[0]}` : '';
             const imp = t.importance === 'high' ? ' ⚡' : '';
-            lines.push(`- [ ] ${t.title}${imp}${due} <!--id:${t.id}-->`);
+            lines.push(`- [ ] ${t.title}${imp}${due}${recComment(t.recurrence)} <!--id:${t.id}-->`);
             todoCount++;
           }
           lines.push('');

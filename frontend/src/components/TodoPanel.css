@@ -1009,6 +1009,35 @@
 }
 
 /* Shown when the vault line toggled but Microsoft refused the push */
+/* A recurring Microsoft task. Deliberately NOT styled as a warning: it is a
+   neutral fact about the task, and it is the fact that explains why completing
+   it does not make it go away. */
+.todo-recurring {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(92, 100, 120, 0.08);
+  white-space: nowrap;
+}
+
+/* The completion LANDED and the task rolled to its next occurrence. Blue, not
+   amber: `.todo-ms-warning` above means Microsoft refused the push, and reading
+   these two the same way is how "it worked" and "it failed" become one message. */
+.todo-ms-recurred {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.28);
+  color: #7fb0f5;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
 .todo-ms-warning {
   margin-bottom: 12px;
   padding: 8px 12px;

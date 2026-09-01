@@ -1065,6 +1065,9 @@ async function completeTodoTask(taskId, listId = null) {
     token
   );
 
+  // The list the PATCH actually landed on — not necessarily `resolved`, since the
+  // 404 branch below re-walks. The re-read at the end has to ask the same list.
+  let patchedList = resolved;
   let result = await patch(resolved);
   // A cached list survives restarts now, so it can also be WRONG across them —
   // move a task between lists and the stored mapping points at nothing. That
@@ -1074,6 +1077,7 @@ async function completeTodoTask(taskId, listId = null) {
     _forgetTodoList(taskId);
     const rewalked = await _resolveTodoList(taskId, token, { skipCache: true });
     if (!rewalked) return { completed: false, reason: 'list_not_found' };
+    patchedList = rewalked;
     result = await patch(rewalked);
   }
   if (!result.ok) {
@@ -1081,7 +1085,43 @@ async function completeTodoTask(taskId, listId = null) {
     return { completed: false, reason: result.reason };
   }
   console.log(`[ToDo] Completed ${taskId}`);
-  return { completed: true, kind: 'todo' };
+
+  // ⚠ A RECURRING task is not finished by being completed.
+  //
+  // Graph takes the PATCH, closes THAT OCCURRENCE, and rolls the SAME task id
+  // forward: `status` back to `notStarted`, `dueDateTime` advanced by one
+  // interval. The next mirror sync then reads it from Graph as open and writes
+  // it straight back into `Tasks/Microsoft Tasks.md` — so from Nick's side a
+  // completion that worked perfectly is indistinguishable from one NEURO lost.
+  // Three of his monthly To Do tasks are months in arrears, so each tick moves
+  // them one month and they come back; he ticked one three times in three days
+  // before anything said why (1 Sep 2026).
+  //
+  // So the task is READ BACK, and the roll is reported rather than inferred.
+  // Deliberately a second GET rather than trusting the PATCH response: whether
+  // the roll is reflected in the response body is Graph's business and could
+  // change, while "go and look at what is there now" cannot be wrong.
+  //
+  // NEVER allowed to fail the completion. The occurrence IS closed by the time
+  // this runs; a failed re-read means "we could not tell you what happened
+  // next", not "that did not work" — so it returns completed with `rolled: null`
+  // and the caller says nothing rather than something untrue.
+  let rolled = null;
+  try {
+    const after = await graphFetch(`/me/todo/lists/${patchedList}/tasks/${encodeURIComponent(taskId)}`, token);
+    if (after && after.status && after.status !== 'completed') {
+      rolled = {
+        nextDue: after.dueDateTime?.dateTime ? after.dueDateTime.dateTime.split('T')[0] : null,
+        recurrence: require('../../shared/ms-task.cjs').recurrenceToken(after.recurrence),
+        status: after.status,
+      };
+      console.log(`[ToDo] ${taskId} recurred — next due ${rolled.nextDue || 'unknown'}`);
+    }
+  } catch (e) {
+    console.warn(`[ToDo] Could not re-read ${taskId} after completing: ${e.message}`);
+  }
+
+  return { completed: true, kind: 'todo', rolled };
 }
 
 // Planner PATCHes are optimistically concurrent — Graph rejects them without a

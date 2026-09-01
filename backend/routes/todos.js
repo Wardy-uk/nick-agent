@@ -7,6 +7,7 @@ const todoIntelligence = require('../services/todo-intelligence');
 const taskStore = require('../services/task-store');
 const microsoft = require('../services/microsoft');
 const msQueue = require('../services/ms-push-queue');
+const msTask = require('../../shared/ms-task.cjs');
 
 // How many pending capture_todo suggestions the todos payload will carry. The
 // queue hit 930 in August and collapsed to single figures once #108 made it
@@ -112,6 +113,10 @@ router.get('/', (req, res) => {
       // the card says nothing rather than naming a board NEURO could not read.
       msPlan: t.msPlan || null,
       msSource: t.msSource || null,
+      // Whether Microsoft brings this one back. Completing a recurring task
+      // closes the occurrence and rolls the same task forward, so a card that
+      // does not say so reads as a completion that failed — see shared/ms-task.
+      recurrence: t.recurrence || null,
       mustdo: t.mustdo || false,
       vault_task: true,
       filePath: t.filePath || null,
@@ -219,6 +224,7 @@ router.get('/focus', async (req, res) => {
         ms_id: t.ms_id || null,
         msPlan: t.msPlan || null,
         msSource: t.msSource || null,
+        recurrence: t.recurrence || null,
         vault_task: true,
         filePath: t.filePath || null,
         lineNumber: t.lineNumber != null ? t.lineNumber : null,
@@ -547,7 +553,41 @@ router.post('/complete-ms', async (req, res) => {
 
     const result = await microsoft.completeMicrosoftTask(msId, source, listId || null);
     if (result.completed) {
-      return res.json({ ok: true, pushed: result.kind || 'graph' });
+      // ⚠ A recurring task is NOT finished by being completed. Microsoft closes
+      // the occurrence and rolls the same task id forward — status back to
+      // notStarted, due date advanced — so the next mirror sync reads it as open
+      // and writes it back. Ticked, gone, back an hour later: exactly what a
+      // LOST completion looks like, which is how three of these got ticked over
+      // and over (1 Sep 2026).
+      //
+      // The tick did something real, so it is not undone — but the mirror is
+      // repainted to what Microsoft now holds rather than left claiming a state
+      // Graph does not agree with. Leaving it ticked would be NEURO showing the
+      // wrong answer for up to half an hour and then appearing to lose it.
+      if (result.rolled && filePath && lineNumber != null) {
+        try {
+          // Back to open: this is a repaint of Microsoft's truth, not a rollback
+          // of Nick's action.
+          obsidian.toggleTask(filePath, lineNumber);
+          if (result.rolled.nextDue) {
+            // The due date moved with the occurrence. Without this the line
+            // keeps the old one and the card goes on reporting an overdue that
+            // is no longer real — the 184-days-overdue figure that made this
+            // look like a stuck task rather than a recurring one.
+            obsidian.setTaskFields(filePath, lineNumber, { dueDate: result.rolled.nextDue }, msId);
+          }
+        } catch (e) {
+          console.warn('[Todos] Could not repaint the rolled mirror line:', e.message);
+        }
+      }
+      return res.json({
+        ok: true,
+        pushed: result.kind || 'graph',
+        // Null for the ordinary case, so a client can treat its presence as the
+        // whole signal: this task is still open and here is why.
+        rolled: result.rolled || null,
+        notice: msTask.rolledNotice(result.rolled || null),
+      });
     }
 
     // Graph refused — fall back to the Power Automate flow.

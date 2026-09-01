@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { apiUrl } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import { duePresets } from '../../../shared/due-dates.cjs';
-import { msPlanBadge } from '../../../shared/ms-task.cjs';
+import { msPlanBadge, recurrenceLabel } from '../../../shared/ms-task.cjs';
 import { domainBadge } from '../../../shared/task-domain.cjs';
 import TimeFitCard from './TimeFitCard';
 import TaskDedupe from './TaskDedupe';
@@ -818,6 +818,15 @@ function MustMoveLane({ items, toggling, onToggle, onSetWip }) {
                 {/* The lane names no source, so for a Microsoft row this is the
                     only thing on the card saying whose board the work is on. */}
                 {msPlanBadge(item) && <span className="todo-tag todo-ms-plan" title="Microsoft board / list">{msPlanBadge(item)}</span>}
+                {/* A recurring task comes BACK when you complete it — Microsoft
+                    closes the occurrence and rolls the same task forward. Saying
+                    so is the difference between "it reappeared" and "NEURO lost
+                    my tick". */}
+                {recurrenceLabel(item) && (
+                  <span className="todo-tag todo-recurring" title="Recurring — completing this closes one occurrence and rolls it forward">
+                    &#8635; {recurrenceLabel(item)}
+                  </span>
+                )}
                 {typeof item.ageDays === 'number' && item.ageDays > 0 && (
                   <span className="todo-tag todo-tag-age">{item.ageDays}d old</span>
                 )}
@@ -869,6 +878,10 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   const [subFilters, setSubFilters] = useState([]);
   const [toggling, setToggling] = useState({});
   const [msPushWarning, setMsPushWarning] = useState(null);
+  // Not a warning: the push LANDED. The task is open again because it recurs,
+  // which is a different fact from "Microsoft would not take it" and has to read
+  // differently or the two get conflated into "it didn't work".
+  const [msRolledNotice, setMsRolledNotice] = useState(null);
   // A tick that was held for a write-up. Shown rather than swallowed: a task
   // that silently refuses to complete is far worse than no hold at all, and it
   // is the one moment Nick needs to be told which note to go and write.
@@ -1139,6 +1152,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
     setToggling(prev => ({ ...prev, [key]: true }));
     try {
       let res;
+      let rolled = null;
       if (todo.ms_id && (todo.source === 'MS Planner' || todo.source === 'MS ToDo')) {
         res = await fetch(apiUrl('/api/todos/complete-ms'), {
           method: 'POST',
@@ -1153,6 +1167,12 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         // Vault is toggled either way, but say so when Microsoft didn't take it.
         const data = await res.clone().json().catch(() => ({}));
         setMsPushWarning(data.warning || null);
+        // A recurring task rolled forward instead of closing. The server has
+        // already repainted the mirror line to what Microsoft now holds, so the
+        // row must NOT be painted done here — showing a tick that the next
+        // refresh removes is precisely how this looked like a lost completion.
+        rolled = data.rolled || null;
+        setMsRolledNotice(rolled ? (data.notice || null) : null);
       } else {
         res = await fetch(apiUrl('/api/todos/toggle'), {
           method: 'POST',
@@ -1160,8 +1180,8 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           body: JSON.stringify({ filePath: todo.filePath, lineNumber: todo.lineNumber })
         });
       }
-      if (res.ok) setLocalDone(prev => ({ ...prev, [key]: todo.done ? 0 : 1 }));
-      else console.error('[TodoPanel] Toggle failed:', res.status);
+      if (res.ok && !rolled) setLocalDone(prev => ({ ...prev, [key]: todo.done ? 0 : 1 }));
+      else if (!res.ok) console.error('[TodoPanel] Toggle failed:', res.status);
       // Small delay to let vault cache invalidate before refetch
       await new Promise(r => setTimeout(r, 300));
       if (mode === 'focused') refreshFocus();
@@ -1212,6 +1232,12 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         {msPushWarning && (
           <div className="todo-ms-warning" onClick={() => setMsPushWarning(null)}>
             Marked done here, but not in Microsoft — {msPushWarning}
+          </div>
+        )}
+
+        {msRolledNotice && (
+          <div className="todo-ms-recurred" onClick={() => setMsRolledNotice(null)}>
+            {msRolledNotice}
           </div>
         )}
 
@@ -1404,6 +1430,11 @@ export default function TodoPanel({ focusContext, onClearContext }) {
       {msPushWarning && (
         <div className="todo-ms-warning" onClick={() => setMsPushWarning(null)}>
           Marked done here, but not in Microsoft — {msPushWarning}
+        </div>
+      )}
+      {msRolledNotice && (
+        <div className="todo-ms-recurred" onClick={() => setMsRolledNotice(null)}>
+          {msRolledNotice}
         </div>
       )}
       {holdNotice && <HoldNotice notice={holdNotice} onDismiss={() => setHoldNotice(null)} />}

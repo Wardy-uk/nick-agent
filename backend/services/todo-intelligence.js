@@ -257,6 +257,9 @@ function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5, opts = {
       // does. Null when unknown — never a stand-in for "we could not read it".
       msPlan: task.msPlan || null,
       msSource: task.msSource || null,
+      // Recurring tasks come BACK by design; a lane row that does not say so
+      // reads as a completion NEURO lost.
+      recurrence: task.recurrence || null,
       text: task.text,
       priority: task.priority,
       moscow: task.moscow,
