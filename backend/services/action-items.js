@@ -10,6 +10,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const vaultExclusions = require('./vault-exclusions');
 
 const VAULT_PATH = () => process.env.OBSIDIAN_VAULT_PATH || '';
 
@@ -111,12 +112,40 @@ function findActionItems({ person, status = 'open', daysBack = 90 } = {}) {
     if (!fs.existsSync(dir)) continue;
     const files = walkDir(dir, 4);
     for (const file of files) {
+      const rel = path.relative(vault, file).replace(/\\/g, '/');
+
+      // ⚠ The one exclude list, applied here too — it was not, and the
+      // consequence was that this endpoint's numbers meant nothing.
+      //
+      // Measured on the live vault, 1 Sep 2026: 3,218 open action items, of
+      // which 307 carried a past due date. Only 84 of those were real. The
+      // rest were:
+      //
+      //   1,055 rows from Tasks/Archive — files DELIBERATELY retired (the
+      //         Master Todo and the eleven superseded MoSCoW worksheets,
+      //         archived in #46/#27 precisely so nothing would read them).
+      //     233 rows from "NEURO Tasks (export).md" and a Syncthing conflict
+      //         copy of it — a read-only MIRROR of the tasks table, so every
+      //         task was counted a second and third time as though it were a
+      //         separate commitment.
+      //    ~128 rows from FIVE .sync-conflict- copies of the Microsoft
+      //         mirror, counting the same twenty-odd tasks five times over.
+      //
+      // fileIsRecent could not save it: Syncthing rewrites mtimes, so a note
+      // retired in July looks like it was touched this morning. And nothing
+      // downstream could tell — a consumer asking "how many commitments are
+      // past their date" got a plausible number four times too big, which is
+      // the shape this codebase keeps meeting (the stale Jira cache; the
+      // MoSCoW worksheets still holding 36 entity rows after retirement).
+      // VANTAGE was reporting the 307 to Nick as broken promises.
+      if (vaultExclusions.isExcludedPath(rel)) continue;
+
       if (!fileIsRecent(file, daysBack)) continue;
       let content;
       try { content = fs.readFileSync(file, 'utf-8'); } catch { continue; }
       const lines = content.split('\n');
       for (let i = 0; i < lines.length; i++) {
-        const action = parseActionLine(lines[i], path.relative(vault, file).replace(/\\/g, '/'), i + 1);
+        const action = parseActionLine(lines[i], rel, i + 1);
         if (!action) continue;
 
         if (status === 'open' && action.done) continue;
