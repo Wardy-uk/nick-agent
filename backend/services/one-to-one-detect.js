@@ -518,8 +518,23 @@ function cadenceState({ lastHeld, nextDue, booked, bookable = true } = {}, today
     }
     // A note dated on or after the booking proves it happened; the booking is
     // spent and syncPeopleNotes will clear it. Until then it is unwritten.
+    //
+    // ⚠ A booking is a SCHEDULE, never evidence of attendance — nothing here knows
+    // whether the meeting took place. So this state must not be phrased as "met", and
+    // it must not SWALLOW the overdue fact either: a stale booking over a months-wide
+    // gap otherwise masks a genuinely overdue 1-2-1 completely. Live on 1 Sep 2026,
+    // Sebastian Broome's 21 Aug booking hid the fact that he had not actually been
+    // seen since 17 Jun. `daysOverdue` is null when the cadence date has NOT passed —
+    // the ordinary case of a meeting last week that simply is not written up yet.
     if (!lastHeld || lastHeld < booked) {
-      return { state: 'unwritten', booked, daysSince: daysBetween(booked, now) };
+      const overdueBy = nextDue ? daysBetween(now, nextDue) : null;
+      return {
+        state: 'unwritten',
+        booked,
+        daysSince: daysBetween(booked, now),
+        nextDue: nextDue || null,
+        daysOverdue: overdueBy !== null && overdueBy < 0 ? Math.abs(overdueBy) : null,
+      };
     }
   }
 

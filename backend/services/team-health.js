@@ -123,13 +123,22 @@ function analysePerson({ name, team }) {
         meta: { dueDate: s.nextDue, daysOverdue: s.daysOverdue },
       });
     } else if (s.state === 'unwritten') {
-      // Not an overdue 1-2-1 — a missing write-up, or a cancellation nobody
-      // recorded. Different problem, different fix, so it gets its own type
-      // rather than being folded into the overdue count.
+      // Usually not an overdue 1-2-1 — a missing write-up, or a cancellation nobody
+      // recorded. Different problem, different fix, so it keeps its own type rather
+      // than being folded into the overdue count.
+      //
+      // ⚠ But it must not HIDE an overdue one either. A booking is a schedule, not
+      // evidence anyone turned up, so when the cadence date has also passed the gap is
+      // real and is stated — and stated as "scheduled", never "met". Live on 1 Sep 2026
+      // this was Sebastian Broome: a 21 Aug booking masking the fact that he had not
+      // been seen since 17 Jun, and it took him off the overdue list altogether.
       issues.push({
-        severity: 'med', type: 'unwritten_1to1',
-        title: `1:1 on ${s.booked} has no note (${s.daysSince}d ago)`,
-        meta: { bookedDate: s.booked, daysSince: s.daysSince },
+        severity: s.daysOverdue ? 'high' : 'med',
+        type: 'unwritten_1to1',
+        title: s.daysOverdue
+          ? `1:1 scheduled ${s.booked} — no note, overdue by ${s.daysOverdue}d`
+          : `1:1 scheduled ${s.booked} has no note (${s.daysSince}d ago)`,
+        meta: { bookedDate: s.booked, daysSince: s.daysSince, dueDate: s.nextDue, daysOverdue: s.daysOverdue },
       });
     } else if (s.state === 'due-soon') {
       issues.push({

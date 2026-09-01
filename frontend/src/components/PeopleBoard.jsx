@@ -45,7 +45,12 @@ function getSaraStatus(person, vaultData, summaries, detectedLast) {
 
   const s121 = get121Status(fm, detectedLast);
 
-  if (s121?.status === 'overdue') return { word: 'overdue', tone: 'danger', reason: s121.label };
+  // A booking that has been and gone with nothing written, over a gap that is ALSO past
+  // its cadence date, is an overdue 1-2-1 wearing a diary entry. It reads as overdue —
+  // the label still says what happened, so the "write it up or rebook" prompt survives.
+  if (s121?.status === 'overdue' || (s121?.status === 'unwritten' && s121?.daysOverdue)) {
+    return { word: 'overdue', tone: 'danger', reason: s121.label };
+  }
   if (status === 'risk' || empStatus.includes('improvement')) return { word: 'slipping', tone: 'danger', reason: empStatus || 'Flagged at risk' };
   if (empStatus.includes('probation')) return { word: 'watch', tone: 'warning', reason: 'Probation' };
   if (tags.includes('blocked') || status === 'blocked') return { word: 'blocked', tone: 'warning', reason: 'Tagged blocked' };
@@ -125,7 +130,18 @@ function get121Status(frontmatter, detectedLast) {
     // Been and gone with nothing written up — a missing note, or a cancellation
     // nobody recorded. Not the same as never having booked one.
     if (!last || last < booked) {
-      return { status: 'unwritten', daysUntil: untilBooked, label: `Met ${booked} — no note` };
+      // ⚠ "Scheduled", never "Met". A booking is a diary entry, not evidence anyone
+      // turned up — and the card said "Met 2026-08-21" about a 1-2-1 that never
+      // happened. It also must not swallow the overdue fact: Sebastian Broome's stale
+      // booking hid a 48-day gap and dropped him off the overdue list entirely.
+      const overdueBy = due ? -dayDelta(due) : null;
+      const overdueSuffix = overdueBy > 0 ? ` · overdue by ${overdueBy}d` : '';
+      return {
+        status: 'unwritten',
+        daysUntil: untilBooked,
+        daysOverdue: overdueBy > 0 ? overdueBy : null,
+        label: `Scheduled ${booked} — no note${overdueSuffix}`,
+      };
     }
   }
 

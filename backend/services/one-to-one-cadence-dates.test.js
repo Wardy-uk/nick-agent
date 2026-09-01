@@ -143,3 +143,57 @@ test('the board offers exactly the cadences the server understands', () => {
     assert.ok(known.has(v), `the board offers "${v}", which the server does not name`);
   }
 });
+
+// ── A booking is a schedule, not attendance ──────────────────────────────────
+
+test('a stale booking does not swallow the overdue fact', () => {
+  // Sebastian Broome, live 1 Sep 2026: booked 21 Aug, but not actually seen since
+  // 17 Jun. The booking put him in `unwritten` and took him off the overdue list
+  // entirely, so the board reported nobody needing a 1-2-1 while a 48-day gap stood.
+  const fm = {
+    'last-1-2-1': '2026-06-17', 'next-1-2-1-due': '2026-07-01',
+    '1-2-1-booked': '2026-08-21', cadence: 'monthly',
+  };
+  const s = cadenceState(foldDetected(fm, '2026-06-17'), '2026-09-01');
+  assert.equal(s.state, 'unwritten');
+  assert.equal(s.daysOverdue, 48);
+  assert.equal(s.booked, '2026-08-21');
+});
+
+test('an ordinary unwritten 1-2-1 claims no overdue at all', () => {
+  // Booked last week, not yet due. This is what `unwritten` was built for, and it
+  // must not start crying overdue — daysOverdue is null, not 0.
+  const fm = {
+    'last-1-2-1': '2026-08-20', 'next-1-2-1-due': '2026-09-17',
+    '1-2-1-booked': '2026-08-28', cadence: 'monthly',
+  };
+  const s = cadenceState(foldDetected(fm, '2026-08-20'), '2026-09-01');
+  assert.equal(s.state, 'unwritten');
+  assert.equal(s.daysOverdue, null);
+});
+
+test('a note dated on or after the booking clears it', () => {
+  // Kayleigh Russell: booked 24 Aug and the detector found that note, so the booking
+  // is spent and she is simply due next month.
+  const fm = {
+    'last-1-2-1': '2026-07-01', 'next-1-2-1-due': '2026-07-15',
+    '1-2-1-booked': '2026-08-24', cadence: 'monthly',
+  };
+  assert.equal(cadenceState(foldDetected(fm, '2026-08-24'), '2026-09-01').state, 'ok');
+});
+
+test('nothing anywhere claims the meeting was "met"', () => {
+  // ⚠ Forbidden wording. A booking is a diary entry; NEURO has no evidence anyone
+  // turned up, and the card said "Met 2026-08-21" about a 1-2-1 that never happened.
+  const board = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'PeopleBoard.jsx'), 'utf8');
+  const health = fs.readFileSync(path.join(__dirname, 'team-health.js'), 'utf8');
+
+  assert.match(board, /Scheduled \$\{booked\}/, 'positive control: the board renders the label');
+  for (const [file, src] of [['PeopleBoard.jsx', board], ['team-health.js', health]]) {
+    const labels = [...src.matchAll(/(?:label|title):\s*[`'"][^`'"]*/g)].map((m) => m[0]);
+    for (const l of labels) {
+      assert.ok(!/\bMet\b/.test(l), `${file} states a meeting happened: ${l}`);
+    }
+  }
+});
