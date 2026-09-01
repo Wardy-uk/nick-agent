@@ -247,3 +247,56 @@ test('an object with zero segments is empty — a real "no transcript"', () => {
   // This is the case the stub genuinely exists for, and it must still be reachable.
   assert.deepEqual(extractTranscriptSegments({ total: 0, segments: [] }), []);
 });
+
+// ---------------------------------------------------------------------------
+// The failure ledger nobody read
+// ---------------------------------------------------------------------------
+//
+// 14 recordings went permanently missing while the sync reported success nightly. A
+// recording that failed on a transient error was written to `failedRecordings` and left
+// eligible for retry — but the next sync listed only the last 14 days, and nothing
+// consulted that ledger when choosing the window. Once the recording aged past the
+// lookback it was never listed again, so the retry it was owed never came.
+
+const AT = '2026-09-01T16:00:00.000Z';
+
+test('with no failures, the window is the plain lookback', () => {
+  assert.equal(incrementalDateFrom(AT, true, 14, {}), '2026-08-18');
+  assert.equal(incrementalDateFrom(AT, true, 14, null), '2026-08-18');
+});
+
+test('an outstanding failure widens the window back to reach it', () => {
+  // The real case: two July recordings failed on 12 Aug and fell out of every
+  // subsequent 14-day window, so they were never retried.
+  const failed = { abc: { failedAt: '2026-08-12T13:22:22.690Z', message: 'Request timed out' } };
+  assert.equal(incrementalDateFrom(AT, true, 14, failed), '2026-08-11');
+});
+
+test('the oldest outstanding failure decides the reach', () => {
+  const failed = {
+    a: { failedAt: '2026-08-30T17:01:22.076Z', message: '500' },
+    b: { failedAt: '2026-08-12T13:22:22.690Z', message: 'timeout' },
+  };
+  assert.equal(incrementalDateFrom(AT, true, 14, failed), '2026-08-11');
+});
+
+test('a failure NEWER than the lookback does not narrow the window', () => {
+  // Widening only. A recent failure must never shrink the normal window.
+  const failed = { a: { failedAt: '2026-08-31T10:00:00.000Z', message: '500' } };
+  assert.equal(incrementalDateFrom(AT, true, 14, failed), '2026-08-18');
+});
+
+test('an ancient failure stops widening the window for ever', () => {
+  // Otherwise one permanently broken recording makes every sync list the whole account.
+  const failed = { a: { failedAt: '2025-01-01T00:00:00.000Z', message: 'gone' } };
+  assert.equal(incrementalDateFrom(AT, true, 14, failed), '2026-08-18');
+});
+
+test('a corrupt failedAt is ignored rather than throwing', () => {
+  const failed = { a: { failedAt: 'not-a-date' }, b: {}, c: null };
+  assert.equal(incrementalDateFrom(AT, true, 14, failed), '2026-08-18');
+});
+
+test('a full (non-incremental) sync is still unbounded', () => {
+  assert.equal(incrementalDateFrom(AT, false, 14, { a: { failedAt: '2026-08-12T00:00:00Z' } }), undefined);
+});

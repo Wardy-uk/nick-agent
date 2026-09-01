@@ -368,7 +368,30 @@ async function withRetry(label, operation, options = {}) {
 // LOOKBACK, not a full re-list — a full list is `{ incremental: false }`.
 const DEFAULT_SYNC_LOOKBACK_DAYS = Number(process.env.PLAUD_SYNC_LOOKBACK_DAYS || 14);
 
-function incrementalDateFrom(lastSuccessfulSyncAt, incremental, lookbackDays = DEFAULT_SYNC_LOOKBACK_DAYS) {
+/**
+ * How long a failed recording keeps being retried. Past this it stays in the ledger as a
+ * record of what was lost, but stops widening every sync's window for ever.
+ */
+const FAILED_RETRY_MAX_AGE_DAYS = Number(process.env.PLAUD_FAILED_RETRY_DAYS || 90);
+
+/**
+ * The window an incremental sync lists.
+ *
+ * ⚠ IT MUST REACH BACK FAR ENOUGH TO INCLUDE OUTSTANDING FAILURES, and until 2026-09-01
+ * it did not — which is how 14 recordings went permanently missing while the sync
+ * reported success every night.
+ *
+ * The chain: a recording fails on a transient error (an MCP timeout, a 500 from
+ * get_transcript). It is written to `failedRecordings` and NOT ledgered as synced, so it
+ * is eligible to be retried. But the next sync lists only the last 14 days, and nothing
+ * ever consulted `failedRecordings` when choosing that window — so once the recording
+ * aged past the lookback it stopped being listed at all, and the retry it was owed never
+ * came. `failedRecordings` was written and never read: a ledger of losses nobody acted on.
+ *
+ * Two July recordings failed on 12 Aug with "Request timed out" and were simply gone. So
+ * the window now stretches back to the oldest outstanding failure.
+ */
+function incrementalDateFrom(lastSuccessfulSyncAt, incremental, lookbackDays = DEFAULT_SYNC_LOOKBACK_DAYS, failedRecordings = null) {
   if (!incremental || !lastSuccessfulSyncAt) return undefined;
 
   const last = new Date(lastSuccessfulSyncAt);
@@ -376,7 +399,21 @@ function incrementalDateFrom(lastSuccessfulSyncAt, incremental, lookbackDays = D
 
   const days = Number.isFinite(lookbackDays) && lookbackDays > 0 ? Math.floor(lookbackDays) : 0;
   last.setUTCDate(last.getUTCDate() - days);
-  return last.toISOString().slice(0, 10);
+  let from = last;
+
+  const cutoff = Date.now() - FAILED_RETRY_MAX_AGE_DAYS * 86400000;
+  for (const entry of Object.values(failedRecordings || {})) {
+    // `failedAt` is when the retry was owed, which is at or after the recording's own
+    // date — near enough, and the only timestamp the ledger keeps.
+    const failedAt = new Date(entry && entry.failedAt);
+    if (Number.isNaN(failedAt.getTime())) continue;
+    if (failedAt.getTime() < cutoff) continue;
+    // A day of margin: the recording is older than the moment its retry failed.
+    const reach = new Date(failedAt.getTime() - 86400000);
+    if (reach < from) from = reach;
+  }
+
+  return from.toISOString().slice(0, 10);
 }
 
 async function listRecordings(client, dateFrom) {
@@ -890,7 +927,14 @@ async function syncPlaudRecordings({ incremental = true } = {}) {
 
     const { client, transport } = await createClient();
     try {
-      const dateFrom = incrementalDateFrom(syncState.lastSuccessfulSyncAt, incremental);
+      // The failure ledger widens the window — see incrementalDateFrom.
+      const dateFrom = incrementalDateFrom(
+        syncState.lastSuccessfulSyncAt, incremental, DEFAULT_SYNC_LOOKBACK_DAYS, syncState.failedRecordings
+      );
+      const outstandingFailures = Object.keys(syncState.failedRecordings || {}).length;
+      if (outstandingFailures) {
+        console.log(`[PlaudSync] ${outstandingFailures} outstanding failure(s) — listing from ${dateFrom} to retry them`);
+      }
 
       const recordings = await listRecordings(client, dateFrom);
       recordings.sort((a, b) => {
@@ -1044,8 +1088,14 @@ async function syncPlaudRecordings({ incremental = true } = {}) {
           failed += 1;
           const message = error.message || String(error);
           console.error(`[PlaudSync] Recording ${recording.id} failed:`, message);
+          const prior = syncState.failedRecordings[recording.id] || {};
           syncState.failedRecordings[recording.id] = {
+            // `firstFailedAt` is kept so a recording failing every night is distinguishable
+            // from one that failed once — the first is a broken recording, the second is a
+            // blip, and they want different attention.
+            firstFailedAt: prior.firstFailedAt || new Date().toISOString(),
             failedAt: new Date().toISOString(),
+            attempts: (prior.attempts || 0) + 1,
             message,
             title: recording.name || recording.id
           };
