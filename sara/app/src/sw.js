@@ -1,4 +1,42 @@
 import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
+import { NavigationRoute, registerRoute } from 'workbox-routing';
+import { NetworkFirst } from 'workbox-strategies';
+
+// ── The page itself comes from the NETWORK first ─────────────────────────────
+//
+// ⚠ REGISTERED BEFORE `precacheAndRoute`, and the order is the whole mechanism.
+// Workbox matches routes in registration order, and the precache registers a
+// route for `/` and `/index.html` — so with precache first, a reload was served
+// the PREVIOUS build's HTML, which references the previous build's asset
+// hashes, which are also precached. The page therefore loaded entirely from
+// yesterday while the new worker installed quietly behind it, and only the
+// SECOND reload showed the new build.
+//
+// That is not a theoretical ordering nicety. It cost three screenshots of the
+// Pi panel showing a UI from before 30 August over a correctly-updated server,
+// and then cost Nick a refresh that came back on build 540a138 while the width
+// change he had just asked for was sitting in 165340a. `skipWaiting` and
+// `clients.claim` below do NOT fix this: they make the new worker take over
+// fast, but the page in front of him was already built from the old HTML.
+//
+// A screen that shows last week's app and looks completely fine is the failure
+// this codebase refuses everywhere else. Here the CACHE was introducing it.
+//
+// ⚠ The offline promise is kept, and it matters on a phone — the capture
+// outbox, opening her on a train. NetworkFirst falls back to its own cache, so
+// a genuine outage still gets the last good shell; the 3s timeout bounds how
+// long a bad connection can hold the launch. Hashed assets stay PRECACHED
+// below, because they are immutable and are the bulk of the offline story.
+registerRoute(new NavigationRoute(
+  new NetworkFirst({
+    cacheName: 'sara-shell',
+    networkTimeoutSeconds: 3,
+  }),
+  // The API is never the app shell. `/api` is same-origin in dev via the Vite
+  // proxy, and a navigation-looking request to it must not be answered with
+  // HTML.
+  { denylist: [/^\/api\//] },
+));
 
 // Injected by VitePWA at build time
 precacheAndRoute(self.__WB_MANIFEST);
