@@ -13,6 +13,40 @@ function timeAgo(timestamp) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+// When the email landed. The window is 14 days now, so "how long has this been
+// sitting" is most of what the date is for — a relative age is what scans, with
+// the exact moment on hover for the rare case the wording matters.
+//
+// NOTE this DOES parse into a Date, deliberately, and is not the calendar's
+// slice-the-string rule: `receivedDateTime` is a real UTC instant, and both an
+// elapsed duration and a local rendering of an instant are correct to compute.
+// The calendar rule exists because Graph is asked there for Europe/London
+// wall-clock, which re-parsing would shift by an offset a second time.
+const OLD_MAIL_DAYS = 7;
+
+function receivedAge(iso, now = Date.now()) {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  // Unreadable is nothing, never a guess — a card with no date says less than
+  // a card with the wrong one.
+  if (!Number.isFinite(t)) return null;
+  const mins = Math.floor((now - t) / 60000);
+  if (mins < 0) return { label: 'just now', days: 0 };
+  if (mins < 60) return { label: `${Math.max(mins, 1)}m`, days: 0 };
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return { label: `${hrs}h`, days: 0 };
+  const days = Math.floor(hrs / 24);
+  return { label: `${days}d`, days };
+}
+
+function receivedExact(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  return new Date(t).toLocaleString('en-GB', {
+    weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  });
+}
+
 function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied, onPromote }) {
   // mode: null | 'summary' | 'full' | 'reply'
   const [mode, setMode] = useState(null);
@@ -138,11 +172,20 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied, onPro
   };
 
   const busy = dismissing === email.id;
+  const age = receivedAge(email.received);
 
   return (
     <div className={`inbox-item ${borderClass}`}>
       <div className="inbox-item-header">
         <span className="inbox-item-from">{email.from}</span>
+        {age && (
+          <span
+            className={`inbox-item-age${age.days >= OLD_MAIL_DAYS ? ' inbox-item-age-old' : ''}`}
+            title={receivedExact(email.received)}
+          >
+            {age.label}
+          </span>
+        )}
         {email.reason && <span className="inbox-item-cat">{email.reason}</span>}
       </div>
       <div className="inbox-item-subject">{email.subject}</div>

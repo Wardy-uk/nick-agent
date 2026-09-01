@@ -130,6 +130,21 @@
   flex: 1;
 }
 
+/* When it landed. Subdued by default — it is context, not a verdict — and
+   warmer once mail has been sitting a week, which the 24-hour window could
+   never have shown. */
+.inbox-item-age {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.inbox-item-age-old {
+  color: var(--warning);
+}
+
 .inbox-item-cat {
   font-family: var(--font-mono);
   font-size: 10px;
