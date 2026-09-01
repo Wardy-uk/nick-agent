@@ -220,7 +220,12 @@ const DISMISSED_RETAIN_DAYS = 7;
 //     clock moved.
 const LOOKBACK_DAYS = Number(process.env.EMAIL_TRIAGE_LOOKBACK_DAYS || 14);
 const LOOKBACK_HOURS = LOOKBACK_DAYS * 24;
-const MAX_FETCH = Number(process.env.EMAIL_TRIAGE_MAX_FETCH || 500);
+// Sized against the live mailbox, not guessed: **663** messages sat in the
+// 14-day Inbox window when this was measured (1 Sep 2026), and a cap of 500
+// truncated it — which is worse than a smaller window, because a truncated
+// read reports `complete: false` and the departure rule below then never fires
+// at all. Headroom, and the walk still says so loudly if it is ever hit.
+const MAX_FETCH = Number(process.env.EMAIL_TRIAGE_MAX_FETCH || 1500);
 
 // Absence from a fetch is only evidence when the fetch actually covered the
 // message. Two guards, and both are needed:
