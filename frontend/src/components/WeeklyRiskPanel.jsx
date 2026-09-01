@@ -69,6 +69,12 @@ export default function WeeklyRiskPanel() {
   // top of the panel and the buttons sit near the bottom, so a click produced a
   // message off-screen above and looked like nothing had happened.
   const [done, setDone] = useState(null);
+  // The queued send, and whether this week is finished. Kept separate from
+  // `report` because it moves on its own: approving does not rebuild the
+  // report, and reopening does not re-fetch the queue.
+  const [sendState, setSendState] = useState(null);
+  const [showApproval, setShowApproval] = useState(false);
+  const [confirmReopen, setConfirmReopen] = useState(false);
 
   function confirmOn(key, text) {
     setDone({ key, text });
@@ -79,13 +85,15 @@ export default function WeeklyRiskPanel() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [r, l] = await Promise.all([
+      const [r, l, ss] = await Promise.all([
         fetch(apiUrl('/api/weekly-risk')).then(res => res.json()),
         fetch(apiUrl('/api/weekly-risk/log')).then(res => res.json()),
+        fetch(apiUrl('/api/weekly-risk/send-status')).then(res => res.json()).catch(() => null),
       ]);
       if (r.error) throw new Error(r.error);
       setReport(r);
       setLog(l);
+      setSendState(ss && !ss.error ? ss : null);
       // Seed the form from what is stored, so a half-finished week reopens
       // where it was left rather than blank.
       setDraft({
@@ -190,13 +198,65 @@ export default function WeeklyRiskPanel() {
     }
   }
 
+  /**
+   * Approve the queued send from here.
+   *
+   * ⚠ This is NOT a second way to send. It posts to the same
+   * /api/actions/:id/approve the Actions queue posts to, running the same
+   * executor — all that has moved is WHERE the second gate is shown. The card
+   * above it renders `presentation` built by the server, so the two screens
+   * cannot describe the same send differently, and the full body is on screen
+   * before the button can be pressed.
+   */
+  async function approveSend() {
+    const id = sendState?.queued?.actionId;
+    if (!id) return;
+    const out = await post(`/api/actions/${id}/approve`, {}, 'approve');
+    if (!out) return;
+    // The executor reports what actually happened; an `ok:false` here is a send
+    // that did not leave, and must not read as one that did.
+    if (out.ok === false || out.result?.ok === false) {
+      setNotice({ tone: 'bad', text: out.result?.detail || out.error || 'The send did not go through.' });
+      await load();
+      return;
+    }
+    confirmOn('approve', 'Sent to Chris');
+    setNotice({ tone: 'ok', text: out.result?.detail || 'Sent to Chris.' });
+    setShowApproval(false);
+    await load();
+  }
+
+  async function rejectSend() {
+    const id = sendState?.queued?.actionId;
+    if (!id) return;
+    const out = await post(`/api/actions/${id}/reject`, {}, 'reject');
+    if (out) {
+      setNotice({ tone: 'ok', text: 'Send cancelled — nothing was sent. Queue it again when you are ready.' });
+      setShowApproval(false);
+      await load();
+    }
+  }
+
+  async function doReopen() {
+    const out = await post('/api/weekly-risk/reopen', {}, 'reopen');
+    if (out?.ok) {
+      setConfirmReopen(false);
+      setNotice({
+        tone: 'ok',
+        text: 'Reopened. The figures below are live again and may no longer match what Chris received.',
+      });
+      await load();
+    }
+  }
+
   async function doQueueSend() {
     const out = await post('/api/weekly-risk/queue-send', {}, 'send');
     if (out?.ok) {
       confirmOn('send', 'Queued');
+      setShowApproval(true);
       setNotice({
         tone: 'ok',
-        text: `Queued for ${out.recipient?.email}. NOTHING HAS BEEN SENT — approve it in Actions to send.`,
+        text: `Queued for ${out.recipient?.email}. NOTHING HAS BEEN SENT — check it below and approve to send.`,
       });
     }
   }
@@ -241,6 +301,14 @@ export default function WeeklyRiskPanel() {
   const blockers = report.blockers || [];
   const findings = report.findings || [];
   const trend = (report.trend || []).filter(t => /compliance/i.test(t.kpi));
+  // Durable facts, read back from the server rather than inferred from a click.
+  const locked = Boolean(sendState?.locked);
+  const queued = sendState?.queued || null;
+  const published = Boolean(sendState?.published || report?.published);
+  const sentWhen = sendState?.sent?.sentAt
+    ? new Date(sendState.sent.sentAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
+    : 'an earlier date';
+
   const ready = blockers.length === 0;
 
   return (
@@ -354,19 +422,36 @@ export default function WeeklyRiskPanel() {
         </div>
 
         <div className="wr-actions">
-          <button type="button" className={done?.key === 'save' ? 'wr-confirmed' : undefined} onClick={saveManual} disabled={busy === 'save'}>
+          <button type="button" className={done?.key === 'save' ? 'wr-confirmed' : undefined} onClick={saveManual} disabled={busy === 'save' || locked} title={locked ? 'This week has been sent — reopen it to make changes' : ''}>
             {busy === 'save' ? 'Saving…' : labelFor('save', 'Save')}
           </button>
-          <button type="button" className={done?.key === 'publish' ? 'wr-confirmed' : undefined} onClick={doPublish} disabled={!ready || busy === 'publish'} title={ready ? '' : 'Finish your sections first'}>
-            {busy === 'publish' ? 'Publishing…' : labelFor('publish', 'Publish to vault')}
-          </button>
+          {/* ⚠ A completed step reads as COMPLETE, not merely as pressed.
+              `done` is a four-second flash after a click; `published` and
+              `locked` are durable facts read back from the server, so the
+              answer survives a reload — which is the whole point of asking. */}
           <button
-            type="button" className={`wr-send${done?.key === 'send' ? ' wr-confirmed' : ''}`}
-            onClick={doQueueSend} disabled={!ready || busy === 'send'}
-            title={ready ? 'Queues for approval — sends nothing' : 'Finish your sections first'}
+            type="button"
+            className={published || done?.key === 'publish' ? 'wr-confirmed' : undefined}
+            onClick={doPublish}
+            disabled={!ready || busy === 'publish' || locked}
+            title={locked ? 'This week has been sent — reopen it to publish again' : (ready ? '' : 'Finish your sections first')}
           >
-            {busy === 'send' ? 'Queueing…' : labelFor('send', 'Queue send to Chris')}
+            {busy === 'publish' ? 'Publishing…' : published ? '✓ Published to vault' : labelFor('publish', 'Publish to vault')}
           </button>
+          {locked ? (
+            <button type="button" className="wr-send wr-confirmed" disabled title={`Sent ${sentWhen}`}>
+              ✓ Sent to Chris
+            </button>
+          ) : (
+            <button
+              type="button" className={`wr-send${done?.key === 'send' ? ' wr-confirmed' : ''}`}
+              onClick={queued ? () => setShowApproval(v => !v) : doQueueSend}
+              disabled={!ready || busy === 'send'}
+              title={ready ? 'Queues for approval — sends nothing' : 'Finish your sections first'}
+            >
+              {busy === 'send' ? 'Queueing…' : queued ? (showApproval ? 'Hide the send' : 'Review & send to Chris') : labelFor('send', 'Queue send to Chris')}
+            </button>
+          )}
           {/* Not gated on `ready` — seeing an unfinished report in an inbox is
               the point, and the mail itself says which sections are missing. */}
           <button type="button" className={done?.key === 'test' ? 'wr-confirmed' : undefined} onClick={doTestSend} disabled={busy === 'test'}>
@@ -375,7 +460,28 @@ export default function WeeklyRiskPanel() {
           <button type="button" onClick={loadPreview} disabled={busy === 'preview'}>
             {busy === 'preview' ? 'Loading…' : preview !== null ? 'Hide preview' : 'Preview note'}
           </button>
+          {/* The way back. A finished week that could not be reopened would
+              mean a correction after sending had nowhere to go. */}
+          {locked && (
+            <button type="button" className="wr-reopen" onClick={() => setConfirmReopen(true)} disabled={busy === 'reopen'}>
+              Reopen this week
+            </button>
+          )}
         </div>
+
+        {confirmReopen && (
+          <div className="wr-notice wr-notice-warn">
+            <strong>Reopen w/c {report.week}?</strong> The report goes back to rebuilding from live data, so
+            the figures on this screen will no longer be the ones Chris received on {sentWhen}. The record of
+            that send is kept either way, and sending again will be counted as a second send.
+            <div className="wr-confirm-row">
+              <button type="button" onClick={doReopen} disabled={busy === 'reopen'}>
+                {busy === 'reopen' ? 'Reopening…' : 'Reopen it'}
+              </button>
+              <button type="button" onClick={() => setConfirmReopen(false)}>Keep it closed</button>
+            </div>
+          </div>
+        )}
         {/* The outcome renders HERE, immediately under the buttons that caused
             it. It used to sit at the top of the panel, several screens above
             the controls, so every click looked like it had done nothing. */}
@@ -388,9 +494,72 @@ export default function WeeklyRiskPanel() {
           </div>
         )}
 
-        <p className="wr-hint">
-          Queueing sends nothing. It creates an approval card in <strong>Actions</strong> showing the full report and the exact address.
-        </p>
+        {/* The second gate, shown where the report is. It is the SAME action
+            the Actions queue holds and the same approve route — only the place
+            it is displayed has moved, so nothing here is a shortcut past a
+            check. Everything rendered comes from the server's `presentation`. */}
+        {queued && showApproval && !locked && (
+          <div className="wr-approval">
+            <div className="wr-approval-head">
+              <strong>{queued.presentation?.label || 'Send the weekly risk report'}</strong>
+              <span className="wr-approval-kind">Nothing has been sent yet</span>
+            </div>
+            <dl className="wr-approval-fields">
+              {(queued.presentation?.fields || []).map((f, i) => (
+                <div key={i}>
+                  <dt>{f.label}</dt>
+                  <dd className={f.mono ? 'mono' : undefined}>{f.value ?? '—'}</dd>
+                </div>
+              ))}
+            </dl>
+            {queued.presentation?.warnings?.length > 0 && (
+              <ul className="wr-approval-warn">{queued.presentation.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+            )}
+            {/* ⚠ Approve is DISABLED while a blocker stands, and says why —
+                an approve that quietly fails is worse than one that refuses. */}
+            {queued.presentation?.blockers?.length > 0 && (
+              <ul className="wr-approval-block">{queued.presentation.blockers.map((b, i) => <li key={i}>{b}</li>)}</ul>
+            )}
+            {queued.presentation?.body && (
+              <details className="wr-approval-body">
+                <summary>The exact words that will be sent — {queued.presentation.body.length.toLocaleString()} characters</summary>
+                <pre>{queued.presentation.body}</pre>
+              </details>
+            )}
+            {queued.presentation?.note && <p className="wr-hint">{queued.presentation.note}</p>}
+            <div className="wr-confirm-row">
+              <button
+                type="button" className="wr-send"
+                onClick={approveSend}
+                disabled={busy === 'approve' || (queued.presentation?.blockers?.length > 0)}
+                title={queued.presentation?.blockers?.length ? 'Fix the blocker above first' : 'This sends the report to Chris'}
+              >
+                {busy === 'approve' ? 'Sending…' : 'Approve and send to Chris'}
+              </button>
+              <button type="button" onClick={rejectSend} disabled={busy === 'reject'}>
+                {busy === 'reject' ? 'Cancelling…' : 'Cancel this send'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {locked ? (
+          <p className="wr-hint">
+            Sent to {(sendState?.sent?.recipients || []).map(r => r.email).join(', ') || 'Chris'} on {sentWhen}
+            {sendState?.sent?.sendCount > 1 ? ` (send ${sendState.sent.sendCount})` : ''}. This week is finished:
+            the figures above are the ones that were sent, frozen, not a rebuild. Reopen it if something needs changing.
+          </p>
+        ) : sendState?.sent?.reopenedAt ? (
+          <p className="wr-hint wr-hint-warn">
+            This week was already sent on {sentWhen} and has since been reopened — the figures above are live
+            again and may no longer match what Chris received. Sending now counts as a second send.
+          </p>
+        ) : (
+          <p className="wr-hint">
+            Queueing sends nothing. It shows the exact report and address here for approval — the same card
+            also appears in <strong>Actions</strong>.
+          </p>
+        )}
 
         {preview !== null && (
           <div className="wr-preview">

@@ -61,6 +61,11 @@ const BREACH_CONCENTRATION = 0.8;
 
 const MANUAL_KEY = week => `weekly_risk_manual_${week}`;
 const PUBLISH_KEY = week => `weekly_risk_published_${week}`;
+// What was SENT, and the build it was sent from. See markSent.
+const SENT_KEY = week => `weekly_risk_sent_${week}`;
+// The assessed report as it stood when the send was queued, so the figures on
+// screen and the words in the mail come from ONE build rather than two.
+const QUEUED_KEY = week => `weekly_risk_queued_${week}`;
 
 // ── Dates ────────────────────────────────────────────────────────────────────
 
@@ -1421,9 +1426,35 @@ ${markdownToEmailHtml(md)}
 // ── Build + publish ──────────────────────────────────────────────────────────
 
 async function build(opts = {}) {
+  const week = opts.week || weekCommencing();
+  // WARNING: a sent week is a RECORD, not a draft. Handing back a rebuild here
+  // would show Nick figures Chris never saw, on a screen whose banner says the
+  // report has been sent -- see markSent. `live: true` forces a rebuild for the
+  // one caller that legitimately wants today's numbers off a finished week.
+  if (opts.live !== true && isLocked(week)) {
+    const rec = sentRecord(week);
+    const frozen = rec && rec.report ? rec.report : null;
+    if (frozen) {
+      return { ...frozen, markdown: rec.body || frozen.markdown, locked: true, sent: sentSummary(rec) };
+    }
+    // The body survived but the assessed build did not -- a send queued before
+    // this existed, or a stash that failed to parse. Say so rather than
+    // silently rebuilding under a "sent" banner.
+    if (rec && rec.body) {
+      return {
+        week, markdown: rec.body, locked: true, sent: sentSummary(rec),
+        findings: [], blockers: [], sources: [], reportOnly: true,
+      };
+    }
+  }
   const snap = await snapshot(opts);
   const assessed = assess(snap);
-  return { ...assessed, markdown: render(assessed) };
+  const built = { ...assessed, markdown: render(assessed) };
+  const rec = sentRecord(week);
+  // A reopened week still says what was sent, and when -- the figures below are
+  // live again and may no longer match.
+  if (rec) built.sent = sentSummary(rec);
+  return built;
 }
 
 /**
@@ -1472,7 +1503,24 @@ async function publish({ week = weekCommencing(), force = false } = {}) {
  * Chris is not a recoverable mistake.
  */
 async function queueSend({ week = weekCommencing(), to = null, force = false } = {}) {
-  const report = await build({ week });
+  // Already sent and not reopened. Queueing a second card for a finished week
+  // is how the same report reaches Chris twice, so it is refused in words with
+  // the way out named, rather than silently deduping into the old card.
+  if (isLocked(week)) {
+    const rec = sentRecord(week);
+    const who = (rec.recipients || []).map(r => r.email).join(', ') || 'Chris';
+    return {
+      ok: false,
+      blockers: [`Already sent to ${who} on ${formatUk((rec.sentAt || '').split('T')[0])}. Reopen the week if it needs sending again.`],
+      sent: sentSummary(rec),
+    };
+  }
+  const report = await build({ week, live: true });
+  // Stash the assessed build behind the card, so if this one is approved the
+  // figures the screen then shows come from the SAME build as the words that
+  // were sent. Rebuilt at every queue press, which is also when the card body
+  // is refreshed -- the two stay in step because they are written together.
+  try { db.setState(QUEUED_KEY(week), JSON.stringify(report)); } catch { /* costs the tiles, never the send */ }
   if (report.blockers.length && !force) {
     return { ok: false, blockers: report.blockers, report };
   }
@@ -1599,6 +1647,113 @@ ${report.blockers.length
   };
 }
 
+/**
+ * A week that has been SENT is finished, and the report freezes.
+ *
+ * -- Why freeze at all -------------------------------------------------------
+ *
+ * Every route rebuilds from live data, which is right while the report is being
+ * worked on: it is how a figure corrected on Monday morning reaches the version
+ * Chris gets. But the moment it is sent, the report stops being a draft and
+ * becomes a RECORD. The only honest answer to "what did I send Chris?" is the
+ * words that left, not a rebuild that would quietly show different numbers a
+ * week later. Reopening the screen must not silently regenerate it.
+ *
+ * So this stores the exact body that was sent, alongside the assessed build it
+ * came from, and build() hands that back verbatim while the week is locked.
+ *
+ * WARNING: recorded by the EXECUTOR, not by the screen. The send can be
+ * approved from the weekly risk panel or from the Actions queue, and a hook on
+ * one of them is a hook the other walks straight past -- the same reason the
+ * task-blocks hold lives in task-store rather than in a route.
+ *
+ * WARNING: never allowed to fail the send. The mail has already left by the
+ * time this runs; refusing here would report a delivered report as a failure,
+ * which is the one thing worse than losing the bookkeeping.
+ */
+function markSent(week, { actionId = null, recipients = [], subject = null, body = null, sentAt = null } = {}) {
+  try {
+    const existing = sentRecord(week);
+    // The assessed build stashed when the send was queued. Same build as the
+    // body, so the stat tiles and the words cannot disagree.
+    let report = null;
+    try {
+      const raw = db.getState(QUEUED_KEY(week));
+      if (raw) report = JSON.parse(raw);
+    } catch { /* a missing stash costs the tiles, never the record */ }
+
+    const record = {
+      week,
+      sentAt: sentAt || new Date().toISOString(),
+      actionId,
+      recipients,
+      subject,
+      body,
+      report,
+      // A resend after a reopen is a real thing that can happen, and the count
+      // is the only way the screen can say so rather than implying one send.
+      sendCount: (existing?.sendCount || 0) + 1,
+      // A fresh send closes any earlier reopen.
+      reopenedAt: null,
+    };
+    db.setState(SENT_KEY(week), JSON.stringify(record));
+    return record;
+  } catch (e) {
+    console.warn('[WeeklyRisk] Could not record the send:', e.message);
+    return null;
+  }
+}
+
+function sentRecord(week = weekCommencing()) {
+  const raw = db.getState(SENT_KEY(week));
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+/**
+ * Is this week finished? Sent, and not since reopened.
+ *
+ * WARNING: sent and LOCKED are different questions and both are needed. "Has
+ * Chris had it?" is a fact that never becomes untrue; "may this screen
+ * rebuild?" is a state Nick can change. Collapsing them into one boolean would
+ * mean reopening the week erased the record of having sent it.
+ */
+function isLocked(week = weekCommencing()) {
+  const rec = sentRecord(week);
+  return Boolean(rec && !rec.reopenedAt);
+}
+
+/**
+ * Unlock a sent week so it rebuilds live again.
+ *
+ * Keeps the sent record -- that is history, and deleting it would let the
+ * screen claim the week was never sent. What comes back is the ability to
+ * rebuild, and the screen is expected to SAY that the live figures may no
+ * longer match what Chris received; a reopened week that looked identical to an
+ * untouched one is how a second, different report gets sent without anyone
+ * noticing.
+ */
+function reopen(week = weekCommencing()) {
+  const rec = sentRecord(week);
+  if (!rec) return { ok: false, reason: 'not-sent' };
+  if (rec.reopenedAt) return { ok: true, already: true, record: rec };
+  const next = { ...rec, reopenedAt: new Date().toISOString() };
+  db.setState(SENT_KEY(week), JSON.stringify(next));
+  return { ok: true, record: next };
+}
+
+/** The non-sensitive half of a send record: what a screen needs, minus the body. */
+function sentSummary(rec) {
+  if (!rec) return null;
+  return {
+    sentAt: rec.sentAt,
+    recipients: rec.recipients || [],
+    subject: rec.subject || null,
+    sendCount: rec.sendCount || 1,
+    reopenedAt: rec.reopenedAt || null,
+  };
+}
+
 function publishedAt(week = weekCommencing()) {
   const raw = db.getState(PUBLISH_KEY(week));
   if (!raw) return null;
@@ -1607,6 +1762,7 @@ function publishedAt(week = weekCommencing()) {
 
 module.exports = {
   snapshot, assess, render, build, publish, publishedAt, queueSend, testSend,
+  markSent, sentRecord, sentSummary, isLocked, reopen,
   getManual, setManual, manualBlockers, emptyManual, carryForward,
   weekCommencing, previousWeek, buildTrend, consecutiveBelowTarget, ragBucket,
   toEmailHtml, markdownToEmailHtml,

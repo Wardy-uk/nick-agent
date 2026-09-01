@@ -337,3 +337,88 @@
   border-color: var(--success);
   color: var(--success);
 }
+
+/* ── The second gate, shown where the report is ──────────────────────────────
+   Not a new send path: the same queued action and the same approve route the
+   Actions queue uses. It is styled as a distinct panel rather than another
+   notice, because approving it puts a document in front of the manager
+   assessing a PIP and should not read like a toast. */
+.wr-approval {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning, #d97706);
+  border-radius: 6px;
+  background: var(--surface-2, rgba(148, 163, 184, 0.06));
+}
+
+.wr-approval-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.wr-approval-kind {
+  font-size: 12px;
+  color: var(--text-dim, #94a3b8);
+}
+
+.wr-approval-fields {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 4px 16px;
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.wr-approval-fields > div { display: contents; }
+.wr-approval-fields dt { color: var(--text-dim, #94a3b8); }
+.wr-approval-fields dd { margin: 0; overflow-wrap: anywhere; }
+.wr-approval-fields dd.mono { font-family: var(--font-mono); }
+
+.wr-approval-warn,
+.wr-approval-block {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  font-size: 13px;
+}
+.wr-approval-warn { color: var(--warning, #d97706); }
+/* A blocker disables Approve, so it has to look like the reason and not like a
+   note in passing. */
+.wr-approval-block { color: var(--danger); }
+
+.wr-approval-body summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-dim, #94a3b8);
+}
+.wr-approval-body pre {
+  margin: 8px 0 0;
+  padding: 10px;
+  max-height: 340px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface, rgba(15, 23, 42, 0.5));
+  border-radius: 4px;
+}
+
+.wr-confirm-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+/* Reopening a finished week is a real decision, so it is quiet in the row and
+   only appears once the week is closed. */
+.wr-actions button.wr-reopen {
+  margin-left: auto;
+  color: var(--text-dim, #94a3b8);
+}
+
+.wr-notice-warn { border-left-color: var(--warning, #d97706); }
+.wr-hint-warn { color: var(--warning, #d97706); }

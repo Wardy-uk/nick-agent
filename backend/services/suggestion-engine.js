@@ -485,6 +485,25 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
         return { ok: false, detail: reasons[result.reason] || `Send failed (${result.reason})` };
       }
 
+      // Freeze the week. From here the report is a RECORD, not a draft: the
+      // screen must show what actually went to Chris rather than a rebuild that
+      // would quietly carry different numbers a week later.
+      //
+      // WARNING: recorded HERE rather than in the route, because the approval
+      // can come from the weekly risk panel or from the Actions queue, and a
+      // hook on one is a hook the other walks past. Never allowed to fail the
+      // send -- the mail has already left.
+      try {
+        require('./weekly-risk').markSent(payload.week, {
+          actionId: action && action.id ? action.id : null,
+          recipients,
+          subject: payload.subject || null,
+          body: String(payload.body),
+        });
+      } catch (e) {
+        console.warn('[SARA] Weekly risk send recorded nowhere:', e.message);
+      }
+
       // Close the log row that tracks the Monday cadence, so the commitment
       // Nick made on 12 Aug is evidenced by the send rather than by memory.
       try {

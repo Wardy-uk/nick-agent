@@ -14,6 +14,7 @@ const router = express.Router();
 
 const weeklyRisk = require('../services/weekly-risk');
 const managementLog = require('../services/management-log');
+const db = require('../db/database');
 
 function fail(res, err, code = 500) {
   res.status(code).json({ error: err?.message || String(err) });
@@ -130,6 +131,66 @@ router.post('/test-send', async (req, res) => {
         ? `Sent to you. ${result.unfinished} section(s) still unanswered — the mail says so.`
         : 'Sent to you. This is exactly what Chris would receive.',
     });
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * GET /api/weekly-risk/send-status -- everything the panel needs to approve in
+ * place: the queued card, what it would send, and whether the week is finished.
+ *
+ * The approval itself still goes through POST /api/actions/:id/approve, the
+ * same executor and the same gate the Actions queue uses. This route exists so
+ * the second gate can be SHOWN where the report is, not so a second way to send
+ * can exist -- and it returns the presentation the Actions card is built from,
+ * verbatim, so the two screens cannot describe the same send differently.
+ */
+router.get('/send-status', (req, res) => {
+  try {
+    const week = req.query.week || weeklyRisk.weekCommencing();
+    const sent = weeklyRisk.sentSummary(weeklyRisk.sentRecord(week));
+    const actionPresenter = require('../services/action-presenter');
+    const pending = (db.getPendingSaraActionsByType
+      ? db.getPendingSaraActionsByType('send_weekly_risk_report', 50)
+      : []) || [];
+
+    let queued = null;
+    for (const action of pending) {
+      const payload = typeof action.payload === 'string' ? JSON.parse(action.payload) : action.payload;
+      if (!payload || payload.week !== week) continue;
+      queued = {
+        actionId: action.id,
+        createdAt: action.created_at || null,
+        // Built by the presenter, never re-derived here: the recipient, the
+        // blockers and the full body have to read identically wherever the
+        // approval happens.
+        presentation: actionPresenter.describe({ ...action, payload }),
+      };
+      break;
+    }
+
+    res.json({
+      week,
+      queued,
+      sent,
+      locked: weeklyRisk.isLocked(week),
+      published: weeklyRisk.publishedAt(week),
+    });
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * POST /api/weekly-risk/reopen -- a sent week goes back to rebuilding live.
+ *
+ * Keeps the sent record: having sent it is a fact that does not become untrue.
+ * What comes back is the ability to rebuild and to queue another send, and the
+ * panel is expected to say the figures may no longer match what Chris received.
+ */
+router.post('/reopen', (req, res) => {
+  try {
+    const week = req.body?.week || weeklyRisk.weekCommencing();
+    const result = weeklyRisk.reopen(week);
+    if (!result.ok) return res.status(409).json({ error: 'That week has not been sent, so there is nothing to reopen' });
+    res.json({ ok: true, week, sent: weeklyRisk.sentSummary(result.record), already: Boolean(result.already) });
   } catch (err) { fail(res, err); }
 });
 
