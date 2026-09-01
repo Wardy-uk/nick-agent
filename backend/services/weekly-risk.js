@@ -1178,7 +1178,7 @@ function render(a) {
     lines.push('### Not yet classified');
     lines.push('');
     if (t.unclassified.open > 0) {
-      lines.push(`**${t.unclassified.open}** open task${t.unclassified.open === 1 ? '' : 's'} ${t.unclassified.open === 1 ? 'has' : 'have'} not been marked as either, of which **${t.unclassified.overdue}** ${t.unclassified.overdue === 1 ? 'is' : 'are'} past its due date.`);
+      lines.push(`**${t.unclassified.open}** open task${t.unclassified.open === 1 ? '' : 's'} ${t.unclassified.open === 1 ? 'has' : 'have'} not been marked as either, of which **${t.unclassified.overdue}** ${t.unclassified.overdue === 1 ? 'is past its' : 'are past their'} due date.`);
       lines.push('');
       lines.push('> ⚠️ These are **not** counted in the overdue commitment figure above, and are **not** being written off as improvement work. Nothing in the task store records who asked for a piece of work, so the split is only as complete as the classification. Treat the commitment figure as a floor until this is zero.');
     } else {

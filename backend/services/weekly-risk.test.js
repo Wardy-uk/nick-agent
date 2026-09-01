@@ -770,6 +770,7 @@ test('NEGATIVE: unclassified overdue work is neither counted as a commitment nor
   const md = weeklyRisk.render(a);
   assert.match(md, /### Not yet classified/);
   assert.match(md, /\*\*40\*\* open tasks/);
+  assert.match(md, /\*\*9\*\* are past their due date/, 'plural agreement — this document is read by Chris');
   assert.match(md, /Treat the commitment figure as a floor/);
 });
 
