@@ -84,10 +84,10 @@ test('the message names the sender off the triage record, not a DB column', () =
 test('an unreachable mailbox keeps the last known triage instead of clearing it', async () => {
   seed([email()]);
   const microsoft = require('./microsoft');
-  const realFetch = microsoft.fetchRecentEmails;
+  const realFetch = microsoft.fetchRecentEmailsDetailed;
   const realAuth = microsoft.isAuthenticated;
   microsoft.isAuthenticated = async () => true;
-  microsoft.fetchRecentEmails = async () => null;
+  microsoft.fetchRecentEmailsDetailed = async () => ({ emails: null, complete: false });
   try {
     const result = await emailTriage.runTriage();
     assert.equal(result.ok, false);
@@ -95,7 +95,7 @@ test('an unreachable mailbox keeps the last known triage instead of clearing it'
     assert.match(result.reason, /unreachable/);
     assert.equal(emailTriage.getUrgentEmails().length, 1, 'the banner must not be silenced by a failed look');
   } finally {
-    microsoft.fetchRecentEmails = realFetch;
+    microsoft.fetchRecentEmailsDetailed = realFetch;
     microsoft.isAuthenticated = realAuth;
   }
 });
@@ -105,10 +105,10 @@ test('an unreachable mailbox keeps the last known triage instead of clearing it'
 // 30 minutes exactly when there is nothing to do.
 test('unchanged mail skips the model call, even with everything dismissed', async () => {
   const microsoft = require('./microsoft');
-  const realFetch = microsoft.fetchRecentEmails;
+  const realFetch = microsoft.fetchRecentEmailsDetailed;
   const realAuth = microsoft.isAuthenticated;
   microsoft.isAuthenticated = async () => true;
-  microsoft.fetchRecentEmails = async () => [{ id: 'AAMk-1' }, { id: 'AAMk-2' }];
+  microsoft.fetchRecentEmailsDetailed = async () => ({ emails: [{ id: 'AAMk-1' }, { id: 'AAMk-2' }], complete: true });
   // Stubbed, or the forced run below makes a real cloud call and spends the
   // daily AI budget to prove a control-flow branch.
   const aiProvider = require('./ai-provider');
@@ -130,7 +130,7 @@ test('unchanged mail skips the model call, even with everything dismissed', asyn
     const forced = await emailTriage.runTriage({ force: true });
     assert.notEqual(forced.skipped, true, 'force must actually re-run');
   } finally {
-    microsoft.fetchRecentEmails = realFetch;
+    microsoft.fetchRecentEmailsDetailed = realFetch;
     microsoft.isAuthenticated = realAuth;
     aiProvider.triageEmails = realTriage;
   }
@@ -161,13 +161,13 @@ function inbox(n) {
 test('all 40 fetched emails reach the model, in batches', async () => {
   const microsoft = require('./microsoft');
   const aiProvider = require('./ai-provider');
-  const realFetch = microsoft.fetchRecentEmails;
+  const realFetch = microsoft.fetchRecentEmailsDetailed;
   const realAuth = microsoft.isAuthenticated;
   const realTriage = aiProvider.triageEmails;
 
   const batchSizes = [];
   microsoft.isAuthenticated = async () => true;
-  microsoft.fetchRecentEmails = async () => inbox(40);
+  microsoft.fetchRecentEmailsDetailed = async () => ({ emails: inbox(40), complete: true });
   aiProvider.triageEmails = async (prompt) => {
     const n = (prompt.match(/^\[\d+\] From:/gm) || []).length;
     batchSizes.push(n);
@@ -191,7 +191,7 @@ test('all 40 fetched emails reach the model, in batches', async () => {
     // batch 1's emails — the silent way this could go wrong.
     assert.equal(stored[39].aiCategory, 'ACTION');
   } finally {
-    microsoft.fetchRecentEmails = realFetch;
+    microsoft.fetchRecentEmailsDetailed = realFetch;
     microsoft.isAuthenticated = realAuth;
     aiProvider.triageEmails = realTriage;
   }
@@ -200,13 +200,13 @@ test('all 40 fetched emails reach the model, in batches', async () => {
 test('a failed batch costs only itself, and unanswered mail says so', async () => {
   const microsoft = require('./microsoft');
   const aiProvider = require('./ai-provider');
-  const realFetch = microsoft.fetchRecentEmails;
+  const realFetch = microsoft.fetchRecentEmailsDetailed;
   const realAuth = microsoft.isAuthenticated;
   const realTriage = aiProvider.triageEmails;
 
   let call = 0;
   microsoft.isAuthenticated = async () => true;
-  microsoft.fetchRecentEmails = async () => inbox(40);
+  microsoft.fetchRecentEmailsDetailed = async () => ({ emails: inbox(40), complete: true });
   aiProvider.triageEmails = async (prompt) => {
     if (++call === 1) throw new Error('rate limited');
     const n = (prompt.match(/^\[\d+\] From:/gm) || []).length;
@@ -227,7 +227,7 @@ test('a failed batch costs only itself, and unanswered mail says so', async () =
     assert.equal(unanswered.length, 20);
     assert.ok(unanswered.every(e => e.aiCategory === null), 'no answer is null, never "FYI"');
   } finally {
-    microsoft.fetchRecentEmails = realFetch;
+    microsoft.fetchRecentEmailsDetailed = realFetch;
     microsoft.isAuthenticated = realAuth;
     aiProvider.triageEmails = realTriage;
   }
@@ -257,18 +257,18 @@ test('promoting moves an email into ACTION without dismissing it', () => {
 test('a promotion survives the next re-classification', async () => {
   const microsoft = require('./microsoft');
   const aiProvider = require('./ai-provider');
-  const realFetch = microsoft.fetchRecentEmails;
+  const realFetch = microsoft.fetchRecentEmailsDetailed;
   const realAuth = microsoft.isAuthenticated;
   const realTriage = aiProvider.triageEmails;
 
   microsoft.isAuthenticated = async () => true;
-  microsoft.fetchRecentEmails = async () => [{
+  microsoft.fetchRecentEmailsDetailed = async () => ({ complete: true, emails: [{
     // Neutral on purpose: "digest", "weekly report" and friends are NOISE
     // keywords that force IGNORE deterministically, which would land this in
     // the wrong section before the promotion is even reached.
     id: 'fyi-1', subject: 'Team notes from Tuesday', from: 'Someone', fromEmail: 's@example.com',
     preview: 'Sharing where we got to.', received: new Date().toISOString(), isRead: true,
-  }];
+  }] });
   // The model keeps calling it FYI — exactly the disagreement being overridden.
   aiProvider.triageEmails = async () => ({
     provider: 'stub',
@@ -291,7 +291,7 @@ test('a promotion survives the next re-classification', async () => {
     assert.equal(cat.fyi.length, 0);
     assert.equal(cat.action[0].promoted, true);
   } finally {
-    microsoft.fetchRecentEmails = realFetch;
+    microsoft.fetchRecentEmailsDetailed = realFetch;
     microsoft.isAuthenticated = realAuth;
     aiProvider.triageEmails = realTriage;
   }
@@ -418,4 +418,134 @@ test('the chat context feed can tell "not looked yet" from "inbox clear"', () =>
   assert.equal(flagged.items.length, 1, 'ignored mail is not context');
   assert.equal(flagged.items[0].emailId, 'AAMk-2');
   assert.ok(flagged.lastScan, 'a run that happened must be datable');
+});
+
+// ── Nothing drops out by age (1 Sep 2026) ──────────────────────────────────
+//
+// The merge kept `existing.filter(dismissed)` plus whatever the fetch returned,
+// and the fetch was 24 hours of the newest 40 messages. So the store's memory
+// was exactly backwards: mail Nick had FINISHED with survived a week, and mail
+// he had not dealt with vanished a day after it arrived. The ACTION lane
+// emptied itself overnight and a promotion expired in 24 hours.
+
+function stubFetch(emails, complete = true) {
+  const microsoft = require('./microsoft');
+  const aiProvider = require('./ai-provider');
+  const real = {
+    fetch: microsoft.fetchRecentEmailsDetailed,
+    auth: microsoft.isAuthenticated,
+    triage: aiProvider.triageEmails,
+  };
+  microsoft.isAuthenticated = async () => true;
+  microsoft.fetchRecentEmailsDetailed = async () => ({ emails, complete });
+  aiProvider.triageEmails = async (prompt) => {
+    const n = (prompt.match(/^\[\d+\] From:/gm) || []).length;
+    return {
+      provider: 'stub',
+      text: JSON.stringify(Array.from({ length: n }, (_, i) => ({ index: i, category: 'FYI', reason: 'stub' }))),
+    };
+  };
+  return () => {
+    microsoft.fetchRecentEmailsDetailed = real.fetch;
+    microsoft.isAuthenticated = real.auth;
+    aiProvider.triageEmails = real.triage;
+  };
+}
+
+test('an unanswered email older than the window is carried forward, not dropped', async () => {
+  const restore = stubFetch([]);
+  try {
+    db.setState('email_triage_input', '');
+    // 30 days old: outside anything the fetch looked at, and never actioned.
+    seed([email({ id: 'old-1', received: daysAgo(30) })]);
+    await emailTriage.runTriage({ force: true });
+
+    const cat = emailTriage.getTriageByCategory();
+    assert.equal(cat.action.length, 1, 'age is never a reason to drop unanswered mail');
+    assert.equal(emailTriage.getUrgentEmails().length, 1);
+  } finally { restore(); }
+});
+
+test('a promotion outlives the fetch window', async () => {
+  const restore = stubFetch([]);
+  try {
+    db.setState('email_triage_feedback_rollup', '');
+    db.setState('email_triage_input', '');
+    seed([email({ id: 'fyi-old', lane: 'fyi', category: 'FYI', urgency: 'low', received: daysAgo(30) })]);
+    assert.equal(emailTriage.promoteEmail('fyi-old').ok, true);
+
+    await emailTriage.runTriage({ force: true });
+    const cat = emailTriage.getTriageByCategory();
+    assert.equal(cat.action.length, 1, '"keep this in front of me" must not expire');
+    assert.equal(cat.action[0].promoted, true);
+  } finally { restore(); }
+});
+
+// Absence is only evidence when we actually saw the whole window.
+test('an incomplete read never concludes an email has gone', async () => {
+  const restore = stubFetch([], false);
+  try {
+    db.setState('email_triage_input', '');
+    seed([email({ id: 'recent-1', received: daysAgo(1) })]);
+    await emailTriage.runTriage({ force: true });
+    assert.equal(emailTriage.getTriageByCategory().action.length, 1,
+      'a capped or part-failed page walk must not sweep the panel');
+  } finally { restore(); }
+});
+
+test('an email that has left the Inbox is closed, and is not counted as feedback', async () => {
+  const restore = stubFetch([], true);
+  try {
+    db.setState('email_triage_feedback_rollup', '');
+    db.setState('email_triage_input', '');
+    seed([email({ id: 'filed-1', received: daysAgo(1) })]);
+    await emailTriage.runTriage({ force: true });
+
+    assert.equal(emailTriage.getTriageByCategory().action.length, 0,
+      'deleted or filed in Outlook — it is off his plate');
+    const stored = JSON.parse(db.getState('email_triage'));
+    const gone = stored.find(e => e.id === 'filed-1');
+    assert.equal(gone.dismissed, true);
+    assert.equal(gone.dismissReason, 'left-inbox');
+    // It is NEURO noticing, not Nick judging the classifier.
+    assert.equal(emailTriage.getDismissFeedback().judged, 0);
+  } finally { restore(); }
+});
+
+// The 30-minute cadence over a 14-day window is only affordable because an
+// email's text never changes, so neither does its model answer.
+test('an already-classified email is not sent to the model again', async () => {
+  const microsoft = require('./microsoft');
+  const aiProvider = require('./ai-provider');
+  const realFetch = microsoft.fetchRecentEmailsDetailed;
+  const realAuth = microsoft.isAuthenticated;
+  const realTriage = aiProvider.triageEmails;
+  const seen = [];
+  const mail = inbox(3);
+  microsoft.isAuthenticated = async () => true;
+  microsoft.fetchRecentEmailsDetailed = async () => ({ emails: mail, complete: true });
+  aiProvider.triageEmails = async (prompt) => {
+    const n = (prompt.match(/^\[\d+\] From:/gm) || []).length;
+    seen.push(n);
+    return {
+      provider: 'stub',
+      text: JSON.stringify(Array.from({ length: n }, (_, i) => ({ index: i, category: 'FYI', reason: 'stub' }))),
+    };
+  };
+  try {
+    seed([]);
+    db.setState('email_triage_input', '');
+    await emailTriage.runTriage({ force: true });
+    assert.deepEqual(seen, [3]);
+
+    // A new arrival changes the fingerprint, so the pass runs — but only the
+    // one new email may cost anything.
+    mail.push({ ...inbox(1)[0], id: 'mail-new' });
+    await emailTriage.runTriage();
+    assert.deepEqual(seen, [3, 1], 'only the new mail is sent to the model');
+  } finally {
+    microsoft.fetchRecentEmailsDetailed = realFetch;
+    microsoft.isAuthenticated = realAuth;
+    aiProvider.triageEmails = realTriage;
+  }
 });

@@ -57,7 +57,7 @@ ${emailList}`;
 // rules. Two batches of 20 each fit, and a batch that fails costs only itself.
 const CLASSIFY_BATCH = 20;
 
-async function classifyBatch(batch, offset) {
+async function classifyBatch(batch) {
   const emailList = batch.map((e, i) =>
     `[${i}] From: ${e.from} <${e.fromEmail}>\nSubject: ${e.subject}\nPreview: ${e.preview?.substring(0, 150) || '(no preview)'}`
   ).join('\n\n');
@@ -80,47 +80,68 @@ Classify these ${batch.length} emails:\n\n${emailList}`
   console.log(`[EmailTriage] Classified ${batch.length} via ${result.provider}`);
   // Batch-local indices become global ones here, so the caller never has to
   // know the batching happened.
+  // Batch-local indices become EMAIL IDS here, so the caller never has to know
+  // the batching happened — and, since only unclassified mail is batched now,
+  // never has to reason about which slice of the inbox a batch covered.
   return parsed
     .filter(c => Number.isInteger(c?.index) && c.index >= 0 && c.index < batch.length)
-    .map(c => ({ ...c, index: c.index + offset }));
+    .map(c => ({ ...c, id: batch[c.index].id }));
 }
 
-async function classifyEmails(emails) {
+/**
+ * Classify a fetched list.
+ *
+ * `prior` is what triage already knows about these ids, and it is what keeps a
+ * 14-day window affordable: an email's text never changes, so its MODEL answer
+ * never changes either, and re-asking for it every 30 minutes is pure spend.
+ * Only mail with no answer yet is batched — including mail whose earlier batch
+ * FAILED, which is the case the old code could not tell from a real 'FYI'.
+ *
+ * The DETERMINISTIC half is always re-run, on the freshly fetched fields, so a
+ * message that has since been read or flagged is re-rated on what is true now.
+ */
+async function classifyEmails(emails, prior = new Map()) {
   if (!emails || emails.length === 0) return [];
 
+  const pending = emails.filter(e => !prior.get(e.id)?.aiClassified);
   const classifications = [];
   let failedBatches = 0;
 
   // Sequential, not parallel: these are cloud calls against a shared daily
   // budget and a rate limit, and triage is a background job with nobody
   // waiting on it.
-  for (let offset = 0; offset < emails.length; offset += CLASSIFY_BATCH) {
-    const batch = emails.slice(offset, offset + CLASSIFY_BATCH);
+  for (let offset = 0; offset < pending.length; offset += CLASSIFY_BATCH) {
+    const batch = pending.slice(offset, offset + CLASSIFY_BATCH);
     try {
-      classifications.push(...await classifyBatch(batch, offset));
+      classifications.push(...await classifyBatch(batch));
     } catch (aiErr) {
       failedBatches++;
       console.error(`[EmailTriage] AI classification failed for emails ${offset}-${offset + batch.length - 1}:`, aiErr.message);
     }
   }
 
-  const answered = new Set(classifications.map(c => c.index));
-  const unclassified = emails.length - answered.size;
+  const byId = new Map(classifications.map(c => [c.id, c]));
+  const unclassified = pending.length - byId.size;
   if (unclassified > 0) {
     // Loud, because the failure is otherwise invisible: an email the model
     // never saw looks exactly like one it called FYI.
-    console.warn(`[EmailTriage] ${unclassified}/${emails.length} emails got no model answer`
+    console.warn(`[EmailTriage] ${unclassified}/${pending.length} emails got no model answer`
       + `${failedBatches ? ` (${failedBatches} batch(es) failed)` : ''} — deterministic rules only`);
   }
+  if (pending.length < emails.length) {
+    console.log(`[EmailTriage] ${emails.length - pending.length}/${emails.length} already classified — reused, ${pending.length} sent to the model`);
+  }
 
-  return emails.map((email, i) => {
-    const cls = classifications.find(c => c.index === i);
+  return emails.map((email) => {
+    const cls = byId.get(email.id);
+    const was = prior.get(email.id);
     const deterministic = evaluateEmail(email);
     // No answer means NO ANSWER. Defaulting to 'FYI' and storing it in the same
     // field the model writes made "never looked at" and "judged informational"
     // the same record — so the blend below then treated a non-answer as the
     // model actively disagreeing with the deterministic rules.
-    const aiCategory = cls ? String(cls.category || 'FYI').toUpperCase() : null;
+    const aiCategory = cls ? String(cls.category || 'FYI').toUpperCase()
+      : (was?.aiClassified ? (was.aiCategory || null) : null);
     let category = aiCategory || deterministic.category;
     if (deterministic.category === 'IGNORE') category = 'IGNORE';
     else if (deterministic.category === 'FYI' && aiCategory === 'ACTION') category = 'FYI';
@@ -148,9 +169,11 @@ async function classifyEmails(emails) {
       aiCategory,
       // Null aiCategory already says it, but only to code that remembers to
       // check. This says it plainly to anything reading the record later.
-      aiClassified: cls != null,
+      aiClassified: cls != null || !!was?.aiClassified,
       triaged: true,
-      triagedAt: new Date().toISOString()
+      // When the model answer is reused, so is the stamp — it says when this
+      // mail was judged, not when a pass last happened to walk past it.
+      triagedAt: cls ? new Date().toISOString() : (was?.triagedAt || new Date().toISOString())
     };
   });
 }
@@ -180,6 +203,35 @@ const INPUT_KEY = 'email_triage_input';
 // costs history rather than throwing it away. The classifier's only free
 // feedback signal must not quietly reset every week.
 const DISMISSED_RETAIN_DAYS = 7;
+
+// ── How far back triage looks, and what it means to stop looking ────────────
+//
+// The window was 24 hours and the merge kept only DISMISSED entries, so the
+// store's memory was exactly backwards: mail Nick had finished with survived a
+// week, and mail he had NOT dealt with vanished a day after it arrived. The
+// ACTION lane emptied itself overnight, and a promotion — the button that
+// means "keep this in front of me" — expired in 24 hours.
+//
+// Two rules now, and they are separate:
+//   • The window is 14 days, PAGED, so a fetch is a real walk of the period
+//     rather than the newest 40 messages.
+//   • NOTHING leaves the panel by age. An entry leaves when Nick acts on it,
+//     or when it has demonstrably left the Inbox (below) — never because the
+//     clock moved.
+const LOOKBACK_DAYS = Number(process.env.EMAIL_TRIAGE_LOOKBACK_DAYS || 14);
+const LOOKBACK_HOURS = LOOKBACK_DAYS * 24;
+const MAX_FETCH = Number(process.env.EMAIL_TRIAGE_MAX_FETCH || 500);
+
+// Absence from a fetch is only evidence when the fetch actually covered the
+// message. Two guards, and both are needed:
+//   • the read must be COMPLETE (`fetchRecentEmailsDetailed` says so — a
+//     capped or part-failed page walk is a short list that looks like a small
+//     mailbox, and reading absence out of it would sweep the panel), and
+//   • the message must have arrived comfortably INSIDE the window, so an email
+//     sitting on the boundary is never mistaken for one that has gone.
+// Anything older than the window is kept indefinitely: we did not look, so we
+// know nothing, and "I could not see it" is not "it is gone".
+const DEPARTURE_GRACE_MS = 15 * 60 * 1000;
 const DISMISSED_FIELDS = ['id', 'dismissed', 'dismissedAt', 'dismissReason', 'urgency', 'category'];
 const FEEDBACK_ROLLUP_KEY = 'email_triage_feedback_rollup';
 
@@ -207,7 +259,11 @@ function readRollup() {
 }
 
 function isJudged(e) {
-  return e.dismissed && e.dismissReason && e.dismissReason !== 'unspecified';
+  // `left-inbox` is triage noticing the mail has gone from the Inbox, not Nick
+  // telling the classifier anything — counting it would pad the feedback score
+  // with verdicts nobody gave.
+  return e.dismissed && e.dismissReason
+    && e.dismissReason !== 'unspecified' && e.dismissReason !== 'left-inbox';
 }
 
 // Anything judged that is about to leave the blob — pruned by age, or dropped
@@ -293,7 +349,9 @@ async function runTriage({ force = false } = {}) {
   }
 
   try {
-    const emails = await microsoft.fetchRecentEmails(24, 40);
+    const fetched = await microsoft.fetchRecentEmailsDetailed(LOOKBACK_HOURS, MAX_FETCH);
+    const emails = fetched?.emails ?? null;
+    const complete = !!fetched?.complete;
 
     // `null` means we could not READ the mailbox; `[]` means we read it and
     // there was nothing. Those were one branch, and it wiped the stored triage
@@ -307,13 +365,9 @@ async function runTriage({ force = false } = {}) {
       return { ok: false, reason: 'mailbox unreachable', stale: true };
     }
 
-    if (emails.length === 0) {
-      storeTriage(getStoredTriage().filter(e => e.dismissed));
-      db.setState('email_triage_time', String(Date.now()));
-      db.setState(INPUT_KEY, inputFingerprint([]));
-      try { require('./nudges').triggerUrgentEmailNudge(); } catch {}
-      return { ok: true, classified: 0, ...outstandingCounts() };
-    }
+    // An empty read used to wipe everything undismissed. It no longer gets a
+    // branch of its own: it is just a fetch containing nothing, and the merge
+    // below already knows what to do with mail it did not see.
 
     // Same mail as last time → the classification would be identical, so skip
     // the (cloud, paid) model call. Gated on HAVING a stored classification,
@@ -331,32 +385,68 @@ async function runTriage({ force = false } = {}) {
       return { ok: true, skipped: true, classified: 0, ...outstandingCounts() };
     }
 
-    const classified = await classifyEmails(emails);
+    const priorById = new Map(stored.map(e => [e.id, e]));
+    // `force` means re-run properly, including paying the model again — it is
+    // what a manual "Run triage" and a `/triage/clear` both want.
+    const classified = await classifyEmails(emails, force ? new Map() : priorById);
     db.setState(INPUT_KEY, fingerprint);
 
-    // Store results
-    const existing = getStoredTriage();
-
-    // Merge: keep existing dismissed items, add/update new ones.
+    // ── The merge ───────────────────────────────────────────────────────────
+    //
+    // This used to be `existing.filter(dismissed)` plus whatever the fetch
+    // returned — so an email Nick had NOT dealt with was carried by nothing and
+    // disappeared the moment it fell out of the window. The set is now keyed by
+    // id and every entry has to be positively accounted for.
     //
     // Nick's verdicts are the things a re-classification must NOT overwrite.
     // That was already true of `dismissed`; it is equally true of a promotion,
     // and at a 30-minute cadence a promotion that did not survive the merge
     // would silently drop back to FYI within the half hour — the button would
     // appear to work and then quietly undo itself.
-    const updated = [
-      ...existing.filter(e => e.dismissed),
-      ...classified.map(e => {
-        const prev = existing.find(p => p.id === e.id);
-        return applyPromotion({
-          ...e,
-          dismissed: prev?.dismissed || false,
-          dismissedAt: prev?.dismissedAt || null,
-          promoted: prev?.promoted || false,
-          promotedAt: prev?.promotedAt || null,
-        });
-      })
-    ];
+    const fetchedIds = new Set(emails.map(e => e.id));
+    const windowStart = Date.now() - LOOKBACK_HOURS * 3600000;
+    let departed = 0;
+
+    // Keying on id also removes a duplicate the old shape produced: a dismissed
+    // email still inside the window appeared in both halves of the list.
+    const byId = new Map(stored.map(e => [e.id, e]));
+
+    for (const e of stored) {
+      if (e.dismissed || fetchedIds.has(e.id)) continue;
+      // We could not see the whole window, so its absence says nothing.
+      if (!complete) continue;
+      const arrived = e.received ? Date.parse(e.received) : NaN;
+      // Older than what we looked at — kept, indefinitely. Age is never a
+      // reason to drop something Nick has not answered.
+      if (!Number.isFinite(arrived) || arrived < windowStart + DEPARTURE_GRACE_MS) continue;
+      // Inside a complete read and not there: it has been deleted, filed or
+      // moved out of the Inbox. Recorded rather than silently deleted, and with
+      // a reason that is plainly not one of Nick's.
+      byId.set(e.id, {
+        ...e,
+        dismissed: true,
+        dismissedAt: new Date().toISOString(),
+        dismissReason: LEFT_INBOX,
+      });
+      departed++;
+    }
+
+    for (const e of classified) {
+      const prev = priorById.get(e.id);
+      byId.set(e.id, applyPromotion({
+        ...e,
+        dismissed: prev?.dismissed || false,
+        dismissedAt: prev?.dismissedAt || null,
+        dismissReason: prev?.dismissReason,
+        promoted: prev?.promoted || false,
+        promotedAt: prev?.promotedAt || null,
+      }));
+    }
+
+    const updated = [...byId.values()];
+    if (departed) {
+      console.log(`[EmailTriage] ${departed} entr${departed === 1 ? 'y' : 'ies'} no longer in the Inbox — closed as ${LEFT_INBOX}`);
+    }
 
     storeTriage(updated);
     db.setState('email_triage_time', String(Date.now()));
@@ -484,7 +574,11 @@ function getFlaggedItems() {
 // wrong, and that was discarded on the spot — the only feedback this classifier
 // will ever get for free. Two buttons that do the same thing quietly teach him
 // they mean nothing.
+// `left-inbox` is NEURO's own observation, not one of Nick's verdicts, so it is
+// deliberately absent from this set: it can only be written by the merge, never
+// by a caller passing a string.
 const DISMISS_REASONS = new Set(['done', 'not-relevant', 'replied', 'unspecified']);
+const LEFT_INBOX = 'left-inbox';
 
 function dismissEmail(emailId, reason = 'unspecified') {
   const clean = DISMISS_REASONS.has(reason) ? reason : 'unspecified';

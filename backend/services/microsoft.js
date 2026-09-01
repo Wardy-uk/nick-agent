@@ -538,7 +538,21 @@ async function fetchCalendarEvents(startDate, endDate) {
 }
 
 // Fetch recent emails — unread + recent (last N hours)
-async function fetchRecentEmails(hoursBack = 24, maxResults = 50) {
+/**
+ * Inbox mail for the last `hoursBack` hours, PAGED.
+ *
+ * Returns `{ emails, complete, source }` — or `emails: null` when the mailbox
+ * could not be read at all, which callers must keep distinct from an empty
+ * inbox.
+ *
+ * `complete` is the load-bearing field, and it is what makes it safe for a
+ * caller to treat "id absent from this answer" as evidence the mail has left
+ * the Inbox. A capped or part-failed read is a SHORTER list that looks
+ * identical to a smaller mailbox, so anything less than a full walk of the
+ * window reports `complete: false` and no absence may be read out of it.
+ * `$top` is a page size here, never the answer (the calendar/Planner lesson).
+ */
+async function fetchRecentEmailsDetailed(hoursBack = 24, maxResults = 500) {
   // Priority 1 — MSAL/Graph direct
   const token = await getAccessToken();
   if (token) {
@@ -546,12 +560,20 @@ async function fetchRecentEmails(hoursBack = 24, maxResults = 50) {
       const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
       const filter = `receivedDateTime ge ${since}`;
       const select = 'id,subject,from,receivedDateTime,isRead,importance,flag,bodyPreview,hasAttachments';
-      const data = await graphFetch(
-        `/me/mailFolders/Inbox/messages?$filter=${encodeURIComponent(filter)}&$top=${maxResults}&$orderby=receivedDateTime desc&$select=${select}`,
-        token
+      const pageSize = Math.min(100, Math.max(1, maxResults));
+      const maxPages = Math.max(1, Math.ceil(maxResults / pageSize));
+      const data = await graphFetchAll(
+        `/me/mailFolders/Inbox/messages?$filter=${encodeURIComponent(filter)}&$top=${pageSize}&$orderby=receivedDateTime desc&$select=${select}`,
+        token,
+        {},
+        maxPages
       );
       if (data && data.value) {
-        return data.value.map(msg => ({
+        const capped = data.value.length > maxResults;
+        if (capped) {
+          console.warn(`[Mail] ${data.value.length} messages in the last ${hoursBack}h — capped at ${maxResults}`);
+        }
+        const emails = data.value.slice(0, maxResults).map(msg => ({
           id: msg.id,
           subject: msg.subject || '(No subject)',
           from: msg.from?.emailAddress?.name || msg.from?.emailAddress?.address || 'Unknown',
@@ -563,6 +585,7 @@ async function fetchRecentEmails(hoursBack = 24, maxResults = 50) {
           preview: (msg.bodyPreview || '').substring(0, 300),
           hasAttachments: msg.hasAttachments
         }));
+        return { emails, complete: !data.truncated && !capped, source: 'graph' };
       }
     } catch (err) {
       console.error('[Microsoft] Email fetch error:', err.message);
@@ -579,7 +602,10 @@ async function fetchRecentEmails(hoursBack = 24, maxResults = 50) {
       if (bridgeData) {
         const messages = Array.isArray(bridgeData) ? bridgeData :
           (bridgeData.value || []);
-        return messages.map(m => ({
+        // The bridge takes a COUNT and no date window, so it can never
+        // establish that it saw the whole period — `complete` stays false and
+        // nothing may conclude a message has gone from its absence here.
+        const emails = messages.map(m => ({
           id: m.id,
           subject: m.subject,
           from: m.from?.emailAddress?.name || m.from?.emailAddress?.address || '',
@@ -591,13 +617,20 @@ async function fetchRecentEmails(hoursBack = 24, maxResults = 50) {
           preview: m.bodyPreview || '',
           hasAttachments: m.hasAttachments || false
         }));
+        return { emails, complete: false, source: 'bridge' };
       }
     } catch (e) {
       console.warn('[Mail] Bridge failed:', e.message);
     }
   }
 
-  return null;
+  return { emails: null, complete: false, source: null };
+}
+
+// Array-or-null shape, kept for callers that only want the mail.
+async function fetchRecentEmails(hoursBack = 24, maxResults = 500) {
+  const { emails } = await fetchRecentEmailsDetailed(hoursBack, maxResults);
+  return emails;
 }
 
 function htmlToText(value) {
@@ -1888,6 +1921,7 @@ module.exports = {
   fetchEventById,
   respondToEvent,
   fetchRecentEmails,
+  fetchRecentEmailsDetailed,
   fetchEmailById,
   sendEmailReply,
   markEmailRead,
