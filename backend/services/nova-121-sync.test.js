@@ -190,3 +190,27 @@ test('an empty roster refuses to reconcile', async () => {
     assert.match(r.error, /No direct reports/);
   });
 });
+
+test('someone deliberately off the rota is not drift', async () => {
+  // Adele is a direct report on maternity leave with `cadence: n/a`. She has no NOVA
+  // plan BECAUSE she should not be scheduled — reporting that every morning is the
+  // system flagging its own correct behaviour as a fault.
+  await withStubs({
+    people: [person({ name: 'Adele Norman-Swift', cadence: 'n/a' }), person({ name: 'Nathan Rutland' })],
+    novaAgents: [novaAgent({ agentName: 'Nathan Rutland' })],
+  }, async (sync) => {
+    const r = await sync.reconcile({ apply: false });
+    assert.deepEqual(r.drift.notInNova, [], 'an off-rota report is not missing from NOVA');
+  });
+});
+
+test('a bookable report with no NOVA plan IS drift', async () => {
+  // The case the report exists for: invisible to the loop, never scheduled or prepped.
+  await withStubs({
+    people: [person({ name: 'New Starter', cadence: 'fortnightly' })],
+    novaAgents: [novaAgent({ agentName: 'Nathan Rutland' })],
+  }, async (sync) => {
+    const r = await sync.reconcile({ apply: false });
+    assert.deepEqual(r.drift.notInNova, ['New Starter']);
+  });
+});

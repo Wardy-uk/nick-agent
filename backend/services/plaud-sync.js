@@ -1236,14 +1236,22 @@ function recordingDateStr(recording) {
 
 // Read every ACTIVE note (Archive excluded) and index it by date + title tokens,
 // plus the set of plaud_ids that resolve to an active note.
-function buildActiveNoteIndex() {
+function buildActiveNoteIndex({ archivedOnly = false } = {}) {
   const vaultPath = getVaultPath();
   const byDate = new Map();   // 'YYYY-MM-DD' -> [ Set<token> ]
   const plaudIds = new Set();
 
   for (const filePath of readMarkdownFiles(vaultPath)) {
     const relParts = path.relative(vaultPath, filePath).split(path.sep);
-    if (relParts.some((seg) => RECONCILE_EXCLUDE.has(seg))) continue;
+    const inArchive = relParts.includes('Archive');
+    // The same walk serves both indexes: the ACTIVE one (Archive excluded, which is what
+    // "has a note" means) and the ARCHIVED one, used only to explain a recording's
+    // absence rather than to satisfy it.
+    if (archivedOnly) {
+      if (!inArchive) continue;
+    } else if (relParts.some((seg) => RECONCILE_EXCLUDE.has(seg))) {
+      continue;
+    }
 
     let content = '';
     try { content = fs.readFileSync(filePath, 'utf-8'); } catch { continue; }
@@ -1284,34 +1292,48 @@ async function reconcilePlaudRecordings({ minJaccard = 0.5, write = true } = {})
     await transport.close();
   }
 
+  // ⚠ ARCHIVED IS NOT MISSING, and conflating them made this report untrustworthy.
+  //
+  // Measured 2026-09-01: of 14 "missing" recordings, SIX were sitting in
+  // `Archive/Empty Recordings` and `Archive/Accidental Recordings` — deliberately binned
+  // by Nick. Reporting a decision back as a fault every run is how a report stops being
+  // read, and the two genuinely lost recordings were hidden in that noise.
+  const archived = buildActiveNoteIndex({ archivedOnly: true });
+
+  const isPresentIn = (idx, rec, date, tokens) => {
+    if (idx.plaudIds.has(rec.id)) return true;
+    const sameDate = date ? (idx.byDate.get(date) || []) : [];
+    if (tokens.size === 0) return sameDate.length > 0;    // unnamed/timestamp → date match
+    return sameDate.some((noteTokens) => jaccard(tokens, noteTokens) >= minJaccard);
+  };
+
   const missing = [];
+  const binned = [];
   for (const rec of recordings) {
     const id = rec.id;
     const title = rec.name || '';
-    if (index.plaudIds.has(id)) continue;                 // active note carries the id
-
     const date = recordingDateStr(rec);
-    const sameDate = date ? (index.byDate.get(date) || []) : [];
     const tokens = titleTokens(title);
 
-    let present;
-    if (tokens.size === 0) {
-      present = sameDate.length > 0;                       // unnamed/timestamp → date match
-    } else {
-      present = sameDate.some((noteTokens) => jaccard(tokens, noteTokens) >= minJaccard);
-    }
-    if (!present) missing.push({ id, date: date || 'undated', title: title || '(unnamed)' });
+    if (isPresentIn(index, rec, date, tokens)) continue;   // active note — nothing to say
+
+    const row = { id, date: date || 'undated', title: title || '(unnamed)' };
+    // A note in Archive explains the absence: it was pulled, then filed away on purpose.
+    if (isPresentIn(archived, rec, date, tokens)) binned.push(row);
+    else missing.push(row);
   }
 
   missing.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  binned.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
   let reportPath = null;
   if (write) {
     const lines = [
       '---', 'type: reference', `created: ${new Date().toISOString().slice(0, 10)}`, 'tags: [plaud, reconcile, audit]', 'author: NEURO plaud-sync', '---',
       `# PLAUD Reconciliation — ${new Date().toISOString().slice(0, 10)}`, '',
-      `**${recordings.length}** PLAUD recordings · **${recordings.length - missing.length}** have an active note · **${missing.length}** missing.`, '',
-      'Missing recordings have no active vault note (notes may be in Archive). Re-pull fetches these FRESH from PLAUD — never restore from Archive.', '',
+      `**${recordings.length}** PLAUD recordings · **${recordings.length - missing.length - binned.length}** have an active note · ` +
+        `**${binned.length}** deliberately archived · **${missing.length}** genuinely missing.`, '',
+      'Missing means no note ANYWHERE — not active, not archived. Recordings you binned in Archive are listed separately below and are not a fault. Re-pull fetches missing ones FRESH from PLAUD — never restore from Archive.', '',
       '| Date | PLAUD ID | Title |', '|---|---|---|',
       ...missing.map((m) => `| ${m.date} | \`${m.id}\` | ${m.title.replace(/\|/g, '\\|')} |`),
     ];
@@ -1322,7 +1344,16 @@ async function reconcilePlaudRecordings({ minJaccard = 0.5, write = true } = {})
     reportPath = path.relative(getVaultPath(), outPath).replace(/\\/g, '/');
   }
 
-  return { total: recordings.length, present: recordings.length - missing.length, missing, reportPath };
+  return {
+    total: recordings.length,
+    // `present` counts notes that actually exist and are live. Archived ones are neither
+    // present nor missing — they are a third answer, and the caller gets it separately.
+    present: recordings.length - missing.length - binned.length,
+    archived: binned.length,
+    binned,
+    missing,
+    reportPath,
+  };
 }
 
 // Fetch + render + stage + route a single recording FRESH. Mirrors the inner body

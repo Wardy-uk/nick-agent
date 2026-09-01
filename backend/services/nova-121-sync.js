@@ -149,7 +149,16 @@ async function reconcile({ apply = false } = {}) {
   for (const p of people) {
     const known = novaByName.get(p.name);
     seen.add(p.name);
-    if (!known) { drift.notInNova.push(p.name); continue; }
+    if (!known) {
+      // `cadence: n/a` is the vault SAYING they are not scheduled — maternity, long-term
+      // sick, whatever. Adele Norman-Swift is on maternity leave and was being reported
+      // every morning as a direct report missing a NOVA plan, which is not a gap but the
+      // system agreeing with itself. Reporting a deliberate decision as drift is how a
+      // drift report stops being read.
+      if (cadenceDaysFor(p.cadence) === null) continue;
+      drift.notInNova.push(p.name);
+      continue;
+    }
 
     const stated = String(p.cadence || '').trim();
     const days = cadenceDaysFor(p.cadence);
