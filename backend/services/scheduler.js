@@ -1103,7 +1103,7 @@ function start() {
     } catch (e) { console.error('[Scheduler] Alert checks failed:', e.message); }
   });
 
-  console.log('[Scheduler] Started — pre-warm 8:55am, standup 9am, 1-2-1 9:10am, nag 15m, EOD pre-warm 4:55pm, EOD 5pm, weekly review Fri 4:30pm, knowledge reflection Mon 8:10am, import consolidation hourly, import report 18:10, plan milestone 9:05am, escalations 5m, email triage 8/12/17, meeting prep 5m, Plaud MCP 30m, MS Tasks 30m');
+  console.log('[Scheduler] Started — pre-warm 8:55am, standup 9am, 1-2-1 9:10am, nag 15m, EOD pre-warm 4:55pm, EOD 5pm, weekly review Fri 4:30pm, knowledge reflection Mon 8:10am, import consolidation hourly, import report 18:10, plan milestone 9:05am, escalations 5m, email triage 8/12/17, meeting prep 5m, Plaud MCP 15m, MS Tasks 30m');
 
   // Last, so every tracked job is registered. Staggered — several of these walk
   // the whole vault, and a deploy should not cost a load spike on a Pi that is
