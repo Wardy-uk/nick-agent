@@ -124,6 +124,20 @@ router.get('/', (req, res) => {
       meta: t.meta || {},
       moscow: t.moscow || null,
       moscowProposed: Boolean(t.moscowProposed),
+      // ⚠ A FOURTH whitelist, and a field missing from it is dropped IN
+      // SILENCE — the way estimateMinutes vanished from POST /api/tasks. This
+      // is what the panel renders, so anything not listed here simply does not
+      // exist as far as every badge, filter and control is concerned.
+      //
+      // Commitment or continual improvement. Raw and undefaulted: null means
+      // "not classified", and the panel's filter counts it as its own pile.
+      origin: t.origin || null,
+      originProposed: Boolean(t.originProposed),
+      // Work or personal. Added at the same time because it was missing too, so
+      // `domainBadge` in TodoPanel could never fire in full mode — the personal
+      // chip has never once rendered on this screen. Same whitelist, same
+      // silent drop, one line to close it.
+      domain: t.domain || null,
       context: t.context || null,
       needsToday: Boolean(t.needsToday),
       createdAt: t.createdAt || null,

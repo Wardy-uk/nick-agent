@@ -1193,3 +1193,16 @@
     background: rgba(129, 140, 248, 0.18);
   }
 }
+
+/* The origin filters, marked as a set so they read as one question ("whose idea
+   was this?") rather than three more chips in a row of eight. The tint matches
+   the row badge, so the chip you press and the badge you then see are the same
+   colour — and `unclassified` is deliberately NEUTRAL, because "I have not
+   decided yet" is not a warning state. */
+.todo-filter-btn.origin-filter {
+  border-left-width: 3px;
+  border-left-style: solid;
+}
+.todo-filter-btn.origin-filter.commitment { border-left-color: rgba(234, 88, 12, 0.75); }
+.todo-filter-btn.origin-filter.improvement { border-left-color: rgba(99, 102, 241, 0.75); }
+.todo-filter-btn.origin-filter.unclassified { border-left-color: var(--border, #334155); }

@@ -4,7 +4,7 @@ import useCachedFetch from '../useCachedFetch';
 import { duePresets } from '../../../shared/due-dates.cjs';
 import { msPlanBadge, recurrenceLabel } from '../../../shared/ms-task.cjs';
 import { domainBadge } from '../../../shared/task-domain.cjs';
-import { originBadge, ORIGINS, SHORT_LABELS, DESCRIPTIONS, LABELS } from '../../../shared/task-origin.cjs';
+import { originBadge, ORIGINS, SHORT_LABELS, DESCRIPTIONS, LABELS, UNCLASSIFIED_LABEL } from '../../../shared/task-origin.cjs';
 import TimeFitCard from './TimeFitCard';
 import TaskDedupe from './TaskDedupe';
 import TaskBlocks, { BlockTimeControl } from './TaskBlocks';
@@ -1434,6 +1434,27 @@ export default function TodoPanel({ focusContext, onClearContext }) {
     return c;
   }, [activeTodos]);
 
+  // Commitment / continual improvement / not yet classified — the same split the
+  // weekly risk report to Chris counts, so the screen he classifies on and the
+  // document he signs cannot disagree about the size of each pile.
+  //
+  // ⚠ UNCLASSIFIED counts only rows NEURO OWNS (`task_id`). A Microsoft mirror
+  // line or a vault checkbox has no origin column and no Origin control on its
+  // expanded row, so gathering them here would build a filter whose whole
+  // purpose is "what do I still have to decide" out of rows that cannot be
+  // decided — a dead end, and a count that disagrees with the report for a
+  // reason nothing on screen explains.
+  const originCounts = useMemo(() => {
+    const c = { commitment: 0, improvement: 0, unclassified: 0 };
+    for (const t of activeTodos) {
+      if (!t.task_id) continue;
+      if (t.origin === 'commitment') c.commitment++;
+      else if (t.origin === 'improvement') c.improvement++;
+      else c.unclassified++;
+    }
+    return c;
+  }, [activeTodos]);
+
   let filtered = activeTodos;
   if (filter === 'mustdo') {
     filtered = mustDoTodos;
@@ -1448,6 +1469,12 @@ export default function TodoPanel({ focusContext, onClearContext }) {
     });
   } else if (filter === 'high') {
     filtered = activeTodos.filter(t => t.priority === 'high');
+  } else if (filter === 'commitment' || filter === 'improvement') {
+    filtered = activeTodos.filter(t => t.origin === filter);
+  } else if (filter === 'unclassified') {
+    // Positively: unset, and NOT "everything that is not a commitment" — which
+    // would sweep in the improvement pile the moment someone edits this line.
+    filtered = activeTodos.filter(t => t.task_id && !t.origin);
   } else if (['plan', 'vault', 'ms'].includes(filter)) {
     filtered = activeTodos.filter(t => getTopGroup(t.source) === filter);
     if (subFilters.length > 0) {
@@ -1571,13 +1598,19 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           { key: 'overdue', label: `Overdue (${overdueTodos.length})` },
           { key: 'today', label: 'Due today' },
           { key: 'high', label: 'High priority' },
+          // Nick's own split. Full labels rather than the badge's short forms:
+          // a filter is a labelled control with room, and these have to read the
+          // same as the headings in the report they feed.
+          { key: 'commitment', label: `${LABELS.commitment}s (${originCounts.commitment})` },
+          { key: 'improvement', label: `${LABELS.improvement} (${originCounts.improvement})` },
+          { key: 'unclassified', label: `${UNCLASSIFIED_LABEL} (${originCounts.unclassified})` },
           { key: 'plan', label: `90-Day Plan (${topCounts.plan})` },
           { key: 'vault', label: `Vault Todos (${topCounts.vault})` },
           { key: 'ms', label: `MS Tasks (${topCounts.ms})` },
         ].map(f => (
           <button
             key={f.key}
-            className={`todo-filter-btn ${filter === f.key ? 'active' : ''}${f.key === 'mustdo' ? ' mustdo-filter' : ''}`}
+            className={`todo-filter-btn ${filter === f.key ? 'active' : ''}${f.key === 'mustdo' ? ' mustdo-filter' : ''}${['commitment', 'improvement', 'unclassified'].includes(f.key) ? ` origin-filter ${f.key}` : ''}`}
             onClick={() => setTopFilter(f.key)}
           >
             {f.label}
