@@ -5,8 +5,9 @@
  * Propose an origin — commitment or continual improvement — for tasks that have
  * none.
  *
- *   node backend/scripts/backfill-task-origin.js            # show what it would do
- *   node backend/scripts/backfill-task-origin.js --apply    # write the proposals
+ *   node backend/scripts/backfill-task-origin.js              # show what it would do
+ *   node backend/scripts/backfill-task-origin.js --apply      # write the proposals
+ *   node backend/scripts/backfill-task-origin.js --open-only  # skip finished tasks (rarely what you want)
  *
  * ── Why this is a script and not a migration ─────────────────────────────────
  *
@@ -35,16 +36,22 @@ const db = require(path.join(__dirname, '..', 'db', 'database'));
 const { inferOrigin, LABELS } = require(path.join(__dirname, '..', '..', 'shared', 'task-origin.cjs'));
 
 const APPLY = process.argv.includes('--apply');
-// Closed tasks are history; classifying them changes no report. `--all` is there
-// for the one-off case of wanting the archive labelled too.
-const ALL_STATUSES = process.argv.includes('--all');
+// ⚠ Closed tasks are classified TOO, by default.
+//
+// The first cut skipped them, reasoning that history changes no report. That is
+// wrong, and it showed the moment the report was read: "Closed w/c ..." IS
+// history, and with every finished task unclassified it read **0 commitments
+// closed** in a week Nick had closed 43 things — the report understating his
+// output in the one section meant to show it. `--open-only` is the escape
+// hatch, and it is the option nobody should normally want.
+const OPEN_ONLY = process.argv.includes('--open-only');
 
 async function main() {
   // The DB is opened lazily; a script is not the server and nothing else has
   // done this for it.
   await db.init();
 
-  const where = ALL_STATUSES ? '' : " AND status IN ('open','in-progress')";
+  const where = OPEN_ONLY ? " AND status IN ('open','in-progress')" : '';
   const rows = db.all(`SELECT id, text, source, origin_path, ms_source, due_date, status
                        FROM tasks WHERE origin IS NULL${where} ORDER BY id`);
 

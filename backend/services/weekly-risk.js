@@ -1180,6 +1180,14 @@ function render(a) {
     if (t.unclassified.open > 0) {
       lines.push(`**${t.unclassified.open}** open task${t.unclassified.open === 1 ? '' : 's'} ${t.unclassified.open === 1 ? 'has' : 'have'} not been marked as either, of which **${t.unclassified.overdue}** ${t.unclassified.overdue === 1 ? 'is past its' : 'are past their'} due date.`);
       lines.push('');
+      // ⚠ The CLOSED figure has its own remainder, and it is invisible without
+      // this line: a reader seeing "25 commitments closed" beside a whole-list
+      // "43 closed" is left to wonder where eighteen went, in a section whose
+      // job is to show what Nick got done.
+      if (t.unclassified.closedLastWeek) {
+        lines.push(`A further **${t.unclassified.closedLastWeek}** task${t.unclassified.closedLastWeek === 1 ? ' was' : 's were'} closed last week without being classified, so ${t.unclassified.closedLastWeek === 1 ? 'it does' : 'they do'} not appear in either “closed” figure above.`);
+        lines.push('');
+      }
       lines.push('> ⚠️ These are **not** counted in the overdue commitment figure above, and are **not** being written off as improvement work. Nothing in the task store records who asked for a piece of work, so the split is only as complete as the classification. Treat the commitment figure as a floor until this is zero.');
     } else {
       lines.push('None — every open task is marked as a commitment or as improvement work, so the figures above are the whole picture.');

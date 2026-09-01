@@ -774,6 +774,17 @@ test('NEGATIVE: unclassified overdue work is neither counted as a commitment nor
   assert.match(md, /Treat the commitment figure as a floor/);
 });
 
+test('the closed figure names its own unclassified remainder', () => {
+  // A reader seeing 25 closed commitments beside a whole-list 43 is otherwise
+  // left to wonder where eighteen went, in the one section meant to show output.
+  const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({
+    open: 40, closedLastWeek: 43,
+    commitments: group({ open: 29, closedLastWeek: 25 }),
+    unclassified: group({ open: 11, closedLastWeek: 18 }),
+  })));
+  assert.match(md, /A further \*\*18\*\* tasks were closed last week without being classified/);
+});
+
 test('a fully classified list SAYS so — the absence of a caveat is itself a fact', () => {
   const md = weeklyRisk.render(weeklyRisk.assess(taskSnap({
     open: 20, commitments: group({ open: 12 }), improvement: group({ open: 8 }),
