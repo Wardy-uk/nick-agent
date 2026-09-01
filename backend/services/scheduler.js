@@ -947,8 +947,13 @@ function start() {
     });
   }, 90 * 1000);
 
-  // Every 30 minutes 8am-6pm — sync Plaud via official MCP
-  cron.schedule('*/30 8-18 * * *', () => {
+  // Every 15 minutes 8am-6pm — sync Plaud via official MCP.
+  // 15 rather than 30 because of the speaker-naming hold: a recording held waiting
+  // for PLAUD to name its voices is re-checked on this tick, and the hold is bounded
+  // at an hour, so a 30-minute tick would give it only two chances to catch the
+  // names. A tick with nothing pending costs ONE list_files call — already-synced
+  // recordings are skipped before any per-recording fetch.
+  cron.schedule('*/15 8-18 * * *', () => {
     console.log('[Scheduler] Syncing Plaud via MCP...');
     require('./plaud-sync').syncPlaudRecordings({ incremental: true }).catch(e => {
       console.error('[Scheduler] Plaud MCP sync failed:', e.message);

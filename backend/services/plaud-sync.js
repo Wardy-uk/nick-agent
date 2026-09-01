@@ -12,6 +12,20 @@ const DEFAULT_RETRY_BASE_MS = Number(process.env.PLAUD_MCP_RETRY_BASE_MS || 1500
 const DEFAULT_BETWEEN_RECORDINGS_MS = Number(process.env.PLAUD_MCP_BETWEEN_RECORDINGS_MS || 750);
 const DEFAULT_STALE_RUN_MS = Number(process.env.PLAUD_MCP_STALE_RUN_MS || 2 * 60 * 60 * 1000);
 const DEFAULT_SUMMARY_STABILIZATION_HOURS = Number(process.env.PLAUD_SUMMARY_STABILIZATION_HOURS || 24);
+// How long a recording may be held back waiting for PLAUD to name its speakers,
+// and whether to hold at all. The wait is bounded because the deadline is the only
+// thing that makes holding safe: on expiry the recording is pulled REGARDLESS, with
+// the note stamped to say the speakers were never named.
+const DEFAULT_SPEAKER_WAIT_MINUTES = Number(process.env.PLAUD_SPEAKER_WAIT_MINUTES || 60);
+function speakerWaitEnabled() {
+  return String(process.env.PLAUD_SPEAKER_WAIT_ENABLED || 'true').toLowerCase() !== 'false';
+}
+function speakerWaitMs() {
+  const minutes = Number.isFinite(DEFAULT_SPEAKER_WAIT_MINUTES) && DEFAULT_SPEAKER_WAIT_MINUTES > 0
+    ? DEFAULT_SPEAKER_WAIT_MINUTES
+    : 60;
+  return minutes * 60 * 1000;
+}
 
 function getVaultPath() {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || '';
@@ -125,9 +139,9 @@ function readSyncState() {
     const raw = db.getState(PLAUD_STATE_KEY);
     return raw
       ? JSON.parse(raw)
-      : { syncedRecordings: {}, failedRecordings: {}, lastSuccessfulSyncAt: null, lastRunAt: null };
+      : { syncedRecordings: {}, failedRecordings: {}, pendingSpeakers: {}, lastSuccessfulSyncAt: null, lastRunAt: null };
   } catch {
-    return { syncedRecordings: {}, failedRecordings: {}, lastSuccessfulSyncAt: null, lastRunAt: null };
+    return { syncedRecordings: {}, failedRecordings: {}, pendingSpeakers: {}, lastSuccessfulSyncAt: null, lastRunAt: null };
   }
 }
 
@@ -523,6 +537,10 @@ function extractTranscriptSegments(payload) {
  *  long meeting, and the cap exists so a broken cursor cannot loop for ever. */
 const MAX_TRANSCRIPT_PAGES = 40;
 
+// A label of the "Speaker 3" form is a slot, not a name — matched case-insensitively
+// and allowing the bare word, so "speaker" alone is not mistaken for somebody called it.
+const GENERIC_SPEAKER_RE = /^speaker[ _-]*[0-9]*$/i;
+
 // Render segments using the real `speaker` name (NOT original_speaker, the raw
 // "Speaker N" label) with an mm:ss timestamp.
 function renderTranscript(segments) {
@@ -533,6 +551,139 @@ function renderTranscript(segments) {
       return `**${s.speaker || 'Speaker'}** \`${t}\`  ${s.content.trim()}`;
     })
     .join('\n\n');
+}
+
+/**
+ * Whether PLAUD has finished putting real names to the voices in a recording. PURE —
+ * takes segments, no clock, no network, no DB (the `pi-health.assess()` split).
+ *
+ * Every segment carries BOTH `speaker` and `original_speaker`. The raw diarisation
+ * label ("Speaker 1") lands in `original_speaker` and stays there; `speaker` is where
+ * a real name appears once one has been assigned. So an unnamed voice is one whose
+ * `speaker` still equals its raw label — verified against live recordings, where a
+ * named 1-2-1 reads `speaker: "Nick Ward" / original_speaker: "Speaker 1"` and an
+ * unnamed one reads `"Speaker 2" / "Speaker 2"`.
+ *
+ * ⚠ A slot counts as named if ANY of its segments names it. Attribution is per
+ * utterance and PLAUD is not perfectly consistent across a long recording; requiring
+ * every line to agree would hold a fully named meeting on one stray label for ever.
+ *
+ * ⚠ This says names were ASSIGNED, never that they are CORRECT. Live data has a
+ * segment labelled "Nick Ward" whose raw label is "Speaker 2" — two voices merged.
+ * Nothing here can see that, and nothing here should claim to.
+ */
+function assessSpeakerNaming(segments) {
+  const list = Array.isArray(segments) ? segments : [];
+  const slots = new Map();
+
+  for (const segment of list) {
+    if (!segment || typeof segment !== 'object') continue;
+    // Fall back to `speaker` for the slot identity only when there is no raw label —
+    // an older payload shape, not the normal case.
+    const label = String(segment.original_speaker || segment.speaker || '').trim();
+    if (!label) continue;
+    const name = String(segment.speaker || '').trim();
+    const named = Boolean(name) && name !== label && !GENERIC_SPEAKER_RE.test(name);
+
+    const slot = slots.get(label) || { label, name: null, named: false };
+    if (named && !slot.named) {
+      slot.named = true;
+      slot.name = name;
+    }
+    slots.set(label, slot);
+  }
+
+  const speakers = [...slots.values()];
+  if (!speakers.length) {
+    // No segments is NOT "nobody is named" — it is "there is nothing to judge yet",
+    // and the two license opposite behaviour. Holding on an absence would wait out
+    // the full deadline on every recording whose transcript never arrives.
+    return {
+      known: false,
+      complete: false,
+      solo: false,
+      speakers: [],
+      total: 0,
+      namedCount: 0,
+      unnamed: [],
+      reason: 'no transcript segments to judge speakers on'
+    };
+  }
+
+  const unnamed = speakers.filter((slot) => !slot.named).map((slot) => slot.label);
+  const namedCount = speakers.length - unnamed.length;
+
+  return {
+    known: true,
+    complete: unnamed.length === 0,
+    // A recording with one voice has nothing to disambiguate, so PLAUD never names it.
+    // Holding one would burn the whole deadline on every solo memo, every time.
+    solo: speakers.length === 1,
+    speakers,
+    total: speakers.length,
+    namedCount,
+    unnamed,
+    reason: unnamed.length === 0
+      ? `all ${speakers.length} speaker${speakers.length === 1 ? '' : 's'} named`
+      : `${unnamed.length} of ${speakers.length} still unnamed (${unnamed.join(', ')})`
+  };
+}
+
+/**
+ * Whether to hold a recording back for another cycle. PURE — `now` and `firstSeenAt`
+ * are passed in, never read from the clock.
+ *
+ * ⚠ The deadline is what makes holding safe, so every path that cannot measure it
+ * PULLS. A hold that can outlive its own clock is a recording that never arrives, and
+ * a transcript nobody can find is a far worse failure than an unattributed one.
+ */
+function decideSpeakerHold({ naming, firstSeenAt, now, maxHoldMs = 60 * 60 * 1000, enabled = true } = {}) {
+  if (!enabled) return { hold: false, outcome: 'disabled', waitedMs: null, reason: 'speaker wait is switched off' };
+  if (!naming || !naming.known) {
+    return { hold: false, outcome: 'unjudgeable', waitedMs: null, reason: naming ? naming.reason : 'no naming assessment' };
+  }
+  if (naming.complete) return { hold: false, outcome: 'named', waitedMs: null, reason: naming.reason };
+  if (naming.solo) return { hold: false, outcome: 'solo', waitedMs: null, reason: 'single speaker — PLAUD has nobody to tell apart' };
+
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
+  const seenMs = firstSeenAt instanceof Date ? firstSeenAt.getTime() : Date.parse(firstSeenAt);
+  if (!Number.isFinite(nowMs) || !Number.isFinite(seenMs)) {
+    return { hold: false, outcome: 'unmeasurable', waitedMs: null, reason: 'cannot measure how long this has waited — pulling rather than holding blind' };
+  }
+
+  // A stamp in the future (clock skew, a restored backup) reads as no wait at all
+  // rather than as a negative one, so it can still expire normally.
+  const waitedMs = Math.max(0, nowMs - seenMs);
+  if (waitedMs >= maxHoldMs) {
+    return { hold: false, outcome: 'timeout', waitedMs, reason: `waited ${Math.round(waitedMs / 60000)} min — pulling with ${naming.reason}` };
+  }
+
+  return { hold: true, outcome: 'waiting', waitedMs, reason: naming.reason };
+}
+
+// The wait is measured from when NEURO FIRST SAW the recording, and that stamp is
+// persisted. An in-memory timer would be wrong twice over: the backend restarts several
+// times a day on deploys, so the hour would reset on each one and a recording could be
+// held indefinitely, never reaching the deadline that makes holding safe.
+function noteSpeakerHold(syncState, recordingId, nowIso, naming) {
+  if (!syncState.pendingSpeakers) syncState.pendingSpeakers = {};
+  const existing = syncState.pendingSpeakers[recordingId];
+  syncState.pendingSpeakers[recordingId] = {
+    firstSeenAt: existing?.firstSeenAt || nowIso,
+    lastCheckedAt: nowIso,
+    attempts: (existing?.attempts || 0) + 1,
+    unnamed: naming?.unnamed || [],
+    total: naming?.total || 0
+  };
+  return syncState.pendingSpeakers[recordingId];
+}
+
+function clearSpeakerHold(syncState, recordingId) {
+  if (syncState.pendingSpeakers && syncState.pendingSpeakers[recordingId]) {
+    delete syncState.pendingSpeakers[recordingId];
+    return true;
+  }
+  return false;
 }
 
 function escapeYaml(value) {
@@ -635,7 +786,7 @@ function renderSummaryNote(recording, note, summaryBody, transcriptRelativePath)
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
-function renderTranscriptNote(recording, summaryRelativePath, transcriptBody) {
+function renderTranscriptNote(recording, summaryRelativePath, transcriptBody, naming = null) {
   const meetingDate = new Date(recording.start_at || recording.created_at || Date.now()).toISOString().slice(0, 10);
   const lines = [
     '---',
@@ -647,6 +798,10 @@ function renderTranscriptNote(recording, summaryRelativePath, transcriptBody) {
     'type: transcript',
     'note_type: "transcript"',
     'source: PLAUD',
+    // Three-valued on purpose: null is "never judged" (no transcript to judge on, or a
+    // note written before this existed), which is NOT the same fact as "judged, and the
+    // speakers were never named". A reader must be able to tell those apart.
+    `speakers_named: ${naming && naming.known ? String(naming.complete) : 'null'}`,
     '---',
     '',
     `# ${recording.name || recording.id}`,
@@ -656,6 +811,13 @@ function renderTranscriptNote(recording, summaryRelativePath, transcriptBody) {
     '## Transcript',
     ''
   ];
+
+  // Say it in the body as well as the frontmatter. This note is read by a person
+  // looking for who said what, and an unattributed transcript that looks exactly like
+  // an attributed one is how a "Speaker 2" quote gets put in somebody's mouth.
+  if (naming && naming.known && !naming.complete) {
+    lines.push(`> ⚠ Speakers were never named in PLAUD — ${naming.reason}. Attribution below is unreliable.`, '');
+  }
 
   if (transcriptBody && transcriptBody.trim()) {
     lines.push(transcriptBody.trim());
@@ -762,7 +924,8 @@ async function syncPlaudRecordings({ incremental = true } = {}) {
           const preferredSummary = choosePreferredSummary(Array.isArray(noteList) ? noteList : []);
           const summaryBody = renderNote(noteList);
           // Retry on empty — PLAUD returns nothing while a recording is still transcribing.
-          const transcriptBody = await fetchTranscriptBody(client, recording.id);
+          const transcriptSegments = await fetchTranscriptSegments(client, recording.id);
+          const transcriptBody = renderTranscript(transcriptSegments);
 
           // Not ready: PLAUD has produced neither transcript nor summary yet (a premature
           // pull mid-processing). Skip WITHOUT writing a stub or marking it synced, so the
@@ -772,6 +935,43 @@ async function syncPlaudRecordings({ incremental = true } = {}) {
             console.log(`[PlaudSync] ${recording.id} not ready (no transcript/summary yet) — retry next cycle`);
             continue;
           }
+
+          // Ready, but are the speakers named? PLAUD assigns real names some minutes
+          // after the transcript itself lands, so pulling the moment a transcript exists
+          // reliably captures it at its least useful — "Speaker 2" throughout, permanently,
+          // because nothing re-pulls a recording once it is ledgered.
+          //
+          // ⚠ Holding costs a re-fetch per cycle and is bounded by a persisted deadline.
+          // On expiry the recording is pulled ANYWAY, stamped as unattributed: a late
+          // transcript is a nuisance, a transcript that never arrives is a lost meeting.
+          const speakerNaming = assessSpeakerNaming(transcriptSegments);
+          const pending = syncState.pendingSpeakers?.[recording.id] || null;
+          const speakerHold = decideSpeakerHold({
+            naming: speakerNaming,
+            firstSeenAt: pending?.firstSeenAt || new Date().toISOString(),
+            now: new Date(),
+            maxHoldMs: speakerWaitMs(),
+            enabled: speakerWaitEnabled()
+          });
+
+          if (speakerHold.hold) {
+            const held = noteSpeakerHold(syncState, recording.id, new Date().toISOString(), speakerNaming);
+            // Persisted PER RECORDING, never batched to the end of the run: a crash or a
+            // deploy mid-pass would otherwise lose the stamp and restart the clock.
+            writeSyncState(syncState);
+            skipped += 1;
+            console.log(
+              `[PlaudSync] ${recording.id} held for speaker naming — ${speakerHold.reason}; ` +
+              `waited ${Math.round((speakerHold.waitedMs || 0) / 60000)}/${Math.round(speakerWaitMs() / 60000)} min, attempt ${held.attempts}`
+            );
+            // NOT ledgered, so `shouldProcessRecording` re-offers it next cycle.
+            continue;
+          }
+
+          if (speakerHold.outcome === 'timeout') {
+            console.warn(`[PlaudSync] ${recording.id} pulled UNATTRIBUTED — ${speakerHold.reason}`);
+          }
+          if (clearSpeakerHold(syncState, recording.id)) writeSyncState(syncState);
 
           const baseName = buildNoteBaseName(details);
           const defaultSummaryRelativePath = `${normalizeVaultPath(getSummaryFolder())}/${baseName}.md`;
@@ -792,7 +992,7 @@ async function syncPlaudRecordings({ incremental = true } = {}) {
           );
           const transcriptWrite = writeFile(
             transcriptRelativePath,
-            renderTranscriptNote(details, summaryRelativePath, transcriptBody)
+            renderTranscriptNote(details, summaryRelativePath, transcriptBody, speakerNaming)
           );
 
           let transcriptResult = null;
@@ -895,7 +1095,7 @@ async function syncPlaudRecordings({ incremental = true } = {}) {
 }
 
 function getStatus() {
-  let syncState = { syncedRecordings: {}, failedRecordings: {}, lastSuccessfulSyncAt: null, lastRunAt: null };
+  let syncState = { syncedRecordings: {}, failedRecordings: {}, pendingSpeakers: {}, lastSuccessfulSyncAt: null, lastRunAt: null };
   let running = false;
   let stale = false;
   let lastError = null;
@@ -912,6 +1112,17 @@ function getStatus() {
 
   const syncedCount = Object.keys(syncState.syncedRecordings || {}).length;
   const failedCount = Object.keys(syncState.failedRecordings || {}).length;
+  // A held recording is one NEURO has deliberately not written yet, so it must be
+  // visible: silently absent from the vault while everything reports healthy is exactly
+  // how nine days of missing meetings went unnoticed before.
+  const pendingSpeakers = Object.entries(syncState.pendingSpeakers || {}).map(([id, held]) => ({
+    id,
+    firstSeenAt: held?.firstSeenAt || null,
+    lastCheckedAt: held?.lastCheckedAt || null,
+    attempts: held?.attempts || 0,
+    unnamed: held?.unnamed || [],
+    total: held?.total || 0
+  }));
   const vaultConfigured = Boolean(process.env.OBSIDIAN_VAULT_PATH);
   return {
     configured: vaultConfigured,
@@ -925,7 +1136,13 @@ function getStatus() {
     lastSuccessfulSyncAt: syncState.lastSuccessfulSyncAt || null,
     lastError,
     syncedCount,
-    failedCount
+    failedCount,
+    speakerWait: {
+      enabled: speakerWaitEnabled(),
+      maxHoldMinutes: Math.round(speakerWaitMs() / 60000),
+      pendingCount: pendingSpeakers.length,
+      pending: pendingSpeakers
+    }
   };
 }
 
@@ -1072,14 +1289,19 @@ async function processRecordingFresh(client, recording, syncState) {
   const summaryBody = renderNote(noteList);
   // get_transcript returns empty intermittently under load even when a transcript
   // exists; fetchTranscriptBody retries on empty before giving up (prevents stubs).
-  const transcriptBody = await fetchTranscriptBody(client, recording.id);
+  const transcriptSegments = await fetchTranscriptSegments(client, recording.id);
+  const transcriptBody = renderTranscript(transcriptSegments);
+  // ⚠ Repull is a deliberate manual recovery for a recording that is MISSING, so it
+  // never waits for naming — it pulls and stamps what it found. Holding here would make
+  // the one route back from a lost meeting refuse to run for an hour.
+  const speakerNaming = assessSpeakerNaming(transcriptSegments);
 
   const baseName = buildNoteBaseName(details);
   const summaryRelativePath = `${normalizeVaultPath(getSummaryFolder())}/${baseName}.md`;
   const transcriptRelativePath = `${normalizeVaultPath(getTranscriptFolder())}/${baseName}.md`;
 
   const summaryWrite = writeFile(summaryRelativePath, renderSummaryNote(details, preferredSummary, summaryBody, transcriptRelativePath));
-  const transcriptWrite = writeFile(transcriptRelativePath, renderTranscriptNote(details, summaryRelativePath, transcriptBody));
+  const transcriptWrite = writeFile(transcriptRelativePath, renderTranscriptNote(details, summaryRelativePath, transcriptBody, speakerNaming));
 
   let transcriptResult = null;
   try { transcriptResult = await require('./transcript-processor').processTranscript(transcriptWrite.fullPath); }
@@ -1212,7 +1434,13 @@ const PLAUD_BACKUP_REL = ['Scripts', '.lint-backups'];
  * The empty-retry stays for the case it was written for — PLAUD genuinely returning
  * nothing under load — but it now only fires when page ONE is empty.
  */
-async function fetchTranscriptBody(client, id, { emptyRetries = 3, emptyDelayMs = 2500 } = {}) {
+/**
+ * The transcript SEGMENTS, paginated. Split out of `fetchTranscriptBody` so the
+ * speaker-naming gate can read the structured fields it needs without a second,
+ * identical download — the sync already pays for this fetch before it decides
+ * anything, so checking whether the speakers are named costs no extra API calls.
+ */
+async function fetchTranscriptSegments(client, id, { emptyRetries = 3, emptyDelayMs = 2500 } = {}) {
   for (let attempt = 0; attempt <= emptyRetries; attempt += 1) {
     const segments = [];
     let offset = 0;
@@ -1233,11 +1461,16 @@ async function fetchTranscriptBody(client, id, { emptyRetries = 3, emptyDelayMs 
       offset = next;
     }
 
-    const body = renderTranscript(segments);
-    if (body && body.trim()) return body;
+    // ⚠ Retry on an empty RENDER, not an empty segment list: a page of segments that all
+    // render blank is the same "still transcribing" state, and was the original bug here.
+    if (renderTranscript(segments).trim()) return segments;
     if (attempt < emptyRetries) await sleep(emptyDelayMs * (attempt + 1));
   }
-  return '';
+  return [];
+}
+
+async function fetchTranscriptBody(client, id, options = {}) {
+  return renderTranscript(await fetchTranscriptSegments(client, id, options));
 }
 
 // Find every note carrying the stub marker that has a plaud_id to re-fetch.
@@ -1319,6 +1552,8 @@ module.exports = {
   renderNote,
   renderTranscript,
   extractTranscriptSegments,
+  assessSpeakerNaming,
+  decideSpeakerHold,
   htmlUnescape,
   // exported for tests / reuse
   _internal: {
