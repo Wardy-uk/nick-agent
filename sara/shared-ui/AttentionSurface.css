@@ -39,6 +39,40 @@
   margin: 0 auto;
 }
 
+/* ── On a desk-sized window ─────────────────────────────────────────────────
+   Nick, 1 Sep 2026: "she still wants to be wider — fill 75% of the available
+   width."
+
+   The 34rem measure above is right in the hand and right at a metre on the Pi
+   panel, but on a 2500px monitor it leaves her sitting in a narrow column with
+   the field doing all the work either side. 75% is his call and it is a
+   reasonable one for a screen read from further away than a phone.
+
+   ⚠ It goes in THIS file, not in either shell's App.css, for two reasons. The
+   base rule is in here, so putting the override anywhere else makes the result
+   depend on CSS import order — which is exactly how the kiosk's retired 248px
+   sidebar came to beat the phone's bottom bar on the real panel. And the desk
+   kiosk wants the same treatment for the same reason, so one rule serves both
+   rather than two rules drifting.
+
+   ⚠ The upper bound is deliberate, not timidity. At 75% of a 3440px ultrawide a
+   sentence is ~2400px, which is roughly 300 characters a line — past about 90
+   the eye loses its place returning to the left margin, and her one line is the
+   product. 75% up to a ceiling gives Nick the width he asked for on every
+   monitor he actually uses, and stops only where the line would stop being
+   readable at all. */
+@media (min-width: 900px) {
+  .surface__content {
+    max-width: 75%;
+  }
+}
+
+@media (min-width: 1800px) {
+  .surface__content {
+    max-width: min(75%, 88rem);
+  }
+}
+
 /* ── Crown ─────────────────────────────────────────────────────────────────
  * Small and wordless about its own certainty. The state is one lowercase word;
  * the reasoning is a tap away. The previous version put "MODERATE CONFIDENCE"
