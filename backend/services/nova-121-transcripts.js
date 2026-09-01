@@ -297,6 +297,10 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
       plaudId, agentName: person, meetingDate: date, title,
       notePath: rel, transcript, attribution,
       participants: participants.join(', ') || null,
+      // Local wall-clock, passed through as the vault stores it. NOVA renders the time
+      // by string match rather than parsing — a Date would shift it by the viewer's
+      // offset and move an afternoon 1-2-1 into the morning.
+      startedAt: fm.start_at || null,
       durationMinutes,
       summaryExcerpt: summaryExcerptFrom(body),
     };
