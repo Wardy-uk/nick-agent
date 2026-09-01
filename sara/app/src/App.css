@@ -227,3 +227,83 @@ body {
   flex: 0 0 auto;
   min-width: 64px;
 }
+
+/* ── On a desktop-sized window ──────────────────────────────────────────────
+   Nick, 1 Sep 2026, looking at the Electron shell: "make her almost full
+   width", and "what is that scrollbar all about????"
+
+   ⚠ WIDE MEANS THE FIELD, NOT THE WORDS. `.app` was capped at 720px, which is
+   right in the hand and leaves her substrate as a narrow strip down the middle
+   of a 2500px monitor with dead ground either side — a picture of a field
+   rather than the room you are in. So the SHELL goes full width and the field
+   with it, while `.surface__content` keeps its 34rem measure and stays centred.
+   Stretching a sentence across a monitor is not presence, it is just a long
+   line nobody can read.
+
+   The breakpoint is deliberately above any phone in landscape. */
+@media (min-width: 900px) {
+  .app {
+    max-width: 100%;
+  }
+
+  /* Four tabs sharing 2500px would be four 600px buttons. They keep a thumb's
+     width and sit in the middle, under the words. */
+  .app__nav {
+    justify-content: center;
+    gap: 1rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .app__nav .navbtn {
+    flex: 0 1 8rem;
+  }
+
+  .app__header {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+/* ── The scrollbar ──────────────────────────────────────────────────────────
+   ⚠ It is not spurious — the surface genuinely overflows once the agenda, the
+   sentences, the held items and the ambient lines are all on screen, and
+   scrolling is the correct answer to that. What was wrong is that it arrived as
+   a full-fat Windows scrollbar: a grey shaft with arrow buttons, drawn straight
+   over her field, roughly as loud as the words.
+
+   So it is thinned rather than hidden. Hiding it would make a scrollable
+   surface look unscrollable, which is worse — this screen already asks Nick to
+   believe that what is on it is everything there is. */
+.app__view {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+.app__view::-webkit-scrollbar {
+  width: 8px;
+}
+
+.app__view::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app__view::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  /* Inset from the edge so it floats over the field rather than butting
+     against the frame. */
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.app__view::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.26);
+  background-clip: content-box;
+}
+
+/* Chromium draws stepper arrows on Windows by default — two more grey boxes
+   nobody uses on a touch-first surface. */
+.app__view::-webkit-scrollbar-button {
+  display: none;
+}

@@ -151,3 +151,14 @@
   color: #e0726a;
 }
 .exitnav__act--yes:hover { background: rgba(224, 114, 106, 0.14); }
+
+/* ⚠ Matches the tabs at the same breakpoint. The shared shell stops stretching
+   `.navbtn` to fill a wide window and gives each one a thumb's width instead;
+   without this `.exitnav` keeps `flex: 1` and Exit alone swells to fill the
+   gap, which is the one button on the bar that should draw the least
+   attention. */
+@media (min-width: 900px) {
+  .exitnav {
+    flex: 0 1 8rem;
+  }
+}
