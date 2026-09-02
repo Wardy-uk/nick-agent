@@ -84,10 +84,16 @@ function vantageSpend() {
       .get().n > 0;
     if (!hasDocs) return { known: false, reason: 'VANTAGE has no document store yet' };
 
+    // ⚠ The column is `json`, not `data`. Copied verbatim from
+    //     CREATE TABLE docs (id INTEGER PRIMARY KEY, collection TEXT, json TEXT)
+    // after the first cut guessed `data` and the panel spent a deploy reporting
+    // "could not read VANTAGE ledger (no such column: data)". It failed the
+    // right way — a named gap rather than a $0.00 — but the lesson is the older
+    // one: read an external schema, never hand-write it from memory.
     const rows = db
-      .prepare("SELECT data FROM docs WHERE collection = 'llm_calls'")
+      .prepare("SELECT json FROM docs WHERE collection = 'llm_calls'")
       .all()
-      .map(r => { try { return JSON.parse(r.data); } catch { return null; } })
+      .map(r => { try { return JSON.parse(r.json); } catch { return null; } })
       .filter(Boolean);
 
     // A ledger that exists but is empty is a DIFFERENT fact from one that
