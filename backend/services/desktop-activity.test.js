@@ -193,3 +193,130 @@ test('the long-run observation remembers having been said', () => {
   const second = desk.longRunObservation(NOW);
   assert.equal(second, null, 'and not reported again a moment later');
 });
+
+// ── More than one machine ────────────────────────────────────────────────────
+//
+// Everything below is about the failure that has no symptom. With one host
+// installed all of it passes trivially; the moment a second one reports, the old
+// single-ring implementation was wrong in ways that produce plausible numbers
+// and log nothing.
+
+test('the legacy single ring migrates into per-host buckets, losslessly', () => {
+  db.setState(desk.STATE_KEY, JSON.stringify({
+    samples: [
+      { at: ago(2), app: 'Code', idleSeconds: 1, locked: false, host: 'LAPTOP' },
+      { at: ago(4), app: 'chrome', idleSeconds: 1, locked: false, host: 'DESK' },
+      { at: ago(6), app: 'Code', idleSeconds: 1, locked: false, host: 'LAPTOP' },
+      { at: ago(8), app: 'Code', idleSeconds: 1, locked: false },   // no host at all
+    ],
+    mentioned: { Code: ago(5) },
+  }));
+
+  assert.equal(desk.samples().length, 4, 'every sample survives the migration');
+  assert.equal(desk.samples({ host: 'LAPTOP' }).length, 2);
+  assert.equal(desk.samples({ host: 'DESK' }).length, 1);
+  assert.equal(desk.samples({ host: desk.UNKNOWN_HOST }).length, 1,
+    'a sample with no hostname goes somewhere nameable, not nowhere');
+
+  // The mention is carried, not dropped: staying quiet slightly too long beats
+  // repeating the line the moment we deploy.
+  assert.equal(desk.longRunObservation(NOW), null);
+});
+
+test('a second machine does not evict the first machine samples', () => {
+  db.setState(desk.STATE_KEY, '');
+  for (let i = 0; i < desk.MAX_SAMPLES; i += 1) desk.record({ app: 'Code', host: 'LAPTOP', idleSeconds: 1 });
+  assert.equal(desk.samples({ host: 'LAPTOP' }).length, desk.MAX_SAMPLES);
+
+  for (let i = 0; i < 50; i += 1) desk.record({ app: 'chrome', host: 'DESK', idleSeconds: 1 });
+  assert.equal(desk.samples({ host: 'LAPTOP' }).length, desk.MAX_SAMPLES,
+    'the laptop keeps its full window — a shared ring would have halved it');
+  assert.equal(desk.samples({ host: 'DESK' }).length, 50);
+});
+
+test('interleaved machines do not cut each other runs short', () => {
+  // The bug this whole change exists for. Two hosts, samples alternating in
+  // time. In ONE list, the other machine's sample sits mid-run in a different
+  // app and ends it, so a three-hour stretch reports as two minutes — quietly,
+  // with nothing logged.
+  const laptop = stream(90, 'Code');                       // 3 hours, newest-first
+  const deskPc = stream(90, 'chrome', { from: 1, idleSeconds: 4000 }); // on, but idle
+
+  const merged = [...laptop, ...deskPc].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  const naive = desk.currentRun(merged, NOW);
+  assert.ok(naive.minutes < 10, 'proof the old shape was broken: one list reads the run as minutes');
+
+  const across = desk.runAcross({ LAPTOP: laptop, DESK: deskPc }, NOW);
+  assert.equal(across.app, 'Code');
+  assert.ok(across.minutes >= 170, `the real run survives (${across.minutes} min)`);
+  assert.equal(across.host, 'LAPTOP', 'and it says which machine it is talking about');
+});
+
+test('an ACTIVE machine outranks one that is merely switched on', () => {
+  const across = desk.runAcross({
+    IDLE_BOX: stream(30, 'chrome', { idleSeconds: 4000 }),
+    LAPTOP: stream(30, 'Code', { from: 1 }),
+  }, NOW);
+  assert.equal(across.host, 'LAPTOP');
+  assert.equal(across.app, 'Code');
+  assert.equal(across.hosts.length, 2, 'both machines are reported either way');
+});
+
+test('a run is only unbroken if he was not on the OTHER machine during it', () => {
+  // Two hours in Code on the laptop, but he was actively on the desktop forty
+  // minutes ago. Each list in isolation says two hours; that is true of the list
+  // and false about the man.
+  const across = desk.runAcross({
+    LAPTOP: stream(60, 'Code'),
+    DESK: stream(5, 'chrome', { from: 40 }),
+  }, NOW);
+
+  assert.equal(across.host, 'LAPTOP');
+  assert.ok(across.minutes <= 45, `the run starts after the interruption (got ${across.minutes})`);
+  assert.deepEqual(across.otherHostsActive, ['DESK'], 'and names what interrupted it');
+});
+
+test('an idle other machine does not interrupt anything', () => {
+  const across = desk.runAcross({
+    LAPTOP: stream(60, 'Code'),
+    DESK: stream(30, 'chrome', { from: 10, idleSeconds: 4000 }),
+  }, NOW);
+  assert.ok(across.minutes >= 110, 'a switched-on machine he is not using is not a break');
+  assert.deepEqual(across.otherHostsActive, []);
+});
+
+test('no machines at all is unknown, and says so', () => {
+  const across = desk.runAcross({}, NOW);
+  assert.equal(across.known, false);
+  assert.equal(across.host, null);
+  assert.deepEqual(across.hosts, []);
+  assert.match(across.why, /never reported/);
+});
+
+test('the number of hosts is bounded', () => {
+  db.setState(desk.STATE_KEY, '');
+  for (let i = 0; i < desk.MAX_HOSTS + 3; i += 1) {
+    desk.record({ app: 'Code', host: `BOX${i}`, idleSeconds: 1 });
+  }
+  assert.equal(desk.hosts().length, desk.MAX_HOSTS,
+    'a reporter with a rolling hostname cannot grow the blob without limit');
+});
+
+test('the long-run memory is per machine', () => {
+  db.setState(desk.STATE_KEY, JSON.stringify({
+    hosts: {
+      LAPTOP: { samples: stream(120, 'Code'), mentioned: {} },
+    },
+  }));
+  assert.ok(desk.longRunObservation(NOW), 'the laptop run is reported');
+  assert.equal(desk.longRunObservation(NOW), null, 'and not repeated');
+
+  // A different machine running the same app long is a separate fact, and must
+  // not be silenced by the first machine having been mentioned.
+  const state = JSON.parse(db.getState(desk.STATE_KEY));
+  state.hosts.DESK = { samples: stream(120, 'Code', { from: 1 }), mentioned: {} };
+  // Push the laptop out of contention so DESK is the primary.
+  state.hosts.LAPTOP.samples = stream(5, 'Code', { from: 600 });
+  db.setState(desk.STATE_KEY, JSON.stringify(state));
+  assert.ok(desk.longRunObservation(NOW), 'the second machine gets its own mention');
+});

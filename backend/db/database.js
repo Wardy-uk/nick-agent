@@ -1311,6 +1311,64 @@ function getHealthDay(day) {
   return get('SELECT * FROM health_daily WHERE day = ?', [day]);
 }
 
+// ── Desktop agent, rolled up per day per machine ──
+// One row per (day, host). See services/desktop-daily.js for why nothing is
+// merged across hosts and why a thinner row must never overwrite a fuller one.
+
+function upsertDesktopDay(row) {
+  run(
+    `INSERT INTO desktop_daily (
+       day, host, present_minutes, active_minutes, idle_minutes, locked_minutes,
+       apps, top_app, top_app_minutes, longest_run_minutes, first_at, last_at,
+       sample_count, complete, computed_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+     ON CONFLICT(day, host) DO UPDATE SET
+       present_minutes=excluded.present_minutes, active_minutes=excluded.active_minutes,
+       idle_minutes=excluded.idle_minutes, locked_minutes=excluded.locked_minutes,
+       apps=excluded.apps, top_app=excluded.top_app,
+       top_app_minutes=excluded.top_app_minutes,
+       longest_run_minutes=excluded.longest_run_minutes,
+       first_at=excluded.first_at, last_at=excluded.last_at,
+       sample_count=excluded.sample_count, complete=excluded.complete,
+       computed_at=CURRENT_TIMESTAMP`,
+    [
+      row.day, row.host, row.presentMinutes ?? null, row.activeMinutes ?? null,
+      row.idleMinutes ?? null, row.lockedMinutes ?? null, row.apps ?? null,
+      row.topApp ?? null, row.topAppMinutes ?? null, row.longestRunMinutes ?? null,
+      row.firstAt ?? null, row.lastAt ?? null, row.sampleCount ?? 0,
+      row.complete ? 1 : 0,
+    ]
+  );
+}
+
+function getDesktopDay(day, host) {
+  return get('SELECT * FROM desktop_daily WHERE day = ? AND host = ?', [day, host]);
+}
+
+// Newest first. `days` bounds DISTINCT DAYS, not rows — with two machines
+// reporting, a plain LIMIT would return one day's pair and call it two days.
+function getDesktopDays(days, { completeOnly = false, host = null } = {}) {
+  return all(
+    `SELECT * FROM desktop_daily
+      WHERE day IN (
+        SELECT day FROM desktop_daily
+         ${completeOnly ? 'WHERE complete = 1' : ''}
+         GROUP BY day ORDER BY day DESC LIMIT ?
+      )
+      ${completeOnly ? 'AND complete = 1' : ''}
+      ${host ? 'AND host = ?' : ''}
+      ORDER BY day DESC, host ASC`,
+    host ? [days || 30, host] : [days || 30]
+  );
+}
+
+function getDesktopDaysFor(day, host = null) {
+  return all(
+    `SELECT * FROM desktop_daily WHERE day = ? ${host ? 'AND host = ?' : ''} ORDER BY host ASC`,
+    host ? [day, host] : [day]
+  );
+}
+
 // ── Location Visits ──
 
 function saveLocationVisit(dateKey, placeName, lat, lng, arrival, departure, durationMinutes, source, placeId) {
@@ -1875,6 +1933,10 @@ module.exports = {
   getHealthSamplesBetween,
   getSleepSamplesBetween,
   upsertHealthDay,
+  upsertDesktopDay,
+  getDesktopDay,
+  getDesktopDays,
+  getDesktopDaysFor,
   getHealthDays,
   getHealthDay,
   getHealthSamples,

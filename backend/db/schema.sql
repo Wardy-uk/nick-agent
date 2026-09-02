@@ -954,3 +954,41 @@ CREATE TABLE IF NOT EXISTS attention_events (
 );
 CREATE INDEX IF NOT EXISTS idx_attention_events_record ON attention_events(record_id, at DESC);
 CREATE INDEX IF NOT EXISTS idx_attention_events_at ON attention_events(at DESC);
+
+-- What the desktop agent saw, rolled up per day per machine.
+--
+-- The live samples are a ~13-hour ring buffer in agent_state by design: "what is
+-- he doing lately" is disposable state. That leaves no history at all, which is
+-- the whole reason RescueTime looked like the better option until its coverage
+-- was measured (9 blind weekdays in three months, 0.16h logged against 8.21h
+-- actually worked). This is the durable half. Same shape as health_daily:
+-- materialised rather than derived on read, because the samples it is built from
+-- age out of the ring within the day.
+--
+-- ONE ROW PER (day, host). Deliberately not merged across machines: summing two
+-- hosts double-counts an hour spent switching between them, and the raw samples
+-- needed to take a union are gone by the time anyone asks.
+CREATE TABLE IF NOT EXISTS desktop_daily (
+  day             TEXT NOT NULL,     -- YYYY-MM-DD, LOCAL (never toISOString)
+  host            TEXT NOT NULL,
+  -- present = active + idle + locked, by construction. Intervals longer than the
+  -- agent's reporting gap are NOT counted: a machine asleep for an hour was not
+  -- an hour at the desk.
+  present_minutes REAL,
+  active_minutes  REAL,
+  idle_minutes    REAL,
+  locked_minutes  REAL,
+  apps            TEXT,              -- JSON { app: minutes }, active time only
+  top_app         TEXT,
+  top_app_minutes REAL,
+  longest_run_minutes REAL,          -- longest unbroken stretch in ONE app
+  first_at        TEXT,
+  last_at         TEXT,
+  sample_count    INTEGER NOT NULL DEFAULT 0,
+  -- The DAY is over. Says nothing about whether the agent was running for all of
+  -- it — that is what sample_count and first/last_at are for.
+  complete        INTEGER NOT NULL DEFAULT 0,
+  computed_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (day, host)
+);
+CREATE INDEX IF NOT EXISTS idx_desktop_daily_day ON desktop_daily(day DESC);

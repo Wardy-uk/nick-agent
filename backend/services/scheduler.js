@@ -553,6 +553,35 @@ function start() {
     }
   });
 
+  // Hourly at :50 — roll the desktop agent's samples into desktop_daily.
+  //
+  // ⚠ The cadence is not cosmetic. The live buffer is a ring of MAX_SAMPLES
+  // (~13 hours at the agent's two-minute cadence), so anything not rolled up
+  // within that window is GONE — unlike the health rollup, which reads a table
+  // that keeps its own history and can be re-derived at any time. Hourly leaves
+  // an order of magnitude of headroom; a boot run below covers a restart landing
+  // mid-hour.
+  //
+  // Deliberately NOT a scheduleDaily/TRACKED_JOBS job, same call as wins and the
+  // health rollup: sync() recomputes a trailing window and refuses to overwrite
+  // a fuller row with a thinner one, so a missed hour is corrected by the next
+  // and there is nothing to replay.
+  const rollDesktop = where => {
+    try {
+      const { written, skipped, gaps } = require('./desktop-daily').sync();
+      // Gaps and refusals are both logged. A rollup that quietly writes nothing
+      // because the buffer was unreadable looks exactly like a quiet day, and
+      // that conflation is the entire reason this feature exists.
+      for (const g of gaps) console.warn(`[Scheduler] Desktop rollup gap — ${g.input}: ${g.why}`);
+      for (const s of skipped) console.warn(`[Scheduler] Desktop rollup kept the stored ${s.day} (${s.host}): ${s.why}`);
+      if (written) console.log(`[Scheduler] Desktop rollup (${where}): ${written} day/host row(s)`);
+    } catch (e) {
+      console.error('[Scheduler] Desktop rollup failed:', e.message);
+    }
+  };
+  cron.schedule('50 * * * *', () => rollDesktop('hourly'));
+  setTimeout(() => rollDesktop('startup'), 40000);
+
   // 03:10 nightly — re-roll a WIDE window of health days.
   //
   // The hourly job re-reads 10 trailing days, which is right for steady state:

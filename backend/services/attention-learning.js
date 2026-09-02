@@ -272,7 +272,20 @@ function _judge(delivery) {
   try {
     if (rule.kind === 'desktop-switch') {
       const desk = require('./desktop-activity');
-      const samples = desk.samples().filter(s => s.at > from && s.at <= to);
+      // ⚠ Scoped to ONE machine. Merged across hosts, a second machine's
+      // samples always name a different app, so "he switched" would be
+      // trivially true and every nudge would learn as having worked.
+      //
+      // The host is taken from the WINDOW itself — whichever machine reported
+      // most in it — never from `run()`, which judges freshness against now and
+      // would answer about the machine he is at this minute rather than the one
+      // he was at when the nudge landed.
+      const inWindow = desk.samples().filter(s => s.at > from && s.at <= to);
+      if (!inWindow.length) return 'unmeasurable';
+      const counts = {};
+      for (const s of inWindow) counts[s.host || ''] = (counts[s.host || ''] || 0) + 1;
+      const host = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+      const samples = inWindow.filter(s => (s.host || '') === host);
       if (!samples.length) return 'unmeasurable';
       // Any app other than the one he was in, or going idle, counts as a break.
       const changed = samples.some(s => !s.app || s.idleSeconds > 600);

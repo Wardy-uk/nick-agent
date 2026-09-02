@@ -200,6 +200,82 @@ function atLaptop(samples = [], now = new Date()) {
 }
 
 /**
+ * Whether a sample is him actively using that machine. PURE.
+ *
+ * Shared by `runAcross` and the daily rollup so "active" cannot come to mean two
+ * things — the rollup's hours and the live run must be answering the same
+ * question about the same sample.
+ */
+function isActive(sample) {
+  if (!sample || sample.locked) return false;
+  if (Number(sample.idleSeconds) >= IDLE_AWAY_MINUTES * 60) return false;
+  return sanitiseApp(sample.app) != null;
+}
+
+/**
+ * The current run across EVERY reporting machine. PURE.
+ *
+ * `buckets` is `{ [host]: samples[] }`, each newest-first. Returns `currentRun`'s
+ * shape plus `host` (which machine answered), `hosts` (what each one said) and
+ * `otherHostsActive`.
+ *
+ * ⚠ Which host answered is ALWAYS reported. A run attributed to the wrong
+ * machine is worse than no run, and with one host installed the field is simply
+ * always the same — that is the point at which it is cheap to get right.
+ *
+ * ⚠ A run on one machine is only unbroken if he was not on ANOTHER machine
+ * during it. Two hosts will each report a tidy three-hour stretch for an
+ * afternoon spent switching between them: true of each list in isolation, false
+ * about the man. So the run starts after the last moment another machine saw
+ * real use, and says which one interrupted it.
+ */
+function runAcross(buckets = {}, now = new Date()) {
+  const entries = Object.entries(buckets || {}).filter(([, s]) => Array.isArray(s) && s.length);
+  if (!entries.length) {
+    return {
+      known: false, app: null, label: null, minutes: 0,
+      why: 'the laptop has never reported', host: null, hosts: [], otherHostsActive: [],
+    };
+  }
+
+  const runs = entries.map(([host, list]) => ({ host, list, run: currentRun(list, now), newest: list[0] }));
+
+  // An ACTIVE host beats a merely-reporting one, and inside each group the
+  // freshest sample wins. A machine that is on but idle must never outrank the
+  // one he is actually typing at.
+  const rank = r => (r.run.known && r.run.app ? 2 : r.run.known ? 1 : 0);
+  runs.sort((a, b) => (rank(b) - rank(a)) || String(b.newest.at).localeCompare(String(a.newest.at)));
+  const primary = runs[0];
+
+  const hosts = runs.map(r => ({ host: r.host, at: r.newest.at, known: r.run.known, active: !!r.run.app }));
+  const base = { ...primary.run, host: primary.host, hosts, otherHostsActive: [] };
+  if (!primary.run.known || !primary.run.app) return base;
+
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
+  let startMs = Date.parse(primary.run.since);
+  let since = primary.run.since;
+  const interrupted = [];
+  for (const other of runs) {
+    if (other.host === primary.host) continue;
+    // Newest-first, so the first hit is the LATEST time another machine was in
+    // use — which is where this run really began.
+    const hit = other.list.find(s => {
+      const t = Date.parse(s.at);
+      return isActive(s) && Number.isFinite(t) && t > startMs && t <= nowMs;
+    });
+    if (hit) { startMs = Date.parse(hit.at); since = hit.at; interrupted.push(other.host); }
+  }
+  if (!interrupted.length) return base;
+
+  return {
+    ...base,
+    since,
+    minutes: Math.max(0, Math.round(_minutesBetween(since, now) || 0)),
+    otherHostsActive: interrupted,
+  };
+}
+
+/**
  * Should a long run be mentioned? PURE.
  *
  * `lastMentioned` is the ISO time this app's run was last surfaced, so a poll
@@ -240,28 +316,112 @@ function _minutesBetween(fromIso, toIsoOrDate) {
   return (b - a) / 60000;
 }
 
-// ── Storage ──────────────────────────────────────────────────────────────────
+// ── Storage, bucketed by host ────────────────────────────────────────────────
+
+/**
+ * ⚠ Samples are bucketed BY HOST, and that is not tidiness.
+ *
+ * Until 2 Sep 2026 every sample went into ONE 400-slot ring. With one machine
+ * that is correct and cheap; the moment a second box runs the agent it is wrong
+ * in two ways at once, and both are silent:
+ *
+ *  1. Both hosts compete for the same 400 slots, so the window each machine can
+ *     see halves — and MAX_SAMPLES is the whole basis of "twelve hours of
+ *     history".
+ *  2. Worse, `currentRun` walks one list looking for CONTIGUITY. Interleave two
+ *     hosts and the other machine's sample lands mid-run in a different app and
+ *     ends it. Every run length would read short, with nothing logged and no
+ *     error anywhere — which is precisely the failure this feature caught in
+ *     RescueTime, where 0.16h was reported against a measured 8.21h day.
+ *
+ * So each host gets its own ring and its own `mentioned` map. Fixed BEFORE the
+ * second install rather than after, because after is when the numbers are wrong
+ * and plausible.
+ */
+
+// A reporter that sends no hostname still has to go somewhere. Written and read
+// in this one module so the two halves cannot drift — an unrecognised marker
+// arriving on a card as a machine name is the `(plan unknown)` lesson.
+const UNKNOWN_HOST = 'unknown';
+
+// The whole thing is one `agent_state` blob, parsed on every read, and several
+// surfaces poll it. Four machines is already more than Nick owns; the cap is
+// here so a reporter with a rolling hostname cannot grow the blob without limit.
+const MAX_HOSTS = 4;
+
+function _hostKey(host) {
+  const s = host == null ? '' : String(host).trim().slice(0, 40);
+  return s || UNKNOWN_HOST;
+}
+
+function _blankBucket() {
+  return { samples: [], mentioned: {} };
+}
 
 function _load() {
   try {
     const raw = db.getState(STATE_KEY);
-    if (!raw) return { samples: [], mentioned: {} };
+    if (!raw) return { hosts: {} };
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return {
-      samples: Array.isArray(parsed.samples) ? parsed.samples : [],
-      mentioned: parsed.mentioned && typeof parsed.mentioned === 'object' ? parsed.mentioned : {},
-    };
+
+    if (parsed && parsed.hosts && typeof parsed.hosts === 'object') {
+      const hosts = {};
+      for (const [h, b] of Object.entries(parsed.hosts)) {
+        hosts[h] = {
+          samples: Array.isArray(b && b.samples) ? b.samples : [],
+          mentioned: b && b.mentioned && typeof b.mentioned === 'object' ? b.mentioned : {},
+        };
+      }
+      return { hosts };
+    }
+
+    // ── Migration from the single-ring shape ──
+    // Lossless: every sample already carries the host that sent it, so the rows
+    // go where they always belonged. `mentioned` is COPIED into each bucket
+    // rather than dropped — the conservative direction is a long-run line that
+    // stays quiet slightly too long, not one that repeats the moment we deploy.
+    const legacy = Array.isArray(parsed && parsed.samples) ? parsed.samples : [];
+    const mentioned = parsed && parsed.mentioned && typeof parsed.mentioned === 'object' ? parsed.mentioned : {};
+    const hosts = {};
+    for (const s of legacy) {
+      const k = _hostKey(s && s.host);
+      if (!hosts[k]) hosts[k] = { samples: [], mentioned: { ...mentioned } };
+      hosts[k].samples.push(s);
+    }
+    if (!Object.keys(hosts).length && Object.keys(mentioned).length) {
+      hosts[UNKNOWN_HOST] = { samples: [], mentioned: { ...mentioned } };
+    }
+    return { hosts };
   } catch (e) {
     console.error('[Desktop] Could not read activity:', e.message);
-    return { samples: [], mentioned: {} };
+    return { hosts: {} };
   }
 }
 
+/** Drop the least-recently-reporting hosts past MAX_HOSTS. */
+function _prune(state) {
+  const keys = Object.keys(state.hosts);
+  if (keys.length <= MAX_HOSTS) return;
+  keys
+    .map(h => ({ h, at: (state.hosts[h].samples[0] || {}).at || '' }))
+    .sort((a, b) => String(b.at).localeCompare(String(a.at)))
+    .slice(MAX_HOSTS)
+    .forEach(({ h }) => { delete state.hosts[h]; });
+}
+
 function _save(state) {
-  db.setState(STATE_KEY, JSON.stringify({
-    samples: state.samples.slice(0, MAX_SAMPLES),
-    mentioned: state.mentioned || {},
-  }));
+  const hosts = {};
+  for (const [h, b] of Object.entries(state.hosts || {})) {
+    hosts[h] = { samples: (b.samples || []).slice(0, MAX_SAMPLES), mentioned: b.mentioned || {} };
+  }
+  db.setState(STATE_KEY, JSON.stringify({ hosts }));
+}
+
+/** `{ [host]: samples[] }` — what the pure functions take. */
+function _buckets(state) {
+  const out = {};
+  for (const [h, b] of Object.entries(state.hosts || {})) out[h] = b.samples || [];
+  return out;
 }
 
 /**
@@ -271,6 +431,7 @@ function _save(state) {
  */
 function record({ app = null, idleSeconds = 0, locked = false, host = null, at = null } = {}) {
   const state = _load();
+  const key = _hostKey(host);
 
   const stamp = at && Number.isFinite(Date.parse(at)) ? new Date(at).toISOString() : new Date().toISOString();
   const sample = {
@@ -280,45 +441,75 @@ function record({ app = null, idleSeconds = 0, locked = false, host = null, at =
     app: locked ? null : sanitiseApp(app),
     idleSeconds: Math.max(0, Math.round(Number(idleSeconds) || 0)),
     locked: !!locked,
-    host: host ? String(host).slice(0, 40) : null,
+    // The normalised key, never the raw value: a sample whose host disagreed
+    // with the bucket holding it is a trap for everything downstream.
+    host: key,
   };
 
-  // Newest first, and out-of-order arrivals are placed rather than assumed —
-  // a reporter catching up after a sleep can post a batch.
-  state.samples.unshift(sample);
-  state.samples.sort((a, b) => String(b.at).localeCompare(String(a.at)));
-  state.samples = state.samples.slice(0, MAX_SAMPLES);
+  if (!state.hosts[key]) state.hosts[key] = _blankBucket();
+  const bucket = state.hosts[key];
+  // Newest first, and out-of-order arrivals are placed rather than assumed — a
+  // reporter catching up after a sleep can post a batch.
+  bucket.samples.unshift(sample);
+  bucket.samples.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  bucket.samples = bucket.samples.slice(0, MAX_SAMPLES);
+
+  _prune(state);
   _save(state);
 
   return sample;
 }
 
-function samples() {
-  return _load().samples;
+/**
+ * Samples, newest first. Merged across machines by default — "has anything
+ * reported lately" is a question about the estate, not about one box. Pass a
+ * host for the questions that are about one machine, such as whether a run was
+ * broken.
+ */
+function samples({ host = null } = {}) {
+  const state = _load();
+  if (host != null) return ((state.hosts[_hostKey(host)] || {}).samples || []).slice();
+  return Object.values(state.hosts)
+    .flatMap(b => b.samples || [])
+    .sort((a, b) => String(b.at).localeCompare(String(a.at)));
 }
 
-/** The current run, read from stored samples. */
+/** What each machine last said. Read-only, and the basis of the senses row. */
+function hosts() {
+  const state = _load();
+  return Object.entries(state.hosts).map(([host, b]) => ({
+    host,
+    sampleCount: (b.samples || []).length,
+    lastAt: (b.samples || [])[0] ? b.samples[0].at : null,
+  })).sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
+}
+
+/** The current run, read from stored samples, across every machine. */
 function run(now = new Date()) {
-  return currentRun(_load().samples, now);
+  return runAcross(_buckets(_load()), now);
 }
 
-/** Whether he is at the laptop, read from stored samples. */
+/** Whether he is at a machine at all, and which one. */
 function present(now = new Date()) {
-  return atLaptop(_load().samples, now);
+  const r = run(now);
+  if (!r.known) return { known: false, at: false, why: r.why, host: null };
+  return { known: true, at: r.app != null, why: r.why || null, host: r.host };
 }
 
 /**
  * The long-run observation, if there is one — and it REMEMBERS having said it,
- * so a surface polled every thirty seconds does not repeat the same line.
- * Recording the mention is a write, so this is not pure; the judgement it wraps
- * is.
+ * so a surface polled every thirty seconds does not repeat the same line. The
+ * memory is PER HOST, because the same app running long on two machines is two
+ * separate facts. Recording the mention is a write, so this is not pure; the
+ * judgement it wraps is.
  */
 function longRunObservation(now = new Date()) {
   const state = _load();
-  const r = currentRun(state.samples, now);
-  const obs = assessDesk({ run: r, lastMentioned: state.mentioned[r.app] || null, now });
-  if (obs) {
-    state.mentioned[obs.app] = now.toISOString();
+  const r = runAcross(_buckets(state), now);
+  const bucket = r.host ? state.hosts[r.host] : null;
+  const obs = assessDesk({ run: r, lastMentioned: (bucket && bucket.mentioned[r.app]) || null, now });
+  if (obs && bucket) {
+    bucket.mentioned[obs.app] = now.toISOString();
     _save(state);
   }
   return obs;
@@ -328,18 +519,23 @@ module.exports = {
   // pure
   sanitiseApp,
   labelFor,
+  isActive,
   currentRun,
+  runAcross,
   atLaptop,
   assessDesk,
   // stateful
   record,
   samples,
+  hosts,
   run,
   present,
   longRunObservation,
   // constants
   STATE_KEY,
   MAX_SAMPLES,
+  MAX_HOSTS,
+  UNKNOWN_HOST,
   FRESH_MINUTES,
   IDLE_AWAY_MINUTES,
   LONG_RUN_MINUTES,
