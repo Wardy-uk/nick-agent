@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useContext, useEffect, useRef } from 'react';
+import { FieldCoverContext } from './FieldCover';
 import './Field.css';
 
 // Field — SARA's presence on the phone.
@@ -190,6 +191,13 @@ function drive({ degraded, confidenceLevel, quiet, activity, pressing }) {
 // blank canvas, and it costs nothing to honour.
 export default function Field({ activity, confidenceLevel, quiet = false, degraded = false, pressing = false, still = false }) {
   const canvasRef = useRef(null);
+  // See FieldCover. An overlay covering this subtree means nobody can see the
+  // field, whatever the tab's visibility state says.
+  const covered = useContext(FieldCoverContext);
+  const coveredRef = useRef(covered);
+  // The running loop's handles, so covering can stop and start it WITHOUT
+  // re-running the effect below — that would rebuild the substrate and flicker.
+  const loopRef = useRef(null);
   // Live state the loop reads without being torn down and rebuilt — regenerating
   // the substrate on every poll would make the whole field flicker once a minute.
   const driveRef = useRef(drive({ degraded, confidenceLevel, quiet, activity, pressing }));
@@ -413,16 +421,23 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
     }
     function onVisibility() {
-      if (document.visibilityState === 'hidden') stop(); else start();
+      // ⚠ Returning to the tab must not resume a field that is still covered —
+      // the two reasons to be stopped are independent and either one holds.
+      if (document.visibilityState === 'hidden' || coveredRef.current) stop();
+      else start();
     }
 
     const ro = new ResizeObserver(() => { build(); });
     ro.observe(canvas);
     document.addEventListener('visibilitychange', onVisibility);
-    start();
+    loopRef.current = { start, stop };
+    // ⚠ Do not start under an overlay. Mounting while already covered is the
+    // normal case on a kiosk that has been locked for hours.
+    if (!coveredRef.current) start();
 
     return () => {
       stop();
+      loopRef.current = null;
       ro.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
     };
@@ -431,6 +446,13 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
     // `driveRef` precisely so a poll cannot rebuild the substrate and make the
     // whole field flicker once a minute.
   }, [still]);
+
+  useEffect(() => {
+    coveredRef.current = covered;
+    const loop = loopRef.current;
+    if (!loop) return;          // `still` and reduced-motion have no loop to stop
+    if (covered) loop.stop(); else loop.start();
+  }, [covered]);
 
   return (
     <div className="field" aria-hidden="true">

@@ -3,6 +3,7 @@ import { SaraStateProvider, useSaraState } from './state/saraState';
 import { useDisplayState } from './state/useDisplayState';
 import { PRIMARY, SECONDARY, TABS, DEFAULT_TAB, revealsSecondary } from '../../shared-ui/tabs';
 import Field from '../../shared-ui/Field';
+import { FieldCover } from '../../shared-ui/FieldCover';
 import { useFieldDrive } from '../../shared-ui/useFieldDrive';
 import ExitButton from './components/ExitButton';
 import LockScreen from './components/LockScreen';
@@ -62,11 +63,17 @@ function AppShell() {
   const { state: displayState, detail: displayDetail } = useDisplayState();
   const locked = displayState === 'locked';
   const showClock = displayState === 'clock';
-  // ⚠ Both of these render as an OVERLAY over the live shell rather than
-  // instead of it, and each mounts a Field of its own — so the suppression rule
-  // above was one case short and the kiosk drew TWO full-screen fields at once,
-  // which is the exact thing its comment says must not happen. Locked, that was
-  // ~22,000 stroke calls a frame behind a backlight set to 0.
+  // ⚠ Both of these render as an OVERLAY over the live shell rather than instead
+  // of it. Everything they cover is still mounted, still polling and — this is
+  // the expensive part — still ANIMATING: the kiosk opens on the Surface, which
+  // mounts a Field of its own, so the shell's `active !== 'surface'` rule never
+  // applied to the one that was actually running. It painted underneath a
+  // privacy lock, behind a backlight set to 0, for as long as Nick was out.
+  //
+  // `FieldCover` wraps exactly the covered subtree, so every field inside it
+  // stops and the overlays' own fields — which ARE visible, and in the clock's
+  // case lit — are untouched. The shell field stays suppressed as well: two
+  // stacked fields is a separate wrong, about layering rather than cost.
   const overlayOwnsScreen = locked || showClock;
 
   const ActiveView = useMemo(
@@ -100,75 +107,81 @@ function AppShell() {
           only on her own (Nick, 31 Aug 2026). Suppressed on the Surface, which
           mounts its own driven by the real attention payload; two stacked
           fields would put a `quiet` placeholder under an honest one. */}
-      {!overlayOwnsScreen && active !== 'surface' && (
-        <div className="app__field" aria-hidden="true"><Field {...fieldDrive} /></div>
-      )}
+      <FieldCover covered={overlayOwnsScreen}>
+        {!overlayOwnsScreen && active !== 'surface' && (
+          <div className="app__field" aria-hidden="true"><Field {...fieldDrive} /></div>
+        )}
 
-      <header className="app__header">
-        <span className="app__brand">SARA</span>
-        {/* Not chrome. "This is demo data" and "nothing here is current" are
-            facts about everything below, and this is the surface with nobody
-            standing at it to ask. Silent when live. */}
-        <ConnectionStatus />
-      </header>
+        <header className="app__header">
+          <span className="app__brand">SARA</span>
+          {/* Not chrome. "This is demo data" and "nothing here is current" are
+              facts about everything below, and this is the surface with nobody
+              standing at it to ask. Silent when live. */}
+          <ConnectionStatus />
+        </header>
 
-      <main className="app__view">
-        {/* `key` forces a fresh mount when switching Capture↔Voice so
-            `autoRecord` re-fires — the phone's rule, and the same component. */}
-        <ActiveView
-          key={active}
-          autoRecord={active === 'voice'}
-          onNavigate={goTab}
-          onShowAll={() => setNavOpen(true)}
-        />
-      </main>
+        <main className="app__view">
+          {/* `key` forces a fresh mount when switching Capture↔Voice so
+              `autoRecord` re-fires — the phone's rule, and the same component. */}
+          <ActiveView
+            key={active}
+            autoRecord={active === 'voice'}
+            onNavigate={goTab}
+            onShowAll={() => setNavOpen(true)}
+          />
+        </main>
 
-      {/* ⚠ `.app__nav[hidden]{display:none}` in the phone's sheet is
-          load-bearing — the rule above it is `display:flex`, which beats the
-          bare `hidden` attribute. Without it this row renders permanently
-          open. */}
-      <nav className="app__nav app__nav--more" aria-label="Everything else" hidden={!moreVisible}>
-        {SECONDARY.map((t) => (
+        {/* ⚠ `.app__nav[hidden]{display:none}` in the phone's sheet is
+            load-bearing — the rule above it is `display:flex`, which beats the
+            bare `hidden` attribute. Without it this row renders permanently
+            open. */}
+        <nav className="app__nav app__nav--more" aria-label="Everything else" hidden={!moreVisible}>
+          {SECONDARY.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={`navbtn${active === t.id ? ' navbtn--on' : ''}`}
+              onClick={() => goTab(t.id)}
+            >
+              <span className="navbtn__icon" aria-hidden="true">{t.icon}</span>
+              <span className="navbtn__label">{t.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <nav className="app__nav" aria-label="SARA">
+          {PRIMARY.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={`navbtn${active === t.id ? ' navbtn--on' : ''}`}
+              onClick={() => goTab(t.id)}
+            >
+              <span className="navbtn__icon" aria-hidden="true">{t.icon}</span>
+              <span className="navbtn__label">{t.label}</span>
+            </button>
+          ))}
           <button
-            key={t.id}
             type="button"
-            className={`navbtn${active === t.id ? ' navbtn--on' : ''}`}
-            onClick={() => goTab(t.id)}
+            className={`navbtn${moreVisible ? ' navbtn--on' : ''}`}
+            aria-expanded={moreVisible}
+            onClick={() => setNavOpen((open) => !open)}
           >
-            <span className="navbtn__icon" aria-hidden="true">{t.icon}</span>
-            <span className="navbtn__label">{t.label}</span>
+            <span className="navbtn__icon" aria-hidden="true">⋯</span>
+            <span className="navbtn__label">More</span>
           </button>
-        ))}
-      </nav>
+          {/* ⚠ In the nav rather than the top bar (Nick, 31 Aug 2026), and LAST —
+              it is the only way out of a keyboardless kiosk, so it must be
+              findable, but it is not somewhere to go. Its two-step confirm is
+              kept: a stray palm must not close SARA. */}
+          <ExitButton variant="nav" />
+        </nav>
+      </FieldCover>
 
-      <nav className="app__nav" aria-label="SARA">
-        {PRIMARY.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={`navbtn${active === t.id ? ' navbtn--on' : ''}`}
-            onClick={() => goTab(t.id)}
-          >
-            <span className="navbtn__icon" aria-hidden="true">{t.icon}</span>
-            <span className="navbtn__label">{t.label}</span>
-          </button>
-        ))}
-        <button
-          type="button"
-          className={`navbtn${moreVisible ? ' navbtn--on' : ''}`}
-          aria-expanded={moreVisible}
-          onClick={() => setNavOpen((open) => !open)}
-        >
-          <span className="navbtn__icon" aria-hidden="true">⋯</span>
-          <span className="navbtn__label">More</span>
-        </button>
-        {/* ⚠ In the nav rather than the top bar (Nick, 31 Aug 2026), and LAST —
-            it is the only way out of a keyboardless kiosk, so it must be
-            findable, but it is not somewhere to go. Its two-step confirm is
-            kept: a stray palm must not close SARA. */}
-        <ExitButton variant="nav" />
-      </nav>
-
+      {/* ⚠ OUTSIDE the cover, deliberately. These are the visible half — the
+          clock screen is lit and its field animates; the lock screen is `still`
+          because its panel is dark. Putting them inside would stop the one
+          field anybody can actually see. */}
       {showClock && <ClockScreen now={now} say={displayDetail?.say} />}
       {locked && <LockScreen reason={displayDetail?.reason} now={now} />}
     </div>

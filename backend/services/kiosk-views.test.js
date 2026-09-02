@@ -94,6 +94,44 @@ test('⚠ ONE field at a time — an overlay owns the screen, or the shell does'
     'overlayOwnsScreen must cover both overlays, each of which mounts its own Field');
 });
 
+test('⚠ the covered subtree stops animating, and the overlays are OUTSIDE it', () => {
+  // ⚠ THE FIRST FIX MISSED THE FIELD THAT WAS ACTUALLY RUNNING. Suppressing the
+  // shell field did nothing here: the kiosk opens on the Surface (DEFAULT_TAB),
+  // which was already excluded by `active !== 'surface'` — and AttentionSurface
+  // mounts a Field of ITS OWN, which no guard in App.jsx reaches. That is the
+  // one that painted under the lock overlay. Measured after the first deploy:
+  // still 23% renderer + 23% GPU on a locked, unlit screen.
+  //
+  // So the cover has to be a property of the SUBTREE, not of a named component.
+  const src = read(APP);
+  const open = src.indexOf('<FieldCover covered={overlayOwnsScreen}>');
+  const close = src.indexOf('</FieldCover>');
+  assert.ok(open > -1 && close > open, 'the shell is not wrapped in a FieldCover');
+
+  const covered = src.slice(open, close);
+  assert.ok(covered.includes('<ActiveView'),
+    'the active view must be INSIDE the cover — its own Field is the expensive one');
+
+  // ⚠ And the overlays must be OUTSIDE it. The clock screen is lit and its field
+  // animates; stopping that would blank the only field anyone can see.
+  const after = src.slice(close);
+  assert.ok(after.includes('<ClockScreen') && after.includes('<LockScreen'),
+    'an overlay is inside the cover — its own visible field would be stopped');
+});
+
+test('⚠ covering stops the loop without rebuilding the substrate', () => {
+  // Uncovering happens exactly when Nick walks back into the room, which is the
+  // one moment the field is being looked at. Rebuilding there would flicker the
+  // whole substrate, so the cover toggles the loop through a ref rather than
+  // re-running the effect that generates it.
+  const field = read(FIELD);
+  assert.ok(field.includes('useContext(FieldCoverContext)'), 'Field ignores the cover');
+  assert.ok(field.includes('}, [covered]);'),
+    'the cover must be its own effect — folding it into the build effect rebuilds the substrate');
+  assert.ok(!field.includes('[still, covered]') && !field.includes('[covered, still]'),
+    'covered must not be a dependency of the substrate build');
+});
+
 test('⚠ the shell field is DRIVEN, not hardcoded', () => {
   // It used to be pinned at `quiet` + `low` on every screen but the Surface, so
   // she looked identical whether the queue was on fire or the day was empty —
