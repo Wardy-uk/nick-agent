@@ -51,7 +51,9 @@ const STUBS = {
   api: [
     'export const apiUrl = (p) => p;',
     "export const apiFetch = async () => ({ ok: true, status: 200, statusText: 'OK', json: async () => ({}) });",
-    'export default { apiUrl, apiFetch };',
+    'export const setPin = () => {};',
+    'export const getPin = () => null;',
+    'export default { apiUrl, apiFetch, setPin, getPin };',
   ].join('\n'),
   cached: [
     'const TODOS = ' + JSON.stringify(TODOS) + ';',
@@ -84,7 +86,7 @@ function stubPlugin(cachedStub) {
   };
 }
 
-async function render(componentFile, props, cachedStub) {
+async function render(componentFile, props, cachedStub, exportName) {
   const out = await esbuild.build({
     entryPoints: [path.join(COMPONENTS, componentFile + '.jsx')],
     bundle: true,
@@ -99,7 +101,9 @@ async function render(componentFile, props, cachedStub) {
   const mod = { exports: {} };
   // eslint-disable-next-line no-new-func
   new Function('module', 'exports', 'require', out.outputFiles[0].text)(mod, mod.exports, require);
-  return renderToString(React.createElement(mod.exports.default, props));
+  const Component = exportName ? mod.exports[exportName] : mod.exports.default;
+  if (!Component) throw new Error(`no export ${exportName || "default"} in ${componentFile}`);
+  return renderToString(React.createElement(Component, props));
 }
 
 // Browser globals these panels touch during a first render.
@@ -119,6 +123,9 @@ const PANELS = [
   ['FrictionSection', { onNavigate() {} }],
   ['Dashboard', { onNavigate() {} }],
   ['TodoPanel', { focusContext: null, onClearContext() {} }],
+  // Settings, for the integration cards - each one is a hook-bearing component
+  // whose first paint happens before its own fetch resolves.
+  ['AdminPanel', {}],
 ];
 
 for (const [name, props] of PANELS) {
@@ -127,6 +134,19 @@ for (const [name, props] of PANELS) {
     assert.equal(typeof html, 'string');
   });
 }
+
+// -- Settings actually carries the integration cards --------------------------
+
+test('Settings offers the RescueTime connect card before a key exists', async () => {
+  // "AdminPanel renders" proves the panel mounts, not that a card is in it —
+  // a component that was written and never rendered would pass that on its own.
+  const html = await render('AdminPanel', {}, 'cached', 'RescueTimeCard');
+  assert.match(html, /RescueTime/, 'the card must be mounted, not merely written');
+  assert.match(html, /anapi\/manage/, 'and it must say where the key comes from');
+  // ⚠ The card must never promise a connection is enough. The whole finding was
+  // that "connected" was true and green while RescueTime was blind.
+  assert.match(html, /desktop agent/, 'it has to say the figures are checked against our own agent');
+});
 
 // -- "Open it" lands on the row, and says so ---------------------------------
 

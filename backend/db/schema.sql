@@ -992,3 +992,26 @@ CREATE TABLE IF NOT EXISTS desktop_daily (
   PRIMARY KEY (day, host)
 );
 CREATE INDEX IF NOT EXISTS idx_desktop_daily_day ON desktop_daily(day DESC);
+
+-- RescueTime, kept as a second opinion that desktop_daily audits.
+--
+-- ⚠ NO PRODUCTIVITY PULSE, by design. Measured r = -0.96 against meeting count:
+-- it is a coding-vs-meetings ratio, and NEURO already derives both halves from
+-- git and the calendar. Storing it would add a number that looks like insight
+-- and carries none.
+--
+-- ⚠ `domains` holds BARE HOSTNAMES only. RescueTime's activity rows carry query
+-- strings and OAuth parameters verbatim, and its account holds full window
+-- titles; services/rescuetime.js cuts every value to a hostname before it gets
+-- here, and restrict_kind=document is never requested.
+--
+-- The day key is RescueTime's OWN, in the account's timezone, used verbatim.
+CREATE TABLE IF NOT EXISTS rescuetime_daily (
+  day           TEXT PRIMARY KEY,
+  total_minutes REAL,
+  categories    TEXT,            -- JSON { category: minutes }
+  domains       TEXT,            -- JSON { hostname: minutes }
+  top_category  TEXT,
+  complete      INTEGER NOT NULL DEFAULT 0,
+  fetched_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+);

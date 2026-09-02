@@ -1362,6 +1362,32 @@ function getDesktopDays(days, { completeOnly = false, host = null } = {}) {
   );
 }
 
+// ── RescueTime, one row per day ──
+// Audited against desktop_daily; see services/rescuetime.js.
+
+function upsertRescueTimeDay(row) {
+  run(
+    `INSERT INTO rescuetime_daily (day, total_minutes, categories, domains, top_category, complete, fetched_at)
+     VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)
+     ON CONFLICT(day) DO UPDATE SET
+       total_minutes=excluded.total_minutes, categories=excluded.categories,
+       domains=excluded.domains, top_category=excluded.top_category,
+       complete=excluded.complete, fetched_at=CURRENT_TIMESTAMP`,
+    [
+      row.day, row.totalMinutes ?? null, row.categories ?? null, row.domains ?? null,
+      row.topCategory ?? null, row.complete ? 1 : 0,
+    ]
+  );
+}
+
+function getRescueTimeDay(day) {
+  return get('SELECT * FROM rescuetime_daily WHERE day = ?', [day]);
+}
+
+function getRescueTimeDays(days) {
+  return all('SELECT * FROM rescuetime_daily ORDER BY day DESC LIMIT ?', [days || 30]);
+}
+
 function getDesktopDaysFor(day, host = null) {
   return all(
     `SELECT * FROM desktop_daily WHERE day = ? ${host ? 'AND host = ?' : ''} ORDER BY host ASC`,
@@ -1937,6 +1963,9 @@ module.exports = {
   getDesktopDay,
   getDesktopDays,
   getDesktopDaysFor,
+  upsertRescueTimeDay,
+  getRescueTimeDay,
+  getRescueTimeDays,
   getHealthDays,
   getHealthDay,
   getHealthSamples,

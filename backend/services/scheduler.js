@@ -582,6 +582,30 @@ function start() {
   cron.schedule('50 * * * *', () => rollDesktop('hourly'));
   setTimeout(() => rollDesktop('startup'), 40000);
 
+  // Every 3 hours at :05 — pull RescueTime's view of the same days.
+  //
+  // ⚠ Deliberately NO startup run, unlike the desktop rollup beside it. That one
+  // reads a local ring buffer that loses data if it is not drained; this is a
+  // network call to a third party, and the backend restarts several times a day
+  // on deploys — a boot fetch would mean dozens of pointless calls a week to
+  // re-read days that have not changed.
+  //
+  // Not a TRACKED_JOBS job: it re-reads a trailing 14-day window and refuses to
+  // overwrite a day that had hours with an empty one, so a missed run corrects
+  // itself. Silent when no key is configured — that is a choice, not a fault.
+  cron.schedule('5 */3 * * *', async () => {
+    try {
+      const rt = require('./rescuetime');
+      if (!rt.isConfigured()) return;
+      const { written, skipped, gaps } = await rt.sync();
+      for (const g of gaps) console.warn(`[Scheduler] RescueTime gap — ${g.input}: ${g.why}`);
+      for (const s of skipped) console.warn(`[Scheduler] RescueTime kept the stored ${s.day}: ${s.why}`);
+      if (written) console.log(`[Scheduler] RescueTime: ${written} day(s)`);
+    } catch (e) {
+      console.error('[Scheduler] RescueTime sync failed:', e.message);
+    }
+  });
+
   // 03:10 nightly — re-roll a WIDE window of health days.
   //
   // The hourly job re-reads 10 trailing days, which is right for steady state:

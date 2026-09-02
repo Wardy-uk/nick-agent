@@ -155,6 +155,32 @@ function snapshot(now = new Date()) {
     };
   });
 
+  // ── RescueTime ────────────────────────────────────────────────────────────
+  //
+  // ⚠ This row does NOT ask whether the API answered. That is what every
+  // RescueTime dashboard already tells you, and it was green throughout the nine
+  // weekdays it recorded nothing. It asks whether RescueTime AGREES with what
+  // the desktop agent independently measured — the only question that would have
+  // caught the failure.
+  guard('rescuetime', 'RescueTime', 'a second opinion on where the day went, audited against the agent', () => {
+    const svc = require('./rescuetime');
+    if (!svc.isConfigured()) {
+      // A CHOICE, not a fault: no key means Nick has not connected it.
+      return { state: 'off', why: 'no API key', detail: 'Settings → Integrations' };
+    }
+    const c = svc.coverageReport(30);
+    if (c.state === 'calibrating') {
+      // Not yet enough overlapping days to accuse it of anything. Distinct from
+      // agreeing, and it says so rather than showing a green light it has not
+      // earned.
+      return { state: 'never', why: c.why, detail: `${c.judged}/${c.needed} comparable days` };
+    }
+    if (c.state === 'under') {
+      return { state: 'stale', why: c.why, detail: `missed ${c.days.slice(0, 3).join(', ')}` };
+    }
+    return { state: 'live', detail: `agrees on ${c.judged} measured days` };
+  });
+
   // ── Apple Health ingest ───────────────────────────────────────────────────
   guard('health', 'Health data', 'sleep, HRV, resting heart rate, exercise', () => {
     const r = rate(_latestSample('hrv') || _latestSample('steps'), 60, now, { staleAfter: 12 * 60 });

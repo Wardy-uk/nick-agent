@@ -232,6 +232,7 @@ app.use('/api/state-of-play', require('./routes/state-of-play'));
 app.use('/api/attention', require('./routes/attention'));
 app.use('/api/ambient', require('./routes/ambient'));
 app.use('/api/desktop', require('./routes/desktop'));
+app.use('/api/rescuetime', require('./routes/rescuetime'));
 app.use('/api/signals', require('./routes/signals'));
 app.use('/api/profile', require('./routes/profile'));
 app.use('/api/catalogues', require('./routes/catalogue'));
