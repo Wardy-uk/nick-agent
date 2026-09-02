@@ -9,6 +9,7 @@ const microsoft = require('../services/microsoft');
 const msQueue = require('../services/ms-push-queue');
 const msTask = require('../../shared/ms-task.cjs');
 const msLocal = require('../services/ms-task-local');
+const lifecycle = require('../services/attention-lifecycle');
 
 // How many pending capture_todo suggestions the todos payload will carry. The
 // queue hit 930 in August and collapsed to single figures once #108 made it
@@ -84,6 +85,20 @@ function _recordCompletion({ text, msId = null, msSource = null, filePath = null
   } catch (e) {
     console.warn('[Todos] Could not record completion:', e.message);
   }
+}
+
+/**
+ * The attention record a lane row is about.
+ *
+ * ⚠ Built through `dedupeKeyFor` rather than slugged here, so the lane and the
+ * decision-engine's own `todo` cards land on the SAME record. That is the point
+ * of reusing the lifecycle instead of inventing a second suppression map: "not
+ * today" said in the Must Move lane is the same statement as deferring the same
+ * task on the Now page, and two stores would let one surface contradict the
+ * other about a decision Nick made once.
+ */
+function laneKeyFor(row) {
+  return lifecycle.dedupeKeyFor({ type: 'todo', title: row.text });
 }
 
 // GET /api/todos — reads tasks from Obsidian vault + 90-day plan
@@ -162,7 +177,30 @@ router.get('/', (req, res) => {
     // decoration and the lane, or the letter he just set would render on the
     // badge and change no ranking, which is the half-working shape.
     const enriched = msLocal.annotate(mapped).map((task) => todoIntelligence.decorateTask(task));
-    const todayLane = todoIntelligence.buildTodayLane(rankTasks(enriched.filter((task) => !task.done), new Date().toISOString().split('T')[0]));
+    // What Nick has said "not today" to. A cheap read of open records — no
+    // writes on this path, and a record whose window has already passed is not
+    // returned, so a poll arriving before `releaseDeferrals` runs cannot hide
+    // something that is due back.
+    //
+    // ⚠ Failing to read it must never HIDE the lane's own failure: an
+    // unreadable lifecycle means "we could not check what you snoozed", so the
+    // lane shows everything (nothing hidden on the strength of not having
+    // looked) and says so in `laneGaps`.
+    let deferred = new Map();
+    const laneGaps = [];
+    try {
+      deferred = lifecycle.deferredKeys();
+    } catch (e) {
+      laneGaps.push({ source: 'attention-lifecycle', why: e.message });
+      console.warn('[Todos] Could not read deferrals — showing the whole lane:', e.message);
+    }
+    const laneHeld = [];
+    const todayLane = todoIntelligence.buildTodayLane(
+      rankTasks(enriched.filter((task) => !task.done), new Date().toISOString().split('T')[0]),
+      new Date().toISOString().split('T')[0],
+      5,
+      { deferred, held: laneHeld, keyFor: laneKeyFor },
+    );
 
     // The same action often gets extracted from more than one note — a Plaud
     // summary and the meeting note built from it, say. Show it once, and carry
@@ -210,6 +248,10 @@ router.get('/', (req, res) => {
       todos: enriched,
       suggested,
       todayLane,
+      // Held back, never silently dropped — a lane that is simply shorter is
+      // indistinguishable from one that found less work.
+      laneHeld,
+      laneGaps,
       suggestedTotal: pendingTotal,
       suggestedCapped: pending.length >= SUGGESTION_CAP,
     });
@@ -451,6 +493,121 @@ router.delete('/ms-queue/:msId', (req, res) => {
     res.json({ ok: true, ...msQueue.status() });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * "This isn't a must-do today."
+ *
+ * ── Why it goes through the attention lifecycle ─────────────────────────────
+ *
+ * The lane had no way to disagree with it at all. Membership is recomputed on
+ * every read (`moscow === 'must' || overdue || dueToday || priority high`), so
+ * there was nothing to override, and the indirect levers do not work either:
+ * dropping the MoSCoW leaves `overdue` carrying `needsToday` on its own, so the
+ * only exit for an overdue task was to move its due date — a lie about when it
+ * was committed to — or to abandon it.
+ *
+ * The rest of NEURO already solved this properly. `attention_records` keeps
+ * "I've seen it", "not now" and "not mine" apart, carries a REASON on a
+ * deferral, and `friction.js` reads those reasons back as evidence about the
+ * WORK (a task put off three times for `too-big` is a finding). So this reuses
+ * that rather than adding a second suppression map — and because the key is
+ * `todo:<slug of text>`, the same key the decision engine uses, "not today"
+ * here is the same statement as deferring the task on the Now page. Two stores
+ * would let one surface contradict the other about a decision made once.
+ *
+ * ⚠ The record is created HERE, at the moment Nick decides — never on the read
+ * path. `GET /api/todos` is polled; opening a record per lane row per poll
+ * would write continuously to say nothing, and the honest position is that a
+ * task has no lifecycle record until somebody has an opinion about it.
+ *
+ * ⚠ Only DEFER is offered, not dismiss. "Not today" is a statement about
+ * timing; "never show me this" is a statement about the task, and the task is
+ * still open and still owed. Conflating them is how work disappears from the
+ * one place Nick looks to find what he owes.
+ */
+
+// 07:00 tomorrow, in local time — never toISOString(), the Pi may run UTC.
+//
+// Tomorrow morning rather than "+24h": the lane is called Must move TODAY, so
+// the natural unit is a day, and a rolling 24 hours would bring it back mid
+// afternoon on a day it had already been excused from.
+function _minutesUntilTomorrowMorning(now = new Date()) {
+  const then = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 7, 0, 0, 0);
+  return Math.max(1, Math.round((then.getTime() - now.getTime()) / 60000));
+}
+
+/**
+ * POST /api/todos/lane/defer — { text, reason?, minutes? }
+ *
+ * Keyed on the task's TEXT, because that is what `dedupeKeyFor` uses for a
+ * `todo` card and the whole value here is sharing one record with the other
+ * surfaces. The client sends the row's text verbatim.
+ */
+router.post('/lane/defer', (req, res) => {
+  try {
+    const { text, reason, minutes } = req.body || {};
+    if (!text || !String(text).trim()) return res.status(400).json({ ok: false, error: 'text is required' });
+
+    // A reason NEURO does not recognise is REFUSED rather than stored as
+    // 'unspecified'. The reasons are the payoff — friction reads them back as
+    // evidence about the work — and quietly downgrading a typo to "no reason
+    // given" loses exactly the signal this exists to collect.
+    if (reason != null && reason !== '' && !lifecycle.DEFER_REASONS.has(reason)) {
+      return res.status(400).json({
+        ok: false,
+        error: `Unknown reason — expected one of ${[...lifecycle.DEFER_REASONS].join(', ')}.`,
+      });
+    }
+
+    const record = lifecycle.upsert({
+      type: 'todo',
+      title: String(text).trim(),
+      reason: 'Must move today',
+      tab: 'todos',
+    });
+    if (!record) return res.status(400).json({ ok: false, error: 'Could not open a record for that task' });
+
+    const mins = Number.isFinite(Number(minutes)) && Number(minutes) > 0
+      ? Number(minutes)
+      : _minutesUntilTomorrowMorning();
+    const result = lifecycle.act(record.id, 'defer', { minutes: mins, reason: reason || 'unspecified' });
+    if (!result.ok) return res.status(400).json(result);
+
+    res.json({
+      ok: true,
+      recordId: record.id,
+      until: result.record.defer_until,
+      reason: result.record.defer_reason,
+    });
+  } catch (e) {
+    console.error('[Todos] Lane defer error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * POST /api/todos/lane/undefer — { text }
+ *
+ * The way back. Every other decision in this codebase has one (`restore`,
+ * `unmerge`, `unlink`, `forget`), and a snooze that could only be waited out
+ * would be the exception. The deferral itself is NOT erased — the event stays
+ * in the history, so the friction read still counts that Nick put it off.
+ */
+router.post('/lane/undefer', (req, res) => {
+  try {
+    const { text } = req.body || {};
+    if (!text || !String(text).trim()) return res.status(400).json({ ok: false, error: 'text is required' });
+    const key = lifecycle.dedupeKeyFor({ type: 'todo', title: String(text).trim() });
+    const row = db.getOpenAttentionRecord(key);
+    if (!row) return res.status(404).json({ ok: false, error: 'Nothing is snoozed for that task' });
+    const result = lifecycle.act(row.id, 'undefer', {});
+    if (!result.ok) return res.status(400).json(result);
+    res.json({ ok: true, recordId: row.id });
+  } catch (e) {
+    console.error('[Todos] Lane undefer error:', e);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

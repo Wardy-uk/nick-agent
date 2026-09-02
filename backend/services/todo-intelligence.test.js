@@ -233,3 +233,62 @@ test('a nonsense percentage is rejected rather than carried', () => {
   ], '2026-08-27');
   assert.strictEqual(lane[0].percentComplete, null);
 });
+
+// ── "Not today" ──────────────────────────────────────────────────────────────
+//
+// Lane membership is recomputed on every read, so until this there was nothing
+// to disagree with. These pin the two properties that make the snooze honest
+// rather than merely present: the lane does not shrink, and nothing vanishes.
+
+const laneKey = (row) => `todo:${String(row.text).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)}`;
+
+function musts(...texts) {
+  return texts.map((text, i) => ({
+    id: i + 1, text, mustdo: true, due_date: '2020-01-01', source: 'NEURO',
+  }));
+}
+
+test('a snoozed row leaves the lane and the next task moves UP into its place', () => {
+  // Filtering after the slice would leave a gap and quietly shrink the lane,
+  // which makes snoozing feel like losing capacity.
+  const tasks = musts('alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot');
+  const full = buildTodayLane(tasks, '2026-09-02', 5);
+  assert.strictEqual(full.length, 5);
+  assert.ok(!full.some(r => r.text === 'foxtrot'), 'foxtrot should be the one over the limit');
+
+  const deferred = new Map([[laneKey({ text: 'alpha' }), { until: '2099-01-01T07:00:00Z', reason: 'too-big' }]]);
+  const lane = buildTodayLane(tasks, '2026-09-02', 5, { deferred, keyFor: laneKey });
+
+  assert.strictEqual(lane.length, 5, 'the lane must stay five deep');
+  assert.ok(!lane.some(r => r.text === 'alpha'), 'the snoozed row is still showing');
+  assert.ok(lane.some(r => r.text === 'foxtrot'), 'nothing backfilled the gap');
+});
+
+test('what was held back is REPORTED, with its reason and return time', () => {
+  // A lane that is simply shorter is indistinguishable from one that found less
+  // work — and if everything were snoozed, an empty lane would read as a clear
+  // day over four deferred musts.
+  const tasks = musts('alpha', 'bravo');
+  const held = [];
+  const deferred = new Map([
+    [laneKey({ text: 'alpha' }), { until: '2099-01-01T07:00:00Z', reason: 'waiting-on-someone' }],
+  ]);
+  const lane = buildTodayLane(tasks, '2026-09-02', 5, { deferred, keyFor: laneKey, held });
+
+  assert.deepEqual(lane.map(r => r.text), ['bravo']);
+  assert.strictEqual(held.length, 1);
+  assert.strictEqual(held[0].text, 'alpha');
+  assert.strictEqual(held[0].snoozeReason, 'waiting-on-someone');
+  assert.strictEqual(held[0].snoozedUntil, '2099-01-01T07:00:00Z');
+});
+
+test('without a key function nothing is hidden — an unreadable lifecycle shows the whole lane', () => {
+  // Fails OPEN, deliberately. Hiding work on the strength of not having been
+  // able to check what was snoozed is the false all-clear this codebase refuses
+  // everywhere else.
+  const tasks = musts('alpha', 'bravo');
+  const deferred = new Map([[laneKey({ text: 'alpha' }), { until: '2099-01-01T07:00:00Z', reason: 'not-now' }]]);
+  assert.strictEqual(buildTodayLane(tasks, '2026-09-02', 5, { deferred }).length, 2, 'no keyFor should hide nothing');
+  assert.strictEqual(buildTodayLane(tasks, '2026-09-02', 5, { keyFor: laneKey }).length, 2, 'no deferrals should hide nothing');
+  assert.strictEqual(buildTodayLane(tasks, '2026-09-02', 5).length, 2, 'the old call shape must be unchanged');
+});

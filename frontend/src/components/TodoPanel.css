@@ -1324,3 +1324,84 @@
   margin-right: 5px;
   opacity: 0.7;
 }
+
+/* ── Disagreeing with the Must Move lane ──────────────────────────────────────
+   Quiet on purpose. The checkbox and the WIP control move work forward; this is
+   the escape hatch, and one that reads as loudly as the actions would invite
+   itself. */
+.todo-nottoday-btn,
+.todo-nottoday-reason {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  padding: 4px 8px;
+  white-space: nowrap;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.todo-nottoday-btn { flex: 0 0 auto; align-self: flex-start; }
+
+.todo-nottoday-btn:hover:not(:disabled),
+.todo-nottoday-reason:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.todo-nottoday {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  max-width: 320px;
+}
+
+.todo-nottoday-q {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* What was held back. Never a silently shorter lane: on its own, "fewer rows"
+   is indistinguishable from "less work today". */
+.todo-lane-held {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.todo-lane-held-head {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.todo-lane-held-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.todo-lane-held-text { flex: 1 1 220px; }
+
+.todo-lane-held-reason {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.todo-lane-error {
+  color: var(--danger, #ef4444);
+  cursor: pointer;
+}

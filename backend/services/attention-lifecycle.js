@@ -665,6 +665,22 @@ function act(recordId, action, opts = {}) {
       return { ok: true, record: db.setAttentionState(recordId, STATES.SUPPRESSED, at, { resolution: 'dismissed' }) };
     }
 
+    // Cancel a deferral early. `releaseDeferrals` does the same transition on a
+    // timer; this is Nick changing his mind before the window is up.
+    //
+    // ⚠ An undo, not a new state — every other decision here has a way back
+    // (`restore`, `unmerge`, `unlink`, `forget`), and a snooze that could only
+    // be waited out would be the one that does not. Logged as its own event
+    // rather than silently flipping the state: the deferral HAPPENED, and the
+    // friction read counts what Nick said at the time, so cancelling must not
+    // erase the evidence that he put it off.
+    case 'undefer':
+      if (row.state !== STATES.DEFERRED) {
+        return { ok: false, error: `record is ${row.state}, not deferred` };
+      }
+      _event(recordId, 'surfaced', at, 'deferral cancelled');
+      return { ok: true, record: db.setAttentionState(recordId, STATES.ACTIVE, at, {}) };
+
     case 'resolve':
       _event(recordId, 'resolved', at, opts.note || 'acted');
       return { ok: true, record: db.setAttentionState(recordId, STATES.RESOLVED, at, { resolution: opts.resolution || 'acted' }) };

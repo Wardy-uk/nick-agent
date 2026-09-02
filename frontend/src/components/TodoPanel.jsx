@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { apiUrl } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import { duePresets } from '../../../shared/due-dates.cjs';
@@ -1142,8 +1142,75 @@ function wipKeyFor(todo) {
   return null;
 }
 
-function MustMoveLane({ items, toggling, onToggle, onSetWip }) {
-  if (!items.length) return null;
+/**
+ * Disagreeing with the lane.
+ *
+ * ⚠ The reason is the product, not decoration. A deferral goes through the
+ * attention lifecycle and `friction.js` reads the reasons back — a task put off
+ * three times for `too-big` is a finding ABOUT THE WORK, and "not today" with
+ * no reason throws that away. So the button opens the reasons rather than
+ * snoozing straight off, and each one is phrased as the thing Nick would
+ * actually say.
+ *
+ * Deliberately no "never show me this": the task is still open and still owed,
+ * and conflating a statement about TIMING with a statement about the TASK is
+ * how work vanishes from the one place he looks to find what he owes.
+ */
+// The same vocabulary read back. A held row showing the raw `too-big` would be
+// NEURO quoting its own enum at him.
+const HELD_REASON_LABELS = {
+  'too-big': 'too big',
+  'waiting-on-someone': 'blocked on someone',
+  'no-context': 'wrong context',
+  'not-now': 'not today',
+  unspecified: 'no reason given',
+};
+
+const NOT_TODAY_REASONS = [
+  { key: 'too-big', label: "It's too big", desc: 'Needs breaking down before it can start' },
+  { key: 'waiting-on-someone', label: "I'm blocked", desc: 'Waiting on somebody else' },
+  { key: 'no-context', label: 'Wrong context', desc: "Can't do this from where I am" },
+  { key: 'not-now', label: 'Just not today', desc: 'No reason beyond timing' },
+];
+
+function NotToday({ item, busy, onDefer }) {
+  const [open, setOpen] = useState(false);
+
+  if (!open) {
+    return (
+      <button
+        className="todo-nottoday-btn"
+        disabled={busy}
+        title="Move it out of today's lane. The task stays open and keeps its due date."
+        onClick={() => setOpen(true)}
+      >
+        Not today
+      </button>
+    );
+  }
+
+  return (
+    <div className="todo-nottoday">
+      <span className="todo-nottoday-q">Why not?</span>
+      {NOT_TODAY_REASONS.map(r => (
+        <button
+          key={r.key}
+          className="todo-nottoday-reason"
+          disabled={busy}
+          title={r.desc}
+          onClick={() => { setOpen(false); onDefer(item, r.key); }}
+        >{r.label}</button>
+      ))}
+      <button className="todo-nottoday-reason" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
+    </div>
+  );
+}
+
+function MustMoveLane({ items, held, gaps, toggling, onToggle, onSetWip, onDefer, onUndefer, error, onDismissError }) {
+  // ⚠ Not `!items.length`. Once a row can be snoozed, an empty lane has two
+  // meanings — nothing qualified, or everything that did has been put off —
+  // and rendering nothing would show a clear day over four deferred musts.
+  if (!items.length && !(held || []).length) return null;
 
   return (
     <section className="todo-suggestions todo-suggestions-mustmove">
@@ -1244,10 +1311,51 @@ function MustMoveLane({ items, toggling, onToggle, onSetWip }) {
                 ● {pct}%
               </span>
             )}
+            {/* Disagreeing with the lane. Last on the row on purpose — the
+                checkbox and the WIP control are what move work forward; this
+                is the escape hatch, and an escape hatch that reads as loudly
+                as the actions would invite it. */}
+            <NotToday item={item} busy={Boolean(toggling[wipKey])} onDefer={onDefer} />
           </div>
           );
         })}
       </div>
+
+      {/* ⚠ Held back, NEVER silently dropped. A lane that is simply shorter is
+          indistinguishable from one that found less work — and if every must
+          were snoozed, an empty lane would render as a clear day. Each row says
+          what Nick said and when it comes back, with the way out beside it. */}
+      {(held || []).length > 0 && (
+        <div className="todo-lane-held">
+          <div className="todo-lane-held-head">
+            Not today ({held.length}) &mdash; still open, still due, back tomorrow morning
+          </div>
+          {held.map(h => (
+            <div key={h.id} className="todo-lane-held-row">
+              <span className="todo-lane-held-text">{h.text}</span>
+              <span className="todo-lane-held-reason">{HELD_REASON_LABELS[h.snoozeReason] || h.snoozeReason}</span>
+              <button
+                className="todo-nottoday-reason"
+                title="Put it back in the lane now. The deferral stays on the record either way."
+                onClick={() => onUndefer(h)}
+              >Bring it back</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* "I could not check what you snoozed" is not "nothing is snoozed" — on
+          a failed read the lane shows everything rather than hiding work on the
+          strength of not having looked, and says so. */}
+      {error && (
+        <div className="todo-lane-held-head todo-lane-error" onClick={onDismissError}>{error}</div>
+      )}
+
+      {(gaps || []).length > 0 && (
+        <div className="todo-lane-held-head">
+          Showing the whole lane &mdash; couldn&rsquo;t read what you&rsquo;d put off ({gaps.map(g => g.source).join(', ')}).
+        </div>
+      )}
     </section>
   );
 }
@@ -1460,6 +1568,57 @@ export default function TodoPanel({ focusContext, onClearContext }) {
     }
     setToggling(prev => ({ ...prev, [key]: false }));
   };
+
+  // A lane write that failed. Deliberately NOT HoldNotice, which is about a
+  // write-up hold and renders a block's time and note path — handed a bare
+  // reason it prints "had undefined on undefined blocked out for it".
+  const [laneError, setLaneError] = useState(null);
+
+  /**
+   * "Not today" — and why.
+   *
+   * ⚠ Keyed on the task's TEXT, because that is what the attention record's
+   * dedupe key is built from, and sharing that key is the whole point: this is
+   * the same statement as deferring the task on the Now page. Sending a task id
+   * instead would open a second, competing record for one decision.
+   *
+   * The reason is REQUIRED by the caller (the picker offers four and no
+   * skip-it): `friction.js` reads those reasons back as evidence about the
+   * work, and an unreasoned defer is a decision recorded with the useful half
+   * thrown away.
+   */
+  const deferFromLane = useCallback(async (item, reason) => {
+    try {
+      const res = await fetch(apiUrl('/api/todos/lane/defer'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: item.text, reason }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await fetchTodos();
+    } catch (e) {
+      // Said out loud rather than swallowed: a "Not today" that silently did
+      // nothing leaves the row exactly where it was, which reads as a dead
+      // button — the failure this whole lane change exists to remove.
+      setLaneError(`Couldn't put "${item.text}" off: ${e.message}`);
+    }
+  }, [fetchTodos]);
+
+  const undeferFromLane = useCallback(async (item) => {
+    try {
+      const res = await fetch(apiUrl('/api/todos/lane/undefer'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: item.text }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await fetchTodos();
+    } catch (e) {
+      setLaneError(`Couldn't bring "${item.text}" back: ${e.message}`);
+    }
+  }, [fetchTodos]);
 
   const addTask = async () => {
     const text = newTaskText.trim();
@@ -1962,7 +2121,18 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           held open because it has not been written up is a task the lane will
           keep offering, so the explanation has to arrive before the list does. */}
       <TaskBlocks />
-      <MustMoveLane items={todayLane} toggling={toggling} onToggle={toggleTodo} onSetWip={setWip} />
+      <MustMoveLane
+        items={todayLane}
+        held={fullData?.laneHeld || []}
+        gaps={fullData?.laneGaps || []}
+        toggling={toggling}
+        onToggle={toggleTodo}
+        onSetWip={setWip}
+        onDefer={deferFromLane}
+        onUndefer={undeferFromLane}
+        error={laneError}
+        onDismissError={() => setLaneError(null)}
+      />
 
       <div className="todo-add">
         <input

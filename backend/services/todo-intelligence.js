@@ -227,7 +227,7 @@ function msPercentComplete(task) {
  */
 function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5, opts = {}) {
   const domain = opts.domain || null;
-  return (tasks || [])
+  const rows = (tasks || [])
     .map((task) => decorateTask(task, todayStr))
     .filter((task) => !domain || (task.domain || 'work') === domain)
     .filter((task) => task.needsToday || task.mustdo || task.priority === 'high')
@@ -239,7 +239,10 @@ function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5, opts = {
       if ((a.ageDays || 0) !== (b.ageDays || 0)) return (b.ageDays || 0) - (a.ageDays || 0);
       return 0;
     })
-    .slice(0, limit)
+    // ⚠ NOT sliced here any more. The snooze filter below has to run over every
+    // qualifying task, or a deferred row leaves a GAP in the lane instead of
+    // the next-ranked task moving up into its place — which would make putting
+    // something off feel like losing capacity for the day.
     .map((task, index) => ({
       // ⚠ `id` is a DISPLAY KEY, not a task id. parseVaultTodos numbers todos as
       // it walks them, so lane row `id: 28` is simply the 28th todo it saw —
@@ -292,6 +295,44 @@ function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5, opts = {
       why: task._scoreReason || laneReason(task, todayStr),
       sourcePath: task.meta?.sourcePath || task.sourcePath || null,
     }));
+
+  // ── "Not today" ────────────────────────────────────────────────────────────
+  //
+  // Membership is recomputed from scratch on every read, so until this there
+  // was NOTHING to disagree with: no dismiss, no snooze, no defer. Changing the
+  // MoSCoW did not help either, because `overdue` alone keeps `needsToday`
+  // true — so the only way to get an overdue task out of the lane was to move
+  // its due date, which is a lie about when it was committed to. A lane you
+  // cannot argue with is one you stop reading, and Nick's failure mode is
+  // avoidance, so a lane he has learnt to skip costs more than it gives.
+  //
+  // ⚠ The filter runs BEFORE the slice, so a snoozed row does NOT leave a gap
+  // — the next-ranked task moves up and the lane is still five deep. Filtering
+  // after would quietly shrink it and make snoozing feel like losing capacity.
+  //
+  // ⚠ `keyFor` is INJECTED rather than computed here. The identity of an
+  // attention record is `attention-lifecycle`'s to decide, and a second slug
+  // implementation would drift — keeping it out also keeps this module free of
+  // the DB, which is what lets the lane rules be tested as pure functions.
+  //
+  // ⚠ What is held back is REPORTED, never silently dropped: `opts.held`
+  // collects every snoozed row with its reason and return time, so the lane can
+  // say "2 snoozed until tomorrow" rather than simply being shorter.
+  const deferred = opts.deferred instanceof Map ? opts.deferred : null;
+  const keyFor = typeof opts.keyFor === 'function' ? opts.keyFor : null;
+  const held = Array.isArray(opts.held) ? opts.held : null;
+  if (!deferred || !deferred.size || !keyFor) return rows.slice(0, limit);
+
+  const out = [];
+  for (const row of rows) {
+    const snooze = deferred.get(keyFor(row));
+    if (snooze) {
+      if (held) held.push({ ...row, snoozedUntil: snooze.until, snoozeReason: snooze.reason });
+      continue;
+    }
+    if (out.length < limit) out.push(row);
+  }
+  return out;
 }
 
 function buildFollowThroughCandidate(tasks, todayStr = todayDateString()) {
