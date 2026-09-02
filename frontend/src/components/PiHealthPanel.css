@@ -668,3 +668,43 @@
   opacity: 0.8;
   font-style: italic;
 }
+
+/* ── Estate spend: NEURO + VANTAGE on one shared OpenRouter key ──
+   A system that could not be read renders as an explicit gap, never as a
+   tidy zero — the whole point of showing this at all. */
+.ph-estate { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.ph-estate-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 5px 8px; border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 12px;
+}
+.ph-estate-row.total {
+  background: transparent;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 3px; padding-top: 7px;
+}
+.ph-estate-name {
+  font-family: var(--ph-mono, ui-monospace, monospace);
+  min-width: 96px; color: var(--ph-text, #e8edf2);
+}
+.ph-estate-calls { color: var(--ph-muted, #7e8b99); font-size: 11px; }
+.ph-estate-value {
+  margin-left: auto;
+  font-family: var(--ph-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--ph-text, #e8edf2);
+}
+.ph-estate-share {
+  font-family: var(--ph-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  min-width: 38px; text-align: right;
+  color: var(--ph-muted, #7e8b99); font-size: 11px;
+}
+.ph-estate-row.unknown { background: rgba(224, 162, 79, 0.08); }
+.ph-estate-unknown { margin-left: auto; color: #e0a24f; font-size: 11px; text-align: right; }
+.ph-estate-note {
+  color: var(--ph-muted, #7e8b99);
+  font-size: 11px; line-height: 1.45;
+  padding: 4px 8px 0;
+}

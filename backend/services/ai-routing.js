@@ -992,6 +992,14 @@ function getStatus() {
     health: getHealth(),
     // What it cost. The counters above are a cap check, not a bill.
     cost: getCostSummary(),
+    // ...and what the REST of the box cost. NEURO and VANTAGE share one
+    // OpenRouter key, and over the week to 1 Sep NEURO was 12.8% of it. A panel
+    // showing only its own eighth is how the other 87% went unnoticed.
+    // Never allowed to fail the status read.
+    estate: (() => {
+      try { return require('./estate-cost').estateSpend(getCostSummary()); }
+      catch (e) { return { systems: [], complete: false, missing: ['VANTAGE'], combined: null, error: e.message }; }
+    })(),
     taskModels: TASK_MODELS,
     cloudPreferredTasks: [...CLOUD_PREFERRED_TASKS],
     backgroundTasks: [...BACKGROUND_TASKS],

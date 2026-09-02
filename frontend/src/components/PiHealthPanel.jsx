@@ -761,6 +761,75 @@ export default function PiHealthPanel() {
             </>
           )}
 
+          {/* ---- ESTATE: NEURO and VANTAGE share one OpenRouter key ----
+               Over the week to 1 Sep, NEURO was 12.8% of that key and VANTAGE
+               87.2%. A panel showing only NEURO's eighth is how the rest went
+               unnoticed for a fortnight. */}
+          {ai.estate?.systems?.length > 0 && (
+            <>
+              <div className="ph-sub-title">
+                Estate
+                <span className="ph-cost-basis">
+                  {ai.estate.complete ? 'one shared OpenRouter key' : `incomplete — ${ai.estate.missing.join(', ')} not readable`}
+                </span>
+              </div>
+              <div className="ph-estate">
+                {ai.estate.systems.map(s => (
+                  <div key={s.system} className={`ph-estate-row ${s.known ? '' : 'unknown'}`}>
+                    <span className="ph-estate-name">{s.system}</span>
+                    {s.known ? (
+                      <>
+                        <span className="ph-estate-calls">{s.calls7} call{s.calls7 === 1 ? '' : 's'} / 7d</span>
+                        <span className="ph-estate-value">{fmtUsd(s.last7)}</span>
+                        {ai.estate.combined?.last7 > 0 && (
+                          <span className="ph-estate-share">
+                            {Math.round((s.last7 / ai.estate.combined.last7) * 100)}%
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      // Not a zero. "Could not read it" and "spent nothing" send
+                      // a reader to completely different places.
+                      <span className="ph-estate-unknown">couldn’t read — {s.reason}</span>
+                    )}
+                  </div>
+                ))}
+                {ai.estate.systems.some(s => s.note) && (
+                  <div className="ph-estate-note">
+                    {ai.estate.systems.filter(s => s.note).map(s => `${s.system}: ${s.note}`).join(' · ')}
+                  </div>
+                )}
+                {ai.estate.combined ? (
+                  <div className="ph-estate-row total">
+                    <span className="ph-estate-name">Combined 7d</span>
+                    <span className="ph-estate-value">{fmtUsd(ai.estate.combined.last7)}</span>
+                  </div>
+                ) : (
+                  <div className="ph-estate-note">
+                    No combined figure — a total that quietly omits a system it could not read looks complete when it is not.
+                  </div>
+                )}
+                {ai.estate.notCounted?.length > 0 && (
+                  <div className="ph-estate-note">Not counted: {ai.estate.notCounted.join(', ')}</div>
+                )}
+              </div>
+              {/* VANTAGE's own breakdown, so "what is it spending on" is
+                  answerable here rather than only that it spent. */}
+              {ai.estate.systems.find(s => s.system === 'VANTAGE')?.byCallType?.length > 0 && (
+                <div className="ph-cost-tasks">
+                  {ai.estate.systems.find(s => s.system === 'VANTAGE').byCallType.map(t => (
+                    <div key={t.task} className="ph-cost-task">
+                      <span className="ph-cost-task-name">vantage · {t.task}</span>
+                      <span className="ph-cost-task-calls">{t.calls}×</span>
+                      <span className="ph-cost-task-value">{fmtUsd(t.costUsd)}</span>
+                      {t.unpriced > 0 && <span className="ph-cost-unpriced">{t.unpriced} unpriced</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
           {aiState.health.recent?.length > 0 && (
             <>
               <div className="ph-sub-title">Recent calls</div>
