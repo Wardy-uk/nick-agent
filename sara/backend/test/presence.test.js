@@ -95,3 +95,59 @@ test('a live location slot wins over proximity, so leaving the desk at home stay
   assert.equal(r.away, false);
   assert.equal(r.basis, 'ha-location');
 });
+
+// ── The sustained-room clock ────────────────────────────────────────────────
+//
+// Found live on 2 Sep 2026: the Pi wall display had been locked as `in-bed`,
+// saying "Goodnight.", since Nick left the house that morning. HA knew perfectly
+// well he was at the office (`away: true`, zone Office) and the watch was absent
+// from all three rooms — but `in-bed` is checked FIRST in `displayState` and the
+// clock behind it had been running unbroken from the last confident bedroom
+// sighting, because nothing ever cleared it.
+const { sustainedClock } = require('../src/routes/presence');
+
+const SURE = (room) => ({ confidence: 'sure', room });
+const UNSURE = { confidence: 'unsure', room: null };
+const AT = (n) => n * 60_000;
+
+test('a confident room starts the clock, and holding it keeps accumulating', () => {
+  const a = sustainedClock(null, { inferred: SURE('bedroom'), arbitration: { status: 'present' }, home: { away: false }, now: AT(0) });
+  assert.equal(a.room, 'bedroom');
+  assert.equal(a.sustained.ms, 0);
+  const b = sustainedClock(a, { inferred: SURE('bedroom'), arbitration: { status: 'present' }, home: { away: false }, now: AT(40) });
+  assert.equal(b.sustained.ms, AT(40), 'staying put must extend the clock, not restart it');
+});
+
+test('an unsure moment neither resets the clock nor extends it', () => {
+  // A deaf poll is not evidence he got up — the original rule, unchanged.
+  const a = sustainedClock(null, { inferred: SURE('bedroom'), arbitration: { status: 'present' }, home: { away: false }, now: AT(0) });
+  const b = sustainedClock(a, { inferred: UNSURE, arbitration: { status: 'unreadable' }, home: { away: false }, now: AT(45) });
+  assert.equal(b.room, 'bedroom');
+  assert.equal(b.sustained.ms, AT(45), 'the clock still runs from the last CONFIDENT sighting');
+});
+
+test('⚠ absent everywhere AND away clears it — the "Goodnight at 1pm" bug', () => {
+  const inBed = sustainedClock(null, { inferred: SURE('bedroom'), arbitration: { status: 'present' }, home: { away: false }, now: AT(0) });
+  const gone = sustainedClock(inBed, {
+    inferred: UNSURE,
+    arbitration: { status: 'absent' },
+    home: { away: true },
+    now: AT(345), // he has been at the office nearly six hours
+  });
+  assert.equal(gone.room, null);
+  assert.equal(gone.sustained, null, 'a lock reason cannot outlive the evidence for it');
+});
+
+test('⚠ BOTH halves are load-bearing — neither alone may clear it', () => {
+  const inBed = sustainedClock(null, { inferred: SURE('bedroom'), arbitration: { status: 'present' }, home: { away: false }, now: AT(0) });
+
+  // A flat watch battery at 3am. Absent from every room, but HA says he is home
+  // — clearing here would trade an in-bed lock for a lit clock screen at 3am.
+  const flatWatch = sustainedClock(inBed, { inferred: UNSURE, arbitration: { status: 'absent' }, home: { away: false }, now: AT(200) });
+  assert.equal(flatWatch.room, 'bedroom', 'absent alone must not clear the clock');
+
+  // Away, but the watch is still audible in the house — so `away` is the thing
+  // in doubt, not his position. Unreadable is never treated as absent.
+  const noisyGeofence = sustainedClock(inBed, { inferred: UNSURE, arbitration: { status: 'unreadable' }, home: { away: true }, now: AT(200) });
+  assert.equal(noisyGeofence.room, 'bedroom', 'away alone, on an unreadable radio, must not clear the clock');
+});

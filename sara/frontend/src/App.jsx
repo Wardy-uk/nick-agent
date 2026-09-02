@@ -62,6 +62,12 @@ function AppShell() {
   const { state: displayState, detail: displayDetail } = useDisplayState();
   const locked = displayState === 'locked';
   const showClock = displayState === 'clock';
+  // ⚠ Both of these render as an OVERLAY over the live shell rather than
+  // instead of it, and each mounts a Field of its own — so the suppression rule
+  // above was one case short and the kiosk drew TWO full-screen fields at once,
+  // which is the exact thing its comment says must not happen. Locked, that was
+  // ~22,000 stroke calls a frame behind a backlight set to 0.
+  const overlayOwnsScreen = locked || showClock;
 
   const ActiveView = useMemo(
     // Falls back to the default tab's component rather than a named import, so
@@ -94,7 +100,7 @@ function AppShell() {
           only on her own (Nick, 31 Aug 2026). Suppressed on the Surface, which
           mounts its own driven by the real attention payload; two stacked
           fields would put a `quiet` placeholder under an honest one. */}
-      {active !== 'surface' && (
+      {!overlayOwnsScreen && active !== 'surface' && (
         <div className="app__field" aria-hidden="true"><Field {...fieldDrive} /></div>
       )}
 

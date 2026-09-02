@@ -39,8 +39,17 @@ export default function LockScreen({ reason, now }) {
           could call "where she is". The field is what she looks like everywhere
           else, and the lock screen is a place Nick SEES her — so it is the
           field here too, degraded, because in this state she genuinely cannot
-          see anything. */}
-      <Field confidenceLevel="low" degraded />
+          see anything.
+
+          ⚠ STILL. This state takes the backlight to 0, so there is nobody to
+          animate for — and a browser cannot tell a dark panel from a lit one
+          (`document.hidden` is never set on a kiosk), so the field's own battery
+          guard never fires here. It painted at 12fps into an unlit screen for as
+          long as Nick was out. One static frame keeps her present for the case
+          this component exists for — the light returning before the verdict
+          does, or the display agent dying — and costs nothing while it does
+          not. */}
+      <Field confidenceLevel="low" degraded still />
       <div className="lock__panel">
         <span className="lock__mark">SARA</span>
         {now && <span className="lock__time">{formatTime(now)}</span>}

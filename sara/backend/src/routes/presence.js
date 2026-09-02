@@ -230,6 +230,47 @@ router.get('/history', (req, res) => {
 // reason, so the phone, the kiosk and anything else added later cannot each
 // invent their own idea of what a missing watch means. Same rule as the
 // attention payload's pre-composed `speech`.
+// How long he has been settled in one room, as a PURE function of the previous
+// clock and this poll. Split out the way `pi-health.assess()` is, because the
+// rule is the product and it should pin without a route, a radio or a clock.
+//
+// Only a CONFIDENT room advances it. An `unsure` or `none` moment is not
+// evidence he got up, so it neither resets the timer nor extends it.
+//
+// ⚠ AND IT HAS TO BE CLEARED, which nothing here ever did. Nick went out
+// wearing the watch, the last sure room was the bedroom, and `ms` simply kept
+// climbing — so half an hour after he left the house the display locked as
+// `in-bed` and said "Goodnight." at one o'clock on a Wednesday afternoon. The
+// screen state was right by luck (`away` locks too) but the REASON was wrong,
+// and the reason is the thing she says out loud.
+//
+// The clearing condition is deliberately narrow and BOTH halves are
+// load-bearing. `absent` alone would clear it for a flat watch battery at 3am
+// and turn an in-bed lock into a lit clock screen in the small hours; `away`
+// alone cannot be trusted to mean he is not in that bed. Together they are two
+// independent senses agreeing he is neither in the room nor in the house.
+//
+// ⚠ `absent`, never `unreadable` — the same distinction the `lastRoom`
+// hysteresis makes, for the same reason: a deaf poll is not evidence he moved.
+function sustainedClock(prev, { inferred, arbitration, home, now }) {
+  // ⚠ Tested for null, never for truthiness — a timestamp of 0 is a real
+  // timestamp, and `since && ...` silently reports "never started" for it.
+  let room = prev && prev.room != null ? prev.room : null;
+  let since = prev && typeof prev.since === 'number' ? prev.since : null;
+
+  if (inferred && inferred.confidence === 'sure' && inferred.room) {
+    if (inferred.room !== room) {
+      room = inferred.room;
+      since = now;
+    }
+  } else if (arbitration && arbitration.status === 'absent' && home && home.away === true) {
+    room = null;
+    since = null;
+  }
+
+  return { room, since, sustained: room != null && since != null ? { room, ms: now - since } : null };
+}
+
 router.get('/display', (req, res) => {
   const room = String(req.query.room || '').trim();
   if (!room) return res.status(400).json({ ok: false, reason: 'room is required' });
@@ -256,17 +297,11 @@ router.get('/display', (req, res) => {
   const home = homePresence(ha.getTelemetry());
   const inferredNow = classify(liveVector(arbitration), profiles.all());
 
-  // Only a CONFIDENT room advances the clock. An `unsure` or `none` moment is
-  // not evidence he got up, so it neither resets the timer nor extends it.
-  if (inferredNow.confidence === 'sure' && inferredNow.room) {
-    if (inferredNow.room !== inferredRoom) {
-      inferredRoom = inferredNow.room;
-      inferredSince = now.getTime();
-    }
-  }
-  const sustained = inferredRoom && inferredSince
-    ? { room: inferredRoom, ms: now.getTime() - inferredSince }
-    : null;
+  const clock = sustainedClock({ room: inferredRoom, since: inferredSince },
+    { inferred: inferredNow, arbitration, home, now: now.getTime() });
+  inferredRoom = clock.room;
+  inferredSince = clock.since;
+  const sustained = clock.sustained;
 
   const display = displayState(room, arbitration, home, inferredNow, sustained);
 
@@ -367,3 +402,4 @@ module.exports = router;
 // Pure rule, exported for tests.
 module.exports.homePresence = homePresence;
 module.exports.presenceSource = presenceSource;
+module.exports.sustainedClock = sustainedClock;

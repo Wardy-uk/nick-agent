@@ -51,6 +51,28 @@ const SEED_MAX = 18;
 const EDGE_DIST_SQ = 2100;     // ~46px. Latent edges only; never created while thinking
 const FOCUS_RADIUS = 150;
 
+// ⚠ NODE_MAX BOUNDS THE WRONG THING ON ITS OWN. Edges are quadratic in LOCAL
+// density and nothing capped them, so the "perf floor and ceiling" above was
+// measuring nodes while the cost lived in the mesh. Measured: a 340x700 phone
+// builds ~265 nodes and ~1,100 edges; the 720x1280 kiosk panel hits the 900-node
+// ceiling and builds ~10,000 — the clustering concentrates 50 nodes into each
+// seed blob, so the edge count runs about 3x what an even scatter of the same
+// nodes would give. On a Pi 4 that was a renderer pegged at 100% indefinitely.
+//
+// The thin is UNIFORM (a shuffle, then a truncate), so the mesh gets sparser
+// without changing its shape — dense here and open there survives, which is the
+// whole point of the seeds. Well above what a phone ever builds, so nothing
+// about the reference look changes.
+const MAX_EDGES = 3000;
+
+// ⚠ ONE PATH PER ALPHA BUCKET, NOT ONE PER EDGE. Every `stroke()` and `fill()`
+// is a separate rasterisation, and this loop was issuing ~11,000 of them per
+// frame at 12fps — ~130,000 draw calls a second, for ever, on a display that is
+// often not even lit. Quantising alpha into buckets and stroking each bucket as
+// a single path makes that ~24, and is visually indistinguishable: the steps are
+// finer than the difference between adjacent edges at these opacities.
+const ALPHA_BUCKETS = 17;
+
 // ── Presence ────────────────────────────────────────────────────────────────
 //
 // Nick, 31 Aug 2026: "crank up the visibility of SARA's presence — I always
@@ -103,6 +125,22 @@ const PULSE_AMP = 0.45;
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+// Which alpha bucket a computed opacity falls in, and the value drawn for that
+// bucket. `rest` is the floor and `span` the amount coherence can add, so the
+// input always sits in [rest, rest + span].
+//
+// ⚠ THE ENDPOINTS ARE EXACT, and that is not a detail. Bucketing to midpoints
+// is the obvious way to do this and it lifts the RESTING alpha by 25% — and at
+// rest is where nearly every edge sits, so it would have quietly brightened the
+// whole substrate. Those rest values are hand-tuned (`EDGE_REST_ALPHA` went
+// 0.012 -> 0.03 on 31 Aug to make her more visible); a perf change is not
+// allowed to re-tune them by a side effect nobody would trace back to here.
+// Dividing into `ALPHA_BUCKETS - 1` steps and rounding to the nearest makes
+// both ends land on the real number and bounds the error between them.
+const bucketOf = (alpha, rest, span) =>
+  clamp(Math.round(((alpha - rest) / span) * (ALPHA_BUCKETS - 1)), 0, ALPHA_BUCKETS - 1);
+const bucketAlpha = (b, rest, span) => rest + (b / (ALPHA_BUCKETS - 1)) * span;
+
 // How the read becomes a picture. `depth` is how much order arrives (0 = none),
 // `period` how many seconds between settles.
 function drive({ degraded, confidenceLevel, quiet, activity, pressing }) {
@@ -137,7 +175,20 @@ function drive({ degraded, confidenceLevel, quiet, activity, pressing }) {
   return { depth, period, dim: 1, pulse: pressing ? PULSE_AMP : 0 };
 }
 
-export default function Field({ activity, confidenceLevel, quiet = false, degraded = false, pressing = false }) {
+// ⚠ `still` — one frame, no loop, for a screen that is not lit.
+//
+// The lock state takes the backlight to 0, and nothing in a browser can see
+// that: a kiosk page is never `document.visibilityState === 'hidden'`, so the
+// battery guard below has been protecting against a condition that cannot occur
+// on a wall display. The Pi 4 was found painting two full-screen fields at 12fps
+// into a dark panel in an empty house, for a day and a half, at 100% of a core.
+//
+// It paints ONE coherent frame rather than nothing, which is the same choice the
+// reduced-motion path makes and for the same reason: if the display agent dies,
+// or the light comes back a moment before the verdict does, she is still there.
+// "Whenever I see SARA" is satisfied by a static field; it is not satisfied by a
+// blank canvas, and it costs nothing to honour.
+export default function Field({ activity, confidenceLevel, quiet = false, degraded = false, pressing = false, still = false }) {
   const canvasRef = useRef(null);
   // Live state the loop reads without being torn down and rebuilt — regenerating
   // the substrate on every poll would make the whole field flicker once a minute.
@@ -155,6 +206,10 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
     let raf = 0;
     let nodes = [];
     let edges = [];
+    // Reused across frames — allocating 24 arrays per frame at 12fps is exactly
+    // the kind of churn this component is now trying not to do.
+    let edgeBuckets = [];
+    let nodeBuckets = [];
     let w = 0;
     let h = 0;
     let ctx = null;
@@ -202,6 +257,20 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
           if (dx * dx + dy * dy < EDGE_DIST_SQ) edges.push([a, b]);
         }
       }
+      // See MAX_EDGES. Shuffle then truncate — a uniform thin, so a big panel
+      // gets a sparser mesh of the same shape rather than a differently shaped
+      // one. Dropping the longest instead would strip the inter-cluster links,
+      // which are the connections that make it read as a graph at all.
+      if (edges.length > MAX_EDGES) {
+        for (let i = edges.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          const tmp = edges[i]; edges[i] = edges[j]; edges[j] = tmp;
+        }
+        edges.length = MAX_EDGES;
+      }
+      edgeBuckets = [];
+      nodeBuckets = [];
+      for (let i = 0; i < ALPHA_BUCKETS; i++) { edgeBuckets.push([]); nodeBuckets.push([]); }
       return true;
     }
 
@@ -209,6 +278,8 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
       ctx.clearRect(0, 0, w, h);
 
       // Edges first — cognition is relationship-first, nodes secondary.
+      for (let i = 0; i < ALPHA_BUCKETS; i++) { edgeBuckets[i].length = 0; nodeBuckets[i].length = 0; }
+
       for (let e = 0; e < edges.length; e++) {
         const n1 = nodes[edges[e][0]];
         const n2 = nodes[edges[e][1]];
@@ -219,11 +290,21 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
         // dimmed one made `dim` delete edges rather than dim them.
         const base = EDGE_REST_ALPHA + near * EDGE_COHERENT;
         if (base < EDGE_CULL_ALPHA) continue;
-        ctx.strokeStyle = `rgba(120,170,235,${(base * dim).toFixed(3)})`;
-        ctx.lineWidth = 0.7;
+        edgeBuckets[bucketOf(base, EDGE_REST_ALPHA, EDGE_COHERENT)].push(e);
+      }
+
+      ctx.lineWidth = 0.7;
+      for (let b = 0; b < ALPHA_BUCKETS; b++) {
+        const list = edgeBuckets[b];
+        if (!list.length) continue;
+        ctx.strokeStyle = `rgba(120,170,235,${(bucketAlpha(b, EDGE_REST_ALPHA, EDGE_COHERENT) * dim).toFixed(3)})`;
         ctx.beginPath();
-        ctx.moveTo(n1.x, n1.y);
-        ctx.lineTo(n2.x, n2.y);
+        for (let i = 0; i < list.length; i++) {
+          const n1 = nodes[edges[list[i]][0]];
+          const n2 = nodes[edges[list[i]][1]];
+          ctx.moveTo(n1.x, n1.y);
+          ctx.lineTo(n2.x, n2.y);
+        }
         ctx.stroke();
       }
 
@@ -233,31 +314,47 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
         const nd = nodes[n];
         const near = Math.max(0, 1 - Math.hypot(nd.x - focus.x, nd.y - focus.y) / FOCUS_RADIUS) * k;
         const jitter = (1 - near) * 0.9;
-        const jx = Math.sin(t * nd.sp + nd.ph) * jitter;
-        const jy = Math.cos(t * nd.sp * 1.3 + nd.ph) * jitter;
-        ctx.fillStyle = `rgba(150,190,240,${((NODE_REST_ALPHA + near * NODE_COHERENT) * dim).toFixed(3)})`;
+        nd.dx = Math.sin(t * nd.sp + nd.ph) * jitter;
+        nd.dy = Math.cos(t * nd.sp * 1.3 + nd.ph) * jitter;
+        nd.r = 0.95 + near * 0.55;
+        nodeBuckets[bucketOf(NODE_REST_ALPHA + near * NODE_COHERENT, NODE_REST_ALPHA, NODE_COHERENT)].push(n);
+      }
+
+      for (let b = 0; b < ALPHA_BUCKETS; b++) {
+        const list = nodeBuckets[b];
+        if (!list.length) continue;
+        ctx.fillStyle = `rgba(150,190,240,${(bucketAlpha(b, NODE_REST_ALPHA, NODE_COHERENT) * dim).toFixed(3)})`;
         ctx.beginPath();
-        ctx.arc(nd.x + jx, nd.y + jy, 0.95 + near * 0.55, 0, 6.2832);
+        for (let i = 0; i < list.length; i++) {
+          const nd = nodes[list[i]];
+          const x = nd.x + nd.dx;
+          const y = nd.y + nd.dy;
+          // ⚠ `moveTo` before each arc, or every dot is joined to the last by a
+          // stray line — an arc continues the current subpath rather than
+          // starting one.
+          ctx.moveTo(x + nd.r, y);
+          ctx.arc(x, y, nd.r, 0, 6.2832);
+        }
         ctx.fill();
       }
     }
 
     if (!build()) return undefined;
 
-    if (reduced) {
+    if (reduced || still) {
       // One still, half-coherent frame. No loop, no motion, no battery.
       //
       // ⚠ The pulse becomes a STEADY LIFT here rather than vanishing. Reduced
       // motion is a request for less movement, not for less information — a
       // reader who has asked for stillness must not silently lose the one
       // signal that says something needs them.
-      const still = () => {
+      const paintStill = () => {
         const d = driveRef.current;
         paint(0, 0.45 * d.depth, { x: w * 0.7, y: h * 0.25 }, d.dim * (1 + d.pulse));
       };
-      still();
+      paintStill();
       const ro = new ResizeObserver(() => {
-        if (build()) still();
+        if (build()) paintStill();
       });
       ro.observe(canvas);
       return () => ro.disconnect();
@@ -329,7 +426,11 @@ export default function Field({ activity, confidenceLevel, quiet = false, degrad
       ro.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, []);
+    // ⚠ `still` is structural, not driven — it decides whether there is a loop
+    // at all, so it belongs here, unlike the drive props, which are read through
+    // `driveRef` precisely so a poll cannot rebuild the substrate and make the
+    // whole field flicker once a minute.
+  }, [still]);
 
   return (
     <div className="field" aria-hidden="true">

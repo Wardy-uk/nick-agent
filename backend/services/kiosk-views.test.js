@@ -64,6 +64,36 @@ test('⚠ the field renders in EVERY state SARA is seen in', () => {
   assert.doesNotMatch(read(LOCK), /lock__orb/, 'the deprecated orb is back on the lock screen');
 });
 
+test('⚠ the locked field is STILL — nothing animates behind an unlit panel', () => {
+  // The `locked` state takes the backlight to 0, and a browser cannot see that:
+  // a kiosk page is never `document.hidden`, so Field's own "stops dead when the
+  // page is hidden" guard protects against a condition that cannot occur on a
+  // wall display. Found live 2 Sep 2026 — the Pi 4 had been painting the field
+  // at 12fps into a dark screen in an empty house for 1d17h, at 100% of a core.
+  //
+  // It still RENDERS (the test above), because the display agent can die and the
+  // light can come back before the verdict does. It just does not loop.
+  assert.ok(read(LOCK).includes('<Field confidenceLevel="low" degraded still />'),
+    'the lock screen animates its field behind a backlight set to 0');
+});
+
+test('⚠ ONE field at a time — an overlay owns the screen, or the shell does', () => {
+  // LockScreen and ClockScreen render as an overlay OVER the live shell rather
+  // than instead of it, and each mounts a Field of its own. The shell's own
+  // suppression was `active !== 'surface'` — one case short — so the kiosk drew
+  // two full-screen fields stacked, which is the exact thing the comment beside
+  // that line says must not happen ("two stacked fields would put a `quiet`
+  // placeholder under an honest one"). Locked, that was ~22,000 stroke calls a
+  // frame, invisible, behind an unlit panel.
+  const src = read(APP);
+  const guard = src.slice(0, src.indexOf('className="app__field"'));
+  assert.ok(guard.includes('overlayOwnsScreen'),
+    'the shell field is not suppressed while a lock/clock overlay owns the screen');
+  // BOTH overlays, not just the lock — the clock screen mounts a Field too.
+  assert.ok(src.includes('const overlayOwnsScreen = locked || showClock;'),
+    'overlayOwnsScreen must cover both overlays, each of which mounts its own Field');
+});
+
 test('⚠ the shell field is DRIVEN, not hardcoded', () => {
   // It used to be pinned at `quiet` + `low` on every screen but the Surface, so
   // she looked identical whether the queue was on fire or the day was empty —
