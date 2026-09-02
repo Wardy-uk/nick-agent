@@ -511,6 +511,26 @@ function recentDays(days = 30) {
  * its own coverage report, which is the failure marking itself as healthy.
  */
 function coverageReport(days = 30) {
+  // ⚠ NOT CONFIGURED IS ITS OWN STATE, and it short-circuits before any
+  // comparison. Otherwise every measured day pairs against a RescueTime that was
+  // never connected and comes back `under` — a payload accusing an integration
+  // Nick has not set up of failing to watch. Both current consumers happen to
+  // check `configured` first, so nothing rendered it; a raw reader would have
+  // believed it, and "we were never given a key" needs a different fix from
+  // "RescueTime has stopped watching".
+  if (!isConfigured()) {
+    return {
+      state: 'not-configured',
+      configured: false,
+      credentialSource: null,
+      judged: 0,
+      under: 0,
+      unknown: 0,
+      pairs: [],
+      why: 'no API key',
+    };
+  }
+
   const deskDays = require('./desktop-daily').recentDays(days, { completeOnly: true });
   const byDay = {};
   for (const r of deskDays) (byDay[r.day] = byDay[r.day] || []).push(r);

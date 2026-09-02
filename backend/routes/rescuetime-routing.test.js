@@ -53,6 +53,12 @@ test('status answers before a key exists, and says it is not configured', async 
   assert.equal(r.status, 200, 'an unconfigured integration is a normal state, not an error');
   assert.equal(r.body.configured, false);
   assert.equal(r.body.credentialSource, null);
+  // ⚠ And it must NOT accuse an integration that was never connected of failing
+  // to watch. Every measured day would otherwise pair against an absent
+  // RescueTime and come back `under`.
+  assert.equal(r.body.state, 'not-configured');
+  assert.equal(r.body.under, 0);
+  assert.deepEqual(r.body.pairs, []);
 });
 
 test('a malformed key is refused with a reason', async () => {
