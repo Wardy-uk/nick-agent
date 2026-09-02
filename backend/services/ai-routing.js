@@ -199,13 +199,24 @@ const USAGE_STATE_KEY = 'ai_routing_usage';
 
 function _todayStr() { return new Date().toISOString().split('T')[0]; }
 
+// ⚠ "Nothing is stored yet" and "we could not read what is stored" are DIFFERENT
+// facts, and conflating them is what made the daily cap stop capping. The old
+// `catch { return blank }` returned a zeroed day on any read error, and the very
+// next call persisted that zero over the day's real total — measured live on
+// 1 Sep 2026: the ledger held 259 calls and 575,921 tokens (96% of the 600k cap)
+// while this counter believed 31 and 64,081, its hourly map holding only the
+// last two hours. With ~354 restarts on this process, a transient read is not a
+// rare path. So a failed read is FLAGGED, and a flagged state is never written.
+let _usageLoadFailed = false;
+
 function _loadUsage() {
   const blank = { date: _todayStr(), calls: 0, tokens: 0, hourlyEscalations: new Map(), lastFallbackReason: null };
   try {
     const raw = require('../db/database').getState(USAGE_STATE_KEY);
-    if (!raw) return blank;
+    _usageLoadFailed = false;
+    if (!raw) return blank;                                   // genuinely nothing stored
     const parsed = JSON.parse(raw);
-    if (!parsed || parsed.date !== blank.date) return blank; // yesterday's spend is not today's
+    if (!parsed || parsed.date !== blank.date) return blank;   // yesterday's spend is not today's
     return {
       date: parsed.date,
       calls: parsed.calls || 0,
@@ -213,11 +224,34 @@ function _loadUsage() {
       hourlyEscalations: new Map(Object.entries(parsed.hourlyEscalations || {})),
       lastFallbackReason: parsed.lastFallbackReason || null,
     };
-  } catch { return blank; }
+  } catch (e) {
+    // Could not READ. Keep counting in memory so the in-process cap still bites,
+    // but refuse to overwrite a total we were never able to see.
+    _usageLoadFailed = true;
+    console.warn(`[AIRouting] Could not read the daily usage counter (${e.message}) — counting in memory, not overwriting the stored total`);
+    return blank;
+  }
 }
 
 function _saveUsage() {
   try {
+    if (_usageLoadFailed) {
+      // We never managed to read today's total, so what is in memory is a
+      // partial count starting from zero. Writing it would erase the real one.
+      // Retry the read; only continue once it succeeds.
+      const recovered = _loadUsage();
+      if (_usageLoadFailed) return;                            // still unreadable — write nothing
+      // Recovered. ADD rather than replace or take the larger: after a failed
+      // load this process started counting from zero, so what is in memory is
+      // exactly the delta since then, and stored + delta is the true total.
+      // (A stored row from a previous DAY comes back as a clean blank with the
+      // flag cleared, so the sum is just our delta — which is correct.)
+      _usage.calls += recovered.calls;
+      _usage.tokens += recovered.tokens;
+      for (const [hr, n] of recovered.hourlyEscalations) {
+        _usage.hourlyEscalations.set(hr, (_usage.hourlyEscalations.get(hr) || 0) + n);
+      }
+    }
     // setState takes a primitive — objects must be stringified (see mistakes.md).
     require('../db/database').setState(USAGE_STATE_KEY, JSON.stringify({
       date: _usage.date,
@@ -655,6 +689,7 @@ async function _runTaskInner(taskType, payload, options = {}) {
         );
         if (text && text.trim().length > 0) {
           console.log(`[AIRouting] ${taskType}: ollama (${model})${attempted > 1 ? ' [fallback]' : ''}`);
+          _recordLocalCall({ model, taskType, usage: options._ollamaUsage });
           return { text, provider: 'ollama', fallback: attempted > 1, model , providerMs: Date.now() - attemptStart };
         }
         continue;
@@ -831,7 +866,32 @@ async function _runOpenAI(taskType, payload, options) {
   });
 }
 
+/**
+ * Record a LOCAL call in the same ledger the cloud ones use.
+ *
+ * `ai_calls` had exactly one writer — the cloud usage recorder — so every Ollama
+ * call was invisible to it, and "what proportion of calls used the intended
+ * provider" could only be answered by grepping pm2 logs. Cost is an explicit 0
+ * with source 'local': unlike an unpriced cloud model (which must stay null, or
+ * it reads as free), a local call genuinely is free, and saying so is accurate.
+ */
+function _recordLocalCall({ model, taskType, usage }) {
+  try {
+    require('../db/database').recordAiCall({
+      provider: 'ollama',
+      model: model || null,
+      taskType: taskType || null,
+      promptTokens: usage?.prompt_tokens || 0,
+      completionTokens: usage?.completion_tokens || 0,
+      costUsd: 0,
+      costSource: 'local',
+    });
+  } catch { /* never let bookkeeping break a call */ }
+}
+
 async function _runOllama(taskType, payload, options) {
+  // Collected via the provider's opt-in callback so the string return stays.
+  const onUsage = (u) => { options._ollamaUsage = u; };
   if (payload.messages) {
     return ollamaProvider.chat(payload.systemPrompt || '', payload.messages, {
       model: payload.model,
@@ -839,6 +899,7 @@ async function _runOllama(taskType, payload, options) {
       maxTokens: payload.maxTokens,
       contextWindow: payload.contextWindow,
       timeout: options.timeout,
+      onUsage,
     });
   }
   return ollamaProvider.generate(payload.prompt || '', {
@@ -847,6 +908,7 @@ async function _runOllama(taskType, payload, options) {
     maxTokens: payload.maxTokens,
     contextWindow: payload.contextWindow,
     timeout: options.timeout,
+    onUsage,
   });
 }
 

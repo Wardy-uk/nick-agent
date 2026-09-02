@@ -96,6 +96,11 @@ router.get('/', async (req, res) => {
       cloudPreferredTasks: status.cloudPreferredTasks,
       backgroundTasks: status.backgroundTasks,
       taskModels: status.taskModels,
+      // getStatus() has always computed these and this route dropped them, so
+      // the provider mix, failure rate and fallback rate — the numbers that
+      // expose a cloud provider dying quietly — were reachable from nowhere.
+      health: status.health,
+      cost: status.cost,
     },
   });
 });

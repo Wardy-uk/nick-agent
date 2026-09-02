@@ -65,13 +65,15 @@ async function classifyBatch(batch) {
   // Route through AI provider (Pi 4 worker first, then local fallback)
   // DO NOT call Pi 5 Ollama directly — it blocks interactive use
   const aiProvider = require('./ai-provider');
-  const result = await aiProvider.triageEmails(
-    `You are classifying emails for Nick Ward, Head of Technical Support at Nurtur.
+  // Built once and shared with the shadow comparison below, so the candidate
+  // model is asked the IDENTICAL question — rebuilding it there would let the
+  // comparison drift from what production actually sends.
+  const prompt = `You are classifying emails for Nick Ward, Head of Technical Support at Nurtur.
 Classify each email into exactly one category: ACTION, FYI, DELEGATE, or IGNORE.
 Respond with ONLY a JSON array. Format: [{"index": 0, "category": "ACTION", "reason": "brief reason max 8 words"}, ...]
 
-Classify these ${batch.length} emails:\n\n${emailList}`
-  );
+Classify these ${batch.length} emails:\n\n${emailList}`;
+  const result = await aiProvider.triageEmails(prompt);
   // Both of these used to return an EMPTY ARRAY, which is the silent failure
   // this file keeps having to relearn: no answer and "the model read them and
   // said nothing" are the same value, so a provider that is down, refusing or
@@ -97,9 +99,17 @@ Classify these ${batch.length} emails:\n\n${emailList}`
   // Batch-local indices become EMAIL IDS here, so the caller never has to know
   // the batching happened — and, since only unclassified mail is batched now,
   // never has to reason about which slice of the inbox a batch covered.
-  return parsed
+  const mapped = parsed
     .filter(c => Number.isInteger(c?.index) && c.index >= 0 && c.index < batch.length)
     .map(c => ({ ...c, id: batch[c.index].id }));
+
+  // Deliberately NOT awaited: the shadow comparison must never delay triage,
+  // and must never change its answer. Off unless TRIAGE_SHADOW_ENABLED=true.
+  try {
+    require('./triage-shadow').compare(batch, mapped, prompt);
+  } catch { /* a comparison harness may never cost the thing it measures */ }
+
+  return mapped;
 }
 
 /**

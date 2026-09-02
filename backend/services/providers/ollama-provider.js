@@ -43,6 +43,17 @@ async function generate(prompt, options = {}) {
     }
 
     const data = await res.json();
+    // Opt-in usage reporting. The return stays a plain string because every
+    // caller reads it as one; a callback adds the token counts without
+    // changing the contract. Ollama omits these on some paths, hence the ?? 0.
+    if (typeof options.onUsage === 'function') {
+      try {
+        options.onUsage({
+          prompt_tokens: data.prompt_eval_count ?? 0,
+          completion_tokens: data.eval_count ?? 0,
+        });
+      } catch { /* telemetry must never break the answer */ }
+    }
     return data.response || '';
   } finally {
     clearTimeout(timer);
@@ -90,6 +101,14 @@ async function chat(systemPrompt, messages, options = {}) {
     }
 
     const data = await res.json();
+    if (typeof options.onUsage === 'function') {
+      try {
+        options.onUsage({
+          prompt_tokens: data.prompt_eval_count ?? 0,
+          completion_tokens: data.eval_count ?? 0,
+        });
+      } catch { /* telemetry must never break the answer */ }
+    }
     return data.message?.content || '';
   } finally {
     clearTimeout(timer);
