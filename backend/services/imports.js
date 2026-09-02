@@ -718,26 +718,11 @@ reason: <one sentence>`;
 
 // classifyWithClaude removed in Phase 3 — replaced by AI routing layer
 
-async function classifyWithOllama(fileName, content) {
-  const ollamaRes = await fetch(`${OLLAMA_URL}/api/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      prompt: buildClassifyPrompt(fileName, content),
-      stream: false,
-      options: { temperature: 0.1, num_ctx: 2048, num_predict: 256 }
-    }),
-    signal: AbortSignal.timeout(30000) // 30s — fail fast to AI routing
-  });
-
-  if (!ollamaRes.ok) {
-    throw new Error(`Ollama error: ${ollamaRes.status}`);
-  }
-
-  const data = await ollamaRes.json();
-  return data.response || '';
-}
+// classifyWithOllama removed 2 Sep 2026 -- it was a second router beside
+// ai-routing, with a 30s timeout the local model could not meet (qwen2.5:3b
+// generates ~2.2 tok/s on this Pi, so the 256 tokens it asked for needed
+// ~116s). It had failed 152 times and succeeded none. Classification goes
+// through ai-provider.classifyImport now.
 
 async function classifyFile(filePath, opts = {}) {
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -761,26 +746,37 @@ async function classifyFile(filePath, opts = {}) {
   }
 
   let responseText = '';
-  let backend = 'ollama';
+  let backend = 'none';
 
-  // Try Ollama first, fall back through AI routing
+  // ⚠ This used to call a PRIVATE Ollama path first — a second router beside
+  // the real one, with its own 30s timeout — and only fall through to AI
+  // routing when that threw. It failed every single time: measured on the Pi,
+  // qwen2.5:1.5b generates ~5 tok/s, so the 256 tokens this asks for need ~50s
+  // and the 30s abort was unreachable by construction. The pm2 logs hold
+  // **152 timeouts and not one `[Imports] Classified` line** — import
+  // classification had never produced anything, silently, because the failure
+  // path only warned.
+  //
+  // Now it goes through `ai-routing` like everything else: Ollama first (it is
+  // a cheap routing decision, and nobody is waiting on an import) with the
+  // provider's own 120s budget, then cloud if that fails. One router, one set
+  // of rules, and the call lands in the cost ledger.
   try {
-    responseText = await classifyWithOllama(fileName, content);
-    console.log(`[Imports] Classified ${fileName} via Ollama`);
-  } catch (ollamaErr) {
-    console.warn(`[Imports] Ollama failed for ${fileName}, trying AI routing:`, ollamaErr.message);
-    try {
-      const aiProvider = require('./ai-provider');
-      const result = await aiProvider.classifyImport(buildClassifyPrompt(fileName, content));
-      if (result.text) {
-        responseText = result.text;
-        backend = result.provider;
-        console.log(`[Imports] Classified ${fileName} via ${result.provider} (fallback)`);
-      }
-    } catch (fallbackErr) {
-      console.error(`[Imports] All AI providers failed for ${fileName}:`, fallbackErr.message);
-      throw fallbackErr;
+    const aiProvider = require('./ai-provider');
+    const result = await aiProvider.classifyImport(buildClassifyPrompt(fileName, content));
+    if (result.text) {
+      responseText = result.text;
+      backend = result.provider;
+      console.log(`[Imports] Classified ${fileName} via ${result.provider}${result.fallback ? ' [fallback]' : ''}`);
+    } else {
+      // Every tier declined or failed. Loud, because the old version's silence
+      // is what hid this for months.
+      console.error(`[Imports] No provider classified ${fileName} (${result.reason || 'no reason given'})`);
+      throw new Error(`no classification for ${fileName}: ${result.reason || 'all providers failed'}`);
     }
+  } catch (err) {
+    console.error(`[Imports] Classification failed for ${fileName}:`, err.message);
+    throw err;
   }
 
   const typeMatch = responseText.match(/type:\s*(\S+)/i);

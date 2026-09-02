@@ -57,6 +57,18 @@ const LATENCY_SENSITIVE_TASKS = new Set([
   'email_draft',
   'email_summary',
   'briefing_synthesis',
+  // ⚠ Added 2 Sep 2026, and it is a CORRECTION of an earlier recommendation to
+  // "give it a longer local timeout like focus_enhancement". That was wrong,
+  // because the two are not alike: focus_enhancement is fire-and-forget
+  // pre-generation with nobody waiting, so a 25s local attempt is free. This
+  // one is awaited INSIDE `GET /api/todos/focus`, raced against a 5s deadline
+  // in routes/todos.js — Nick is holding the request.
+  //
+  // So the old 4s local attempt could never finish (qwen2.5:1.5b measures ~5
+  // tok/s on this Pi), and it burned 4 of those 5 seconds proving it before
+  // paying OpenRouter anyway. Only 9 of 29 calls were ever served locally.
+  // Cloud-first makes it honest AND faster; it costs $0.001 per six calls.
+  'drilldown_framing',
 ]);
 
 /**

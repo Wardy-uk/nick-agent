@@ -10,6 +10,41 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 function _key() { return process.env.OPENROUTER_API_KEY || ''; }
 function _model() { return process.env.OPENROUTER_MODEL || 'anthropic/claude-haiku-4.5'; }
 
+/**
+ * A second choice, inside the same call.
+ *
+ * The four-tier stack is a ONE-tier stack in practice: Anthropic is disabled
+ * (key out of credit) and OpenAI has no key, so every cloud call in NEURO is
+ * OpenRouter and nothing catches it. Worse, `email_triage` and
+ * `transcript_processing` deliberately have no local tier — 41% of volume with
+ * a single point of failure.
+ *
+ * OpenRouter's own `models` array fixes that without a new key, a new bill or a
+ * new vendor relationship: it tries them in order within one request and
+ * returns whichever answered. The default second is deliberately a DIFFERENT
+ * VENDOR — Gemini rather than another Anthropic model — because the outage this
+ * guards against is usually the vendor's, not the model's. That is NOVA's
+ * `failover2` reasoning, reused rather than re-derived.
+ *
+ * ⚠ It must support tool calling, since the same provider serves the tools
+ * path; gemini-2.5-flash does.
+ */
+function _fallbackModels() {
+  const raw = process.env.OPENROUTER_FALLBACK_MODELS;
+  if (raw === '') return [];                       // explicitly disabled
+  if (!raw) return ['google/gemini-2.5-flash'];
+  return raw.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/**
+ * The body's model routing. `models` beats `model` at OpenRouter, so the
+ * primary has to be first in the array.
+ */
+function _modelRouting(model) {
+  const fallbacks = _fallbackModels().filter(m => m !== model);
+  return fallbacks.length ? { model, models: [model, ...fallbacks] } : { model };
+}
+
 function isConfigured() {
   return !!_key();
 }
@@ -33,7 +68,7 @@ async function chat(systemPrompt, messages, options = {}) {
         'X-Title': 'NEURO',
       },
       body: JSON.stringify({
-        model,
+        ..._modelRouting(model),
         messages: [
           { role: 'system', content: systemPrompt },
           ...messages,
@@ -58,7 +93,10 @@ async function chat(systemPrompt, messages, options = {}) {
     // all: "we were not told" must not become "it cost nothing".
     const usage = data.usage || null;
 
-    return { text, usage, model };
+    // ⚠ The model that ACTUALLY served it, not the one asked for. With a
+    // fallback list those differ exactly when it matters, and the ledger would
+    // otherwise bill a Gemini answer to Haiku and hide that a failover happened.
+    return { text, usage, model: data.model || model };
   } finally {
     clearTimeout(timer);
   }
@@ -91,7 +129,7 @@ async function streamChat(systemPrompt, messages, res, options = {}) {
         'X-Title': 'NEURO',
       },
       body: JSON.stringify({
-        model,
+        ..._modelRouting(model),
         messages: [
           { role: 'system', content: systemPrompt },
           ...messages,
@@ -120,6 +158,10 @@ async function streamChat(systemPrompt, messages, res, options = {}) {
     // Stays null until the stream actually tells us. Null and "zero tokens" are
     // different facts and the cost ledger depends on the difference.
     let streamUsage = null;
+    // Which model the stream says answered. With a fallback list this differs
+    // from what was asked for exactly when a failover happened, and the ledger
+    // would otherwise record the wrong one and hide it.
+    let servedModel = null;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
@@ -149,11 +191,12 @@ async function streamChat(systemPrompt, messages, res, options = {}) {
           // The usage chunk arrives at the END, with an empty `choices` array —
           // it is not attached to a delta, so it has to be picked up here.
           if (parsed.usage) streamUsage = parsed.usage;
+          if (parsed.model && !servedModel) servedModel = parsed.model;
         } catch {}
       }
     }
 
-    return { fullText, usage: streamUsage, model };
+    return { fullText, usage: streamUsage, model: servedModel || model };
   } finally {
     clearTimeout(timer);
   }
@@ -190,6 +233,7 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
   // reporting only the last round would under-count a 5-round conversation
   // fivefold.
   const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost: 0 };
+  let servedModel = null;
   let text = '';
 
   for (let round = 0; round < maxRounds; round++) {
@@ -207,7 +251,7 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
           'X-Title': 'NEURO',
         },
         body: JSON.stringify({
-          model,
+          ..._modelRouting(model),
           messages: convo,
           tools: openaiTools,
           temperature: options.temperature ?? 0.5,
@@ -226,6 +270,9 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
     }
 
     const message = data.choices?.[0]?.message;
+    // A tool loop can fail over mid-conversation, so the served model is read
+    // each round; the last one to answer is what gets billed.
+    if (data.model) servedModel = data.model;
     if (data.usage) {
       usage.prompt_tokens += data.usage.prompt_tokens || 0;
       usage.completion_tokens += data.usage.completion_tokens || 0;
@@ -236,7 +283,7 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
     if (message?.content) text = text ? `${text}\n${message.content}` : message.content;
 
     const calls = message?.tool_calls || [];
-    if (!calls.length) return { text, usage, toolCalls, model };
+    if (!calls.length) return { text, usage, toolCalls, model: servedModel || model };
 
     convo.push(message);
 
@@ -266,7 +313,7 @@ async function chatWithTools(systemPrompt, messages, tools, runTool, options = {
   }
 
   console.warn(`[OpenRouter] Tool loop hit maxRounds (${maxRounds}) — returning partial reply`);
-  return { text, usage, toolCalls, truncated: true, model };
+  return { text, usage, toolCalls, truncated: true, model: servedModel || model };
 }
 
 module.exports = { isConfigured, chat, generate, streamChat, chatWithTools };

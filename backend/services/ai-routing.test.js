@@ -34,10 +34,32 @@ test('anything Nick waits on goes to OpenRouter first, never a local model', () 
 });
 
 test('light and scheduled work runs locally first', () => {
-  for (const task of ['focus_enhancement', 'drilldown_framing', 'knowledge_consolidation', 'action_suggestion']) {
+  // drilldown_framing was in this list until 2 Sep 2026 and is deliberately not
+  // any more — see the next test. Nothing else moved.
+  for (const task of ['focus_enhancement', 'knowledge_consolidation', 'action_suggestion']) {
     const order = routing._providerOrder(task);
     assert.equal(order[0], 'ollama', `${task} should lead with Ollama`);
   }
+});
+
+/**
+ * The exception, and why it is one.
+ *
+ * "Light and scheduled runs locally" splits on whether anyone is waiting, and
+ * drilldown_framing looked light — one short sentence, 84 input tokens. But it
+ * is awaited inside `GET /api/todos/focus` and raced against a 5s deadline in
+ * routes/todos.js, so Nick holds the request while it runs. The local model
+ * measures ~5 tok/s on this Pi and was given 4s, which it could never meet: 20
+ * of 29 calls burned four of the five seconds failing and were then served by
+ * OpenRouter anyway.
+ *
+ * Pinned so this cannot be quietly "tidied" back into the local list by someone
+ * reading only the task's size.
+ */
+test('drilldown_framing is cloud-first because a request is waiting on it', () => {
+  const order = routing._providerOrder('drilldown_framing');
+  assert.equal(order[0], 'openrouter', 'a user-facing 5s budget cannot afford a doomed local attempt');
+  assert.equal(order.at(-1), 'ollama', 'still reachable as a last resort');
 });
 
 test('Anthropic and OpenAI are backstops, never the default', () => {
