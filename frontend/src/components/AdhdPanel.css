@@ -170,6 +170,10 @@
 .adhd__avoid-item { display: flex; flex-direction: column; gap: 0.15rem; }
 .adhd__avoid-label { color: var(--text-primary); font-size: 0.92rem; }
 .adhd__avoid-detail { color: var(--text-muted); font-size: 0.78rem; }
+/* Small and below the words. These rows are honest, not urgent — the buttons
+   exist so the row can be answered, not so it competes with the work above. */
+.adhd__avoid-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.35rem; }
+.adhd__avoid-btn { font-size: 0.74rem; padding: 0.2rem 0.55rem; }
 
 /* ── Quick wins ── */
 .adhd__quick, .adhd__wins { list-style: none; margin: 0; padding: 0; }
@@ -403,3 +407,18 @@
 }
 
 .adhd__now-more[open] > summary { margin-bottom: 0.5rem; }
+
+/* Quick wins: tick to close, Start to pick up. Kept visually quiet so the tick
+   stays the obvious action on a row whose whole purpose is a fast close. */
+.adhd__quick-start {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.adhd__quick-start:hover { color: var(--text-primary); border-color: var(--accent); }

@@ -542,7 +542,16 @@ function plan(taskIds, { date = null, startTime = null, minutes = null, now = ne
       // Stated per task, not just in aggregate — the row Nick has to fix is the
       // one without a number on it.
       assumed: t.estimate_minutes == null,
+      dueDate: t.due_date || null,
+      // Blocking work sets its due date to the day it is being done. Pulling a
+      // date IN is unremarkable; pushing one OUT moves a deadline, so it is
+      // named separately here and said out loud before the block is created.
+      dueMovesLater: Boolean(t.due_date) && t.due_date < slot.date,
     })),
+    // Counted here rather than in each client, so the confirm row, the batch
+    // composer and anything added later cannot disagree about how many
+    // deadlines a window is about to move.
+    dueLaterCount: tasks.filter(t => t.due_date && t.due_date < slot.date).length,
     slot,
     minutes: window.minutes,
     minutesAssumed: window.assumed,
@@ -649,7 +658,8 @@ function readCalendar(now = new Date()) {
  * event_id is recoverable; a duplicate invite is not.
  */
 async function schedule(taskIds, {
-  date = null, startTime = null, minutes = null, saveEstimates = true, now = new Date(),
+  date = null, startTime = null, minutes = null, saveEstimates = true, saveDue = true,
+  now = new Date(),
 } = {}) {
   const draft = plan(taskIds, { date, startTime, minutes, now });
   if (!draft.ok) return draft;
@@ -678,11 +688,12 @@ async function schedule(taskIds, {
     throw e;
   }
 
-  // Membership, and the estimate write-back. Splitting the window evenly across
+  // Membership, and the two write-backs. Splitting the window evenly across
   // un-estimated tasks would invent a number per task; instead each keeps what
   // it had, and only a SINGLE-task block learns its duration from the window —
   // there, the window IS the judgement about that task.
   const taskStore = require('./task-store');
+  const dueUpdates = [];
   for (const task of tasks) {
     const allotted = tasks.length === 1 ? windowMinutes : (task.estimate_minutes ?? null);
     db.addTaskBlockItem(blockId, task.id, allotted);
@@ -693,6 +704,33 @@ async function schedule(taskIds, {
     if (saveEstimates && allotted != null && task.estimate_minutes == null) {
       try { taskStore.updateTask(task.id, { estimateMinutes: allotted }); }
       catch (e) { console.warn(`[TaskBlocks] Could not save estimate for #${task.id}: ${e.message}`); }
+    }
+    // The due date follows the block: putting a task in the diary IS deciding
+    // when it is being done, and leaving a date behind that says otherwise puts
+    // it in the overdue lane on a day it is already scheduled for.
+    //
+    // ⚠ It is REPORTED, never silent, and the two directions are not the same
+    // act. Pulling a date in is bookkeeping. Pushing one out MOVES A DEADLINE —
+    // possibly one somebody else is waiting on — and a scheduling tool that
+    // quietly rewrites a commitment because a gap happened to be free next week
+    // is one that cannot be trusted with the field. Nick chose the slot, so it
+    // is done; `dueUpdates` carries `later` so the screen can say so.
+    if (saveDue && (task.due_date || null) !== slot.date) {
+      try {
+        taskStore.updateTask(task.id, { due_date: slot.date });
+        dueUpdates.push({
+          taskId: task.id,
+          text: task.text,
+          from: task.due_date || null,
+          to: slot.date,
+          later: Boolean(task.due_date) && task.due_date < slot.date,
+        });
+      } catch (e) {
+        // Never allowed to fail the block. The event, the note and the
+        // membership are the block; a due date that did not move is a wrong
+        // date, and a block that did not happen is lost work.
+        console.warn(`[TaskBlocks] Could not set due date for #${task.id}: ${e.message}`);
+      }
     }
   }
 
@@ -732,6 +770,7 @@ async function schedule(taskIds, {
       error: `Blocked in NEURO but Outlook refused it (${result.reason})`,
       blockId,
       notePath,
+      dueUpdates,
       graphReason: result.reason,
     };
   }
@@ -754,6 +793,7 @@ async function schedule(taskIds, {
     notePath,
     noteWritten: stub.written,
     noteReason: stub.reason,
+    dueUpdates,
     event: result.event,
   };
 }
@@ -1247,6 +1287,163 @@ async function removeTask(blockId, taskId) {
 }
 
 /**
+ * The window came and went and the work did not happen. Move it.
+ *
+ * ── Why this is not just "drop it and block it again" ────────────────────────
+ *
+ * That is what Nick had to do, and it costs the two things the feature exists
+ * to protect. Dropping loses the membership — a nine-task block is nine
+ * re-selections in a picker — and it leaves the ticks behind, so anything he
+ * DID get through in that window either has to be re-ticked on a new block
+ * (which is a lie about when it happened) or silently falls out of the wins
+ * ledger. His difficulty is initiation; a six-step recovery from a missed block
+ * is a block that never gets rebooked.
+ *
+ * ── The rule that shapes it: a tick is finished work ────────────────────────
+ *
+ * ⚠ TICKED ITEMS DO NOT MOVE. They are done, and they are held only until the
+ * outcome note is written — carrying them into a future slot would put finished
+ * work back in the diary and make the new block's note responsible for evidence
+ * about a sitting that already happened. So the old block survives whenever
+ * anything in it was ticked, still `awaiting-writeup`, still owed its note, and
+ * only the un-ticked half moves.
+ *
+ * The old block's calendar event is therefore deleted ONLY when nothing was
+ * ticked — an empty block in a past hour is clutter, but a block that produced
+ * real work is a record of where the time went.
+ *
+ * ── Order is load-bearing ───────────────────────────────────────────────────
+ *
+ * ⚠ The new block is created FIRST. If the slot is taken, the diary cannot be
+ * read or Graph refuses, nothing has been touched and the old block is exactly
+ * as it was — whereas detaching first and then failing would leave the tasks in
+ * no block at all, which is the one outcome worse than a missed window.
+ */
+async function reschedule(blockId, {
+  date = null, startTime = null, minutes = null, taskIds = null, now = new Date(),
+} = {}) {
+  const block = db.getTaskBlockRow(blockId);
+  if (!block) return { ok: false, error: `No block #${blockId}` };
+  if (!['scheduled', 'awaiting-writeup'].includes(block.status)) {
+    // `released`, `complete` and `dropped` all end the block deliberately.
+    // Reopening one by giving it a new slot would undo a decision rather than
+    // recover from a missed window — `restore` is the way back from a drop.
+    return { ok: false, error: `Block #${blockId} is ${block.status} — only a live block can be moved` };
+  }
+
+  const items = db.listTaskBlockItems(blockId);
+  if (!items.length) return { ok: false, error: 'That block has no tasks in it' };
+
+  const ticked = items.filter(i => i.awaiting);
+  const untickedIds = new Set(items.filter(i => !i.awaiting).map(i => i.task_id));
+
+  let movers;
+  if (Array.isArray(taskIds) && taskIds.length) {
+    const wanted = taskIds.map(Number);
+    const notHere = wanted.filter(id => !items.some(i => i.task_id === id));
+    if (notHere.length) {
+      return { ok: false, error: `Not in this block: ${notHere.map(id => `#${id}`).join(', ')}` };
+    }
+    // Refused rather than quietly skipped. Asking to move something that is
+    // already done is a misunderstanding worth correcting out loud — silently
+    // leaving it behind would look like the reschedule half-worked.
+    const done = wanted.filter(id => !untickedIds.has(id));
+    if (done.length) {
+      return {
+        ok: false,
+        error: `Already ticked, so they stay here and are owed a write-up: ${done.map(id => `#${id}`).join(', ')}`,
+        tickedIds: done,
+      };
+    }
+    movers = items.filter(i => wanted.includes(i.task_id));
+  } else {
+    movers = items.filter(i => !i.awaiting);
+  }
+
+  if (!movers.length) {
+    return {
+      ok: false,
+      error: ticked.length
+        ? 'Everything in this block is ticked — it needs a write-up, not a new slot'
+        : 'Nothing to move',
+    };
+  }
+
+  // ── New block first ───────────────────────────────────────────────────────
+  const created = await schedule(movers.map(i => i.task_id), { date, startTime, minutes, now });
+  if (!created.ok) {
+    // Nothing has been touched. Say which block failed to move rather than
+    // returning the raw scheduling error on its own.
+    return { ...created, rescheduling: blockId };
+  }
+
+  // ── Then detach, and only then ────────────────────────────────────────────
+  const movingAll = movers.length === items.length;
+  let oldBlock = { action: null };
+
+  if (movingAll) {
+    // `removeTask` refuses to empty a block, which is right for its own button
+    // and wrong here — the block is empty because its whole contents moved.
+    //
+    // ⚠ The MEMBERSHIP goes too, not just the status. `drop()` deliberately
+    // keeps its items so `restore()` can put them back, and that is exactly
+    // wrong here: the tasks are in the new block now, so leaving them listed
+    // here puts every one of them in TWO live blocks the moment anybody
+    // restores this one — two holds, two outcome notes, and a sweep with no way
+    // to say which sitting the evidence belongs to. Restoring a moved block is
+    // not a thing to want; rescheduling it again is.
+    for (const item of items) db.removeTaskBlockItem(blockId, item.task_id);
+    db.updateTaskBlockRow(blockId, { status: 'dropped' });
+    oldBlock.action = 'dropped';
+    if (block.event_id) {
+      try {
+        const microsoft = require('./microsoft');
+        oldBlock.event = await microsoft.deleteCalendarEvent(block.event_id);
+      } catch (e) {
+        oldBlock.event = { deleted: false, reason: 'error', detail: e.message };
+      }
+      // Never allowed to fail the move: the tasks are in their new slot and the
+      // old row is dropped. A leftover event in a past hour is a tidiness
+      // problem, and reporting the move as failed would send Nick to redo work
+      // that has already landed.
+      if (oldBlock.event && !oldBlock.event.deleted) {
+        console.warn(`[TaskBlocks] Block #${blockId} moved but its event survived: ${oldBlock.event.reason}`);
+      }
+    }
+  } else {
+    oldBlock.action = 'kept';
+    oldBlock.removed = [];
+    oldBlock.failed = [];
+    // Sequential and fault-isolated — one refusal must not abandon the rest.
+    for (const item of movers) {
+      try {
+        const r = await removeTask(blockId, item.task_id);
+        if (r.ok) oldBlock.removed.push(item.task_id);
+        else oldBlock.failed.push({ taskId: item.task_id, error: r.error });
+      } catch (e) {
+        oldBlock.failed.push({ taskId: item.task_id, error: e.message });
+      }
+    }
+    // The note's checklist still lists what has gone. The sweep decides
+    // completion from `awaiting` rather than from this text, so a stale
+    // checklist misleads Nick rather than the machine — which is reason enough.
+    try { writeChecklistToNote(blockId); }
+    catch (e) { console.warn(`[TaskBlocks] Could not refresh checklist on #${blockId}: ${e.message}`); }
+    oldBlock.stillOwedWriteUp = ticked.length;
+  }
+
+  console.log(`[TaskBlocks] Block #${blockId} → #${created.blockId}: `
+    + `${movers.length} moved, ${items.length - movers.length} stayed (${oldBlock.action})`);
+
+  return {
+    ok: true,
+    from: { blockId, ...oldBlock, ticked: ticked.length },
+    to: created,
+    moved: movers.map(i => ({ taskId: i.task_id, text: i.text })),
+  };
+}
+
+/**
  * Undo a drop.
  *
  * Dropping deletes nothing — the row, the membership, the note and the Outlook
@@ -1476,6 +1673,7 @@ module.exports = {
   settleTaskElsewhere,
   release,
   removeTask,
+  reschedule,
   restore,
   drop,
   sweep,

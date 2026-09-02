@@ -249,6 +249,21 @@
   background: var(--bg-secondary);
 }
 
+/* Already in a block. Shown, not hidden — a task that disappeared from this
+   list would read as one that had been done. */
+.blocks-batch-item.allocated {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.blocks-batch-item.allocated:hover {
+  background: none;
+}
+
+.blocks-batch-item.allocated input {
+  cursor: default;
+}
+
 .blocks-batch-item-text {
   flex: 1;
   min-width: 0;
@@ -402,4 +417,31 @@
   background: rgba(245, 158, 11, 0.1);
   border: 1px solid rgba(245, 158, 11, 0.3);
   color: var(--warning);
+}
+
+/* Moving a missed block. Sits in the whole-block action row, so it inherits
+   blocks-confirm's fencing — this acts on every outstanding task in the window
+   and must not read as belonging to whichever task it happens to line up with. */
+.blocks-reschedule {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.blocks-reschedule-copy {
+  /* Says what will move AND what will not, before the button is pressed. */
+  flex: 1 1 100%;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.blocks-reschedule-date,
+.blocks-reschedule-time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }

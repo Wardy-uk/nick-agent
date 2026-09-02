@@ -133,6 +133,51 @@ export default function AdhdPanel({ onNavigate }) {
     }
   }
 
+  /**
+   * Can this row be acted on, or only read?
+   *
+   * A task signal without any of the three handles cannot be completed and
+   * cannot be pointed at with confidence — the only thing left would be its
+   * text, and a loose text match that lands on the WRONG task would tick
+   * somebody else's work off. So: handles, or no buttons.
+   */
+  function avoidActionable(s) {
+    return s.kind === 'task' && (s.task_id != null || s.ms_id != null || (s.filePath && s.lineNumber != null));
+  }
+
+  /**
+   * Close an avoided task from the card it is named on.
+   *
+   * Owner order is `task_id` → `ms_id` → file+line, the same order and the same
+   * three routes `completeQuickWin` and the phone's `completeTask.js` use — one
+   * more copy of that order is one more chance for them to disagree, so it is
+   * kept identical rather than improved.
+   */
+  async function completeAvoided(s, i) {
+    const key = `av-${i}`;
+    if (busy[key]) return;
+    setBusy((b) => ({ ...b, [key]: true }));
+    try {
+      if (s.task_id != null) {
+        await api(`/api/tasks/${s.task_id}/complete`, { method: 'POST' });
+      } else if (s.ms_id != null) {
+        await api('/api/todos/complete-ms', {
+          method: 'POST',
+          body: JSON.stringify({ msId: s.ms_id, source: s.source, filePath: s.filePath, lineNumber: s.lineNumber }),
+        });
+      } else if (s.filePath && s.lineNumber != null) {
+        await api('/api/todos/toggle', {
+          method: 'POST',
+          body: JSON.stringify({ filePath: s.filePath, lineNumber: s.lineNumber }),
+        });
+      }
+      load();
+    } catch (e) {
+      setState((st) => ({ ...st, error: e.message }));
+    }
+    setBusy((b) => ({ ...b, [key]: false }));
+  }
+
   async function logWin(e) {
     e.preventDefault();
     const text = win.trim();
@@ -387,7 +432,7 @@ export default function AdhdPanel({ onNavigate }) {
 
       {/* ── Friction noticed ──
           Evidence only, and BELOW the work rather than above it. */}
-      <FrictionSection />
+      <FrictionSection onNavigate={onNavigate} />
 
       {/*
         Momentum is full width and alone. It used to share a two-column grid
@@ -486,6 +531,14 @@ export default function AdhdPanel({ onNavigate }) {
                   aria-label={`Complete: ${q.text}`}
                 >{busy[i] ? '…' : ''}</button>
                 <span className="adhd__quick-text">{q.text}</span>
+                {/* The tick closes it; this picks it up. A quick win is the way
+                    back in when the big thing is too big, so being able to
+                    START one is the whole point of the section. */}
+                <button
+                  className="adhd__quick-start"
+                  type="button"
+                  onClick={() => sessionPost('start', { taskId: q.task_id ?? null, text: q.text })}
+                >Start</button>
               </li>
             ))}
           </ul>
@@ -542,6 +595,50 @@ export default function AdhdPanel({ onNavigate }) {
               <li className="adhd__avoid-item" key={i}>
                 <span className="adhd__avoid-label">{s.label}</span>
                 <span className="adhd__avoid-detail">{s.detail}</span>
+                {/* ⚠ The card said "stated so you can decide" and then offered
+                    no way to decide anything. A row naming a task you have been
+                    pushing away, with nothing on it, is the single most
+                    demoralising shape this page can take: it can only be read,
+                    and it says the same thing again tomorrow.
+
+                    What is offered depends on what the row actually knows.
+                    Nothing is invented — a signal with no handle gets no
+                    buttons rather than a button that guesses. */}
+                <span className="adhd__avoid-actions">
+                  {avoidActionable(s) && (
+                    <>
+                      <button
+                        className="adhd__do adhd__avoid-btn"
+                        type="button"
+                        onClick={() => sessionPost('start', { taskId: s.task_id ?? null, text: s.label })}
+                      >Start it</button>
+                      <button
+                        className="adhd__later adhd__avoid-btn"
+                        type="button"
+                        disabled={busy[`av-${i}`]}
+                        onClick={() => completeAvoided(s, i)}
+                      >{busy[`av-${i}`] ? '…' : 'Done'}</button>
+                      <button
+                        className="adhd__later adhd__avoid-btn"
+                        type="button"
+                        onClick={() => onNavigate?.('todos', {
+                          taskId: s.task_id, msId: s.ms_id,
+                          filePath: s.filePath, lineNumber: s.lineNumber,
+                          taskText: s.label,
+                        })}
+                      >Open it</button>
+                    </>
+                  )}
+                  {/* A snoozed reminder is not a task, so it gets the one honest
+                      action it has: take me to the thing it is about. */}
+                  {s.kind === 'nudge' && s.navigate && (
+                    <button
+                      className="adhd__later adhd__avoid-btn"
+                      type="button"
+                      onClick={() => onNavigate?.(s.navigate)}
+                    >Go there</button>
+                  )}
+                </span>
               </li>
             ))}
           </ul>

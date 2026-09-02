@@ -854,10 +854,20 @@
   border-color: var(--accent);
 }
 
+/* One control per ROW, label in a fixed column on the left.
+   
+   It used to be a single wrapping flex line holding every group at once, which
+   made two things unusable: the stacked groups (a Microsoft task's title and
+   notes) were sized to their content instead of the row, so the title box was a
+   few characters wide and the description box smaller than the sentence in it;
+   and the button groups reflowed into each other, so "Due" ran on from
+   "Priority" with nothing but a gap to say where one ended. Stacking the rows
+   costs a little height on an already-expanded row and makes every group
+   findable in one pass down the left edge. */
 .todo-edit {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
+  flex-direction: column;
+  gap: 8px;
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
@@ -871,28 +881,38 @@
 
 .todo-edit-group {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  /* Belt and braces with the column direction above: a group is a ROW of the
+     card, never half of one shared with the next group. Two controls sharing a
+     line is how "Due" came to read as a continuation of "Priority". */
+  width: 100%;
 }
 
+/* A fixed column, so the controls line up down the row rather than each group
+   starting wherever its own label happened to end. */
 .todo-edit-label {
+  flex: 0 0 68px;
   font-family: var(--font-mono);
   font-size: 9px;
   letter-spacing: 1.2px;
   text-transform: uppercase;
   color: var(--text-muted);
-  margin-right: 2px;
 }
 
 .todo-edit-btn {
   font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 5px 10px;
+  white-space: nowrap;
   color: var(--text-secondary);
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
 }
 
 .todo-edit-btn:hover:not(:disabled) {
@@ -900,10 +920,17 @@
   color: var(--text-primary);
 }
 
+/* An active button reads as SET at a glance — the old one differed from its
+   neighbours by a border tint alone, which on a row of six is not a difference
+   you can see without comparing them. */
 .todo-edit-btn.active {
   border-color: var(--moscow-color, var(--accent));
   color: var(--moscow-color, var(--accent));
-  background: rgba(79, 156, 249, 0.1);
+  /* Plain tint first, so a browser without color-mix keeps the old look rather
+     than losing the fill entirely and leaving only a border to read. */
+  background: rgba(79, 156, 249, 0.12);
+  background: color-mix(in srgb, var(--moscow-color, var(--accent)) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--moscow-color, var(--accent)) 35%, transparent);
 }
 
 .todo-edit-btn:disabled {
@@ -913,8 +940,8 @@
 
 .todo-edit-date {
   font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 2px 6px;
+  font-size: 11px;
+  padding: 4px 8px;
   color: var(--text-primary);
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -927,7 +954,12 @@
 .todo-edit-stack {
   flex-direction: column;
   align-items: stretch;
-  gap: 3px;
+  gap: 4px;
+}
+
+/* Its label is a heading for the box below it, not a column beside it. */
+.todo-edit-stack > .todo-edit-label {
+  flex: 0 0 auto;
 }
 
 .todo-edit-input,
@@ -945,14 +977,64 @@
 
 .todo-edit-textarea {
   resize: vertical;
-  line-height: 1.4;
+  line-height: 1.5;
+  min-height: 76px;
 }
 
+/* Wraps onto its own line rather than squeezing the button it sits beside. */
 .todo-edit-note {
+  flex: 1 1 200px;
   font-family: var(--font-mono);
   font-size: 10px;
+  line-height: 1.45;
   color: var(--text-muted);
 }
+
+/* ── What NEURO thinks about a task Microsoft owns ────────────────────────────
+   Set apart from the Graph controls above it, because everything else on an
+   expanded Microsoft row writes to the board and this block writes nowhere but
+   here. A shared visual treatment would make that difference something you have
+   to remember rather than something you can see. */
+.todo-edit-local {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-top: 1px dashed var(--border);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.todo-edit-banner {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+
+/* Nothing on a card is written until this row is used.
+   
+   Every control used to PATCH on click, and each patch re-ranked the list — so
+   setting a MoSCoW moved the card out from under the cursor before the priority
+   beside it had been touched. Triage is one thought; it writes once. Separated
+   from the controls above by a rule, because a Save button sitting flush in the
+   same flow reads as one more option rather than the thing that commits them. */
+.todo-edit-save {
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* On the collapsed row. Says what is happening now, so it leads the meta line. */
+.todo-local-state {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.todo-local-state.working { background: rgba(34, 197, 94, 0.14); color: #22c55e; }
+.todo-local-state.blocked { background: rgba(239, 68, 68, 0.14); color: #ef4444; }
 
 /* A refused or partial save. Stated, not swallowed — the edit is either in
    Microsoft or it is not, and the difference has to be visible. */
@@ -1141,6 +1223,25 @@
 .todo-household input { width: 16px; height: 16px; }
 .todo-household-error { color: var(--danger, #ef4444); font-size: 12px; margin-left: 8px; }
 
+/* ── "Open it" landed here ──────────────────────────────────────────────────
+   The banner is deliberately loud enough to explain why the list is one row
+   long. A filtered-to-one list with no explanation reads as a broken screen. */
+.todo-pin-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
 /* ── Origin: commitment or continual improvement ──────────────────────────────
    Two real values, both shown — unlike the domain chip, where only the
    exception is marked. Which one a task is changes what missing it means, and
@@ -1206,3 +1307,20 @@
 .todo-filter-btn.origin-filter.commitment { border-left-color: rgba(234, 88, 12, 0.75); }
 .todo-filter-btn.origin-filter.improvement { border-left-color: rgba(99, 102, 241, 0.75); }
 .todo-filter-btn.origin-filter.unclassified { border-left-color: var(--border, #334155); }
+
+/* The Microsoft half a merged row stands for.
+   
+   Quiet and indented under the meta line: it is provenance, not a second task,
+   and giving it the weight of a title would undo the merge visually while the
+   data says the pair is one thing. */
+.todo-counterpart {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.todo-counterpart-arrow {
+  margin-right: 5px;
+  opacity: 0.7;
+}

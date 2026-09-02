@@ -45,8 +45,13 @@ function formatMinutes(m) {
   return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} hr`;
 }
 
-export default function TimeFitCard() {
+export default function TimeFitCard({ onStarted, onCompleted }) {
   const [data, setData] = useState(null);
+  // Which row is mid-write. A card that lists work you cannot pick up or put
+  // down is a reading exercise — this one told you what fits in your gap and
+  // then made you go and find it again in the list below.
+  const [actingId, setActingId] = useState(null);
+  const [actError, setActError] = useState(null);
   const [error, setError] = useState(null);
   const [override, setOverride] = useState(null);
   const [savingId, setSavingId] = useState(null);
@@ -88,6 +93,80 @@ export default function TimeFitCard() {
     if (!Number.isFinite(hours) || hours <= 0) return;
     const minutes = Math.min(Math.round(hours * 60), MAX_ESTIMATE_MINUTES);
     setEstimate(taskId, minutes, true);
+  };
+
+  /**
+   * Start a session on the thing that fits. This is the whole point of the card
+   * — Nick's difficulty is INITIATION, and "here is what fits" followed by no
+   * way to begin it is awareness raised with the barrier left exactly where it
+   * was.
+   *
+   * ⚠ 409 means a session is already running. That is a question, not an error,
+   * and it is answered the same way `AdhdPanel` answers it: name what is
+   * running and ask, rather than silently replacing it.
+   */
+  const start = async (item) => {
+    if (!item.task_id || actingId) return;
+    setActingId(item.task_id);
+    setActError(null);
+    try {
+      const post = (force) => fetch(apiUrl('/api/session/start'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: item.task_id, text: item.text, ...(force ? { force: true } : {}) }),
+      });
+      let res = await post(false);
+      let json = await res.json().catch(() => ({}));
+      if (res.status === 409 && json.session) {
+        const ok = window.confirm(
+          `You're ${json.session.elapsedMinutes} minutes into "${json.session.text}".\n\nPark it and start this instead?`
+        );
+        if (!ok) { setActingId(null); return; }
+        res = await post(true);
+        json = await res.json().catch(() => ({}));
+      }
+      if (!res.ok) throw new Error(json.error || `${res.status}`);
+      onStarted?.();
+      load();
+    } catch (e) {
+      // Said out loud. A button that silently did nothing is worse than none.
+      setActError(e.message);
+    }
+    setActingId(null);
+  };
+
+  /**
+   * Close it from here.
+   *
+   * ⚠ A tick can be HELD — `task-blocks` refuses to complete a task whose
+   * outcome note has not been written — and the response says so. Reporting
+   * that as done would be the silent half-failure this codebase refuses
+   * everywhere else, so the hold is surfaced in words.
+   */
+  const complete = async (item) => {
+    if (!item.task_id || actingId) return;
+    setActingId(item.task_id);
+    setActError(null);
+    try {
+      const res = await fetch(apiUrl(`/api/tasks/${item.task_id}/complete`), { method: 'POST' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `${res.status}`);
+      // `held` rides on the returned ROW — the same field TodoPanel reads, not a
+      // second shape invented here.
+      const held = json.task?.held || null;
+      if (held) {
+        setActError(
+          `Held, not done — ${held.reason || 'no write-up yet'}. `
+          + (held.notePath ? `Write it up in ${held.notePath} and it closes itself.` : 'It stays in progress until the outcome note is written.')
+        );
+      } else {
+        onCompleted?.();
+      }
+      load();
+    } catch (e) {
+      setActError(e.message);
+    }
+    setActingId(null);
   };
 
   if (error) return null;          // never let this push a real error at anyone
@@ -192,10 +271,29 @@ export default function TimeFitCard() {
                   <option value="custom">Custom…</option>
                 </select>
               )}
+              {/* Only a NEURO-owned row can be started or closed from here. A
+                  row without an id gets no buttons rather than buttons that
+                  would 400 on the tap. */}
+              {item.task_id && (
+                <span className="tf-acts">
+                  <button
+                    className="tf-inline tf-start"
+                    disabled={actingId === item.task_id}
+                    onClick={() => start(item)}
+                  >{actingId === item.task_id ? '…' : 'Start'}</button>
+                  <button
+                    className="tf-inline"
+                    disabled={actingId === item.task_id}
+                    onClick={() => complete(item)}
+                  >Done</button>
+                </span>
+              )}
             </li>
           ))}
         </ul>
       )}
+
+      {actError && <p className="tf-blurb tf-acterr">{actError}</p>}
 
       <div className="tf-foot">
         {assumedCount > 0 && (

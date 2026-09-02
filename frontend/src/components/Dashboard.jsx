@@ -484,7 +484,12 @@ export default function Dashboard({ onNavigate }) {
       <div className="dash-actions dash-mobile-only">
         <button className="dash-action" onClick={() => onNavigate?.('capture')}>+ Capture</button>
         <button className="dash-action" onClick={() => onNavigate?.('chat')}>Ask</button>
-        <button className="dash-action" onClick={() => onNavigate?.('queue')}>Queue</button>
+        {/* ⚠ This said "Queue" and navigated to `queue`, a view DELETED with the
+            Jira queue feature in July 2026. `App.jsx`'s default case sends an
+            unknown view to Now, so the button silently landed somewhere
+            unrelated and looked like it had worked. Replaced with the thing a
+            quick action on this row is actually for. */}
+        <button className="dash-action" onClick={() => onNavigate?.('todos')}>Tasks</button>
       </div>
     </div>
   );

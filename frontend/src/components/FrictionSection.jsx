@@ -19,7 +19,7 @@ import './FrictionSection.css';
  *     trying to start, because a page about how hard the week has been is a
  *     page that gets opened once.
  */
-export default function FrictionSection() {
+export default function FrictionSection({ onNavigate }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [busy, setBusy] = useState(null);
   const [failed, setFailed] = useState(null);
@@ -101,16 +101,31 @@ export default function FrictionSection() {
                   did and NEURO wrote down, and showing the working is what keeps
                   it a statement of fact rather than a judgement about him. */}
               <p className="friction__because">Based on {ins.because}.</p>
-              {ins.id && (
-                <button
-                  className="friction__note-btn"
-                  type="button"
-                  disabled={busy === ins.id}
-                  onClick={() => note(ins)}
-                >
-                  {busy === ins.id ? '…' : 'Noted'}
-                </button>
-              )}
+              <span className="friction__acts">
+                {/* ⚠ "Noted" answers the CARD; this answers the WORK. They are
+                    different acts and a section that only offered the first one
+                    could tell Nick a task had been put off four times and leave
+                    him to go and find it. `subject` is null wherever the insight
+                    is not about one nameable task, and then there is no button —
+                    never a link that guesses which task was meant. */}
+                {ins.subject && onNavigate && (
+                  <button
+                    className="friction__note-btn"
+                    type="button"
+                    onClick={() => onNavigate('todos', { taskText: ins.subject })}
+                  >Open it</button>
+                )}
+                {ins.id && (
+                  <button
+                    className="friction__note-btn"
+                    type="button"
+                    disabled={busy === ins.id}
+                    onClick={() => note(ins)}
+                  >
+                    {busy === ins.id ? '…' : 'Noted'}
+                  </button>
+                )}
+              </span>
               {Array.isArray(ins.evidence) && ins.evidence.length > 0 && (
                 <ul className="friction__ev">
                   {ins.evidence.slice(0, 3).map((e, j) => (

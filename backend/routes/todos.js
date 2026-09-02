@@ -8,6 +8,7 @@ const taskStore = require('../services/task-store');
 const microsoft = require('../services/microsoft');
 const msQueue = require('../services/ms-push-queue');
 const msTask = require('../../shared/ms-task.cjs');
+const msLocal = require('../services/ms-task-local');
 
 // How many pending capture_todo suggestions the todos payload will carry. The
 // queue hit 930 in August and collapsed to single figures once #108 made it
@@ -113,6 +114,11 @@ router.get('/', (req, res) => {
       // the card says nothing rather than naming a board NEURO could not read.
       msPlan: t.msPlan || null,
       msSource: t.msSource || null,
+      // The Microsoft half a LINKED row now stands for — its wording and due
+      // date, read live off the mirror. Without it the card says which board
+      // the work is on and never what the board calls it, which is the half
+      // Nick needs to recognise the pair he merged.
+      msCounterpart: t.msCounterpart || null,
       // Whether Microsoft brings this one back. Completing a recurring task
       // closes the occurrence and rolls the same task forward, so a card that
       // does not say so reads as a completion that failed — see shared/ms-task.
@@ -151,7 +157,11 @@ router.get('/', (req, res) => {
     // Verified against the live vault before removing: getPlan() -> null,
     // getPlanTasks() -> [].
 
-    const enriched = mapped.map((task) => todoIntelligence.decorateTask(task));
+    // What NEURO thinks about the rows it does not own — MoSCoW, priority, and
+    // whether Nick is mid-way through one or stuck on it. Folded in BEFORE
+    // decoration and the lane, or the letter he just set would render on the
+    // badge and change no ranking, which is the half-working shape.
+    const enriched = msLocal.annotate(mapped).map((task) => todoIntelligence.decorateTask(task));
     const todayLane = todoIntelligence.buildTodayLane(rankTasks(enriched.filter((task) => !task.done), new Date().toISOString().split('T')[0]));
 
     // The same action often gets extracted from more than one note — a Plaud
@@ -257,7 +267,7 @@ router.get('/focus', async (req, res) => {
         tasks = tasks.filter(t => !t.done);
       }
 
-      return rankTasks(tasks.map((task) => todoIntelligence.decorateTask(task, todayStr)), todayStr);
+      return rankTasks(msLocal.annotate(tasks).map((task) => todoIntelligence.decorateTask(task, todayStr)), todayStr);
     });
     const totalCount = ranked.length;
 
@@ -440,6 +450,58 @@ router.delete('/ms-queue/:msId', (req, res) => {
     if (!forgotten) return res.status(404).json({ error: 'Nothing held for that task' });
     res.json({ ok: true, ...msQueue.status() });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * PATCH /api/todos/ms/:msId/local — what NEURO thinks about a Microsoft task.
+ *
+ * ⚠ NOTHING HERE IS SENT TO MICROSOFT, and that is the feature rather than a
+ * shortcut. `wip-ms` one route up is the public version — it writes
+ * percentComplete to Planner, which Nick's team reads. This is the private one:
+ * "working on" without telling the board, "blocked" which Planner cannot
+ * express at all, and a MoSCoW letter and priority that are NEURO's ranking
+ * vocabulary and have no business on somebody else's card.
+ *
+ * Registered ABOVE `/ms/:msId` — Express matches in registration order and this
+ * codebase has shipped a literal path swallowed by a sibling parameter before.
+ * The two paths differ in segment COUNT so they could not collide anyway, but
+ * the ordering costs nothing and the test pins it.
+ *
+ * Only the fields present in the body are touched; an explicit null clears one.
+ * Omission and null are deliberately different — a control that sets MoSCoW
+ * must not wipe the state beside it just by not mentioning it.
+ */
+router.patch('/ms/:msId/local', (req, res) => {
+  try {
+    const { msId } = req.params;
+    if (!msId) return res.status(400).json({ error: 'msId required' });
+
+    const body = req.body || {};
+    const fields = {};
+    for (const key of ['state', 'moscow', 'priority']) {
+      if (key in body) fields[key] = body[key];
+    }
+    if (!Object.keys(fields).length) {
+      return res.status(400).json({ error: 'Nothing to change — send state, moscow or priority.' });
+    }
+    // A value NEURO does not recognise is REFUSED, never silently stored as
+    // null: "clear it" and "I sent you something you did not understand" are
+    // different requests, and normalising the second into the first is how a
+    // typo reads back as a decision Nick made.
+    if (fields.state != null && fields.state !== '' && msLocal.normState(fields.state) === null) {
+      return res.status(400).json({ error: `Unknown state — expected one of ${msLocal.VALID_STATE.join(', ')}.` });
+    }
+
+    const entry = msLocal.set(msId, fields);
+    // The focus lane ranks off a cached scored list, so without this the letter
+    // lands, the badge changes and the ordering stays exactly as it was until
+    // the vault next moves — a change that looks half-applied.
+    vaultCache.invalidateType('todos');
+    res.json({ ok: true, local: entry });
+  } catch (e) {
+    console.error('[Todos] MS local annotation error:', e);
     res.status(500).json({ error: e.message });
   }
 });

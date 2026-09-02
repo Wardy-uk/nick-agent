@@ -320,6 +320,15 @@ function buildFollowThroughCandidate(tasks, todayStr = todayDateString()) {
   return {
     text: top.text,
     context: top.context,
+    // ⚠ The handles, carried rather than dropped. Every consumer of this
+    // candidate renders it as a CARD naming a real task, and a card that names
+    // work it cannot open or close is the dead end Nick called out. These are
+    // the same three `completeTask.js` uses, in the same order of trust.
+    task_id: top.task_id ?? null,
+    ms_id: top.ms_id ?? null,
+    source: top.source ?? null,
+    filePath: top.filePath ?? null,
+    lineNumber: top.lineNumber ?? null,
     sourcePath: top.meta?.sourcePath || top.sourcePath || null,
     sourceLabel,
     message: `"${top.text}" is still open${qualifier}${from}. Move it or kill it.`,

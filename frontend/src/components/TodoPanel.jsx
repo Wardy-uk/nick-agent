@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { apiUrl } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import { duePresets } from '../../../shared/due-dates.cjs';
@@ -6,6 +6,7 @@ import { msPlanBadge, recurrenceLabel } from '../../../shared/ms-task.cjs';
 import { domainBadge } from '../../../shared/task-domain.cjs';
 import { originBadge, ORIGINS, SHORT_LABELS, DESCRIPTIONS, LABELS, UNCLASSIFIED_LABEL } from '../../../shared/task-origin.cjs';
 import TimeFitCard from './TimeFitCard';
+import { pinFromContext, findPinned } from '../taskPin';
 import TaskDedupe from './TaskDedupe';
 import TaskBlocks, { BlockTimeControl } from './TaskBlocks';
 import './TodoPanel.css';
@@ -80,6 +81,23 @@ const DOMAIN_OPTIONS = [
 // shared/task-origin.cjs, never a copy — a second list is how a screen offers a
 // value the backend refuses. Only the button wording is local.
 const ORIGIN_OPTIONS = ORIGINS.map(key => ({ key, label: SHORT_LABELS[key], desc: DESCRIPTIONS[key] }));
+
+// The two things NEURO can say about a Microsoft task that Microsoft cannot
+// hold. Mutually exclusive on purpose — "I am doing this" and "I cannot do
+// this" cannot both be true, and a pair that allowed both would be a third
+// state nothing knows how to render. The vocabulary is pinned server-side in
+// services/ms-task-local.js; only the wording is local.
+// What an unsaved change is CALLED, so the Save row can name it. A card can sit
+// open for a while and "unsaved changes" on its own is a prompt to go hunting.
+const FIELD_LABELS = {
+  moscow: 'MoSCoW', domain: 'domain', origin: 'origin',
+  priority: 'priority', due_date: 'due date', state: 'state',
+};
+
+const MS_LOCAL_STATES = [
+  { key: 'working', label: 'Working on', color: '#22c55e', desc: 'You are mid-way through this — kept in NEURO, not pushed to the board' },
+  { key: 'blocked', label: 'Blocked', color: '#ef4444', desc: 'Stuck waiting on something — Planner has no way to say this, so it stays here' },
+];
 
 function MoscowReview({ onClose }) {
   const [tasks, setTasks] = useState([]);
@@ -212,33 +230,97 @@ function MoscowReview({ onClose }) {
 // Only shown for tasks NEURO owns (task_id present). Before the 13 Aug migration none
 // of MoSCoW / priority / due date could be edited anywhere: the metadata lived in a
 // worksheet file. Now it is a plain DB write and the vault export follows.
+/**
+ * A card's edits are a DRAFT until Save.
+ *
+ * ── Why ─────────────────────────────────────────────────────────────────────
+ *
+ * Every control here used to PATCH on click. Each patch refetched and re-ranked
+ * the list, so setting a MoSCoW moved the card out from under the cursor before
+ * the priority beside it had been touched — triaging one task meant chasing it
+ * up the screen through four separate re-sorts. Worse, none of these buttons
+ * stopped their click bubbling to the row's expand handler, so every one of
+ * them ALSO collapsed the card it lived on.
+ *
+ * Triage is one thought, not five. It writes once now, on a deliberate Save.
+ *
+ * ⚠ The draft resets on the row's IDENTITY, never on its values. The panel
+ * refetches on a timer and after every write elsewhere on the screen, so an
+ * effect keyed on `todo.moscow` and friends would wipe half-finished edits
+ * whenever a background poll landed — silently, and indistinguishably from a
+ * button that never registered.
+ *
+ * BlockTimeControl and HouseholdToggle are deliberately NOT drafted. They are
+ * not fields, they are actions with consequences of their own (a real calendar
+ * event; a task published to VESTA, which Nick's partner reads on a public
+ * URL), each already gated by its own confirmation. Parking those behind a
+ * shared Save would make one button whose blast radius ranges from "changed a
+ * letter" to "put this on the internet".
+ */
 function TaskControls({ todo, onPatch, busy, onRefresh }) {
-  const dueValue = todo.due_date ? todo.due_date.split('T')[0] : '';
-  // ⚠ The picker is a DRAFT until it holds a complete date.
-  //
-  // A `<input type="date">` reports an empty value while it is partially typed,
-  // so patching straight from onChange fired `due_date: null` on the first
-  // keystroke — a write, a refetch and a re-sorted list before the month had
-  // even been typed. Hand-entering a date was effectively impossible.
-  //
-  // Clearing is deliberately NOT inferred from that empty value: the Clear
-  // button says it explicitly, and an empty picker mid-typing is not a request
-  // to wipe the date.
-  const [dueDraft, setDueDraft] = useState(dueValue);
-  useEffect(() => { setDueDraft(dueValue); }, [dueValue]);
+  // Drafted under the PATCH field names, not the row's — `taskPriority` on the
+  // row is `priority` on the wire, and drafting under the display name is how
+  // the wrong key gets sent and then silently dropped by the whitelist.
+  const snapshot = (t) => ({
+    moscow: t.moscow || null,
+    // Read with its default applied, because that is what the buttons render as
+    // selected. Comparing a drafted 'work' against a stored null would make an
+    // untouched task read as dirty the moment it was opened.
+    domain: t.domain || 'work',
+    origin: t.origin || null,
+    priority: t.taskPriority || null,
+    due_date: t.due_date ? t.due_date.split('T')[0] : null,
+  });
+
+  const identity = rowKey(todo);
+  const [draft, setDraft] = useState(() => snapshot(todo));
+  const [baseline, setBaseline] = useState(() => snapshot(todo));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    const next = snapshot(todo);
+    setDraft(next);
+    setBaseline(next);
+    // Identity only — see the note above about background refetches.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity]);
+
+  const changed = {};
+  for (const key of Object.keys(baseline)) {
+    if (draft[key] !== baseline[key]) changed[key] = draft[key];
+  }
+  const dirty = Object.keys(changed).length > 0;
+  const locked = busy || saving;
+
+  const edit = (fields) => setDraft(prev => ({ ...prev, ...fields }));
+
+  const save = async () => {
+    if (!dirty) return;
+    setSaving(true);
+    try {
+      await onPatch(changed);
+      // Optimistic, matching the parent's own localPatches: the row already
+      // shows these values, so re-deriving from props that have not landed yet
+      // would flash the card back to what it was.
+      setBaseline(draft);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <div className="todo-edit">
+    // ⚠ Load-bearing. Without it every click in here bubbles to
+    // `.todo-text-col`'s onClick and collapses the row being edited.
+    <div className="todo-edit" onClick={(e) => e.stopPropagation()}>
       <div className="todo-edit-group">
         <span className="todo-edit-label">{todo.moscowProposed ? 'MoSCoW?' : 'MoSCoW'}</span>
         {MOSCOW_OPTIONS.map(opt => (
           <button
             key={opt.key}
-            className={`todo-edit-btn ${todo.moscow === opt.key ? 'active' : ''}`}
+            className={`todo-edit-btn ${draft.moscow === opt.key ? 'active' : ''}`}
             style={{ '--moscow-color': opt.color }}
-            disabled={busy}
+            disabled={locked}
             title={opt.desc}
-            onClick={() => onPatch({ moscow: todo.moscow === opt.key ? null : opt.key })}
+            onClick={() => edit({ moscow: draft.moscow === opt.key ? null : opt.key })}
           >
             {opt.label}
           </button>
@@ -260,10 +342,10 @@ function TaskControls({ todo, onPatch, busy, onRefresh }) {
         {DOMAIN_OPTIONS.map(opt => (
           <button
             key={opt.key}
-            className={`todo-edit-btn ${(todo.domain || 'work') === opt.key ? 'active' : ''}`}
-            disabled={busy}
+            className={`todo-edit-btn ${draft.domain === opt.key ? 'active' : ''}`}
+            disabled={locked}
             title={opt.desc}
-            onClick={() => onPatch({ domain: opt.key })}
+            onClick={() => edit({ domain: opt.key })}
           >
             {opt.label}
           </button>
@@ -286,20 +368,20 @@ function TaskControls({ todo, onPatch, busy, onRefresh }) {
         {ORIGIN_OPTIONS.map(opt => (
           <button
             key={opt.key}
-            className={`todo-edit-btn ${todo.origin === opt.key ? 'active' : ''}`}
-            disabled={busy}
+            className={`todo-edit-btn ${draft.origin === opt.key ? 'active' : ''}`}
+            disabled={locked}
             title={opt.desc}
-            onClick={() => onPatch({ origin: opt.key })}
+            onClick={() => edit({ origin: opt.key })}
           >
             {opt.label}
           </button>
         ))}
-        {todo.origin && (
+        {draft.origin && (
           <button
             className="todo-edit-btn"
-            disabled={busy}
+            disabled={locked}
             title="Back to unclassified — the weekly report counts it separately until you decide"
-            onClick={() => onPatch({ origin: null })}
+            onClick={() => edit({ origin: null })}
           >
             Clear
           </button>
@@ -314,10 +396,10 @@ function TaskControls({ todo, onPatch, busy, onRefresh }) {
         {[3, 2, 1].map(p => (
           <button
             key={p}
-            className={`todo-edit-btn ${todo.taskPriority === p ? 'active' : ''}`}
-            disabled={busy}
+            className={`todo-edit-btn ${draft.priority === p ? 'active' : ''}`}
+            disabled={locked}
             title={p === 3 ? 'Most pressing' : p === 1 ? 'Least pressing' : 'Middle'}
-            onClick={() => onPatch({ priority: todo.taskPriority === p ? null : p })}
+            onClick={() => edit({ priority: draft.priority === p ? null : p })}
           >
             P{p}
           </button>
@@ -328,30 +410,30 @@ function TaskControls({ todo, onPatch, busy, onRefresh }) {
         <span className="todo-edit-label">Due</span>
         {/* Presets first: "how far away?" is answerable at a glance, "which
             day?" needs a calendar held in your head. The picker stays for when
-            a specific date is genuinely the point. Weekends are never offered. */}
+            a specific date is genuinely the point. Weekends are never offered.
+
+            The half-typed-date problem the old code guarded against is gone by
+            construction: nothing is written until Save, so an incomplete value
+            in the box is just an incomplete draft. Clearing is still its own
+            button rather than inferred from an empty picker — an empty box
+            mid-typing is not a request to wipe the date. */}
         {duePresets().map(p => (
           <button
             key={p.id}
-            className={`todo-edit-btn${dueValue === p.date ? ' active' : ''}`}
-            disabled={busy}
-            onClick={() => { setDueDraft(p.date); onPatch({ due_date: p.date }); }}
+            className={`todo-edit-btn${draft.due_date === p.date ? ' active' : ''}`}
+            disabled={locked}
+            onClick={() => edit({ due_date: p.date })}
           >{p.label}</button>
         ))}
         <input
           type="date"
           className="todo-edit-date"
-          value={dueDraft}
-          disabled={busy}
-          onChange={(e) => {
-            const v = e.target.value;
-            setDueDraft(v);
-            // Only a complete date is a decision. Anything else is someone
-            // still typing.
-            if (/^\d{4}-\d{2}-\d{2}$/.test(v)) onPatch({ due_date: v });
-          }}
+          value={draft.due_date || ''}
+          disabled={locked}
+          onChange={(e) => edit({ due_date: e.target.value || null })}
         />
-        {dueValue && (
-          <button className="todo-edit-btn" disabled={busy} onClick={() => { setDueDraft(''); onPatch({ due_date: null }); }}>
+        {draft.due_date && (
+          <button className="todo-edit-btn" disabled={locked} onClick={() => edit({ due_date: null })}>
             Clear
           </button>
         )}
@@ -375,6 +457,25 @@ function TaskControls({ todo, onPatch, busy, onRefresh }) {
           <span className="todo-source">{todo.originPath}</span>
         </div>
       )}
+
+      {/* Names WHAT is unsaved, not merely that something is. A card can sit
+          open for a while, and "unsaved changes" on its own is a prompt to go
+          hunting for them. */}
+      <div className="todo-edit-group todo-edit-save">
+        <button className="btn btn-primary btn-sm" disabled={!dirty || locked} onClick={save}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        {dirty && (
+          <button className="todo-edit-btn" disabled={locked} onClick={() => setDraft(baseline)}>
+            Discard
+          </button>
+        )}
+        <span className="todo-edit-note">
+          {dirty
+            ? `Not saved yet — ${Object.keys(changed).map(k => FIELD_LABELS[k] || k).join(', ')}.`
+            : 'Nothing to save.'}
+        </span>
+      </div>
     </div>
   );
 }
@@ -443,6 +544,151 @@ function HouseholdToggle({ todo, busy, onSaved }) {
         </span>
       </label>
       {error && <span className="todo-household-error">{error}</span>}
+    </div>
+  );
+}
+
+/**
+ * What NEURO thinks about a task Microsoft owns.
+ *
+ * ⚠ NOTHING HERE REACHES MICROSOFT, and the panel says so in words rather than
+ * leaving it to be inferred — every other control on an expanded Microsoft row
+ * writes to Graph, so a group that does not is the exception and has to be
+ * marked as one. "Blocked" in particular has no Planner equivalent: it is Nick
+ * telling NEURO he is stuck, not a status his team should be reading off a
+ * shared board.
+ *
+ * ⚠ Deliberately rendered OUTSIDE MicrosoftTaskControls rather than inside it.
+ * That component refuses to show anything when Graph could not be read — right,
+ * because it would be editing over values it never fetched — but NEURO's own
+ * triage depends on Microsoft not at all, and losing the ability to say "MUST"
+ * because sign-in expired would make the feature disappear on exactly the days
+ * the list is hardest to work with.
+ */
+function MsLocalControls({ todo, onSaved }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const snapshot = (t) => ({
+    state: t.msLocalState || null,
+    moscow: t.moscow || null,
+    priority: t.taskPriority || null,
+  });
+
+  // Drafted until Save, exactly like the NEURO-owned card above — MoSCoW and
+  // priority feed the ranking, so writing on click re-sorted the list and moved
+  // the card mid-triage. Reset on IDENTITY, never on values, or a background
+  // refetch wipes a half-finished edit.
+  const identity = rowKey(todo);
+  const [draft, setDraft] = useState(() => snapshot(todo));
+  const [baseline, setBaseline] = useState(() => snapshot(todo));
+  useEffect(() => {
+    const next = snapshot(todo);
+    setDraft(next);
+    setBaseline(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity]);
+
+  const changed = {};
+  for (const key of Object.keys(baseline)) {
+    if (draft[key] !== baseline[key]) changed[key] = draft[key];
+  }
+  const dirty = Object.keys(changed).length > 0;
+  const edit = (fields) => setDraft(prev => ({ ...prev, ...fields }));
+
+  const save = async () => {
+    if (!dirty) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(apiUrl(`/api/todos/ms/${encodeURIComponent(todo.ms_id)}/local`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(changed),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) throw new Error(json.error || 'NEURO would not store that.');
+      setBaseline(draft);
+      if (onSaved) onSaved();
+    } catch (e) {
+      // The draft stays exactly as Nick left it. Resetting it on a failure
+      // would throw away the decision as well as the write.
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="todo-edit todo-edit-local" onClick={(e) => e.stopPropagation()}>
+      <div className="todo-edit-banner">
+        NEURO only &mdash; none of this is sent to {/planner/i.test(todo.source || '') ? 'Planner' : 'Microsoft'}.
+      </div>
+
+      <div className="todo-edit-group">
+        <span className="todo-edit-label">State</span>
+        {MS_LOCAL_STATES.map(opt => (
+          <button
+            key={opt.key}
+            className={`todo-edit-btn${draft.state === opt.key ? ' active' : ''}`}
+            style={{ '--moscow-color': opt.color }}
+            disabled={saving}
+            title={opt.desc}
+            onClick={() => edit({ state: draft.state === opt.key ? null : opt.key })}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="todo-edit-group">
+        <span className="todo-edit-label">MoSCoW</span>
+        {MOSCOW_OPTIONS.map(opt => (
+          <button
+            key={opt.key}
+            className={`todo-edit-btn${draft.moscow === opt.key ? ' active' : ''}`}
+            style={{ '--moscow-color': opt.color }}
+            disabled={saving}
+            title={opt.desc}
+            onClick={() => edit({ moscow: draft.moscow === opt.key ? null : opt.key })}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="todo-edit-group">
+        <span className="todo-edit-label">Priority</span>
+        {[3, 2, 1].map(pr => (
+          <button
+            key={pr}
+            className={`todo-edit-btn${draft.priority === pr ? ' active' : ''}`}
+            disabled={saving}
+            title={pr === 3 ? 'Most pressing' : pr === 1 ? 'Least pressing' : 'Middle'}
+            onClick={() => edit({ priority: draft.priority === pr ? null : pr })}
+          >
+            P{pr}
+          </button>
+        ))}
+      </div>
+
+      <div className="todo-edit-group todo-edit-save">
+        <button className="btn btn-primary btn-sm" disabled={!dirty || saving} onClick={save}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        {dirty && (
+          <button className="todo-edit-btn" disabled={saving} onClick={() => setDraft(baseline)}>
+            Discard
+          </button>
+        )}
+        <span className="todo-edit-note">
+          {dirty
+            ? `Not saved yet — ${Object.keys(changed).map(k => FIELD_LABELS[k] || k).join(', ')}.`
+            : 'Nothing to save.'}
+        </span>
+      </div>
+
+      {error && <div className="todo-edit-error">{error}</div>}
     </div>
   );
 }
@@ -666,11 +912,31 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
         <span className={`todo-text ${isExpanded ? '' : 'todo-text-truncated'}`}>{todo.text}</span>
         <div className="todo-meta-row">
           {todo.source && <span className={`todo-source ${sourceClass(todo.source)}`}>{todo.source}</span>}
+          {/* NEURO's own state for a task Microsoft owns. First on the row,
+              because it describes what is happening NOW rather than how the
+              task was filed — the same reason WIP leads on the Must Move card.
+              Titled rather than labelled, so the row does not have to explain
+              on every line that this is not on the board. */}
+          {todo.msLocalState && (
+            <span
+              className={`todo-local-state ${todo.msLocalState}`}
+              title={todo.msLocalState === 'blocked'
+                ? 'Blocked — your note to NEURO. Microsoft has not been told.'
+                : 'Working on it — kept in NEURO, not pushed to the board.'}
+            >{todo.msLocalState === 'blocked' ? '⛔ Blocked' : '● Working on'}</span>
+          )}
           {/* Which Planner board / To Do list this is on. Absent when NEURO
               could not read it — never a placeholder standing in for a board. */}
           {planBadge(todo) && <span className="todo-ms-plan" title="Microsoft board / list">{planBadge(todo)}</span>}
           {todo.moscow && (
-            <span className={`todo-moscow-badge ${todo.moscow}`} title={todo.moscowProposed ? 'Proposed by the 12 Aug triage, not yet confirmed' : undefined}>
+            <span
+              className={`todo-moscow-badge ${todo.moscow}`}
+              title={todo.moscowProposed
+                ? 'Proposed by the 12 Aug triage, not yet confirmed'
+                : todo.msLocal
+                  ? 'Your rating in NEURO — Microsoft does not hold a MoSCoW letter and has not been told'
+                  : undefined}
+            >
               {todo.moscow}{todo.moscowProposed ? '?' : ''}
             </span>
           )}
@@ -704,13 +970,35 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
           {todo.planDay != null && <span className="todo-due">Day {todo.planDay}</span>}
           {todo._scoreReason && <span className="todo-score-reason">{todo._scoreReason}</span>}
         </div>
+        {/* The Microsoft half this row now stands for.
+
+            A merged pair shows ONCE, which is the point — but it also means
+            the board's wording disappears from the screen at the exact moment
+            Nick confirmed the two are the same, and that wording is what his
+            team is reading. The plan badge above says WHICH board; this says
+            what the board calls it. Read live off the mirror on every parse,
+            never copied onto the row, so a Planner rename shows up here rather
+            than the card quoting words nobody uses any more. */}
+        {todo.msCounterpart && (
+          <div className="todo-counterpart" title="Merged: one task here, still open on the board. Ticking it completes both.">
+            <span className="todo-counterpart-arrow">↳</span>
+            also on the board as {String.fromCharCode(8220)}{todo.msCounterpart.text}{String.fromCharCode(8221)}
+            {todo.msCounterpart.dueDate && ` — due ${formatDue(todo.msCounterpart.dueDate)}`}
+          </div>
+        )}
         {isExpanded && editable && (
           <TaskControls todo={todo} busy={Boolean(isToggling)} onPatch={(fields) => onPatch(todo, fields)} onRefresh={onRefresh} />
         )}
         {/* A Microsoft task is editable here now — Microsoft still owns it, so
             the edit is a PATCH to Graph rather than anything stored locally. */}
         {isExpanded && !editable && todo.ms_id && (
-          <MicrosoftTaskControls todo={todo} onSaved={onRefresh} />
+          <>
+            {/* NEURO's own view of the task first, because it always works —
+                the Graph half below refuses to render when Microsoft cannot be
+                read, and triage must not disappear with it. */}
+            <MsLocalControls todo={todo} onSaved={onRefresh} />
+            <MicrosoftTaskControls todo={todo} onSaved={onRefresh} />
+          </>
         )}
         {isExpanded && !editable && !todo.ms_id && (
           <div className="todo-edit todo-edit-readonly">
@@ -969,7 +1257,12 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   const fromFocus = focusContext?.fromFocus;
   const initialFilter = focusContext?.filter || 'overdue';
 
-  const [mode, setMode] = useState(fromFocus ? 'focused' : 'full');
+  // A card asked for ONE task by name. That beats every filter and beats the
+  // focused shortlist — arriving here from "open it" and landing on a list of
+  // five other things is the dead end this exists to close.
+  const [pin, setPin] = useState(() => pinFromContext(focusContext));
+
+  const [mode, setMode] = useState(fromFocus && !pinFromContext(focusContext) ? 'focused' : 'full');
   const [focusFilter, setFocusFilter] = useState(initialFilter);
   const [focusExpansion, setFocusExpansion] = useState('compact'); // compact (5) | expanded (10) | all
 
@@ -997,6 +1290,17 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   useEffect(() => {
     fetch(apiUrl('/api/todos/moscow')).then(r => r.json()).then(d => setMoscowRatings(d.ratings || {})).catch(() => {});
   }, [showMoscow]); // Refresh when moscow review closes
+
+  // ⚠ Pin from the PROP as well as at mount. TodoPanel stays mounted while it
+  // is the active view, so a second "open it" from a card on this page (the
+  // dedupe list, a suggestion) would otherwise change nothing at all — the
+  // classic already-on-that-screen no-op. Only ever set here, never cleared:
+  // clearing is "Show all tasks", which is Nick's decision, not a side effect
+  // of the parent tidying up its context.
+  useEffect(() => {
+    const next = pinFromContext(focusContext);
+    if (next) { setPin(next); setMode('full'); }
+  }, [focusContext]);
 
   // Clear nav context after consuming it
   useEffect(() => {
@@ -1042,6 +1346,28 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   const todos = (fullData?.todos || []).map(applyLocal);
   const suggestedTodos = (fullData?.suggested || []).filter(s => !resolvedSuggestions.includes(s.id));
   const todayLane = fullData?.todayLane || [];
+
+  // Open the pinned row rather than merely showing it. The point of "open it"
+  // is to land on the edit controls, not on a one-item list still needing a click.
+  //
+  // ⚠ Placed AFTER `todos`, not up with the other effects. A dependency array
+  // is evaluated during render, so referencing `fullData` above its own `const`
+  // is a temporal-dead-zone ReferenceError on every render — a crash the build
+  // cannot see, because it compiles perfectly.
+  //
+  // ⚠ ONCE per pin, guarded by a ref. `todos` is rebuilt on every render, so an
+  // unguarded effect re-expands the row continuously — and would silently
+  // undo Nick collapsing it himself, which reads as a screen fighting back.
+  const autoExpandedFor = useRef(null);
+  useEffect(() => {
+    if (!pin) { autoExpandedFor.current = null; return; }
+    const key = `${pin.taskId}|${pin.msId}|${pin.filePath}|${pin.lineNumber}|${pin.text}`;
+    if (autoExpandedFor.current === key) return;
+    const hit = findPinned(todos, pin);
+    if (!hit) return;                       // not loaded yet, or genuinely not here
+    autoExpandedFor.current = key;
+    setExpanded(`${hit.source}-${hit.id}`);
+  }, [pin, todos]);
 
   const toggleSuggestionSelect = (id) => {
     setSelectedSuggestions(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -1447,7 +1773,13 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   }
 
   // ── Full Mode Render (original behaviour, preserved) ──
-  const loading = todos === null;
+  // was `todos === null`, which can never be true: `todos` is built with
+  // `(fullData?.todos || []).map(...)` and is therefore always an array. So the
+  // "Loading vault tasks..." branch below was dead, and an unloaded panel said
+  // "No open todos. Rare." — an empty list standing in for an unread one, which
+  // is the one thing this codebase refuses everywhere else. `fullData` is the
+  // real signal.
+  const loading = fullData == null;
   const activeTodos = (todos || []).filter(t => !t.done);
   const doneTodos = (todos || []).filter(t => t.done);
   const overdueTodos = activeTodos.filter(t => isOverdue(t.due_date));
@@ -1498,8 +1830,17 @@ export default function TodoPanel({ focusContext, onClearContext }) {
     return c;
   }, [activeTodos]);
 
+  // ⚠ The pin outranks every filter. A card said "open THIS", and dropping it
+  // into a filtered list is the same dead end as not linking at all — the row
+  // may not be in the filter that happens to be selected.
+  const pinnedTodo = pin ? findPinned(activeTodos, pin) : null;
+
   let filtered = activeTodos;
-  if (filter === 'mustdo') {
+  if (pin) {
+    // A miss renders as a stated miss below, never as an empty list: "it isn't
+    // here" and "it's finished or I couldn't read it" are different facts.
+    filtered = pinnedTodo ? [pinnedTodo] : [];
+  } else if (filter === 'mustdo') {
     filtered = mustDoTodos;
   } else if (filter === 'overdue') {
     filtered = activeTodos.filter(t => isOverdue(t.due_date));
@@ -1607,7 +1948,10 @@ export default function TodoPanel({ focusContext, onClearContext }) {
       {/* Above the lane on purpose: "what fits in the time I have" is the
           question that decides whether any of what follows is actionable right
           now. The lane says what matters; this says what is possible. */}
-      <TimeFitCard />
+      {/* Starting or closing something here changes the list underneath it, so
+          the panel refreshes rather than showing a task that has just been
+          ticked. */}
+      <TimeFitCard onStarted={refreshAfterWrite} onCompleted={refreshAfterWrite} />
       {/* Lives here rather than behind its own tab: the question "is this the same
           task twice?" is only ever asked while looking at the task list, and a
           screen you have to go and find is one that never gets found. It renders
@@ -1678,6 +2022,31 @@ export default function TodoPanel({ focusContext, onClearContext }) {
               {sub} ({count})
             </button>
           ))}
+        </div>
+      )}
+
+      {pin && (
+        <div className="todo-pin-banner">
+          {loading ? (
+            /* ⚠ Not "couldn't find it" while the list is still arriving. The
+               miss message is a STATEMENT, and stating it for the second before
+               the fetch lands makes it wrong every single time — the same
+               species as reading an unread domain as a zero. */
+            <span>Finding it&hellip;</span>
+          ) : pinnedTodo ? (
+            <span>Showing the one task you came here for.</span>
+          ) : (
+            /* ⚠ Never an empty list. A card pointed at this and the row is not
+               in the open list — finished, dropped, or in a source that could
+               not be read. Saying which is not possible from here; saying that
+               it is not here, is. */
+            <span>
+              Couldn&rsquo;t find that one in your open tasks &mdash; it may already be done,
+              or it may live somewhere NEURO couldn&rsquo;t read. This is not confirmation
+              that it doesn&rsquo;t exist.
+            </span>
+          )}
+          <button className="btn btn-secondary btn-sm" onClick={() => setPin(null)}>Show all tasks</button>
         </div>
       )}
 

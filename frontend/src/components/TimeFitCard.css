@@ -126,3 +126,9 @@
   .tf-text { flex: 1 1 100%; }
   .tf-coverage { margin-left: 0; }
 }
+
+/* Row actions. Deliberately quiet — the row's job is still "this fits", and
+   the buttons exist so it can be answered rather than only read. */
+.tf-acts { display: inline-flex; gap: 0.35rem; margin-left: 0.4rem; }
+.tf-start { font-weight: 600; }
+.tf-acterr { color: var(--warning); }

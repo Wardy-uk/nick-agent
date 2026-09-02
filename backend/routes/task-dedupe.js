@@ -161,8 +161,14 @@ router.post('/match', (req, res) => {
 // POST /api/task-dedupe/link — { taskId, msId, msSource, msPlan } — same task
 router.post('/link', (req, res) => {
   try {
-    const { taskId, msId, msSource, msPlan } = req.body || {};
-    const result = dedupe.linkPair(taskId, msId, msSource || null, msPlan || null);
+    const { taskId, msId, msSource, msPlan, lead, msText, msDue } = req.body || {};
+    // `lead` decides whose WORDING the surviving row carries and nothing else —
+    // both records stay, NEURO still counts and completes it either way.
+    const result = dedupe.linkPair(taskId, msId, msSource || null, msPlan || null, {
+      lead: lead || 'neuro',
+      msText: msText || null,
+      msDue: msDue || null,
+    });
     if (!result.ok) return res.status(409).json(result);
     res.json(result);
   } catch (e) {

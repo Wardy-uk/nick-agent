@@ -101,10 +101,23 @@ export default function TaskDedupe() {
   async function act(pair, kind) {
     setBusyKey(pair.pairKey);
     try {
-      const body = kind === 'link'
-        ? { taskId: pair.neuro.id, msId: pair.ms.ms_id, msSource: pair.ms.source, msPlan: pair.ms.msPlan || null }
+      // `lead` decides whose WORDING the surviving row carries and nothing
+      // else — both records stay either way, NEURO counts it once either way,
+      // and ticking it completes both either way. msText/msDue travel ONLY when
+      // the board is leading, so nothing can be adopted by accident.
+      const lead = kind === 'link-ms' ? 'microsoft' : 'neuro';
+      const body = kind.startsWith('link')
+        ? {
+          taskId: pair.neuro.id,
+          msId: pair.ms.ms_id,
+          msSource: pair.ms.source,
+          msPlan: pair.ms.msPlan || null,
+          lead,
+          msText: lead === 'microsoft' ? pair.ms.text : null,
+          msDue: lead === 'microsoft' ? (pair.ms.due_date || null) : null,
+        }
         : { taskId: pair.neuro.id, msId: pair.ms.ms_id };
-      const res = await fetch(apiUrl(`/api/task-dedupe/${kind}`), {
+      const res = await fetch(apiUrl(`/api/task-dedupe/${kind === 'link-ms' ? 'link' : kind}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -117,9 +130,17 @@ export default function TaskDedupe() {
           ...o,
           [pair.pairKey]: {
             ok: true,
-            text: kind === 'link'
-              ? 'Linked — this now shows once, and ticking it off in NEURO completes it in Microsoft too.'
-              : 'Kept separate. You won\'t be asked about this pair again.',
+            // ⚠ Says what actually happened, per branch. A failed adoption
+            // still leaves the pair merged, and reporting that as a clean
+            // "merged, using Planner's wording" would be a claim about the
+            // card's title that anyone can see is untrue.
+            text: kind.startsWith('link')
+              ? (
+                json.adopted && json.adopted.ok === false
+                  ? `Merged — shows once now, and ticking it completes both. Planner's wording was NOT adopted: ${json.adopted.reason}`
+                  : `Merged — shows once now, and ticking it completes both. Leading with ${lead === 'microsoft' ? "Planner's" : "NEURO's"} wording.`
+              )
+              : "Kept separate. You won't be asked about this pair again.",
           },
         }));
         load(weak);
@@ -369,12 +390,27 @@ export default function TaskDedupe() {
                   <div className={`dedupe-outcome ${outcome.ok ? 'ok' : 'bad'}`}>{outcome.text}</div>
                 ) : (
                   <div className="dedupe-actions">
+                    {/* ⚠ "Merge", not "keep NEURO's". NOTHING is discarded:
+                        both records survive, the pair counts as ONE task, and
+                        ticking it completes both. The old wording read as a
+                        choice about which task to THROW AWAY, which is the one
+                        thing this never does — the only choice is whose words
+                        the single surviving row carries. */}
                     <button
                       className="dedupe-btn dedupe-btn-link"
                       disabled={busyKey === pair.pairKey}
+                      title="Both stay. Counts as one task, ticking it completes both, and the row keeps NEURO's wording."
                       onClick={() => act(pair, 'link')}
                     >
-                      Same task — keep NEURO's
+                      Merge — lead with NEURO’s
+                    </button>
+                    <button
+                      className="dedupe-btn dedupe-btn-link"
+                      disabled={busyKey === pair.pairKey}
+                      title="The same merge, but the row takes the board's title and due date so you and your team read the same words."
+                      onClick={() => act(pair, 'link-ms')}
+                    >
+                      Merge — lead with {pair.ms.source === 'MS ToDo' ? 'To Do' : 'Planner'}’s
                     </button>
                     <button
                       className="dedupe-btn"

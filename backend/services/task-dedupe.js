@@ -588,12 +588,39 @@ function undismissPair(taskId, msId) {
 }
 
 /**
- * Nick says these two ARE the same task. NEURO leads: its row takes the Microsoft
- * id, the Microsoft line stops listing separately, and completing the NEURO task
- * pushes completion to Graph. Nothing is deleted in Microsoft — the task stays
- * there, and stays open until it is actually finished.
+ * Nick says these two ARE the same task.
+ *
+ * One NEURO row is what NEURO counts, ranks and completes; the Microsoft line
+ * stops listing separately, and ticking the task pushes completion to Graph.
+ * Nothing is deleted in Microsoft — the task stays there, and stays open until
+ * it is actually finished.
+ *
+ * ── Which wording leads ─────────────────────────────────────────────────────
+ *
+ * `lead` decides whose WORDS the surviving row carries, and nothing else — both
+ * records still exist, NEURO still owns the count and the completion push
+ * either way. The default is `neuro`, which is the old behaviour and usually
+ * right: the NEURO wording is the fuller one (*"Share the action plan planner
+ * with the team once it is in a workable state"* against Planner's *"Communicate
+ * the action plan to all teams"*). `microsoft` is for the other case — when the
+ * board's wording is the one Nick's team is reading and the two should agree.
+ *
+ * ⚠ Adoption is a ONE-OFF COPY, not a subscription. Nothing re-applies it when
+ * the Planner card is later renamed, and the card says so; storing a `lead`
+ * flag that only something in the future would honour is a reader waiting for a
+ * writer, which is how the Jira cache came to state a seven-week-old snapshot
+ * as current fact.
+ *
+ * ⚠ Adoption NEVER blanks what NEURO already had. An absent Planner due date is
+ * "the board does not track one", not "clear the date Nick set" — the two look
+ * identical in a null and only one of them is a decision.
+ *
+ * ⚠ The link stands even when the adoption fails. `updateTask` refuses a text
+ * that would collide with another task's dedupe key, and the pair being the
+ * same task is a separate fact from whose wording won — throwing the link away
+ * over a rename would make Nick answer the duplicate question twice.
  */
-function linkPair(taskId, msId, msSource = null, msPlan = null) {
+function linkPair(taskId, msId, msSource = null, msPlan = null, options = {}) {
   const id = Number(taskId);
   if (!Number.isInteger(id) || !msId) throw new Error('taskId and msId are required');
 
@@ -622,7 +649,26 @@ function linkPair(taskId, msId, msSource = null, msPlan = null) {
   // A pair that has been linked should not also sit in the rejected pile.
   try { undismissPair(id, msId); } catch {}
 
-  return { ok: true, task: db.getTaskRow(id) };
+  const lead = options.lead === 'microsoft' ? 'microsoft' : 'neuro';
+  let adopted = null;
+  if (lead === 'microsoft') {
+    const msText = typeof options.msText === 'string' ? options.msText.trim() : '';
+    if (!msText) {
+      adopted = { ok: false, reason: 'no_microsoft_text' };
+    } else {
+      const fields = { text: msText };
+      // Only where Microsoft actually has one — see the note above.
+      if (options.msDue) fields.due_date = options.msDue;
+      try {
+        taskStore.updateTask(id, fields);
+        adopted = { ok: true, text: msText, dueDate: fields.due_date || null };
+      } catch (e) {
+        adopted = { ok: false, reason: e.message };
+      }
+    }
+  }
+
+  return { ok: true, task: db.getTaskRow(id), lead, adopted };
 }
 
 function unlinkPair(taskId) {
@@ -797,6 +843,25 @@ function listLinks() {
 }
 
 /** The set of Microsoft ids NEURO now owns — what the vault parser suppresses. */
+/**
+ * Which NEURO task each linked Microsoft id belongs to.
+ *
+ * `linkedMsIds` answers "should this line be suppressed"; this answers "and
+ * whose row swallowed it", which is what lets the surviving card go on naming
+ * the Microsoft half it now stands for. Read once per parse, like the Set.
+ */
+function linkedMsMap() {
+  const map = new Map();
+  try {
+    for (const row of db.listTaskRows({ status: 'all', includeDone: true })) {
+      if (row.ms_id) map.set(row.ms_id, row.id);
+    }
+  } catch (e) {
+    console.error('[TaskDedupe] Could not read links:', e.message);
+  }
+  return map;
+}
+
 function linkedMsIds() {
   const ids = new Set();
   try {
@@ -867,6 +932,7 @@ module.exports = {
   internalPairKey,
   linkPair,
   linkedMsIds,
+  linkedMsMap,
   listLinks,
   listMerges,
   mergeInternalPair,

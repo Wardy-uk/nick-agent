@@ -125,6 +125,9 @@ router.post('/', async (req, res) => {
       // The estimate write-back is on by default — it is the whole reason the
       // duration is asked for here — but a caller can decline it.
       saveEstimates: req.body?.saveEstimates !== false,
+      // Same shape for the due date: on by default, declinable, never guessed
+      // from anything but the slot that was actually created.
+      saveDue: req.body?.saveDue !== false,
     });
     res.status(result.ok ? 200 : (result.duplicate ? 409 : 502)).json(result);
   } catch (e) {
@@ -141,6 +144,40 @@ router.post('/:id/release', (req, res) => {
       completeTask: req.body?.completeTask !== false,
     });
     res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * POST /api/task-blocks/:id/reschedule — move a missed block, or the part of it
+ * that did not happen.
+ *
+ * Body: { date?, startTime?, minutes?, taskIds? }. Omitting `taskIds` moves
+ * every UN-TICKED task; omitting date/startTime lets `findSlot` pick, exactly as
+ * blocking one in the first place does.
+ *
+ * Preview is the EXISTING `GET /plan/:taskIds` — the same two-step every other
+ * writer here uses. There is deliberately no dry-run flag on this route: a
+ * second way to ask "where would it go" is a second answer free to disagree
+ * with the first.
+ */
+router.post('/:id/reschedule', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'id must be a number' });
+    const body = req.body || {};
+    const result = await taskBlocks.reschedule(id, {
+      date: body.date || null,
+      startTime: body.startTime || null,
+      minutes: body.minutes != null ? Number(body.minutes) : null,
+      taskIds: Array.isArray(body.taskIds) && body.taskIds.length ? body.taskIds : null,
+    });
+    // 409 on a taken slot, so the client can tell "that hour is gone" from
+    // "NEURO would not do that" — the duplicate flag is what schedule() already
+    // uses to say the diary, not the request, was the problem.
+    const status = result.ok ? 200 : (result.duplicate ? 409 : 400);
+    res.status(status).json(result);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }

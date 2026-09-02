@@ -143,6 +143,33 @@ function _winsToday(dateKey) {
  * Tone rule: every entry says what happened and how long. None of them says
  * what it means about Nick.
  */
+/**
+ * Where a snoozed reminder's subject lives.
+ *
+ * ⚠ An unmapped type resolves to null, and null renders as NO navigation
+ * button rather than as a guess. A button that lands somewhere unrelated is
+ * worse than no button — it teaches that the links on this page are decoration
+ * (which is exactly what `Dashboard`'s "Queue" button had become, pointing at a
+ * view deleted in July).
+ */
+function _nudgeDestination(type) {
+  // Keys are `nudges.NUDGE_TYPES` verbatim — not a guess at what a nudge type
+  // might be called. Values are `App.jsx` view ids, likewise. Both halves have
+  // bitten this repo before (`sleep_core_hours`, `meeting_alert`), and a wrong
+  // key here fails silently as "no button".
+  const map = {
+    standup: 'standup',
+    todo: 'todos',
+    eod: 'eod',
+    121: 'people',
+    plan_milestone: 'plan',
+    journal: 'journal',
+    escalation: 'escalations',
+    email: 'inbox',
+  };
+  return map[String(type || '').toLowerCase()] || null;
+}
+
 function _avoidance(dateKey) {
   const signals = [];
   const week = db.getActivityForRange(_daysAgoKey(6), dateKey);
@@ -165,6 +192,11 @@ function _avoidance(dateKey) {
       label: `${entry.type} reminder`,
       detail: `pushed back ${total} time${total === 1 ? '' : 's'} this week`,
       count: total,
+      // Where the thing being pushed back actually lives. A card that says a
+      // reminder has been snoozed four times and cannot take you to what it is
+      // about is a card that can only be read, and this one is read weekly.
+      nudgeType: entry.type,
+      navigate: _nudgeDestination(entry.type),
     });
   }
 
@@ -177,6 +209,15 @@ function _avoidance(dateKey) {
         label: stale.text,
         detail: stale.message || 'on your list a while, untouched',
         count: null,
+        // ⚠ The handles are what make this row answerable. Absent them the
+        // client can only navigate to the whole task list, which is where Nick
+        // already was — a "link" that changes nothing.
+        task_id: stale.task_id ?? null,
+        ms_id: stale.ms_id ?? null,
+        source: stale.source ?? null,
+        filePath: stale.filePath ?? null,
+        lineNumber: stale.lineNumber ?? null,
+        navigate: 'todos',
       });
     }
   } catch { /* vault unavailable — the nudge signals still stand on their own */ }
@@ -199,6 +240,16 @@ function _avoidance(dateKey) {
         label: old[0].text,
         detail: `marked must-do ${old[0].ageDays} days ago, still open`,
         count: old.length > 1 ? old.length : null,
+        // ⚠ These are `tasks` ROWS, so the id is the handle and there is no
+        // file line to tick. `origin_path` is a provenance backlink to the note
+        // a task came FROM — passing it as `filePath` would hand a completion
+        // route a path with no task line on it.
+        task_id: old[0].id ?? null,
+        ms_id: old[0].ms_id ?? null,
+        source: old[0].source ?? null,
+        filePath: null,
+        lineNumber: null,
+        navigate: 'todos',
       });
     }
   } catch { /* task store unavailable */ }
@@ -369,6 +420,7 @@ module.exports = {
   // Exported for tests — these carry the judgement worth pinning down.
   _momentum,
   _avoidance,
+  _nudgeDestination,
   _quickWins,
   _winsToday,
   _shape,

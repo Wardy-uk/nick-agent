@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { apiUrl } from '../api';
 import './TaskBlocks.css';
 
@@ -29,8 +29,97 @@ import './TaskBlocks.css';
 // asking for "37 minutes" asks for a number nobody has.
 const DURATIONS = [5, 15, 30, 45, 60, 90, 120];
 
+/**
+ * Where a window ends is DERIVED from its start, never carried on the draft.
+ *
+ * Moving the start has to move the end, or the confirm row states a time that
+ * is not the one being created — the same species as a "this fits" built on an
+ * assumed duration it does not mention. Past midnight it returns null rather
+ * than wrapping into the small hours: a slot that cannot be created should say
+ * so before the button is pressed, not after.
+ */
+function endOf(startTime, minutes) {
+  const [h, m] = String(startTime || '').split(':').map(n => parseInt(n, 10));
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return null;
+  const end = h * 60 + m + (minutes || 0);
+  if (end > 24 * 60) return null;
+  return `${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}`;
+}
+
+/**
+ * The proposed slot, editable.
+ *
+ * A found slot is a suggestion, not a decision — Nick's diary moves under him,
+ * and half of what he blocks is work he already knows the right hour for. The
+ * backend has always accepted an explicit date and time; nothing on screen had
+ * ever offered them.
+ *
+ * It says plainly when the slot is his rather than NEURO's, because those are
+ * not the same claim: a proposed slot was checked against the diary and a typed
+ * one is deliberately NOT second-guessed (task-blocks.plan, 'explicit'). Letting
+ * the "found you a gap" framing stand over a hand-typed time is how a scheduling
+ * tool comes to assert a clash-check it never ran.
+ */
+function SlotEdit({ slot, minutes, edited, onChange }) {
+  const end = endOf(slot.startTime, minutes);
+  return (
+    <>
+      <input
+        type="date"
+        className="todo-edit-date"
+        aria-label="Block date"
+        value={slot.date}
+        onChange={(e) => e.target.value && onChange({ ...slot, date: e.target.value })}
+      />
+      <input
+        type="time"
+        className="todo-edit-date"
+        aria-label="Block start time"
+        value={slot.startTime}
+        onChange={(e) => e.target.value && onChange({ ...slot, startTime: e.target.value })}
+      />
+      {end
+        ? <span className="blocks-slot">– {end} ({minutes} min)</span>
+        : <span className="blocks-warn">that start runs past midnight</span>}
+      {edited && (
+        <span className="blocks-quiet">your slot — not checked against your diary</span>
+      )}
+    </>
+  );
+}
+
+/**
+ * What blocking this does to the due dates.
+ *
+ * Blocking a task IS deciding when it is being done, so the due date follows the
+ * window — otherwise a task sits in the overdue lane on a day it is already
+ * scheduled for.
+ *
+ * Derived from the CURRENT slot rather than read off the plan, because the slot
+ * is editable: a count computed server-side against the proposed day is wrong
+ * the moment Nick moves the block, which is exactly the trap the end time fell
+ * into.
+ *
+ * Pulling a date in is bookkeeping and needs no comment. Pushing one OUT moves a
+ * deadline — possibly one somebody else is waiting on — so it is said before the
+ * button is pressed, never discovered afterwards.
+ */
+function DueNote({ draft }) {
+  const date = draft.slot.date;
+  const rows = draft.tasks || [];
+  const later = rows.filter(t => t.dueDate && t.dueDate < date);
+  const label = `Due date${rows.length === 1 ? '' : 's'} set to ${date}`;
+  return later.length === 0
+    ? <span className="blocks-quiet">{label}.</span>
+    : <span className="blocks-warn">
+        {label} — that pushes {later.length} deadline{later.length === 1 ? '' : 's'} out
+        {later.length === 1 && later[0].dueDate ? ` (was ${later[0].dueDate})` : ''}.
+      </span>;
+}
+
 export function BlockTimeControl({ todo, busy }) {
   const [draft, setDraft] = useState(null);
+  const [edited, setEdited] = useState(false);
   const [state, setState] = useState('idle');   // idle | planning | drafted | saving | done | error
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
@@ -44,6 +133,7 @@ export function BlockTimeControl({ todo, busy }) {
       const body = await res.json();
       if (!body.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setDraft(body);
+      setEdited(false);
       setState('drafted');
     } catch (e) {
       setError(e.message);
@@ -81,6 +171,7 @@ export function BlockTimeControl({ todo, busy }) {
         <span className="todo-edit-label">Calendar</span>
         <span className="blocks-outcome blocks-outcome-ok">
           Blocked {result.slot.date} {result.slot.startTime}–{result.slot.endTime} ({result.minutes} min).
+          {result.dueUpdates?.length > 0 && ` Due ${result.dueUpdates[0].to}${result.dueUpdates[0].from ? ` (was ${result.dueUpdates[0].from})` : ''}.`}
           {' '}This task stays open until <code>{result.notePath}</code> has something in it.
         </span>
       </div>
@@ -98,9 +189,6 @@ export function BlockTimeControl({ todo, busy }) {
 
       {state === 'drafted' && draft && (
         <>
-          <span className="blocks-slot">
-            {draft.slot.date} {draft.slot.startTime}–{draft.slot.endTime}
-          </span>
           {/* How long, set here. This is the moment Nick is already thinking
               about duration, which is the only moment an estimate gets given —
               0 of 154 open tasks had one, because nothing had ever asked at a
@@ -122,25 +210,24 @@ export function BlockTimeControl({ todo, busy }) {
               assuming {draft.assumedMinutes} min
             </span>
           )}
-          {draft.calendarKnown === false && (
+          {draft.calendarKnown === false && !edited && (
             <span className="blocks-warn">
               can't see your diary — this slot may clash
             </span>
           )}
-          <input
-            type="date"
-            className="todo-edit-date"
-            value={draft.slot.date}
-            onChange={(e) => e.target.value && setDraft({ ...draft, slot: { ...draft.slot, date: e.target.value } })}
+          <SlotEdit
+            slot={draft.slot}
+            minutes={draft.minutes}
+            edited={edited}
+            onChange={(slot) => { setEdited(true); setDraft({ ...draft, slot }); }}
           />
-          <input
-            type="time"
-            className="todo-edit-date"
-            value={draft.slot.startTime}
-            onChange={(e) => e.target.value && setDraft({ ...draft, slot: { ...draft.slot, startTime: e.target.value } })}
-          />
-          <button className="todo-edit-btn active" onClick={create}>Create</button>
-          <button className="todo-edit-btn" onClick={() => { setDraft(null); setState('idle'); }}>Cancel</button>
+          <DueNote draft={draft} />
+          <button
+            className="todo-edit-btn active"
+            disabled={!endOf(draft.slot.startTime, draft.minutes)}
+            onClick={create}
+          >Create</button>
+          <button className="todo-edit-btn" onClick={() => { setDraft(null); setEdited(false); setState('idle'); }}>Cancel</button>
         </>
       )}
 
@@ -168,12 +255,13 @@ export function BlockTimeControl({ todo, busy }) {
  * holding 20 minutes of work is a normal thing to want, so the overflow is
  * reported rather than enforced.
  */
-function BatchComposer({ onCreated }) {
+function BatchComposer({ onCreated, allocated }) {
   const [open, setOpen] = useState(false);
   const [tasks, setTasks] = useState([]);
   const [picked, setPicked] = useState([]);
   const [minutes, setMinutes] = useState(30);
   const [draft, setDraft] = useState(null);
+  const [edited, setEdited] = useState(false);
   const [state, setState] = useState('idle');
   const [error, setError] = useState(null);
 
@@ -186,6 +274,7 @@ function BatchComposer({ onCreated }) {
   }, [open, tasks.length]);
 
   const toggle = (id) => {
+    if (allocated?.byTask.has(id)) return;
     setDraft(null);
     setPicked(p => (p.includes(id) ? p.filter(x => x !== id) : [...p, id]));
   };
@@ -203,6 +292,7 @@ function BatchComposer({ onCreated }) {
       const body = await res.json();
       if (!body.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setDraft(body);
+      setEdited(false);
       setState('drafted');
     } catch (e) {
       setError(e.message);
@@ -218,7 +308,7 @@ function BatchComposer({ onCreated }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           taskIds: picked,
-          minutes,
+          minutes: draft.minutes,
           date: draft.slot.date,
           startTime: draft.slot.startTime,
         }),
@@ -228,13 +318,14 @@ function BatchComposer({ onCreated }) {
       setState('idle');
       setPicked([]);
       setDraft(null);
+      setEdited(false);
       setOpen(false);
       onCreated?.(body);
     } catch (e) {
       setError(e.message);
       setState('error');
     }
-  }, [picked, minutes, draft, onCreated]);
+  }, [picked, draft, onCreated]);
 
   if (!open) {
     return (
@@ -248,23 +339,48 @@ function BatchComposer({ onCreated }) {
     <div className="blocks-batch">
       <div className="blocks-batch-head">
         <strong>Pick the tasks, then the window</strong>
-        <button className="btn btn-sm" onClick={() => { setOpen(false); setPicked([]); setDraft(null); }}>Cancel</button>
+        <button className="btn btn-sm" onClick={() => { setOpen(false); setPicked([]); setDraft(null); setEdited(false); }}>Cancel</button>
       </div>
 
       <div className="blocks-batch-list">
         {tasks.length === 0 && <span className="blocks-quiet">Loading open tasks…</span>}
-        {tasks.map(t => (
-          <label key={t.id} className={`blocks-batch-item${picked.includes(t.id) ? ' picked' : ''}`}>
-            <input type="checkbox" checked={picked.includes(t.id)} onChange={() => toggle(t.id)} />
-            <span className="blocks-batch-item-text">{t.text}</span>
-            {/* An un-estimated task shows a dash, never a number it does not
-                have — the same reason time-fit flags every assumption. */}
-            <span className="blocks-chip blocks-chip-quiet">
-              {t.estimate_minutes ? `${t.estimate_minutes}m` : '—'}
-            </span>
-          </label>
-        ))}
+        {tasks.map(t => {
+          // Already in a live block, so it is not something to pack into a
+          // second window — but it stays VISIBLE and says why, because a task
+          // that silently vanished from this list would read as one that had
+          // been done, or as a list that had stopped working.
+          const when = allocated?.byTask.get(t.id) || null;
+          return (
+            <label
+              key={t.id}
+              className={`blocks-batch-item${picked.includes(t.id) ? ' picked' : ''}${when ? ' allocated' : ''}`}
+              title={when ? `Already blocked ${when}` : undefined}
+            >
+              <input
+                type="checkbox"
+                checked={picked.includes(t.id)}
+                disabled={Boolean(when)}
+                onChange={() => toggle(t.id)}
+              />
+              <span className="blocks-batch-item-text">{t.text}</span>
+              {when
+                ? <span className="blocks-chip blocks-chip-quiet">allocated · {when}</span>
+                /* An un-estimated task shows a dash, never a number it does not
+                   have — the same reason time-fit flags every assumption. */
+                : <span className="blocks-chip blocks-chip-quiet">
+                    {t.estimate_minutes ? `${t.estimate_minutes}m` : '—'}
+                  </span>}
+            </label>
+          );
+        })}
       </div>
+
+      {allocated && !allocated.known && (
+        <div className="blocks-warn">
+          Couldn't check what's already blocked{allocated.why ? ` — ${allocated.why}` : ''}, so nothing
+          here is marked allocated. A task may already have a window.
+        </div>
+      )}
 
       <div className="blocks-batch-foot">
         <span className="blocks-quiet">
@@ -294,14 +410,22 @@ function BatchComposer({ onCreated }) {
 
       {state === 'drafted' && draft && (
         <div className="blocks-batch-confirm">
-          <span className="blocks-slot">
-            {draft.slot.date} {draft.slot.startTime}–{draft.slot.endTime}
-          </span>
-          {draft.calendarKnown === false && (
+          <SlotEdit
+            slot={draft.slot}
+            minutes={draft.minutes}
+            edited={edited}
+            onChange={(slot) => { setEdited(true); setDraft({ ...draft, slot }); }}
+          />
+          {draft.calendarKnown === false && !edited && (
             <span className="blocks-warn">can't see your diary — this slot may clash</span>
           )}
+          <DueNote draft={draft} />
           <span className="blocks-quiet">One note for all {picked.length}.</span>
-          <button className="btn btn-sm btn-primary" onClick={create}>Create</button>
+          <button
+            className="btn btn-sm btn-primary"
+            disabled={!endOf(draft.slot.startTime, draft.minutes)}
+            onClick={create}
+          >Create</button>
         </div>
       )}
 
@@ -446,9 +570,80 @@ function countProse(raw) {
 
 // ── What is waiting to be written up ─────────────────────────────────────────
 
-function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, onEditNote, editing, onCloseEditor, onSaved, busy, outcome }) {
+/**
+ * The window went by and the work did not happen. Move what is left.
+ *
+ * Before this the only way back was "Didn't happen — drop all N" and then
+ * rebuilding the block by hand in the picker, which for a nine-task window is
+ * nine re-selections. Nick's difficulty is initiation; a recovery that costs
+ * more than the missed block did is a block that never gets rebooked.
+ *
+ * ⚠ Only the UN-TICKED tasks move, and the form says so before it is used
+ * rather than reporting it afterwards. A tick is finished work owed a write-up,
+ * and carrying it into a future slot would put a completion back in the diary.
+ *
+ * The time is OPTIONAL on purpose. "Tomorrow, wherever it fits" is the answer
+ * most of the time, and making him pick an hour is the friction this is
+ * removing; the picker is there for when a specific slot is the point.
+ */
+function RescheduleForm({ block, busy, onCancel, onMove }) {
+  const movable = block.tasks.filter(t => !t.awaiting);
+  const staying = block.tasks.length - movable.length;
+  const [date, setDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    // Local getters, never toISOString() — the Pi may run UTC.
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  });
+  const [startTime, setStartTime] = useState('');
+
+  if (!movable.length) {
+    return (
+      <span className="blocks-confirm">
+        Everything here is ticked — this needs its write-up, not a new slot.
+        <button className="btn btn-sm" disabled={busy} onClick={onCancel}>OK</button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="blocks-confirm blocks-reschedule">
+      <span className="blocks-reschedule-copy">
+        Move {movable.length} outstanding task{movable.length === 1 ? '' : 's'}
+        {staying > 0 && ` (${staying} ticked, staying here for the write-up)`} to:
+      </span>
+      <input
+        type="date"
+        className="blocks-reschedule-date"
+        value={date}
+        disabled={busy}
+        onChange={(e) => setDate(e.target.value)}
+      />
+      <input
+        type="time"
+        className="blocks-reschedule-time"
+        value={startTime}
+        disabled={busy}
+        title="Leave empty and NEURO finds the first gap that fits"
+        onChange={(e) => setStartTime(e.target.value)}
+      />
+      <button
+        className="btn btn-sm btn-primary"
+        disabled={busy || !date}
+        onClick={() => onMove(block, { date, startTime: startTime || null })}
+      >
+        {startTime ? 'Move it' : 'Move it — first gap that fits'}
+      </button>
+      <button className="btn btn-sm" disabled={busy} onClick={onCancel}>Cancel</button>
+    </span>
+  );
+}
+
+function Row({ block, onRelease, onDrop, onReschedule, onToggleTask, onRemoveTask, onEditNote, editing, onCloseEditor, onSaved, busy, outcome }) {
   const [releasing, setReleasing] = useState(false);
   const [confirmingDrop, setConfirmingDrop] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [reason, setReason] = useState('');
 
   return (
@@ -528,8 +723,15 @@ function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, onEditNote,
           Whole block ({block.tasks.length} task{block.tasks.length === 1 ? '' : 's'}):
         </span>
         {outcome && <span className={`blocks-outcome blocks-outcome-${outcome.ok ? 'ok' : 'fail'}`}>{outcome.text}</span>}
-        {!outcome && !releasing && !confirmingDrop && (
+        {!outcome && !releasing && !confirmingDrop && !moving && (
           <>
+            {/* First of the three, because it is the only one that keeps the
+                work moving. The other two end the block; this one recovers it,
+                and a recovery buried behind two ways to give up is one that
+                does not get used. */}
+            <button className="btn btn-sm" disabled={busy} onClick={() => setMoving(true)}>
+              Didn't get to it — move it
+            </button>
             <button className="btn btn-sm" disabled={busy} onClick={() => setReleasing(true)}>
               Nothing to write up — close all {block.tasks.length}
             </button>
@@ -537,6 +739,14 @@ function Row({ block, onRelease, onDrop, onToggleTask, onRemoveTask, onEditNote,
               Didn't happen — drop all {block.tasks.length}
             </button>
           </>
+        )}
+        {!outcome && moving && (
+          <RescheduleForm
+            block={block}
+            busy={busy}
+            onCancel={() => setMoving(false)}
+            onMove={(b, when) => { setMoving(false); onReschedule(b, when); }}
+          />
         )}
         {!outcome && confirmingDrop && (
           <span className="blocks-confirm">
@@ -724,6 +934,46 @@ export default function TaskBlocks() {
     }
   }, [load]);
 
+  /**
+   * Move a missed block, or the part of it that did not happen.
+   *
+   * ⚠ 409 is the diary saying that slot is taken, which is a different problem
+   * from NEURO refusing the move, and the message says which. The server is the
+   * one that decides what moves — this sends the block and the time, never a
+   * task list computed here, so the "a tick never travels" rule has exactly one
+   * implementation.
+   */
+  const rescheduleBlock = useCallback(async (block, when) => {
+    setBusyId(block.blockId);
+    try {
+      const res = await fetch(apiUrl(`/api/task-blocks/${block.blockId}/reschedule`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: when.date, startTime: when.startTime }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      const to = json.to || {};
+      const stayed = json.from?.action === 'kept' ? json.from.ticked : 0;
+      setOutcomes(o => ({
+        ...o,
+        [block.blockId]: {
+          ok: true,
+          text: `Moved ${json.moved.length} to ${to.block?.date_key || when.date} `
+            + `${to.block?.start_time || ''}–${to.block?.end_time || ''}`
+            // Never silent about what stayed: a count that only mentions what
+            // moved reads as the whole block having gone.
+            + (stayed ? ` — ${stayed} ticked task${stayed === 1 ? '' : 's'} stayed here, still owed a write-up.` : '.'),
+        },
+      }));
+      load();
+    } catch (e) {
+      setOutcomes(o => ({ ...o, [block.blockId]: { ok: false, text: e.message } }));
+    } finally {
+      setBusyId(null);
+    }
+  }, [load]);
+
   const undoDrop = useCallback(async () => {
     if (!lastDropped) return;
     try {
@@ -739,6 +989,29 @@ export default function TaskBlocks() {
 
   const blocks = data?.blocks || [];
   const owed = blocks.filter(b => b.passed);
+
+  /**
+   * Which open tasks already have a window.
+   *
+   * Derived from the blocks just read rather than a second fetch, so the picker
+   * and the list under it cannot disagree about what is allocated.
+   *
+   * `known` is separate from the map on purpose: an unread block list means we
+   * cannot say, and marking nothing allocated would present that as "none of
+   * these are blocked" — the same conflation the panel's own empty state avoids.
+   * `/api/task-blocks` returns open blocks only, so a released, dropped or
+   * completed one correctly frees its tasks again.
+   */
+  const allocated = useMemo(() => {
+    const byTask = new Map();
+    if (loading || error || !data) {
+      return { known: false, byTask, why: error || null };
+    }
+    for (const b of (data.blocks || [])) {
+      for (const t of b.tasks) byTask.set(t.taskId, `${b.dateKey} ${b.startTime}`);
+    }
+    return { known: true, byTask, why: null };
+  }, [data, loading, error]);
 
   // One quiet line when there is nothing waiting — which is most days, and is
   // the correct answer rather than a check that has stopped working.
@@ -761,7 +1034,7 @@ export default function TaskBlocks() {
             <span>{blocks.length} block{blocks.length === 1 ? '' : 's'} in the diary →</span>
           )}
         </span>
-        <BatchComposer onCreated={load} />
+        <BatchComposer onCreated={load} allocated={allocated} />
       </div>
     );
   }
@@ -780,7 +1053,7 @@ export default function TaskBlocks() {
         one.
       </p>
 
-      <BatchComposer onCreated={load} />
+      <BatchComposer onCreated={load} allocated={allocated} />
 
       {lastDropped && (
         <div className="blocks-undo">
@@ -809,6 +1082,7 @@ export default function TaskBlocks() {
           onSaved={() => load()}
           onRelease={(b, reason) => act(b, 'release', { reason }, `Closed — ${reason}`)}
           onDrop={(b) => dropBlock(b)}
+          onReschedule={(b, when) => rescheduleBlock(b, when)}
         />
       ))}
     </div>

@@ -838,3 +838,241 @@ test('unticking a task unticks it everywhere too', () => {
     );
   }
 });
+
+// ── The due date follows the block ──────────────────────────────────────────
+//
+// Blocking a task IS deciding when it is being done, so a due date that says
+// otherwise leaves it in the overdue lane on a day it is already scheduled for.
+// The direction matters: pulling a date in is bookkeeping, pushing one out moves
+// a deadline, and only the second has to be reported.
+
+/** Graph is not reachable from a test, and does not need to be — the write-back
+ *  happens before the event is created, which is exactly what the last of these
+ *  pins. */
+function withoutGraph(fn) {
+  const microsoft = require('./microsoft');
+  const real = microsoft.createCalendarEvent;
+  microsoft.createCalendarEvent = async () => ({ created: false, reason: 'no graph in tests' });
+  try { return fn(); } finally { microsoft.createCalendarEvent = real; }
+}
+
+function freshTask(text, dueDate = null) {
+  const { id } = taskStore.createTask({ text, source: 'manual', skipExport: true });
+  if (dueDate) taskStore.updateTask(id, { due_date: dueDate });
+  return id;
+}
+
+test('blocking a task sets its due date to the day of the block', async () => {
+  const id = freshTask('Write the charter');
+  assert.equal(db.getTaskRow(id).due_date, null);
+
+  const res = await withoutGraph(() => taskBlocks.schedule([id], {
+    date: '2026-09-10', startTime: '10:00', minutes: 30,
+  }));
+
+  assert.equal(db.getTaskRow(id).due_date, '2026-09-10');
+  // Reported even though Graph refused — the date really did move, and a caller
+  // reading updates only on success would call a half-done state nothing.
+  assert.deepEqual(res.dueUpdates.map(u => [u.taskId, u.from, u.to, u.later]),
+    [[id, null, '2026-09-10', false]]);
+});
+
+test('pulling a due date IN is not reported as moving a deadline', async () => {
+  const id = freshTask('Due next week', '2026-09-20');
+  const res = await withoutGraph(() => taskBlocks.schedule([id], {
+    date: '2026-09-11', startTime: '10:00', minutes: 30,
+  }));
+  assert.equal(db.getTaskRow(id).due_date, '2026-09-11');
+  assert.equal(res.dueUpdates[0].later, false);
+});
+
+test('pushing a due date OUT moves a deadline, and says so', async () => {
+  const id = freshTask('Due tomorrow', '2026-09-02');
+  const res = await withoutGraph(() => taskBlocks.schedule([id], {
+    date: '2026-09-12', startTime: '10:00', minutes: 30,
+  }));
+  assert.equal(db.getTaskRow(id).due_date, '2026-09-12');
+  assert.deepEqual(
+    res.dueUpdates.map(u => ({ from: u.from, to: u.to, later: u.later })),
+    [{ from: '2026-09-02', to: '2026-09-12', later: true }],
+  );
+});
+
+test('a task already due on the day is left alone, not rewritten', async () => {
+  const id = freshTask('Already dated', '2026-09-13');
+  const res = await withoutGraph(() => taskBlocks.schedule([id], {
+    date: '2026-09-13', startTime: '10:00', minutes: 30,
+  }));
+  assert.equal(db.getTaskRow(id).due_date, '2026-09-13');
+  assert.deepEqual(res.dueUpdates, [], 'nothing changed, so nothing to report');
+});
+
+test('saveDue:false leaves every due date where it was', async () => {
+  const a = freshTask('Untouched A');
+  const b = freshTask('Untouched B', '2026-09-03');
+  await withoutGraph(() => taskBlocks.schedule([a, b], {
+    date: '2026-09-14', startTime: '10:00', minutes: 60, saveDue: false,
+  }));
+  assert.equal(db.getTaskRow(a).due_date, null);
+  assert.equal(db.getTaskRow(b).due_date, '2026-09-03');
+});
+
+test('plan() says which deadlines the window would push out, and creates nothing', () => {
+  const early = freshTask('Owed sooner', '2026-09-04');
+  const late = freshTask('Owed later', '2026-09-30');
+  const none = freshTask('No date');
+
+  const draft = taskBlocks.plan([early, late, none], {
+    date: '2026-09-15', startTime: '10:00', minutes: 60,
+  });
+
+  assert.equal(draft.ok, true);
+  assert.equal(draft.dueLaterCount, 1, 'only the one due before the block is pushed out');
+  assert.deepEqual(draft.tasks.map(t => t.dueMovesLater), [true, false, false]);
+  assert.deepEqual(draft.tasks.map(t => t.dueDate), ['2026-09-04', '2026-09-30', null]);
+  // Planning is a read. A plan that had already moved the dates would make the
+  // preview the act it exists to precede.
+  assert.equal(db.getTaskRow(early).due_date, '2026-09-04');
+  assert.equal(db.getTaskRow(late).due_date, '2026-09-30');
+  assert.equal(db.getTaskRow(none).due_date, null);
+});
+
+// ── Rescheduling a block that did not happen ────────────────────────────────
+//
+// The property that matters is the one about ticks: a tick is finished work, so
+// it must NEVER travel into a future slot. Everything else here exists to stop
+// the recovery path costing more than the missed window did.
+
+/** Graph, answering. `withoutGraph` above makes schedule() fail by design, which
+ *  is the wrong shape for testing a move — a reschedule that cannot create the
+ *  new block correctly refuses to touch the old one. */
+function withGraph(fn) {
+  const microsoft = require('./microsoft');
+  const real = {
+    create: microsoft.createCalendarEvent,
+    update: microsoft.updateCalendarEvent,
+    del: microsoft.deleteCalendarEvent,
+  };
+  const deleted = [];
+  let seq = 0;
+  microsoft.createCalendarEvent = async () => ({ created: true, event: { id: `evt-${++seq}`, webLink: null } });
+  microsoft.updateCalendarEvent = async () => ({ updated: true });
+  microsoft.deleteCalendarEvent = async (id) => { deleted.push(id); return { deleted: true }; };
+  const done = (r) => { Object.assign(microsoft, {
+    createCalendarEvent: real.create, updateCalendarEvent: real.update, deleteCalendarEvent: real.del,
+  }); return r; };
+  return Promise.resolve(fn(deleted)).then(done, (e) => { done(); throw e; });
+}
+
+test('an untouched block moves whole, and its old event is deleted', async () => {
+  const { taskIds, blockId } = blockedTasks(['Charter V2', 'Rejection reasons'], { dateKey: '2026-09-01' });
+  db.updateTaskBlockRow(blockId, { event_id: 'evt-old' });
+
+  const res = await withGraph(async (deleted) => {
+    const r = await taskBlocks.reschedule(blockId, { date: '2026-09-15', startTime: '10:00', minutes: 60 });
+    assert.deepEqual(deleted, ['evt-old'], 'the old event should not survive an empty block');
+    return r;
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.from.action, 'dropped');
+  assert.equal(db.getTaskBlockRow(blockId).status, 'dropped');
+  assert.equal(res.moved.length, 2);
+  // Both tasks are in the new block, and only there.
+  const moved = db.listTaskBlockItems(res.to.blockId).map(i => i.task_id).sort();
+  assert.deepEqual(moved, [...taskIds].sort());
+  assert.equal(db.listTaskBlockItems(blockId).length, 0);
+});
+
+test('a TICKED task never moves — it stays, owed a write-up', async () => {
+  // The whole rule. Carrying finished work into a future slot would make the
+  // new block's note responsible for evidence about a sitting already had, and
+  // would put a completion in the diary that has already happened.
+  const { taskIds, blockId } = blockedTasks(['Did this one', 'Never started', 'Also not started'], { dateKey: '2026-09-01' });
+  db.updateTaskBlockRow(blockId, { event_id: 'evt-part' });
+  taskStore.updateTask(taskIds[0], { status: 'done' });   // held, awaiting write-up
+  assert.equal(db.getTaskBlockRow(blockId).status, 'awaiting-writeup');
+
+  const res = await withGraph(async (deleted) => {
+    const r = await taskBlocks.reschedule(blockId, { date: '2026-09-16', startTime: '10:00', minutes: 60 });
+    // A block that produced real work is a record of where the time went.
+    assert.deepEqual(deleted, [], 'an event holding finished work must not be deleted');
+    return r;
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.from.action, 'kept');
+  assert.equal(res.from.stillOwedWriteUp, 1);
+  assert.deepEqual(res.moved.map(m => m.taskId).sort(), [taskIds[1], taskIds[2]].sort());
+
+  // The ticked one is still on the old block and still held.
+  const left = db.listTaskBlockItems(blockId);
+  assert.deepEqual(left.map(i => i.task_id), [taskIds[0]]);
+  assert.equal(db.getTaskBlockRow(blockId).status, 'awaiting-writeup');
+  assert.equal(db.getTaskRow(taskIds[0]).status, 'in-progress');
+
+  // And it did not follow the others into the new slot.
+  const next = db.listTaskBlockItems(res.to.blockId).map(i => i.task_id);
+  assert.ok(!next.includes(taskIds[0]), 'a ticked task reached the new block');
+});
+
+test('asking to move a ticked task is REFUSED, not quietly skipped', async () => {
+  const { taskIds, blockId } = blockedTasks(['Done already', 'Outstanding'], { dateKey: '2026-09-01' });
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+
+  const res = await withGraph(() => taskBlocks.reschedule(blockId, {
+    date: '2026-09-17', startTime: '10:00', minutes: 60, taskIds: [taskIds[0], taskIds[1]],
+  }));
+  assert.equal(res.ok, false);
+  assert.match(res.error, /ticked/i);
+  assert.deepEqual(res.tickedIds, [taskIds[0]]);
+  // Nothing moved.
+  assert.equal(db.listTaskBlockItems(blockId).length, 2);
+});
+
+test('part of a block can be moved on its own', async () => {
+  const { taskIds, blockId } = blockedTasks(['Move me', 'Leave me', 'Leave me too'], { dateKey: '2026-09-01' });
+
+  const res = await withGraph(() => taskBlocks.reschedule(blockId, {
+    date: '2026-09-18', startTime: '10:00', minutes: 30, taskIds: [taskIds[0]],
+  }));
+  assert.equal(res.ok, true);
+  assert.equal(res.from.action, 'kept');
+  assert.deepEqual(db.listTaskBlockItems(blockId).map(i => i.task_id).sort(), [taskIds[1], taskIds[2]].sort());
+  assert.deepEqual(db.listTaskBlockItems(res.to.blockId).map(i => i.task_id), [taskIds[0]]);
+});
+
+test('a block with nothing outstanding is refused — it needs a note, not a slot', async () => {
+  const { taskIds, blockId } = blockedTasks(['The only one'], { dateKey: '2026-09-01' });
+  taskStore.updateTask(taskIds[0], { status: 'done' });
+
+  const res = await withGraph(() => taskBlocks.reschedule(blockId, { date: '2026-09-19', startTime: '10:00' }));
+  assert.equal(res.ok, false);
+  assert.match(res.error, /write-up/i);
+});
+
+test('a failed new block leaves the old one exactly as it was', async () => {
+  // Order is load-bearing: detaching first and then failing would leave the
+  // tasks in no block at all, which is worse than the missed window.
+  const { blockId } = blockedTasks(['Stays put A', 'Stays put B'], { dateKey: '2026-09-01' });
+  const before = db.listTaskBlockItems(blockId).length;
+
+  const clash = blockedTasks(['Occupant'], { dateKey: '2026-09-20', startTime: '11:00' });
+  assert.ok(clash.blockId);
+
+  const res = await taskBlocks.reschedule(blockId, { date: '2026-09-20', startTime: '11:00', minutes: 60 });
+  assert.equal(res.ok, false);
+  assert.equal(res.rescheduling, blockId);
+  assert.equal(db.getTaskBlockRow(blockId).status, 'scheduled');
+  assert.equal(db.listTaskBlockItems(blockId).length, before);
+});
+
+test('a finished block is not reopened by giving it a new slot', async () => {
+  // released / complete / dropped all ended the block deliberately. `restore` is
+  // the way back from a drop; a new slot is not an undo.
+  const { blockId } = blockedTasks(['Abandoned'], { dateKey: '2026-09-01' });
+  taskBlocks.drop(blockId);
+  const res = await withGraph(() => taskBlocks.reschedule(blockId, { date: '2026-09-21', startTime: '10:00' }));
+  assert.equal(res.ok, false);
+  assert.match(res.error, /dropped/);
+});

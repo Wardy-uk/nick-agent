@@ -497,3 +497,77 @@ test('an internal rejection persists and round-trips', () => {
   assert.equal(dedupe.undismissInternalPair(3, 4).ok, true);
   assert.equal(dedupe.dismissedKeySet().has(dedupe.internalPairKey(3, 4)), false);
 });
+
+// ── Which wording leads ──────────────────────────────────────────────────────
+//
+// `lead` decides whose WORDS the surviving row carries and nothing else. Both
+// records still exist either way, NEURO still counts it once and still pushes
+// the completion — so these pin the two things that could quietly go wrong: an
+// adoption that blanks a date Nick set, and a failed adoption taking the link
+// down with it.
+
+test('the default keeps NEURO\'s wording, exactly as before', () => {
+  const a = taskStore.createTask({ text: 'Share the action plan once it is workable', skipExport: true });
+  const res = dedupe.linkPair(a.id, 'ms-lead-default', 'MS Planner', null);
+  assert.equal(res.ok, true);
+  assert.equal(res.lead, 'neuro');
+  assert.equal(res.adopted, null, 'nothing should be copied when NEURO leads');
+  assert.equal(db.getTaskRow(a.id).text, 'Share the action plan once it is workable');
+});
+
+test('choosing Planner as primary adopts its wording and its due date', () => {
+  // ⚠ Distinct wording from the test above. dedupe_key is UNIQUE and createTask
+  // FOLDS a repeat rather than duplicating, so two fixtures sharing a sentence
+  // are ONE row — and the second link then correctly refuses as already-linked,
+  // which is the matcher being right and the fixture being wrong.
+  const a = taskStore.createTask({ text: 'Share the workable action plan with everyone', skipExport: true });
+  const res = dedupe.linkPair(a.id, 'ms-lead-adopt', 'MS Planner', 'Support - Improvement Plan', {
+    lead: 'microsoft', msText: 'Communicate the action plan to all teams', msDue: '2026-09-04',
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.adopted.ok, true);
+  const row = db.getTaskRow(a.id);
+  assert.equal(row.text, 'Communicate the action plan to all teams');
+  assert.equal(row.due_date, '2026-09-04');
+  assert.equal(row.ms_id, 'ms-lead-adopt', 'the link is still the link');
+});
+
+test('adoption never BLANKS a due date NEURO already had', () => {
+  // An absent Planner due date means "the board does not track one", not "clear
+  // the date Nick set". The two look identical in a null and only one is a
+  // decision.
+  const a = taskStore.createTask({ text: 'A task with a date of its own', skipExport: true });
+  taskStore.updateTask(a.id, { due_date: '2026-10-01' });
+  const res = dedupe.linkPair(a.id, 'ms-lead-nodue', 'MS Planner', null, {
+    lead: 'microsoft', msText: 'Planner wording, no date', msDue: null,
+  });
+  assert.equal(res.adopted.ok, true);
+  const row = db.getTaskRow(a.id);
+  assert.equal(row.text, 'Planner wording, no date');
+  assert.equal(row.due_date, '2026-10-01', 'the date Nick set was thrown away');
+});
+
+test('a refused adoption still leaves the pair LINKED', () => {
+  // updateTask refuses text that would collide with another task's dedupe key.
+  // The pair being the same task is a separate fact from whose wording won, and
+  // dropping the link would make Nick answer the duplicate question twice.
+  const occupant = taskStore.createTask({ text: 'Occupied wording for the clash', skipExport: true });
+  assert.ok(occupant.id);
+  const a = taskStore.createTask({ text: 'Something else entirely here', skipExport: true });
+
+  const res = dedupe.linkPair(a.id, 'ms-lead-clash', 'MS Planner', null, {
+    lead: 'microsoft', msText: 'Occupied wording for the clash',
+  });
+  assert.equal(res.ok, true, 'the link must survive a failed rename');
+  assert.equal(res.adopted.ok, false);
+  assert.match(res.adopted.reason, /already has that text/);
+  assert.equal(db.getTaskRow(a.id).ms_id, 'ms-lead-clash');
+  assert.equal(db.getTaskRow(a.id).text, 'Something else entirely here', 'wording unchanged on refusal');
+});
+
+test('linkedMsMap says WHICH task swallowed each Microsoft id', () => {
+  // What lets the surviving card go on naming the Microsoft half it stands for.
+  const a = taskStore.createTask({ text: 'A task that will swallow a mirror line', skipExport: true });
+  dedupe.linkPair(a.id, 'ms-map-check', 'MS Planner');
+  assert.equal(dedupe.linkedMsMap().get('ms-map-check'), a.id);
+});

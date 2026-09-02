@@ -346,15 +346,22 @@ function parseVaultTodos(options = {}) {
   // Only consulted when DB tasks are in play: with `dbTasks: false` the importer is
   // reading the vault alone, and suppressing a line against a row it cannot see
   // would silently drop a task from its input.
+  // A MAP, not a Set — it answers "suppress this line" AND "whose row swallowed
+  // it", and the second is what lets the surviving card go on naming the
+  // Microsoft half it now stands for. Derived live from the mirror rather than
+  // copied onto the NEURO row at link time, so a Planner rename shows up on the
+  // next sync instead of the card quoting wording nobody uses any more.
   const linkedMs = includeDbTasks
     ? (() => {
-        try { return require('./task-dedupe').linkedMsIds(); }
+        try { return require('./task-dedupe').linkedMsMap(); }
         catch (e) {
           console.error('[Obsidian] Could not read task links:', e.message);
-          return new Set();
+          return new Map();
         }
       })()
-    : new Set();
+    : new Map();
+  // taskId -> what Microsoft still says about it.
+  const msCounterparts = new Map();
   const msPath = path.join(vaultPath, 'Tasks', 'Microsoft Tasks.md');
   if (fs.existsSync(msPath)) {
     const content = fs.readFileSync(msPath, 'utf-8');
@@ -387,7 +394,15 @@ function parseVaultTodos(options = {}) {
         // the one carrying MoSCoW, estimate and provenance. The Microsoft task is
         // not deleted; NEURO now completes it (routes/tasks.js) when the task is
         // ticked off. Unlinking in the review screen brings this line straight back.
-        if (task.ms_id && linkedMs.has(task.ms_id)) continue;
+        if (task.ms_id && linkedMs.has(task.ms_id)) {
+          msCounterparts.set(linkedMs.get(task.ms_id), {
+            text: task.text,
+            dueDate: task.due_date || null,
+            plan: msPlan,
+            source: msSection,
+          });
+          continue;
+        }
         task.source = msSection;
         task.msPlan = msPlan;
         task.priority = mergePriority(task.priority, 'normal');
@@ -463,6 +478,16 @@ function parseVaultTodos(options = {}) {
           const fromMergeable = t.filePath === masterPath || String(t.source || '').startsWith('Daily');
           return !(fromMergeable && owned.has(taskStore.dedupeKey(t.text)));
         });
+        // The Microsoft half a linked row now stands for. Attached here because
+        // this is the only point that has both — and it is REFERENCED, never
+        // merged in: the pair is one task, and the second wording is provenance
+        // for the card, not a second row.
+        if (msCounterparts.size) {
+          for (const t of dbTasks) {
+            const other = msCounterparts.get(t.task_id);
+            if (other) t.msCounterpart = other;
+          }
+        }
         allTasks.length = 0;
         allTasks.push(...fileBacked, ...dbTasks);
       }

@@ -118,6 +118,43 @@ async function getPower() {
 
 // ------------------------------------------------------------------- memory
 
+// zram is COMPRESSED RAM, not a disk. A zram pool at 100% is the mechanism
+// working as designed — it costs no writes to an SD card and no seeks on an
+// HDD — so it must never be judged by the same rule as a swapfile. What it
+// does cost is RAM, and that is what gets measured here.
+function readZramCost(devices) {
+  let orig = 0, ram = 0, known = false;
+  for (const dev of devices) {
+    const name = dev.replace(/^\/dev\//, '');
+    if (!/^zram\d+$/.test(name)) continue;
+    // mm_stat is the only source on current kernels; the individual files are
+    // the older layout and are absent on the Pi 5.
+    const mm = readFile(`/sys/block/${name}/mm_stat`);
+    const f = mm ? mm.trim().split(/\s+/).map(Number) : [];
+    if (f.length >= 3 && f.slice(0, 3).every(Number.isFinite)) {
+      orig += f[0]; ram += f[2]; known = true; continue;
+    }
+    const o = num(readFile(`/sys/block/${name}/orig_data_size`));
+    const u = num(readFile(`/sys/block/${name}/mem_used_total`));
+    if (o != null && u != null) { orig += o; ram += u; known = true; }
+  }
+  return known ? { zramOrigBytes: orig, zramRamBytes: ram } : { zramOrigBytes: null, zramRamBytes: null };
+}
+
+// backing is 'zram' | 'disk' | 'mixed' | 'none' | null. null means we could not
+// read /proc/swaps — NOT that it is harmless; the assessment keeps warning.
+function getSwapBacking() {
+  const raw = readFile('/proc/swaps');
+  if (!raw) return { backing: null, devices: [], zramOrigBytes: null, zramRamBytes: null };
+  const devices = raw.split('\n').slice(1)
+    .map((l) => l.trim().split(/\s+/)[0])
+    .filter(Boolean);
+  if (!devices.length) return { backing: 'none', devices: [], zramOrigBytes: null, zramRamBytes: null };
+  const zram = devices.filter((d) => /^\/dev\/zram\d+$/.test(d));
+  const backing = zram.length === devices.length ? 'zram' : zram.length ? 'mixed' : 'disk';
+  return { backing, devices, ...readZramCost(zram) };
+}
+
 function getMemory() {
   // /proc/meminfo's MemAvailable is the honest number — os.freemem() ignores
   // reclaimable page cache and makes a healthy Pi look nearly full.
@@ -125,7 +162,7 @@ function getMemory() {
   if (!info) {
     const total = os.totalmem();
     const free = os.freemem();
-    return { total, available: free, used: total - free, usedPct: Math.round(((total - free) / total) * 100), swapTotal: 0, swapUsed: 0, swapPct: 0 };
+    return { total, available: free, used: total - free, usedPct: Math.round(((total - free) / total) * 100), swapTotal: 0, swapUsed: 0, swapPct: 0, swapBacking: 'none', swapDevices: [], zramOrigBytes: null, zramRamBytes: null };
   }
   const kv = {};
   for (const line of info.split('\n')) {
@@ -137,12 +174,14 @@ function getMemory() {
   const used = total - available;
   const swapTotal = kv.SwapTotal || 0;
   const swapUsed = swapTotal - (kv.SwapFree || 0);
+  const { backing, devices, zramOrigBytes, zramRamBytes } = getSwapBacking();
   return {
     total, available, used,
     usedPct: total ? Math.round((used / total) * 100) : 0,
     cached: kv.Cached || 0,
     swapTotal, swapUsed,
-    swapPct: swapTotal ? Math.round((swapUsed / swapTotal) * 100) : 0
+    swapPct: swapTotal ? Math.round((swapUsed / swapTotal) * 100) : 0,
+    swapBacking: backing, swapDevices: devices, zramOrigBytes, zramRamBytes
   };
 }
 
@@ -499,7 +538,23 @@ function assess(s) {
 
   if (s.memory?.usedPct >= 90) add('critical', `Memory ${s.memory.usedPct}%`, 'Under 10% available');
   else if (s.memory?.usedPct >= 80) add('warn', `Memory ${s.memory.usedPct}%`, 'Getting tight');
-  if (s.memory?.swapPct >= 25) add('warn', `Swap ${s.memory.swapPct}% used`, 'Swapping hurts on an SD card / HDD');
+  if (s.memory?.swapPct >= 25) {
+    const m = s.memory;
+    if (m.swapBacking === 'zram') {
+      // The pool's RAM cost is already inside MemAvailable, so the two memory
+      // rules above catch real pressure. This fires only when zram itself is
+      // the thing eating the machine — a full pool on its own is not news.
+      if (m.zramRamBytes != null && m.total && m.zramRamBytes / m.total >= 0.2) {
+        add('warn', `zram using ${fmtBytes(m.zramRamBytes)} of RAM`, `${fmtBytes(m.swapUsed)} swapped out, compressed into ${fmtBytes(m.zramRamBytes)}`);
+      }
+    } else if (m.swapBacking === 'mixed') {
+      add('warn', `Swap ${m.swapPct}% used`, `Partly on disk (${m.swapDevices.join(', ')}) — swapping hurts on an SD card / HDD`);
+    } else if (m.swapBacking === null) {
+      add('warn', `Swap ${m.swapPct}% used`, 'Could not read /proc/swaps — if this is a swapfile, swapping hurts on an SD card / HDD');
+    } else {
+      add('warn', `Swap ${m.swapPct}% used`, 'Swapping hurts on an SD card / HDD');
+    }
+  }
 
   for (const d of s.disks || []) {
     if (d.usedPct >= 90) add('critical', `${d.mount} ${d.usedPct}% full`, `${fmtBytes(d.avail)} left`);
@@ -655,4 +710,5 @@ async function collect({ skipHistory = false } = {}) {
   };
 }
 
-module.exports = { collect, fmtBytes, fmtDuration };
+// assess is exported so the ranking can be pinned without a Pi under it.
+module.exports = { collect, assess, fmtBytes, fmtDuration };

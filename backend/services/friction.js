@@ -138,6 +138,11 @@ function assess(input = {}, now = new Date()) {
       ..._identify('deferred', entry.key, entry.reasons.length),
       kind: 'deferred',
       text,
+      // ⚠ The thing the insight is ABOUT, separate from the sentence about it.
+      // Without it the card can only be read: it names a piece of work and
+      // gives no way to reach it. Null where the insight is not about one
+      // nameable task, and null renders as no button rather than a guess.
+      subject: entry.title || null,
       // What makes it true, said out loud. Every insight carries this and the
       // surface renders it — a claim about Nick's week that cannot show its
       // working is exactly what this file refuses to produce.
@@ -188,6 +193,7 @@ function assess(input = {}, now = new Date()) {
     insights.push({
       ..._identify('shrunk', entry.title, entry.count),
       kind: 'shrunk',
+      subject: entry.title || null,
       text: `You have made "${entry.title}" smaller ${_times(entry.count)}. It may need a different shape rather than another go.`,
       because: `${entry.count} recorded shrinks on this task`,
       evidence: entry.evidence.slice(0, 4),
@@ -203,6 +209,7 @@ function assess(input = {}, now = new Date()) {
     insights.push({
       ..._identify('needs-smaller', session.text, session.startedAt || 'open'),
       kind: 'needs-smaller',
+      subject: session.text || null,
       text: `"${session.text}" is parked because it is too big as it stands. Naming the smallest next bit is the way back in.`,
       because: 'the open session is in the needs-smaller state',
       evidence: [{ source: 'focus-session', ref: session.text, observedAt: session.startedAt || null, detail: 'session state: needs-smaller' }],
@@ -220,6 +227,7 @@ function assess(input = {}, now = new Date()) {
     insights.push({
       ..._identify('stepped-away', session.text, Number(session.steppedAway)),
       kind: 'stepped-away',
+      subject: session.text || null,
       text: `You were pulled away from "${session.text}" ${_times(Number(session.steppedAway))} since starting it.`,
       because: `${session.steppedAway} step-aways you recorded on this session`,
       evidence: [{ source: 'focus-session', ref: session.text, observedAt: session.startedAt || null, detail: `${session.steppedAway} step-aways` }],

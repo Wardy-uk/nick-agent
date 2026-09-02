@@ -118,8 +118,28 @@ if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-  -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$RunnerPath`""
+# ⚠ Launched through `conhost --headless`, NOT `powershell.exe -WindowStyle Hidden`.
+#
+# -WindowStyle is applied by PowerShell AFTER the console host has already been
+# created and shown, so whether it hides anything depends on the host. Windows
+# Terminal — the default on Windows 11 — does not honour it at all, and the
+# agent ran for a day in a visible terminal window on this machine while the
+# task was configured "Hidden". A flag whose effect depends on a setting nobody
+# thinks to check is not a way to hide a window.
+#
+# `conhost --headless` allocates no visible console in the first place, and it
+# needs no scripting engine (the wscript.exe/.vbs shim is the other common fix
+# and VBScript is a deprecated Feature on Demand in Windows 11 — a launcher that
+# stops existing in a future release is not a launcher).
+#
+# ⚠ conhost stays alive for exactly as long as the child, which is what keeps
+# `MultipleInstances IgnoreNew` below working: the task reads as Running while
+# the agent runs, so the 15-minute watchdog trigger is discarded instead of
+# starting a second agent posting duplicate samples. Verified, not assumed.
+$conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
+if (-not (Test-Path $conhost)) { throw "conhost.exe not found at $conhost" }
+$action = New-ScheduledTaskAction -Execute $conhost `
+  -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$RunnerPath`""
 
 # TWO triggers, and the second is what makes "always running" true.
 #

@@ -57,13 +57,30 @@ test('rowKey prefers the task id, and falls back rather than inventing one', () 
 });
 
 test('the date picker does not write a patch straight from its onChange', () => {
-  // The specific shape that caused it. A draft plus a completeness check is
-  // fine; `onPatch({ due_date: e.target.value ... })` is not.
+  // The specific shape that caused it.
   assert.ok(
     !/onPatch\(\{\s*due_date:\s*e\.target\.value/.test(SOURCE),
     'the date input is patching on every transitional value again — a null write per keystroke',
   );
-  assert.match(SOURCE, /\\d\{4\}-\\d\{2\}-\\d\{2\}/, 'expected a completeness check before the date is committed');
+});
+
+test('nothing on the card writes until Save — the ONE call site', () => {
+  // ⚠ This replaces the old `\d{4}-\d{2}-\d{2}` completeness check, which is
+  // obsolete rather than merely passing: the half-typed-date write it guarded
+  // against is now impossible BY CONSTRUCTION, because no control writes on
+  // change at all. Every button edits a local draft and one Save sends one
+  // PATCH, which is also what stopped the list re-sorting the card out from
+  // under the cursor mid-triage.
+  //
+  // Pinned as a COUNT, because the failure mode being prevented is a future
+  // control quietly going back to writing on click — which would look fine on
+  // that control and reintroduce the moving-card bug for the whole card.
+  const calls = SOURCE.match(/onPatch\(/g) || [];
+  assert.strictEqual(
+    calls.length, 2,
+    'expected exactly two: the save() call and the prop wired in TodoItem. A third means something is writing on click again',
+  );
+  assert.ok(SOURCE.includes('await onPatch(changed)'), 'the single write should send the whole accumulated draft');
 });
 
 test('clearing a date stays an EXPLICIT act, not an inference from an empty box', () => {
