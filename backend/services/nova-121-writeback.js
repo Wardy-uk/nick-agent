@@ -149,6 +149,41 @@ function existingIds(text) {
 }
 
 /**
+ * The commitments already ON this card, keyed the way the TASK STORE keys them.
+ *
+ * ⚠ The card deduped by NOVA id and the task store dedupes by normalised text,
+ * and that gap is visible on a real card: Maria Pappa carries *"Work with the
+ * rest of customer care to identify what the twelve customer-facing knowledge
+ * base articles should be"* TWICE, as `nova:17` and `nova:7`, byte-identical
+ * text and the same due date. Two NOVA sessions on the same day each produced
+ * the commitment, they are different rows to NOVA, and by id they are two
+ * things — so the card wrote both while Nick's task list, keyed on text, folded
+ * them into one. One conversation, two lines to tick.
+ *
+ * Keyed through `task-store.dedupeKey` rather than a second normaliser, so the
+ * card and the task list cannot drift about what counts as the same commitment.
+ * Required lazily: `task-store` is a heavy module and this file is loaded by the
+ * nightly job, the same reason `writeBack` requires it at the call site.
+ */
+function existingCommitmentKeys(text) {
+  const { dedupeKey } = require('./task-store');
+  const keys = new Set();
+  for (const line of String(text).split(/\r?\n/)) {
+    const m = line.match(/^\s*[-*+]\s*\[[ xX]\]\s+(.*)$/);
+    if (!m) continue;
+    // Strip the markers `renderAction` adds, so what is keyed is the commitment
+    // itself and not its owner link, its date or its id comment.
+    const body = m[1]
+      .replace(/<!--\s*nova:\d+\s*-->/g, ' ')
+      .replace(/👤\s*\[\[[^\]]*\]\]/g, ' ')
+      .replace(/📅\s*\d{4}-\d{2}-\d{2}/g, ' ');
+    const key = dedupeKey(body);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+/**
  * Splice the actions block into a People note.
  *
  * Pure, so the marker handling is testable without a vault — the same split as the
@@ -261,7 +296,24 @@ async function writeBack({ apply = false, since = null } = {}) {
     }
 
     const already = existingIds(source);
-    const fresh = (session.actions || []).filter((a) => !already.has(Number(a.id)));
+    const seenText = existingCommitmentKeys(source);
+    const { dedupeKey } = require('./task-store');
+    let duplicateText = 0;
+    const fresh = (session.actions || []).filter((a) => {
+      if (already.has(Number(a.id))) return false;
+      // Same words, different NOVA id — a second session producing the same
+      // commitment. Skipped, and COUNTED rather than dropped in silence: a card
+      // that quietly declines to write something NOVA sent is indistinguishable
+      // from one that lost it.
+      const key = dedupeKey(a.description);
+      if (key && seenText.has(key)) { duplicateText += 1; return false; }
+      // Two wordings inside ONE session fold too, or the same run writes both.
+      if (key) seenText.add(key);
+      return true;
+    });
+    if (duplicateText) {
+      console.log(`[121-writeback] ${name}: skipped ${duplicateText} action(s) already on the card under a different NOVA id`);
+    }
 
     // Split by who took it on. Nick's own commitments from a 1-2-1 are HIS tasks and
     // belong in the task store with everything else he owes — not as a checkbox on
@@ -280,6 +332,7 @@ async function writeBack({ apply = false, since = null } = {}) {
       lastHeld: held,
       newActions: theirs.length,
       myActions: mine.length,
+      duplicateText,
       alreadyPresent: (session.actions || []).length - fresh.length,
     };
 
@@ -370,6 +423,7 @@ module.exports = {
   spliceActions,
   renderAction,
   existingIds,
+  existingCommitmentKeys,
   toIsoDate,
   sessionDate,
   STATE_KEY,
