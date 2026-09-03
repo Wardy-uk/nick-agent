@@ -204,6 +204,38 @@ function snapshot(now = new Date()) {
       : r;
   });
 
+  // ── Apple Reminders / Calendar push ───────────────────────────────────────
+  //
+  // A PUSH source with no server-side schedule: nothing here runs on a timer,
+  // so if the Shortcut on the phone stops firing there is no failed job, no
+  // error and no empty result anywhere — a phone that has stopped pushing looks
+  // exactly like a man with no reminders. Measured 3 Sep 2026: it last pushed on
+  // 29 August, 111 hours earlier, and one task has ever been created from it.
+  // Nothing in NEURO said so, which is precisely the blindness this page exists
+  // for.
+  //
+  // ⚠ `stale` is the ingest's OWN verdict, not a second threshold computed here.
+  // `apple-ingest.status()` already names it, and two places deciding what
+  // "stale" means for one source is how a panel comes to disagree with the
+  // endpoint it renders.
+  guard('apple', 'Apple Reminders', 'reminders and calendar pushed from your phone', () => {
+    const st = require('./apple-ingest').status(now);
+    if (!st.known) return { state: 'error', why: st.why || 'the ingest could not be read' };
+    if (!st.lastPushAt) {
+      // Configured or not, we cannot tell from here — the Shortcut lives on the
+      // phone. "It has never pushed" is the honest statement, and it is not the
+      // same as "it is broken".
+      return { state: 'never', why: 'the phone has never pushed', detail: 'the Shortcut may not be installed' };
+    }
+    const ageMinutes = st.ageHours == null ? null : Math.round(st.ageHours * 60);
+    return {
+      state: st.stale ? 'stale' : 'live',
+      ageMinutes,
+      why: st.stale ? 'the Shortcut on your phone has stopped pushing' : undefined,
+      detail: `${st.events} event(s) cached`,
+    };
+  });
+
   // ── Calendar ──────────────────────────────────────────────────────────────
   guard('calendar', 'Calendar', 'meetings, and whether now is a good moment', () => {
     // ⚠ There is no `calendar_last_sync` state key — the freshness lives on the
