@@ -65,7 +65,21 @@ function writeTodayDailyNote(content) {
 }
 
 function appendToDailyNote(content) {
-  const dir = path.join(getVaultPath(), 'Daily');
+  // ⚠ An unconfigured vault must REFUSE, not fall back to the working
+  // directory. `path.join('', 'Daily')` is RELATIVE, so this used to create a
+  // `Daily/` folder wherever the process happened to be running and report
+  // success — which on a dev box is inside the repo. That is the capture
+  // drop-box bug (`path.join('', 'Tasks', 'Capture.md')`) in a second writer,
+  // and it was found the same way: a test appended a daily note and left one
+  // in the checkout. Null rather than a throw, because a daily-note append is
+  // bookkeeping on the back of real work — losing the note must not fail the
+  // thing that caused it.
+  const vault = getVaultPath();
+  if (!vault) {
+    console.warn('[Obsidian] OBSIDIAN_VAULT_PATH is not set — daily note not written');
+    return null;
+  }
+  const dir = path.join(vault, 'Daily');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const notePath = path.join(dir, `${todayDateString()}.md`);
   const existing = fs.existsSync(notePath) ? fs.readFileSync(notePath, 'utf-8') : '';

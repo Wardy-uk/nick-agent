@@ -22,7 +22,13 @@ const fs = require('fs');
 const http = require('http');
 const express = require('express');
 
-process.env.NEURO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'neuro-intake-')), 'a.db');
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'neuro-intake-'));
+process.env.NEURO_DB_PATH = path.join(scratch, 'a.db');
+// Approving an action logs it to the daily note. Without a vault path that
+// write lands wherever the process is running — which was in this repo, until
+// this line and the guard in `obsidian.appendToDailyNote` that goes with it.
+process.env.OBSIDIAN_VAULT_PATH = path.join(scratch, 'vault');
+fs.mkdirSync(process.env.OBSIDIAN_VAULT_PATH, { recursive: true });
 
 const db = require('../db/database');
 const router = require('./actions');
