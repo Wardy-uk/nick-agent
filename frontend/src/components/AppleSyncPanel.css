@@ -1,0 +1,121 @@
+.apple-sync {
+  padding: 20px;
+  max-width: 1120px;
+  margin: 0 auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.as-head h2 { margin: 0 0 4px; font-size: 18px; }
+.as-head p { margin: 0 0 18px; }
+
+.as-muted { color: var(--text-muted); }
+.as-fine { font-size: 12px; }
+.as-bad { color: var(--danger); }
+
+/* ------------------------------------------------------------------ cards */
+
+.as-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.as-card h3 { margin: 0 0 8px; font-size: 14px; }
+.as-card > p { margin: 0 0 12px; }
+
+/* Three states that must never look alike: a deliberate gap (note), something
+   that went wrong (warn), and a clean result. */
+.as-note {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  margin: 12px 0;
+  background: var(--bg-secondary);
+}
+.as-warn {
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  margin: 12px 0;
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+.as-result {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--success);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  margin: 12px 0;
+  background: var(--bg-secondary);
+}
+.as-error {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  margin: 10px 0;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.as-note ul, .as-warn ul, .as-result ul, .as-error ul { margin: 6px 0 0; padding-left: 18px; }
+
+.as-refusal { margin-top: 10px; }
+
+/* ------------------------------------------------------------------- rows */
+
+.as-row { display: flex; gap: 10px; padding: 3px 0; align-items: baseline; }
+.as-row-label {
+  flex: 0 0 130px;
+  color: var(--text-muted);
+}
+.as-row-value { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+
+.as-list { margin: 10px 0 0; padding-left: 18px; }
+.as-list li { padding: 2px 0; }
+
+/* ---------------------------------------------------------------- connect */
+
+.as-connect-fields {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 10px 0;
+}
+.as-connect-fields input {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 7px 9px;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.as-connect code {
+  background: var(--bg-secondary);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* ---------------------------------------------------------------- actions */
+
+.as-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+
+.apple-sync button {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.apple-sync button:hover:not(:disabled) { border-color: var(--text-muted); }
+.apple-sync button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* The one button that writes. Marked, but still disabled until a dry run has
+   been done — the two-step is the safety, not the colour. */
+.apple-sync button.as-primary { border-color: var(--success); }

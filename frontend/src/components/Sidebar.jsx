@@ -78,6 +78,11 @@ const SECONDARY_ITEMS = [
   // entry rather than hiding inside Settings — the mapping table is the whole
   // safety model and needs to be somewhere Nick can actually find it.
   { id: 'notion-sync', label: 'Notion Sync', icon: '⇄' },
+  // Personal calendar + Reminders, pulled from iCloud by NEURO itself. Sits by
+  // Notion Sync because both are "somebody else's system, kept in step with
+  // ours" — and it needs a door of its own because the credential lives here
+  // and a failed read has to be readable, not just logged.
+  { id: 'apple-sync', label: 'Apple Sync', icon: '⌘' },
   // `/api/catalogues` shipped with no UI at all — the routable-but-unreachable
   // hole this list already documents for `todos` and `decisions`. Sits by Notion
   // Sync because both are "a thing of Nick's kept somewhere else as well".
