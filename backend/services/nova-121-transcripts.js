@@ -44,11 +44,34 @@ const EXCLUDE_DIRS = new Set([
  */
 const MIN_TRANSCRIPT_CHARS = 400;
 
-/** How far back a sweep looks. Older recordings are history, not something to file now. */
-const DEFAULT_DAYS = 30;
+/**
+ * How far back a sweep looks.
+ *
+ * Was 30 days, which quietly hid the exact 1-2-1s this feature exists to surface. A person
+ * whose last recorded 1-2-1 was in June is precisely the one NOVA flags as stalled — and a
+ * 30-day window meant the recording that would clear the flag was permanently out of
+ * reach, so the flag could never be right. Anything already resolved is skipped, so a
+ * wider window costs one pass of catch-up and nothing after that.
+ */
+const DEFAULT_DAYS = 180;
 
 /** Anything that reads as a 1-2-1, however Plaud happened to title it. */
 const ONE_TO_ONE_TITLE = /1-2-1|1:1|(^|[^\d-])1-1([^\d-]|$)|one[- ]to[- ]one|one[- ]on[- ]one/i;
+
+/**
+ * `meeting-type: 1-1` in frontmatter — plaud-sync already classified the recording when it
+ * filed the note, and this sweep was throwing that answer away.
+ *
+ * The title alone is not enough and never was. Plaud titles a note by what was DISCUSSED,
+ * so Stephen's monthly 1-2-1 arrived as "Meeting: Team KPIs, Ticket Management, AI Tooling
+ * and Escalation Workflow" and Isabel's as "Performance Review: Isabel Busk KPIs" — both
+ * carrying `meeting-type: 1-1`, both skipped, both showing in NOVA as a person who has not
+ * had a 1-2-1 since the spring.
+ */
+const ONE_TO_ONE_MEETING_TYPE = /^(1-1|1:1|1-2-1|121|one[- ]to[- ]one|one[- ]on[- ]one)$/i;
+
+/** The deterministic router's verdict, written into `plaud_route_reason` on filing. */
+const ROUTED_AS_ONE_TO_ONE = /1-2-1\/performance note/i;
 
 /**
  * Frontmatter, line endings normalised FIRST.
@@ -127,17 +150,41 @@ function summaryExcerptFrom(body, max = 1200) {
 }
 
 /**
- * The transcript note this summary points at, via `transcript_path` frontmatter.
+ * Every transcript note in the vault, indexed by the `plaud_id` it shares with its summary.
  *
- * The transcripts live in `Plaud/Transcripts/`, NOT under `Meetings/` — which is why the
- * first cut, walking only `Meetings/`, sent every candidate over saying "no transcript
- * text". The summary note names its own twin, so follow that rather than guessing a path.
+ * Needed because `transcript_path` goes STALE. Sebastian's June 1-2-1 is the case that
+ * exposed it: the transcript note had been moved into `Meetings/1-2-1/Sebastian Broome/`,
+ * the summary's `transcript_path` still pointed at `Plaud/Transcripts/…`, and the read
+ * failed silently — so a 1-2-1 with a 40-minute transcript sitting in the vault was offered
+ * to NOVA as "no transcript", which attaches a date and then extracts nothing from it. A
+ * note names its recording in frontmatter and THAT never moves, so match on the id and
+ * treat the path as a hint.
+ *
+ * Built once per sweep, and only over the folders transcripts actually live in — walking
+ * the whole vault takes minutes.
  */
-function transcriptFor(fm) {
-  const rel = fm && fm.transcript_path;
-  if (!rel) return null;
+const TRANSCRIPT_DIRS = ['Plaud/Transcripts', 'Meetings'];
+let transcriptIndex = null;
+
+function buildTranscriptIndex() {
+  const byId = new Map();
+  for (const dir of TRANSCRIPT_DIRS) {
+    for (const file of walk(path.join(VAULT_PATH(), dir), 0, [])) {
+      let fm;
+      try { ({ fm } = readNote(file)); } catch { continue; }
+      if (!fm || !fm.plaud_id) continue;
+      const isTranscript = String(fm.type || '').toLowerCase() === 'transcript'
+        || String(fm.note_type || '').toLowerCase() === 'transcript';
+      if (!isTranscript) continue;
+      if (!byId.has(fm.plaud_id)) byId.set(fm.plaud_id, file);
+    }
+  }
+  return byId;
+}
+
+/** The words of one transcript note, or null if it is empty, a stub or unreadable. */
+function readTranscriptBody(abs) {
   try {
-    const abs = path.join(VAULT_PATH(), String(rel).replace(/\.md$/, '') + '.md');
     const raw = fs.readFileSync(abs, 'utf-8').replace(/\r\n/g, '\n');
     // Frontmatter off — the extractor wants the words, not the metadata.
     const body = raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
@@ -158,6 +205,49 @@ function transcriptFor(fm) {
   } catch {
     return null;
   }
+}
+
+/**
+ * The transcript for a summary note.
+ *
+ * `transcript_path` first — the summary names its own twin, and transcripts live in
+ * `Plaud/Transcripts/`, not under `Meetings/`, which is why the first cut of this sweep
+ * sent every candidate over saying "no transcript text". Then the recording id, for when
+ * that path no longer resolves.
+ */
+function transcriptFor(fm) {
+  const rel = fm && fm.transcript_path;
+  if (rel) {
+    const viaPath = readTranscriptBody(
+      path.join(VAULT_PATH(), String(rel).replace(/\.md$/, '') + '.md'));
+    if (viaPath) return viaPath;
+  }
+  if (!fm || !fm.plaud_id) return null;
+  if (!transcriptIndex) transcriptIndex = buildTranscriptIndex();
+  const abs = transcriptIndex.get(fm.plaud_id);
+  return abs ? readTranscriptBody(abs) : null;
+}
+
+/**
+ * Is this note a 1-2-1, and on what grounds?
+ *
+ * `explicit` means somebody SAID so — the note is filed in the 1-2-1 tree, or the title
+ * names the meeting type. Those are offered to NOVA even when nobody can be attributed,
+ * because Nick can pick the person off a dropdown.
+ *
+ * `soft` means only plaud-sync's classifier said so, via `meeting-type` or the route
+ * reason it stamped on filing. That leg is an LLM for most notes and it applies `1-1` to
+ * plenty of things that are not 1-2-1s — a four-person "Weekly Meeting: Customer Service
+ * Improvement Strategy" carries it. Real enough to look at, not real enough to offer
+ * unattributed.
+ */
+function oneToOneSignal(fm, rel, title) {
+  if (/^Meetings\/1-2-1\//.test(rel)) return 'explicit';
+  if (ONE_TO_ONE_TITLE.test(title)) return 'explicit';
+  const meetingType = String((fm && (fm['meeting-type'] || fm.meeting_type)) || '').trim();
+  if (ONE_TO_ONE_MEETING_TYPE.test(meetingType)) return 'soft';
+  if (ROUTED_AS_ONE_TO_ONE.test(String((fm && fm.plaud_route_reason) || ''))) return 'soft';
+  return null;
 }
 
 function walk(dir, depth, out) {
@@ -214,6 +304,19 @@ function attribute(fm, filePath, reports, body = '') {
     return { person: null, attribution: `${linked.length} direct reports on the note — ambiguous` };
   }
 
+  // 3b. plaud-sync's deterministic router named the person as it filed the note
+  //     ("...a 1-2-1/performance note for Isabel Busk."). It got that by matching the
+  //     vault's own People folder against the title and body, which is a firmer claim than
+  //     step 4's bare first name — and it is the only signal on the HR-flavoured notes
+  //     ("Performance Review: ...") where Plaud logged no participants at all.
+  const routed = String(fm && fm.plaud_route_reason || '').match(/1-2-1\/performance note for ([^.]+)\./i);
+  if (routed) {
+    const named = routed[1].trim().toLowerCase();
+    if (byName.has(named)) {
+      return { person: byName.get(named), attribution: 'named by the vault router when the note was filed' };
+    }
+  }
+
   // 4. A name in the title. Weakest, and offered as such.
   const title = String(fm?.title || path.basename(filePath, '.md'));
   const hit = reports.find(p => new RegExp(`\\b${p.name.split(' ')[0]}\\b`, 'i').test(title));
@@ -235,6 +338,8 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
     return { ok: false, error: 'NOVA bridge is not configured (NOVA_BRIDGE_URL / NOVA_BRIDGE_SECRET)' };
   }
 
+  transcriptIndex = null;
+
   const meetingsDir = path.join(vault, 'Meetings');
   if (!fs.existsSync(meetingsDir)) {
     // A missing folder is a read failure, not "no meetings happened".
@@ -255,6 +360,9 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
 
   const offered = [];
   const skipped = [];
+  // Notes the soft frontmatter signal picked up but nobody could be attributed to. Not
+  // failures — reported so a mis-detection is visible rather than silently dropped.
+  const ignored = [];
 
   for (const file of walk(meetingsDir, 0, [])) {
     let fm, body;
@@ -271,10 +379,11 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
 
     const rel = path.relative(vault, file).replace(/\\/g, '/');
     const title = String(fm.title || path.basename(file, '.md'));
-    const inOneToOneFolder = /^Meetings\/1-2-1\//.test(rel);
-    // Either the note lives in the 1-2-1 tree, or it reads as one by title. Everything
-    // else in Meetings/ is a team meeting and not this feature's business.
-    if (!inOneToOneFolder && !ONE_TO_ONE_TITLE.test(title)) continue;
+    // The note lives in the 1-2-1 tree, reads as one by title, or was filed as one by
+    // plaud-sync. Everything else in Meetings/ is a team meeting and not this feature's
+    // business.
+    const signal = oneToOneSignal(fm, rel, title);
+    if (!signal) continue;
 
     // Transcript notes are the summary's twin, sharing a plaud_id. Skip them: the
     // summary is the one with the participants and the notes, and it points AT the
@@ -285,6 +394,14 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
 
     const { person, attribution } = attribute(fm, file, reports, body);
     const participants = participantsFrom(body);
+
+    // A soft signal is only worth Nick's attention once we can say WHOSE 1-2-1 it was.
+    // Offering the unattributable ones would fill the approval queue with team meetings
+    // he has to reject one at a time, and a queue like that stops being read.
+    if (signal === 'soft' && !person) {
+      ignored.push(`${date} ${title} — filed as a 1-2-1 but ${attribution}`);
+      continue;
+    }
 
     // The transcript IS the payload — the extractor reads words, not a summary — and it
     // lives in its own note that `transcript_path` points at. The first cut only looked
@@ -315,10 +432,10 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
     }
   }
 
-  return { ok: true, dryRun: !apply, offered, skipped, reports: reports.length };
+  return { ok: true, dryRun: !apply, offered, skipped, ignored, reports: reports.length };
 }
 
 module.exports = {
   offerTranscripts,
-  _internals: { attribute, readNote, peopleLinks, participantsFrom, summaryExcerptFrom },
+  _internals: { attribute, readNote, peopleLinks, participantsFrom, summaryExcerptFrom, oneToOneSignal },
 };

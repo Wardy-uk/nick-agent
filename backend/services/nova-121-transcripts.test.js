@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const { _internals } = require('./nova-121-transcripts');
-const { attribute, peopleLinks } = _internals;
+const { attribute, peopleLinks, oneToOneSignal } = _internals;
 
 /**
  * Attribution is the dangerous part.
@@ -159,4 +159,82 @@ test('the excerpt is the meeting notes, not the Recording boilerplate', () => {
   assert.match(out, /389 tickets/);
   assert.doesNotMatch(out, /Plaud ID/);
   assert.doesNotMatch(out, /Meeting Information/, 'the quoted preamble is identical on every note');
+});
+
+/**
+ * Which notes count as a 1-2-1 at all.
+ *
+ * The title was the only test for months and it silently lost most of them: Plaud titles
+ * a note by what was DISCUSSED, so Stephen's monthly 1-2-1 arrived as "Meeting: Team KPIs,
+ * Ticket Management, AI Tooling and Escalation Workflow" and Isabel's as "Performance
+ * Review: Isabel Busk KPIs". Both carried `meeting-type: 1-1` in frontmatter, both were
+ * skipped, and both showed in NOVA as somebody with no 1-2-1 since the spring — which is
+ * the failure this feature exists to prevent.
+ */
+
+test('a topical title with meeting-type 1-1 is a 1-2-1 — the case that was being lost', () => {
+  // Stephen's, verbatim from the vault.
+  assert.equal(
+    oneToOneSignal({ 'meeting-type': '1-1' }, 'Meetings/2026/08/x.md',
+      '08-18 Meeting: Team KPIs, Ticket Management, AI Tooling, and Escalation Workflow'),
+    'soft');
+});
+
+test("the vault router's own verdict counts, even with no meeting-type", () => {
+  assert.equal(
+    oneToOneSignal(
+      { plaud_route_reason: 'Deterministic PLAUD routing: identified a 1-2-1/performance note for Isabel Busk.' },
+      'Meetings/2026/08/x.md', 'Performance Review: Isabel Busk KPIs, Workflows, and Operational Planning'),
+    'soft');
+});
+
+test('a folder or a title is an explicit claim, and outranks frontmatter', () => {
+  assert.equal(oneToOneSignal({}, 'Meetings/1-2-1/Zoe Rees/x.md', 'Catch-up'), 'explicit');
+  assert.equal(oneToOneSignal({ 'meeting-type': 'Project Meeting' }, 'Meetings/2026/08/x.md',
+    '08-20 One-to-One Meeting: Maria KPIs'), 'explicit');
+});
+
+test('an ordinary team meeting is still not a 1-2-1', () => {
+  assert.equal(
+    oneToOneSignal({ 'meeting-type': 'Project Meeting' }, 'Meetings/2026/08/x.md',
+      '08-18 Weekly Meeting: Ticket Status Review and Integration Issues'),
+    null);
+});
+
+test('meeting-type must be the whole value, not a substring of prose', () => {
+  // Guards the regex being anchored. "Weekly 1-1s roundup" is not a meeting type.
+  assert.equal(oneToOneSignal({ 'meeting-type': 'Team meeting about 1-1s' },
+    'Meetings/2026/08/x.md', 'Roundup'), null);
+});
+
+/**
+ * The router names the person when it files the note, and that was being thrown away.
+ * It is the only attribution available on the HR-flavoured notes — "Performance Review:
+ * …" — where Plaud logged no participants line at all.
+ */
+test('the router-named person beats a bare first name in the title', () => {
+  const r = attribute(
+    { title: 'Performance Review: Nathan and the team',
+      plaud_route_reason: 'Deterministic PLAUD routing: identified a 1-2-1/performance note for Zoe Rees.' },
+    at('Meetings/2026/08/x.md'), REPORTS, '');
+  assert.equal(r.person, 'Zoe Rees');
+  assert.match(r.attribution, /router/);
+});
+
+test('a router-named person who is not a direct report is not used', () => {
+  const r = attribute(
+    { title: 'Performance Review: catch-up',
+      plaud_route_reason: 'Deterministic PLAUD routing: identified a 1-2-1/performance note for Chris Middleton.' },
+    at('Meetings/2026/08/x.md'), REPORTS, '');
+  assert.equal(r.person, null);
+});
+
+test('who was actually in the room still outranks the router', () => {
+  const body = '> Participants: [Nick Ward] [Nathan Rutland]';
+  const r = attribute(
+    { title: 'Performance Review',
+      plaud_route_reason: 'Deterministic PLAUD routing: identified a 1-2-1/performance note for Zoe Rees.' },
+    at('Meetings/2026/08/x.md'), REPORTS, body);
+  assert.equal(r.person, 'Nathan Rutland');
+  assert.match(r.attribution, /heard speaking/);
 });

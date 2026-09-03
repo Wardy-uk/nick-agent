@@ -282,6 +282,10 @@ function start() {
         console.log(`[Scheduler] 1-2-1 transcripts: ${r.offered.length} offered to NOVA, ${r.skipped.length} failed`);
         for (const f of r.skipped) console.warn(`[Scheduler] transcript offer failed — ${f}`);
       }
+      // Notes plaud-sync filed as a 1-2-1 that nobody could be attributed to. Not
+      // failures, but the only place a mis-detection is visible — without this, a 1-2-1
+      // whose participants Plaud never identified vanishes with no trace anywhere.
+      for (const i of (r.ignored || [])) console.log(`[Scheduler] 1-2-1 not offered — ${i}`);
     } catch (e) {
       console.warn('[Scheduler] 1-2-1 transcript offer threw:', e.message);
     }
