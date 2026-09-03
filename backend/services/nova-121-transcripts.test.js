@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const { _internals } = require('./nova-121-transcripts');
-const { attribute, peopleLinks, oneToOneSignal, attributeFromEvents } = _internals;
+const { attribute, peopleLinks, oneToOneSignal, attributeFromEvents, conversationType } = _internals;
 
 /**
  * Attribution is the dangerous part.
@@ -346,4 +346,42 @@ test('back-to-back 1-2-1s the recording spans are not guessed between', () => {
   const r = attributeFromEvents(events, '2026-08-19T13:02:21', 2047000, DIARY);
   assert.equal(r.person, null, 'which of the two it is, is exactly the question');
   assert.match(r.attribution, /2 possible 1-2-1s/);
+});
+
+/**
+ * What kind of conversation it was.
+ *
+ * The consequential half: only `one_to_one` reaches agent_121_sessions and so only it
+ * moves the cadence clock. Call a welfare check a 1-2-1 and the person is marked as seen
+ * this month, and their real 1-2-1 never gets booked.
+ */
+
+test('a return-to-work interview outranks the performance words in it', () => {
+  assert.equal(
+    conversationType('07-02 Interview: Return-to-Work Discussion — Sick Leave Procedure and Performance'),
+    'return_to_work');
+});
+
+test('formal process beats general chat', () => {
+  assert.equal(conversationType('Formal Disciplinary Hearing on Overtime Approval'), 'performance');
+  assert.equal(conversationType('08-25 Performance Review: Isabel Busk KPIs'), 'performance');
+});
+
+test('welfare is welfare, however it is worded', () => {
+  for (const t of [
+    'Manager–Employee Welfare Check on Extreme Overtime',
+    'Consultation: Occupational Health Support for ADHD Traits',
+    '08-25 Weekly Meeting: Employee Well-being and Burnout',
+  ]) assert.equal(conversationType(t), 'welfare', t);
+});
+
+test('only a note that actually says 1-2-1 is filed as one', () => {
+  // `explicit` means the folder or title said so. A soft meeting-type: 1-1 on a note
+  // titled "Ticket Status Review" must NOT reset the person's cadence.
+  assert.equal(conversationType('08-20 One-to-One Meeting: Maria KPIs', '', 'explicit'), 'one_to_one');
+  assert.equal(conversationType('08-14 Meeting: Ticket Status Review', '', 'soft'), 'ad_hoc');
+});
+
+test('ad_hoc is a floor, not a failure', () => {
+  assert.equal(conversationType('08-19 Meeting: Role Confirmation, Leave, and WFH Arrangement', '', 'soft'), 'ad_hoc');
 });

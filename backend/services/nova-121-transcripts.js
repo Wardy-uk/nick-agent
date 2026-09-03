@@ -70,6 +70,41 @@ const ONE_TO_ONE_TITLE = /1-2-1|1:1|(^|[^\d-])1-1([^\d-]|$)|one[- ]to[- ]one|one
  */
 const ONE_TO_ONE_MEETING_TYPE = /^(1-1|1:1|1-2-1|121|one[- ]to[- ]one|one[- ]on[- ]one)$/i;
 
+/**
+ * What KIND of one-to-one conversation this was.
+ *
+ * A 1-2-1 is one kind, not the only kind that belongs on somebody's record. The sweep used
+ * to offer 1-2-1s and drop everything else, so the return-to-work interviews, the welfare
+ * check on overtime and the occupational-health consultation sat in the vault as
+ * transcripts nobody could reach — and those are precisely the conversations that need a
+ * written record most.
+ *
+ * Order matters: a return-to-work interview about somebody's performance is a
+ * return-to-work interview, and a formal process outranks a general chat. `ad_hoc` is the
+ * floor, never a failure — a conversation with one direct report that fits no category is
+ * still a conversation worth having on their card.
+ *
+ * This reads a TITLE. It is a guess, it is sent as one, and NOVA lets Nick correct it
+ * before anything is written.
+ */
+const CONVERSATION_TYPES = [
+  ['return_to_work', /return[- ]to[- ]work|\bRTW\b|back[- ]to[- ]work|sickness absence|fit note/i],
+  ['performance', /performance|probation|disciplinary|capability|improvement plan|\bPIP\b|appraisal|objectives|competency/i],
+  ['welfare', /welfare|wellbeing|well[- ]being|occupational health|burnout|stress|absence|duty of care|grievance|counsel|support (?:check|discussion)|mental health|accommodation|adjustment/i],
+];
+
+function conversationType(title, body = '', signal = null) {
+  const text = `${title}\n${String(body).slice(0, 2000)}`;
+  for (const [type, re] of CONVERSATION_TYPES) {
+    if (re.test(text)) return type;
+  }
+  // Only a note that actually SAYS 1-2-1 is filed as one. A `meeting-type: 1-1` on a note
+  // titled "Ticket Status Review" is the classifier being loose, and calling that a 1-2-1
+  // would reset the person's cadence clock and stop their real one being booked.
+  if (signal === 'explicit') return 'one_to_one';
+  return 'ad_hoc';
+}
+
 /** The deterministic router's verdict, written into `plaud_route_reason` on filing. */
 const ROUTED_AS_ONE_TO_ONE = /1-2-1\/performance note/i;
 
@@ -584,13 +619,14 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
       startedAt: fm.start_at || null,
       durationMinutes,
       summaryExcerpt: summaryExcerptFrom(body),
+      conversationType: conversationType(title, body, signal),
     };
 
     if (!apply) { offered.push({ ...candidate, transcript: transcript ? `${transcript.length} chars` : null }); continue; }
 
     try {
       await nova.push121TranscriptCandidate(candidate);
-      offered.push({ plaudId, person, date, title });
+      offered.push({ plaudId, person, date, title, conversationType: candidate.conversationType });
     } catch (e) {
       skipped.push(`${title}: ${e.message}`);
     }
@@ -603,6 +639,6 @@ module.exports = {
   offerTranscripts,
   _internals: {
     attribute, readNote, peopleLinks, participantsFrom, summaryExcerptFrom, oneToOneSignal,
-    attributeFromEvents, plaudInstantMs, londonDateStr,
+    attributeFromEvents, plaudInstantMs, londonDateStr, conversationType,
   },
 };
