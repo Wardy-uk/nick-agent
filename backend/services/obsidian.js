@@ -1738,9 +1738,23 @@ function generateWeeklyReview() {
   return { weekStr, path: reviewPath };
 }
 
-// Add a todo to Master Todo inbox via chat command
+// Add a todo to Master Todo inbox via chat command.
+//
+// ⚠ This passed `{ trigger: 'todo-from-chat' }` while `addTodoToMasterList` reads
+// `options.origin`, so the key never matched and every task the model created
+// through the `[ADD TODO: ...]` marker landed stamped `source: 'manual'` — AI
+// output attributed to Nick, indistinguishable in the data from something he
+// typed into the task list himself. `trigger` is kept because it is what the log
+// line and any future caller-side reader mean by it; `origin` is what the store
+// actually reads.
+//
+// ⚠ The parameter is NAMED `origin` and feeds the `source` COLUMN — the `origin`
+// column is a different thing (commitment vs continual improvement) and is left
+// null here deliberately. That is `inferOrigin`'s documented answer for every
+// route INTO the store: knowing this was not typed by a human is not the same as
+// knowing who wanted the work, and null is a first-class value for exactly that.
 function addTodoFromChat(text) {
-  addTodoToMasterList(text, { trigger: 'todo-from-chat' });
+  addTodoToMasterList(text, { origin: 'chat-marker', trigger: 'todo-from-chat' });
   console.log(`[Chat] Added todo: ${text.trim()}`);
   return true;
 }
