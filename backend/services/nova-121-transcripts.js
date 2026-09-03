@@ -545,6 +545,8 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
   // One Graph call per distinct day, and only for notes nothing else could attribute. A
   // steady-state sweep has no new recordings and so makes none at all.
   const calendarCache = new Map();
+  // Notes that reached the 1-2-1 test at all, so `unattributed` has a denominator.
+  let scanned = 0;
 
   for (const file of walk(meetingsDir, 0, [])) {
     let fm, body;
@@ -566,6 +568,7 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
     // business.
     const signal = oneToOneSignal(fm, rel, title);
     if (!signal) continue;
+    scanned++;
 
     // Transcript notes are the summary's twin, sharing a plaud_id. Skip them: the
     // summary is the one with the participants and the notes, and it points AT the
@@ -632,7 +635,27 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
     }
   }
 
-  return { ok: true, dryRun: !apply, offered, skipped, ignored, reports: reports.length };
+  // Tell NOVA the SIZE of what this sweep dropped, so VANTAGE can say "12 logged, 5
+  // unattributable" instead of "12 logged". Only on a real run — a dry run measures
+  // nothing and must not overwrite a real measurement with a rehearsal.
+  //
+  // Best-effort and non-fatal: a sweep that offered its transcripts has done its job even
+  // if the stats push fails, and throwing here would lose that work. But the failure is
+  // logged, because a silently absent measurement is what this whole field exists to
+  // prevent — NOVA reports `measured: false` rather than a comforting zero.
+  if (apply) {
+    try {
+      await nova.push121SweepStats({
+        unattributed: ignored.length,
+        offered: offered.length,
+        scanned: scanned,
+      });
+    } catch (e) {
+      console.warn(`[1-2-1] could not report sweep stats to NOVA: ${e.message}`);
+    }
+  }
+
+  return { ok: true, dryRun: !apply, offered, skipped, ignored, scanned, reports: reports.length };
 }
 
 module.exports = {

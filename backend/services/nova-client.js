@@ -181,6 +181,18 @@ async function push121TranscriptCandidate(candidate) {
   });
 }
 
+/**
+ * Report what the last sweep could not attribute.
+ *
+ * VANTAGE measures completeness off this feed and needs the SIZE of the drop, not just the
+ * fact of one: "12 logged" and "12 logged, 5 unattributable" are different claims and only
+ * the second is honest. Three counts about NEURO's own run — no identity, no per-person
+ * data — so it is safe on a secret-guarded bridge.
+ */
+async function push121SweepStats(stats) {
+  return call('/api/neuro-bridge/121/sweep-stats', { method: 'POST', body: stats });
+}
+
 /** Who has a transcript waiting on Nick's decision — drives the People-card badge. */
 async function get121PendingCandidates() {
   return call('/api/neuro-bridge/121/pending-candidates');
@@ -194,5 +206,6 @@ async function get121KnownRecordings() {
 module.exports = {
   isConfigured, listUrgencyReasons, listEscalations, getTicket, escalate, call,
   push121Booking, cancel121, push121Cadence, get121State, get121Completed,
+  push121SweepStats,
   push121TranscriptCandidate, get121KnownRecordings, get121PendingCandidates,
 };
