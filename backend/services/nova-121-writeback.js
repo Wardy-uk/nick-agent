@@ -56,6 +56,60 @@ function daysAgoStr(days) {
   return todayStr(d);
 }
 
+/** `YYYY-MM-DD`, and nothing else. */
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * NOVA's date, as an ISO date, or null.
+ *
+ * ⚠ NOVA answers with TWO different things and only one of them is a date.
+ * `scheduledDate` is `"2026-08-18"`; `completedAt` is a DISPLAY string —
+ * `"Tue Aug 18"` — with no year in it at all. That distinction is the whole of
+ * the 5-night outage this guards: the watermark took `max(completedAt)`, which
+ * compares as a string, so `"Tue Aug 18" > "2026-05-27"` (T beats 2) and the
+ * display string was stored as the next `since`. NOVA's `/121/completed`
+ * requires `YYYY-MM-DD` and 400s on anything else, and the failure happens
+ * BEFORE any session is processed, so it could never clear itself — five nights
+ * of stranded commitments and a wedged key that only a hand-edit would free.
+ *
+ * A display string is REFUSED rather than parsed. The year is genuinely not in
+ * it, and guessing one is how a watermark lands in the wrong year and silently
+ * skips a fortnight of sessions — or writes a wrong `last-1-2-1` onto a real
+ * person's card. Refusing costs nothing, because `scheduledDate` beside it is
+ * already ISO and re-processing a session is a no-op by construction (the
+ * `<!-- nova:id -->` dedupe).
+ *
+ * Pure — no clock, no I/O — so the rule pins without NOVA or a database.
+ */
+function toIsoDate(value) {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  // A full ISO timestamp is a date with time attached; take the date part.
+  const stamp = raw.match(/^(\d{4}-\d{2}-\d{2})[T ]/);
+  const candidate = stamp ? stamp[1] : raw;
+  const m = candidate.match(ISO_DATE_RE);
+  if (!m) return null;
+  const [, y, mo, d] = m;
+  const dt = new Date(Number(y), Number(mo) - 1, Number(d));
+  // Rejects 2026-02-31 rather than rolling it into March.
+  if (dt.getFullYear() !== Number(y) || dt.getMonth() !== Number(mo) - 1 || dt.getDate() !== Number(d)) return null;
+  return candidate;
+}
+
+/**
+ * The date a session was held, as a real date or nothing.
+ *
+ * `completedAt` first because finishing the click-through is the evidence the
+ * conversation happened, but it is the display string, so in practice
+ * `scheduledDate` is what answers. Null when neither is a date: `last-1-2-1` is
+ * read back by `one-to-one-detect` and compared, and a card carrying
+ * `last-1-2-1: Tue Aug 18` is worse than one carrying nothing.
+ */
+function sessionDate(session = {}) {
+  return toIsoDate(session.completedAt) || toIsoDate(session.scheduledDate);
+}
+
 /**
  * Render one action as an Obsidian task line.
  *
@@ -166,7 +220,18 @@ async function writeBack({ apply = false, since = null } = {}) {
     return { ok: false, error: 'NOVA bridge is not configured (NOVA_BRIDGE_URL / NOVA_BRIDGE_SECRET)' };
   }
 
-  const from = since || db.getState(STATE_KEY) || daysAgoStr(COLD_START_DAYS);
+  // ⚠ A stored watermark that is not a date is IGNORED, not sent. This is the
+  // self-heal: the wedged key held the literal string "Wed May 27", NOVA 400s on
+  // it before reading a single session, and nothing in the run could ever move
+  // it on. Falling back to the cold start reprocesses at worst — which writes
+  // nothing new, because every action carries its NOVA id.
+  const stored = db.getState(STATE_KEY);
+  const storedIso = toIsoDate(stored);
+  const rejectedWatermark = stored && !storedIso ? String(stored) : null;
+  if (rejectedWatermark) {
+    console.warn(`[121-writeback] stored watermark "${rejectedWatermark}" is not a date — ignoring it and reaching back ${COLD_START_DAYS} days`);
+  }
+  const from = toIsoDate(since) || storedIso || daysAgoStr(COLD_START_DAYS);
 
   let payload;
   try {
@@ -208,7 +273,7 @@ async function writeBack({ apply = false, since = null } = {}) {
     const lines = theirs.map((a) => renderAction(a, name));
     const next = spliceActions(source, lines);
 
-    const held = session.completedAt || session.scheduledDate;
+    const held = sessionDate(session);
     const entry = {
       person: name,
       sessionId: session.sessionId,
@@ -230,7 +295,14 @@ async function writeBack({ apply = false, since = null } = {}) {
       //
       // `1-2-1-booked` is cleared because the booking is now SPENT — leaving it would
       // keep the card claiming a meeting is in the diary that has already happened.
-      require('./obsidian').updatePersonNote(name, { last121: held, booked121: '' });
+      //
+      // ⚠ `last121` is only written when the session HAS a real date. NOVA's
+      // `completedAt` is a display string, and stamping `last-1-2-1: Tue Aug 18`
+      // onto a People card breaks every reader that compares that field to a
+      // date. The booking is cleared either way — the meeting demonstrably
+      // happened, whatever NOVA could tell us about when.
+      const dates = held ? { last121: held, booked121: '' } : { booked121: '' };
+      require('./obsidian').updatePersonNote(name, dates);
 
       // Nick's own actions become tasks. `task-store` dedupes on normalised text with a
       // UNIQUE key, so a re-run — or the same commitment repeated in the next 1-2-1 —
@@ -240,6 +312,15 @@ async function writeBack({ apply = false, since = null } = {}) {
           require('./task-store').createTask({
             text: a.description,
             due_date: a.dueDate || null,
+            // Said out loud to a direct report in a 1-2-1 they were sitting in:
+            // the single clearest "somebody is expecting this" in the system, and
+            // until now the single largest source of UNCLASSIFIED tasks — which
+            // the weekly risk report going to Chris cannot count, and which the
+            // VANTAGE radar then reports back as "treat the commitment figure as
+            // a floor". Passed EXPLICITLY, so it is a decision rather than a
+            // proposal with a trailing '?': there is nothing to hedge about.
+            source: 'nova-121',
+            origin: 'commitment',
             // `origin_path` is the provenance field task-store actually reads — a task
             // with no backlink is one Nick cannot place in three weeks' time. Points at
             // the People note, which is where that 1-2-1's record lives.
@@ -256,10 +337,18 @@ async function writeBack({ apply = false, since = null } = {}) {
   }
 
   if (apply && !results.failed.length && sessions.length) {
-    // Watermark on the newest completion we actually processed, not on today: a session
+    // Watermark on the newest session we actually processed, not on today: a session
     // completed later in the run would otherwise be skipped next time.
-    const newest = sessions.reduce((max, s) => (s.completedAt > max ? s.completedAt : max), from);
-    db.setState(STATE_KEY, newest);
+    //
+    // ⚠ Only sessions with a REAL date can move it, and it can only ever move
+    // forward. A session NOVA could not date leaves the watermark where it is —
+    // re-reading a day costs one no-op pass, and writing something that is not a
+    // date is what took this offline for five nights.
+    const newest = sessions.reduce((max, s) => {
+      const iso = sessionDate(s);
+      return iso && iso > max ? iso : max;
+    }, from);
+    if (toIsoDate(newest)) db.setState(STATE_KEY, newest);
   }
 
   // The tracker reads People frontmatter, so it regenerates AFTER the dates move —
@@ -281,6 +370,8 @@ module.exports = {
   spliceActions,
   renderAction,
   existingIds,
+  toIsoDate,
+  sessionDate,
   STATE_KEY,
   START,
   END,
