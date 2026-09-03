@@ -94,6 +94,49 @@ test('a row with no annotation is returned untouched', () => {
   assert.equal(row.msLocal, undefined);
 });
 
+test('"my part done" is a state, and it is not a completion', () => {
+  // Nick's shared Planner cards: his sub-tasks are done, somebody else's are
+  // not. The row must survive intact — this state changes who owes it, never
+  // whether it is owed.
+  reset();
+  msLocal.set('AAA', { state: 'mine-done' });
+  assert.equal(msLocal.get('AAA').state, 'mine-done');
+
+  const [row] = msLocal.annotate([{ ms_id: 'AAA', task_id: null, text: 'shared card', due_date: '2026-08-21', done: 0 }]);
+  assert.equal(row.myPartDone, true);
+  assert.equal(row.msLocalState, 'mine-done');
+  // Nothing about the task itself moved. A state that quietly ticked the box,
+  // cleared the date or dropped the row would be a completion wearing a
+  // different name, on a card his team is still working on.
+  assert.equal(row.done, 0);
+  assert.equal(row.status, undefined);
+  assert.equal(row.due_date, '2026-08-21');
+  assert.equal(row.text, 'shared card');
+});
+
+test('the other states do not claim his part is done', () => {
+  reset();
+  msLocal.set('AAA', { state: 'working' });
+  msLocal.set('BBB', { state: 'blocked' });
+  msLocal.set('CCC', { moscow: 'must' });
+  const rows = msLocal.annotate([
+    { ms_id: 'AAA', task_id: null }, { ms_id: 'BBB', task_id: null }, { ms_id: 'CCC', task_id: null },
+  ]);
+  for (const row of rows) assert.equal(row.myPartDone, false);
+});
+
+test('the letter travels in meta, or the classifier overwrites it', () => {
+  // Regression: `decorateTask` reads `metadata.moscow` and classifies the text
+  // when it is absent, so an annotation written only to the top level was
+  // silently replaced — a stored `could` came back `must` on a live row.
+  reset();
+  msLocal.set('AAA', { moscow: 'could' });
+  const [row] = msLocal.annotate([{ ms_id: 'AAA', task_id: null, meta: { context: 'queue' }, moscow: null }]);
+  assert.equal(row.meta.moscow, 'could');
+  // ...without losing what was already in there.
+  assert.equal(row.meta.context, 'queue');
+});
+
 test('NOTHING here talks to Microsoft', () => {
   // The promise the feature IS. A future "let us keep Planner in sync" would
   // publish "blocked" onto a board Nick's team reads, which is the one thing

@@ -67,6 +67,17 @@ test('MoSCoW and priority reach the same entry without clearing the state', asyn
   assert.equal(entry.priority, 3);
 });
 
+test('"my part done" reaches the store over real HTTP', async () => {
+  // The state Nick asked for: a shared Planner card whose sub-tasks are split
+  // between him and somebody else. Worth a route test of its own because the
+  // handler validates against VALID_STATE — a state the service knows and the
+  // route rejects would 400 on the one button that matters.
+  const res = await patch('/api/todos/ms/EEE/local', { state: 'mine-done' });
+  assert.equal(res.status, 200);
+  assert.equal(res.json.local.state, 'mine-done');
+  assert.equal(msLocal.get('EEE').state, 'mine-done');
+});
+
 test('an unrecognised state is REFUSED, not normalised into a clear', async () => {
   await patch('/api/todos/ms/CCC/local', { state: 'working' });
   const res = await patch('/api/todos/ms/CCC/local', { state: 'on fire' });

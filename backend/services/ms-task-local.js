@@ -47,10 +47,20 @@ const taskStore = require('./task-store');
 
 const KEY = 'ms_task_local';
 
-// Two states, both private, and they are mutually exclusive: "I am doing this"
-// and "I cannot do this" cannot both be true, and a checkbox pair that allowed
-// them to be would be a third state nothing knows how to render.
-const VALID_STATE = ['working', 'blocked'];
+// Three states, all private, and they are mutually exclusive: "I am doing
+// this", "I cannot do this" and "my half is finished" cannot be true at once,
+// and a control that allowed two of them would be a state nothing knows how to
+// render.
+//
+// ⚠ `mine-done` is NOT a completion and must never be treated as one. A shared
+// Planner card with sub-tasks is late because somebody's part is outstanding,
+// and Nick's being finished changes who owes it, not whether it is owed. So the
+// row stays OPEN, stays visible, keeps its due date and is never ticked, in
+// NEURO or on the board — the only thing it loses is the right to demand
+// action from Nick today. Ticking it here would close a card his team is still
+// working on; leaving it screaming overdue makes the list say he is late for
+// work he has already done.
+const VALID_STATE = ['working', 'blocked', 'mine-done'];
 
 function normState(value) {
   if (value == null || value === '') return null;
@@ -131,11 +141,24 @@ function annotate(rows) {
     if (!row || row.task_id || !row.ms_id) return row;
     const entry = map[String(row.ms_id)];
     if (!entry) return row;
+    // ⚠ The letter has to travel in `meta` as well as on the row. `decorateTask`
+    // reads `metadata.moscow` and falls through to classifying the text when it
+    // is absent — so an annotation written only to the top level was silently
+    // overwritten by the classifier on both read paths, and a MUST looked like
+    // it had stuck purely because the classifier agreed. Verified against a
+    // real row before changing it: a stored `could` came back `must`.
+    const meta = entry.moscow ? { ...(row.meta || {}), moscow: entry.moscow } : row.meta;
     return {
       ...row,
+      meta,
       moscow: entry.moscow || row.moscow || null,
       taskPriority: entry.priority || row.taskPriority || null,
       msLocalState: entry.state || null,
+      // A neutral flag rather than the state word, because `todo-intelligence`
+      // ranks every task in the system and has no business knowing Microsoft's
+      // vocabulary — it needs to know that this due date is no longer Nick's,
+      // not where the thought came from.
+      myPartDone: entry.state === 'mine-done',
       msLocal: true,
     };
   });

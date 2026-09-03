@@ -300,16 +300,27 @@ router.get('/focus', async (req, res) => {
       // one was on /focus, so the dead vault walk ran on the hottest path in
       // the app.
 
+      // ⚠ Annotate BEFORE the filter, not after. The date filters below are the
+      // one place a task can be excluded outright, so a row Nick has marked
+      // "my part done" has to be knowable by then — annotating afterwards
+      // leaves it ranked correctly and still sitting at the top of the Overdue
+      // tab, which is the screen the whole point was to get it off.
+      tasks = msLocal.annotate(tasks);
+
       // Apply filter
       if (filter === 'overdue') {
-        tasks = tasks.filter(t => t.due_date && t.due_date.split('T')[0] < todayStr && !t.done);
+        tasks = tasks.filter(t => t.due_date && t.due_date.split('T')[0] < todayStr && !t.done && !t.myPartDone);
       } else if (filter === 'today') {
-        tasks = tasks.filter(t => t.due_date && t.due_date.split('T')[0] === todayStr && !t.done);
+        tasks = tasks.filter(t => t.due_date && t.due_date.split('T')[0] === todayStr && !t.done && !t.myPartDone);
       } else {
+        // ⚠ Still in ALL, always. A card whose other half is outstanding has
+        // not gone anywhere, and dropping it from every view would trade a
+        // false "you are late" for a false "there is nothing there" — the
+        // worse of the two, because the first is at least visible.
         tasks = tasks.filter(t => !t.done);
       }
 
-      return rankTasks(msLocal.annotate(tasks).map((task) => todoIntelligence.decorateTask(task, todayStr)), todayStr);
+      return rankTasks(tasks.map((task) => todoIntelligence.decorateTask(task, todayStr)), todayStr);
     });
     const totalCount = ranked.length;
 

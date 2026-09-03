@@ -33,6 +33,15 @@ function isOverdue(dueDate) {
   return new Date(dueDate) < new Date(new Date().toDateString());
 }
 
+// Overdue FOR NICK, which is the only question the count, the filter tab and
+// SARA's line are actually asking. A shared card he has finished his half of is
+// still late on the board — it is just not late because of him, and counting it
+// as his makes the number he reads every morning wrong in the one direction
+// that reads as failure. The row itself never disappears.
+function isMineOverdue(todo) {
+  return isOverdue(todo.due_date) && todo.msLocalState !== 'mine-done';
+}
+
 function formatDue(dueDate) {
   if (!dueDate) return null;
   const d = new Date(dueDate);
@@ -97,7 +106,21 @@ const FIELD_LABELS = {
 const MS_LOCAL_STATES = [
   { key: 'working', label: 'Working on', color: '#22c55e', desc: 'You are mid-way through this — kept in NEURO, not pushed to the board' },
   { key: 'blocked', label: 'Blocked', color: '#ef4444', desc: 'Stuck waiting on something — Planner has no way to say this, so it stays here' },
+  // Shared ownership: his sub-tasks are done and somebody else's are not. The
+  // card stays open and keeps its date — it stops counting as HIS overdue work.
+  { key: 'mine-done', label: 'My part done', color: '#38bdf8', desc: 'Your half of a shared card is finished. It stays open on the board and stops counting as your overdue work — nothing is completed, here or in Planner' },
 ];
+
+// One place decides what a locally-annotated state says on a row, so the chip,
+// its tooltip and the due date cannot end up telling three different stories.
+const MS_LOCAL_STATE_CHIP = {
+  working: { label: '● Working on', title: 'Working on it — kept in NEURO, not pushed to the board.' },
+  blocked: { label: '⛔ Blocked', title: 'Blocked — your note to NEURO. Microsoft has not been told.' },
+  'mine-done': {
+    label: '✓ My part done',
+    title: 'Your half is finished. The card is still open on the board and nothing has been completed — it just no longer counts as your overdue work.',
+  },
+};
 
 function MoscowReview({ onClose }) {
   const [tasks, setTasks] = useState([]);
@@ -893,7 +916,13 @@ function rowKey(todo) {
 }
 
 function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRefresh }) {
-  const overdue = isOverdue(todo.due_date);
+  // ⚠ The date is still shown, and still says how late the card is — what
+  // changes is that it stops being painted as Nick's failure. Hiding the date
+  // would hide the fact that the board is waiting on somebody; painting it red
+  // says he is late for work he has already finished. Same call the backend
+  // makes on the ranking side.
+  const myPartDone = todo.msLocalState === 'mine-done';
+  const overdue = isOverdue(todo.due_date) && !myPartDone;
   const dueLabel = formatDue(todo.due_date);
   const toggleKey = todo.task_id ? `task:${todo.task_id}` : `${todo.filePath}:${todo.lineNumber}`;
   const isToggling = toggling[toggleKey];
@@ -917,13 +946,11 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
               task was filed — the same reason WIP leads on the Must Move card.
               Titled rather than labelled, so the row does not have to explain
               on every line that this is not on the board. */}
-          {todo.msLocalState && (
+          {todo.msLocalState && MS_LOCAL_STATE_CHIP[todo.msLocalState] && (
             <span
               className={`todo-local-state ${todo.msLocalState}`}
-              title={todo.msLocalState === 'blocked'
-                ? 'Blocked — your note to NEURO. Microsoft has not been told.'
-                : 'Working on it — kept in NEURO, not pushed to the board.'}
-            >{todo.msLocalState === 'blocked' ? '⛔ Blocked' : '● Working on'}</span>
+              title={MS_LOCAL_STATE_CHIP[todo.msLocalState].title}
+            >{MS_LOCAL_STATE_CHIP[todo.msLocalState].label}</span>
           )}
           {/* Which Planner board / To Do list this is on. Absent when NEURO
               could not read it — never a placeholder standing in for a board. */}
@@ -966,7 +993,12 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
             >{originBadge(todo)}</span>
           )}
           {todo.taskPriority && <span className="todo-priority-num">P{todo.taskPriority}</span>}
-          {dueLabel && <span className={`todo-due ${overdue ? 'due-overdue' : ''}`}>{dueLabel}</span>}
+          {dueLabel && (
+            <span
+              className={`todo-due ${overdue ? 'due-overdue' : ''}${myPartDone ? ' due-not-mine' : ''}`}
+              title={myPartDone ? 'The board is still waiting on this — but not on you.' : undefined}
+            >{dueLabel}</span>
+          )}
           {todo.planDay != null && <span className="todo-due">Day {todo.planDay}</span>}
           {todo._scoreReason && <span className="todo-score-reason">{todo._scoreReason}</span>}
         </div>
@@ -1941,7 +1973,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   const loading = fullData == null;
   const activeTodos = (todos || []).filter(t => !t.done);
   const doneTodos = (todos || []).filter(t => t.done);
-  const overdueTodos = activeTodos.filter(t => isOverdue(t.due_date));
+  const overdueTodos = activeTodos.filter(isMineOverdue);
   const mustDoTodos = activeTodos.filter(t => t.mustdo);
 
   const subCategoryOptions = useMemo(() => {
@@ -2002,7 +2034,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   } else if (filter === 'mustdo') {
     filtered = mustDoTodos;
   } else if (filter === 'overdue') {
-    filtered = activeTodos.filter(t => isOverdue(t.due_date));
+    filtered = activeTodos.filter(isMineOverdue);
   } else if (filter === 'today') {
     filtered = activeTodos.filter(t => {
       if (!t.due_date) return false;

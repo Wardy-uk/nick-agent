@@ -115,6 +115,42 @@ test('decorateTask passes overdue and dueToday through', () => {
   assert.equal(lane.length, 1);
 });
 
+test('a shared card whose half he has finished stops being his overdue work', () => {
+  // Nick's Planner cards with sub-tasks: his bits done, somebody else's open.
+  // Every date-driven arm asks "does this demand something from Nick today",
+  // and for that half the answer is now no.
+  const row = { id: 1, text: 'Brief the teams on the escalation standard', due_date: '2026-08-21', source: 'MS Planner', priority: 'normal', meta: {} };
+  const before = triageTodo({ text: row.text, dueDate: row.due_date }, '2026-09-02');
+  assert.equal(before.overdue, true);
+  assert.equal(before.needsToday, true);
+  assert.equal(before.moscow, 'must');
+
+  const after = triageTodo({ text: row.text, dueDate: row.due_date, myPartDone: true }, '2026-09-02');
+  assert.equal(after.overdue, false);
+  assert.equal(after.dueToday, false);
+  assert.equal(after.needsToday, false);
+  assert.notEqual(after.moscow, 'must');
+  assert.notEqual(after.priority, 'high');
+
+  // And it leaves the lane, which is the screen this exists to clear.
+  assert.equal(buildTodayLane([row], '2026-09-02').length, 1);
+  assert.equal(buildTodayLane([{ ...row, myPartDone: true }], '2026-09-02').length, 0);
+});
+
+test('the date survives, because the board really is late', () => {
+  // The suppression is about who owes it, not about hiding it. A row that lost
+  // its date would say the card is fine when somebody is still waiting on it.
+  const [row] = buildTodayLane([
+    { id: 1, text: 'Shared card', due_date: '2026-08-21', mustdo: true, myPartDone: true, source: 'MS Planner', meta: {} },
+  ], '2026-09-02');
+  assert.ok(row, 'an explicit mustdo is a call Nick made himself and is not overruled');
+  assert.equal(row.due_date, '2026-08-21');
+  assert.equal(row.myPartDone, true);
+  // And the lane does not tell him it is overdue, which is the reason it would
+  // have named before the date stopped being his.
+  assert.ok(!/overdue/i.test(row.why), `lane still calls it overdue: ${row.why}`);
+});
+
 test('buildFollowThroughCandidate returns the stalest high-signal task', () => {
   const follow = buildFollowThroughCandidate([
     { id: 1, text: 'Chase finance approval', priority: 'normal', due_date: null, source: 'Master (Inbox)', mustdo: false, meta: { created: '2026-07-08', sourcePath: 'Meetings/finance.md' }, _score: 60 },

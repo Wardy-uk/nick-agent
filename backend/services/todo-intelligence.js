@@ -105,13 +105,25 @@ function priorityFromMoscow(moscow, existingPriority, dueDate, today = todayDate
   return 'low';
 }
 
-function triageTodo({ text, sourcePath, dueDate, mustdo = false, priority = null, metadata = null }, today = todayDateString()) {
+function triageTodo({ text, sourcePath, dueDate, mustdo = false, priority = null, metadata = null, myPartDone = false }, today = todayDateString()) {
   const meta = metadata || {};
   const context = meta.context || classifyContext(text, sourcePath);
-  const moscow = meta.moscow || classifyMoscow({ text, sourcePath, dueDate, mustdo, priority }, today);
-  const computedPriority = priorityFromMoscow(moscow, priority, dueDate, today);
-  const overdue = dueDate ? dueDate < today : false;
-  const dueToday = dueDate ? dueDate === today : false;
+  // ⚠ A date Nick no longer owes is not a deadline for Nick.
+  //
+  // Some work is shared — a Planner card with sub-tasks, his half done and
+  // somebody else's still open. The card IS late, and saying otherwise would be
+  // a lie about the board; but every date-driven arm below asks a different
+  // question, which is "does this demand something from Nick today", and for
+  // that half the answer is now no. So the due date is dropped for the TRIAGE
+  // and kept on the row for DISPLAY: nothing here hides that the card is
+  // overdue, it just stops billing him for it. The one thing not suppressed is
+  // an explicit `mustdo` — that is a call Nick made himself, and a flag he set
+  // is not something a later annotation gets to overrule silently.
+  const owedDate = myPartDone ? null : dueDate;
+  const moscow = meta.moscow || classifyMoscow({ text, sourcePath, dueDate: owedDate, mustdo, priority }, today);
+  const computedPriority = priorityFromMoscow(moscow, priority, owedDate, today);
+  const overdue = owedDate ? owedDate < today : false;
+  const dueToday = owedDate ? owedDate === today : false;
   // `context === 'queue'` used to sit in this list on its own — no due date, no
   // must flag, no priority. And classifyContext assigns `queue` for any of sla /
   // ticket / queue / customer / escalat appearing anywhere in the text, so
@@ -149,6 +161,10 @@ function decorateTask(task, todayStr = todayDateString()) {
     mustdo: Boolean(task.mustdo),
     priority: task.priority || null,
     metadata: meta,
+    // Set by `ms-task-local.annotate` on a shared card whose NEURO-side half
+    // Nick has marked finished. Never inferred here — it is a statement he
+    // made, not something a task's wording or dates could reveal.
+    myPartDone: Boolean(task.myPartDone),
   }, todayStr);
   const ageDays = taskAgeDays({ ...task, meta }, todayStr);
   const stale = ageDays != null && ageDays >= triage.followThroughDays && !triage.needsToday;
@@ -268,6 +284,11 @@ function buildTodayLane(tasks, todayStr = todayDateString(), limit = 5, opts = {
       moscow: task.moscow,
       context: task.context,
       due_date: task.due_date || null,
+      // ⚠ Carried, or the lane is the one screen where "my part is done" goes
+      // missing — a row that got here on an explicit must-do still shows a date
+      // that has passed, and with nothing beside it that reads as Nick being
+      // late for work he has already finished.
+      myPartDone: Boolean(task.myPartDone),
       source: task.source || null,
       // Carried so the lane can show WORK ALREADY STARTED rather than treating
       // every row as untouched. This whitelist is explicit, so a field absent

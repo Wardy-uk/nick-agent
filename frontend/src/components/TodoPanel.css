@@ -1035,6 +1035,16 @@
 
 .todo-local-state.working { background: rgba(34, 197, 94, 0.14); color: #22c55e; }
 .todo-local-state.blocked { background: rgba(239, 68, 68, 0.14); color: #ef4444; }
+/* His half of a shared card. Deliberately calm rather than green: green reads
+   as "done", and the card is not done — somebody else's part is still open. */
+.todo-local-state.mine-done { background: rgba(56, 189, 248, 0.14); color: #38bdf8; }
+
+/* The date on a card he no longer owes. Still legible, still says how late the
+   board is — it just stops being the red that means "you are behind". */
+.todo-due.due-not-mine {
+  color: var(--text-dim, #8b93a7);
+  text-decoration: none;
+}
 
 /* A refused or partial save. Stated, not swallowed — the edit is either in
    Microsoft or it is not, and the difference has to be visible. */
