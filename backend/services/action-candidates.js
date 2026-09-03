@@ -950,9 +950,72 @@ async function scanRecentNotesExcludingNova(options = {}) {
   return scanRecentNotes({ ...options, novaClaimed: await loadNovaClaimed() });
 }
 
+/**
+ * The claim set WITHOUT going to the network. Sync.
+ *
+ * `loadNovaClaimed` is async and `vault-hooks.onVaultWrite` is not — it is
+ * called fire-and-forget from a dozen places that do not await it, so making
+ * that chain async would change the semantics of every one of them. This is the
+ * `team-availability` split instead: a sync cache read for the caller that
+ * cannot wait, and an async refresh kicked off behind it.
+ *
+ * Returns `null` when there is nothing cached, which is deliberately different
+ * from an empty set: "we have never asked NOVA" and "NOVA owns nothing" license
+ * opposite behaviour in the caller.
+ */
+function novaClaimedCached() {
+  return _novaClaimCache.at ? _novaClaimCache.ids : null;
+}
+
+/** Warm the cache in the background. Never awaited, never allowed to throw. */
+function refreshNovaClaimed() {
+  loadNovaClaimed().catch(() => {});
+}
+
+/**
+ * The write-hook's version of the nightly sweep's NOVA exclusion (item 21).
+ *
+ * The nightly sweep has asked NOVA which 1-2-1 recordings it owns since the
+ * feature shipped, and skips those notes — correctly, because NOVA extracts
+ * the actions from them itself. The hook path never did, so a NOVA-owned 1-2-1
+ * routed into `Meetings/` by `imports` had its actions extracted by NEURO via
+ * the hook AND by NOVA: one conversation, two systems, and Nick reviewing the
+ * same commitment twice in two different places.
+ *
+ * ⚠ **It fails OPEN, in both directions that matter.** With nothing cached
+ * nothing is excluded and extraction happens as before: a duplicate candidate
+ * is visible and cheap, a missed commitment is neither. And a cached set that
+ * has since gone stale can only ever over-exclude for as long as it takes the
+ * background refresh to land — after which the nightly sweep, which always uses
+ * a FRESH set, re-reads every meeting note from the last seven days and picks up
+ * anything this wrongly skipped.
+ *
+ * Sync, like the hook that calls it.
+ */
+function syncNoteActionCandidatesUnlessNova(relativePath) {
+  // Kick the refresh either way, so the NEXT write has a warm set. Not awaited.
+  refreshNovaClaimed();
+
+  const claimed = novaClaimedCached();
+  if (claimed && claimed.size && isMeetingNote(relativePath)) {
+    const full = path.join(VAULT_PATH, relativePath);
+    if (novaClaimedNote(full, claimed)) {
+      return { created: 0, autoPromoted: 0, pending: 0, superseded: 0, candidates: [], novaOwned: true };
+    }
+  }
+  return syncNoteActionCandidates(relativePath);
+}
+
 module.exports = {
   scanRecentNotesExcludingNova,
-  _novaInternals: { loadNovaClaimed, novaClaimedNote },
+  _novaInternals: {
+    loadNovaClaimed,
+    novaClaimedNote,
+    // The 5-minute TTL is what makes the claim set affordable on a write path;
+    // it is also what makes it untestable without a way to clear it.
+    resetClaimCache: () => { _novaClaimCache = { at: 0, ids: new Set() }; },
+    seedClaimCache: (ids) => { _novaClaimCache = { at: Date.now(), ids: new Set(ids) }; },
+  },
   AUTO_PROMOTE_CONFIDENCE,
   scanRecentNotes,
   extractMeetingActions,
@@ -963,5 +1026,7 @@ module.exports = {
   rememberReviewedAction,
   reviewStatusFor,
   syncNoteActionCandidates,
+  syncNoteActionCandidatesUnlessNova,
+  novaClaimedCached,
   shouldSkipPath,
 };

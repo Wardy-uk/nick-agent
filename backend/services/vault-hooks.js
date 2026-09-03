@@ -88,7 +88,14 @@ async function _processWrite(relativePath, source) {
   // 4. Candidate action extraction from notes
   try {
     const actionCandidates = require('./action-candidates');
-    const result = actionCandidates.syncNoteActionCandidates(relativePath);
+    // ⚠ ExcludingNova, matching the nightly sweep (item 21). Without it a
+    // NOVA-owned 1-2-1 note routed into `Meetings/` by `imports` was extracted
+    // here AND by NOVA — one conversation, two systems, and the same commitment
+    // in front of Nick twice. Fails open: nothing cached means nothing excluded.
+    const result = actionCandidates.syncNoteActionCandidatesUnlessNova(relativePath);
+    if (result.novaOwned) {
+      console.log(`${tag} Left ${relativePath} to NOVA — it owns that 1-2-1 recording`);
+    }
     if (result.created > 0 || result.superseded > 0) {
       console.log(
         `${tag} Synced action candidates for ${relativePath} ` +
