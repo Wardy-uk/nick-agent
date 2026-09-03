@@ -515,6 +515,28 @@ function updateTask(id, fields = {}) {
   // about the work and throwing it away would make Nick tick twice. Only the
   // 'done' claim waits for its evidence. 'dropped' is never held — abandoning
   // something is not a claim that needs proving.
+  // ── A ticket is closed in Jira, and nowhere else ──────────────────────────
+  //
+  // Nick's rule for assigned Jira tickets (3 Sep 2026): they become real tasks
+  // with NEURO's own fields, but there is no manual tick — completion follows
+  // the ticket, so there is never two places to close one thing. The refusal
+  // lives here rather than in a route because this is the only writer: the
+  // todos routes, the SARA completion funnel, the MCP tool and the chat tool
+  // all arrive through this function, and a guard in any one of them is a guard
+  // the other three walk past. (The same argument as the write-up hold below.)
+  //
+  // It REFUSES rather than holding, and names the ticket: held would leave the
+  // task sitting at in-progress with nothing on earth able to move it, whereas
+  // a refusal that says "resolve NT-1234" tells Nick where the button is.
+  // Dropping is still allowed — abandoning something is not a claim that it was
+  // finished, and a task he no longer wants must be removable from his list.
+  if (patch.status === 'done' && row.status !== 'done' && fields.jiraSync !== true) {
+    const key = require('./jira-tasks').keyForTask(id);
+    if (key) {
+      throw new Error(`${key} closes this one. Resolve the ticket in Jira and NEURO will close the task.`);
+    }
+  }
+
   let held = null;
   if (patch.status === 'done' && row.status !== 'done' && fields.force !== true) {
     const taskBlocks = require('./task-blocks');

@@ -183,6 +183,104 @@ async function fetchActiveEscalations(opts = {}) {
 }
 
 /**
+ * Every ticket assigned to Nick that is not finished.
+ *
+ * ⚠ This did not exist, and its absence is the opposite of what it looks like.
+ * The only JQL in the repo was the escalation pair, so the working escalation
+ * code is NOT a broken version of assigned-ticket ingestion — it is a different
+ * feature that was built instead. A ticket sitting in Nick's name was known to
+ * Jira and to nothing else in the estate.
+ *
+ * `assignee = currentUser()` rather than a name or an account id: the token IS
+ * the identity, so it cannot drift when a display name changes, and it needs no
+ * second copy of "who Nick is" to go stale.
+ *
+ * `statusCategory != Done` rather than a list of status names, for the reason
+ * `fetchActiveEscalations` gives: the queue has more done-ish statuses than
+ * anyone remembers. It is also exactly the predicate the closing half reads, so
+ * "still mine" and "still open" cannot come to mean two different things.
+ *
+ * Deliberately NOT scoped to `JIRA_PROJECT_KEY`: a ticket assigned to Nick in
+ * another project is still assigned to Nick, and a silent project filter is how
+ * a list that looks complete is not.
+ */
+const ASSIGNED_FIELDS = ['summary', 'status', 'priority', 'created', 'updated', 'duedate'];
+const ASSIGNED_PAGE_SIZE = 100;
+
+function mapAssignedIssue(issue) {
+  const f = issue.fields || {};
+  const base = JIRA_BASE_URL.replace(/\/+$/, '');
+  const category = f.status?.statusCategory?.key || null;
+  return {
+    key: issue.key,
+    summary: f.summary || '',
+    status: f.status?.name || null,
+    // 'done' | 'indeterminate' | 'new'. The CATEGORY, not the name — the name
+    // is per-workflow and there are more of them than anyone remembers.
+    statusCategory: category,
+    resolved: category === 'done',
+    priority: f.priority?.name || null,
+    dueDate: f.duedate || null,
+    created: f.created || null,
+    updated: f.updated || null,
+    url: base ? `${base}/browse/${issue.key}` : null,
+  };
+}
+
+async function fetchAssignedToMe() {
+  if (!isConfigured()) return null;
+  const result = await jiraRequest('/rest/api/3/search/jql', {
+    method: 'POST',
+    body: {
+      jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY created ASC',
+      fields: ASSIGNED_FIELDS,
+      maxResults: ASSIGNED_PAGE_SIZE,
+    },
+  });
+  // `/search/jql` dropped `total`, so `isLast` is the only cap signal there is.
+  // Said out loud for the same reason the escalation search says it: this list
+  // decides what reaches Nick's task list, and a silent truncation is one of
+  // this estate's recurring bugs, not a hypothetical.
+  if (result.isLast === false) {
+    console.warn(`[Jira] Assigned-to-me search hit the ${ASSIGNED_PAGE_SIZE}-issue page and there are MORE — the list is truncated`);
+  }
+  return {
+    issues: (result.issues || []).map(mapAssignedIssue),
+    complete: result.isLast !== false,
+  };
+}
+
+/**
+ * The current state of specific keys, whatever it is.
+ *
+ * ⚠ Deliberately NOT `fetchOpenIssuesByKey`, which filters to `statusCategory
+ * != Done` and so answers a DIFFERENT question: absence from its result means
+ * "done OR deleted OR I could not see it", and closing Nick's task on that
+ * would close work because a ticket got moved to a project the token cannot
+ * read. This returns what Jira says about each key, and says nothing about the
+ * ones it did not come back with.
+ */
+async function fetchIssueStates(keys) {
+  const list = [...new Set((keys || []).filter((k) => /^[A-Z][A-Z0-9]+-\d+$/.test(k)))];
+  if (!list.length) return { issues: [], complete: true };
+  if (!isConfigured()) return null;
+
+  const CHUNK = 100;
+  const out = [];
+  let complete = true;
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const batch = list.slice(i, i + CHUNK);
+    const result = await jiraRequest('/rest/api/3/search/jql', {
+      method: 'POST',
+      body: { jql: `key in (${batch.join(',')})`, fields: ASSIGNED_FIELDS, maxResults: CHUNK },
+    });
+    if (result.isLast === false) complete = false;
+    out.push(...(result.issues || []).map(mapAssignedIssue));
+  }
+  return { issues: out, complete };
+}
+
+/**
  * The still-open subset of a list of keys, in the same shape.
  *
  * Urgency escalations are known only to NOVA's log, which records that an
@@ -477,6 +575,9 @@ function stopPolling() {
 }
 
 module.exports = {
+  fetchAssignedToMe,
+  fetchIssueStates,
+  mapAssignedIssue,
   isConfigured,
   fetchEscalationTickets,
   fetchActiveEscalations,

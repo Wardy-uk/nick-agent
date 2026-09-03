@@ -1094,6 +1094,27 @@ function start() {
     require('./email-triage').runTriage().catch(() => {});
   }, 60000);
 
+  // Jira tickets assigned to Nick — hourly on the half hour, weekdays.
+  //
+  // Two jobs in one pass: new assignments become tasks, and a task whose ticket
+  // has been resolved is closed. The second is why the cadence matters at all —
+  // a task Jira has already finished with, still sitting in the list Nick uses
+  // to decide what to do next, is the failure this feature would otherwise
+  // introduce. Hourly rather than every 30 minutes: it is two cheap JQL reads,
+  // but nothing here is time-critical and a ticket resolved at 14:05 does not
+  // need to leave his list at 14:06.
+  //
+  // Deliberately NOT a TRACKED_JOBS catch-up job: it compares live state on
+  // every pass, so a missed run self-corrects on the next one and there is
+  // nothing to replay. Off unless JIRA_ASSIGNED_SYNC_ENABLED — the sync itself
+  // checks, so the schedule is registered either way and the switch needs no
+  // restart to be read.
+  cron.schedule('30 8-18 * * 1-5', () => {
+    require('./jira-tasks').sync({ apply: true }).catch(e => {
+      console.error('[Scheduler] Jira assigned-task sync failed:', e.message);
+    });
+  });
+
   // Every 20 minutes — refresh the calendar cache. Nothing populated it before,
   // so Focus, the meeting alerts and every calendar-aware tool ran blind.
   cron.schedule('*/20 * * * *', async () => {

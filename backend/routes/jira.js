@@ -42,4 +42,26 @@ router.get('/escalations', async (req, res) => {
   }
 });
 
+/**
+ * Tickets assigned to Nick (item 3).
+ *
+ * GET is the dry run — what the next pass WOULD do — so "what is this about to
+ * put in my list" is answerable without it happening. POST applies.
+ */
+router.get('/assigned', async (req, res) => {
+  try {
+    res.json(await require('../services/jira-tasks').sync({ apply: false }));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/assigned/sync', async (req, res) => {
+  try {
+    res.json(await require('../services/jira-tasks').sync({ apply: true }));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 module.exports = router;
