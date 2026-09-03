@@ -57,7 +57,7 @@ router.get('/untriaged', (req, res) => {
 // POST /api/tasks — create (route 2: NEURO direct)
 router.post('/', (req, res) => {
   try {
-    const { text, moscow, priority, due_date, source, notes, origin_path, origin_line, estimateMinutes, estimateExact, domain, origin } = req.body;
+    const { text, moscow, priority, due_date, source, notes, origin_path, origin_line, estimateMinutes, estimateExact, domain, origin, criticality } = req.body;
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'text is required' });
     const result = taskStore.createTask({
       text, moscow, priority, due_date, notes, origin_path, origin_line,
@@ -78,6 +78,12 @@ router.post('/', (req, res) => {
       estimateMinutes,
       // A typed number is honoured exactly; a preset still snaps to a bucket.
       estimateExact,
+      // How urgent the SENDER said this was — stored verbatim as provenance and
+      // never re-derived here. NEURO records who claimed what; deciding whether
+      // the claim is right is the sending system's job, and second-guessing it
+      // would give one question two answers. Absent is the normal case and does
+      // not mean "low".
+      criticality,
       source: source || 'manual',
     });
     res.json({ ok: true, ...result });

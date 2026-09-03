@@ -343,6 +343,29 @@ const PRESENTERS = {
     blockers: trimmed(p.text) ? [] : ['No task text on this action.'],
   }),
 
+  /**
+   * A suggestion VANTAGE decided was not urgent enough to write straight in.
+   *
+   * The `basis` line is the reason this type exists rather than reusing
+   * `capture_todo`: an item that arrived from another system must be able to
+   * say WHY it is here and WHO thought so, or it is indistinguishable from
+   * something NEURO invented about Nick's work.
+   */
+  vantage_suggestion: (p) => ({
+    label: 'Add a VANTAGE suggestion',
+    kind: WRITE,
+    summary: `${str(p.source) || 'VANTAGE'} suggests: "${str(p.text).slice(0, 80)}"`,
+    fields: [
+      field('Task', p.text),
+      field('From', p.source),
+      // What the sending system CLAIMED. Rendered as its claim, never as
+      // NEURO's own judgement — NEURO stores it and does not re-derive it.
+      field('They rated it', p.criticality),
+      field('Why', p.basis),
+    ],
+    blockers: trimmed(p.text) ? [] : ['No task text on this action.'],
+  }),
+
   escalate_ticket: (p) => ({
     label: 'Escalate a ticket',
     kind: OUTBOUND,

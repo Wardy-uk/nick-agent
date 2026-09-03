@@ -794,6 +794,30 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
       };
     }
 
+    // Route 5 — a suggestion from VANTAGE that was not urgent enough to be
+    // written straight in. Approving it is Nick agreeing it is work; the task
+    // carries what VANTAGE claimed, verbatim, so it can still answer why it is
+    // here in three weeks' time.
+    case 'vantage_suggestion': {
+      const taskStore = require('./task-store');
+      const { id, created } = taskStore.createTask({
+        text: payload.text,
+        source: payload.source || 'vantage',
+        // Somebody else's system is waiting on it. That is the commitment test,
+        // and it is the same answer VANTAGE gives on its direct path — one
+        // question, one answer, whichever route it took.
+        origin: 'commitment',
+        criticality: payload.criticality || null,
+        notes: payload.basis ? `${payload.source || 'VANTAGE'}: ${payload.basis}` : null,
+        due_date: payload.dueDate || null,
+      });
+      return {
+        ok: true,
+        detail: `${created ? 'Added task' : 'Folded into existing task'} #${id}: ${payload.text}`,
+        navigate: 'todos',
+      };
+    }
+
     default:
       return { ok: false, detail: `Unknown action type: ${action.type}` };
   }

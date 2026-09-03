@@ -245,6 +245,67 @@ function rejectAction(id) {
   return { status: 200, body: { ok: true, rejected: action.id } };
 }
 
+/**
+ * POST /api/actions — the low-criticality intake (item 15).
+ *
+ * The missing half of the VANTAGE handoff. A high-criticality suggestion goes
+ * straight into the task list; everything else has to wait for Nick, and until
+ * now there was nowhere for it to wait: VANTAGE could create a task and nothing
+ * else, so "this is worth a look, when you have a minute" had no representation
+ * at all and became a task or became nothing.
+ *
+ * ⚠ **It records the claim and DERIVES NOTHING.** `source` and `criticality`
+ * are stored exactly as sent. NEURO deliberately does not re-run the weighting:
+ * the sending system knows why it thinks something matters, and a second
+ * opinion computed here is how one question comes to have two answers that
+ * disagree (`sara/backend`'s retired `inference.js`, one repo over).
+ *
+ * ⚠ It creates a PENDING action and never executes one. Approval is a separate
+ * call Nick makes, and this route cannot reach it.
+ *
+ * Machine clients authenticate the same way every other `/api/*` route makes
+ * them: the PIN middleware upstream, or `X-NEURO-API-TOKEN`.
+ */
+router.post('/', (req, res) => {
+  try {
+    const { type, text, reason, source, criticality, basis, confidence, payload } = req.body || {};
+
+    // A closed set. An action type NEURO cannot present and cannot execute is a
+    // card that renders bare and then fails on approval — `action-presenter`
+    // has a case for this one, and a test fails if a type ever loses its case.
+    if (type !== 'vantage_suggestion') {
+      return res.status(400).json({ error: `type must be 'vantage_suggestion' (got ${type || 'nothing'})` });
+    }
+    if (!text || !String(text).trim()) return res.status(400).json({ error: 'text is required' });
+    if (!source || !String(source).trim()) {
+      // Not pedantry: an action nobody can attribute is one Nick cannot judge,
+      // and this is the only route by which something outside NEURO proposes
+      // work to him.
+      return res.status(400).json({ error: 'source is required — an unattributable suggestion cannot be judged' });
+    }
+
+    const id = db.createSaraAction(
+      type,
+      {
+        ...(payload && typeof payload === 'object' ? payload : {}),
+        text: String(text).trim(),
+        source: String(source).trim(),
+        // Verbatim, both of them. Null stays null: "nobody said" is not "low".
+        criticality: criticality || null,
+        basis: basis || null,
+      },
+      typeof confidence === 'number' ? confidence : 0.5,
+      reason || `Suggested by ${source}`,
+      null,
+    );
+
+    res.json({ ok: true, id, status: 'pending' });
+  } catch (e) {
+    console.error('[Actions] Intake error:', e);
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // POST /api/actions/:id/approve — approve and execute
 router.post('/:id/approve', async (req, res) => {
   try {

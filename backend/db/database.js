@@ -143,6 +143,15 @@ async function init() {
       db.exec('ALTER TABLE tasks ADD COLUMN ms_plan TEXT');
       console.log('[DB] tasks.ms_plan added');
     }
+    // Migration: tasks.criticality — how urgent the system that sent this task
+    // said it was, in that system's own words. PROVENANCE ONLY, and NEURO never
+    // re-derives it: the whole point is that a task which arrived without being
+    // asked for can answer who claimed what. NULL is the normal case — nothing
+    // Nick creates himself carries one — and null must never be read as "low".
+    if (taskColumns.length && !taskColumns.includes('criticality')) {
+      db.exec('ALTER TABLE tasks ADD COLUMN criticality TEXT');
+      console.log('[DB] tasks.criticality added');
+    }
     // Migration: tasks.domain — 'work' or 'personal'. NEURO was built entirely
     // around work, so every row that exists when this runs IS work; that is
     // Nick's own statement, which makes the DEFAULT a fact rather than a guess
@@ -1515,7 +1524,7 @@ const TASK_FIELDS = [
   'text', 'status', 'moscow', 'moscow_proposed', 'priority', 'due_date', 'source',
   'origin_path', 'origin_line', 'context', 'domain', 'origin', 'origin_proposed',
   'notes', 'ms_id', 'ms_source', 'ms_plan',
-  'estimate_minutes', 'assignee', 'household',
+  'estimate_minutes', 'assignee', 'household', 'criticality',
 ];
 
 function createTaskRow(task) {
@@ -1523,8 +1532,8 @@ function createTaskRow(task) {
     `INSERT INTO tasks (text, status, moscow, moscow_proposed, priority, due_date, source,
                         origin_path, origin_line, context, domain, origin, origin_proposed,
                         notes, ms_id, estimate_minutes,
-                        assignee, household, dedupe_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        assignee, household, criticality, dedupe_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       task.text, task.status || 'open', task.moscow || null,
       task.moscow_proposed ? 1 : 0, task.priority || null,
@@ -1544,6 +1553,9 @@ function createTaskRow(task) {
       // NULL is unassigned and is a real answer, not a missing one.
       task.assignee || null,
       task.household ? 1 : 0,
+      // What the sending system CLAIMED, verbatim. NEURO never derives it, and
+      // NULL — the normal case — means nobody claimed anything, never "low".
+      task.criticality || null,
       task.dedupe_key,
     ]
   );

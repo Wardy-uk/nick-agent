@@ -354,6 +354,11 @@ function createTask(input = {}) {
     // Nick's reaches the household surface unless something says so.
     household: input.household ? 1 : 0,
     ms_id: input.ms_id || null,
+    // Provenance only: how urgent the system that sent this said it was, in its
+    // own words. NEURO stores the claim and never re-derives it — the point is
+    // that a task which arrived unasked can answer who claimed what. Null is
+    // the normal case and is not "low".
+    criticality: input.criticality || null,
     estimate_minutes: normEstimate(
       input.estimateMinutes ?? input.estimate_minutes,
       { exact: input.estimateExact === true },
