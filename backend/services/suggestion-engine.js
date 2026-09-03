@@ -777,7 +777,13 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
         moscow: payload.metadata?.moscow || null,
         priority: payload.metadata?.priority || null,
         due_date: payload.metadata?.dueDate || payload.dueDate || null,
-        source: 'meeting-promotion',
+        // ⚠ The payload's own source wins. This was a hardcoded
+        // 'meeting-promotion' from when a note was the only thing that could
+        // raise one of these; an email-sourced candidate promoted under that
+        // word is a task claiming a provenance it does not have, and
+        // `inferOrigin` reads exactly this field to decide whether somebody is
+        // waiting on it. The default is unchanged for every existing row.
+        source: payload.source || 'meeting-promotion',
         origin_path: payload.sourcePath || null,
         origin_line: payload.sourceLine == null ? null : payload.sourceLine,
       });

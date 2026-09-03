@@ -495,6 +495,24 @@ async function runTriage({ force = false } = {}) {
       console.warn('[EmailTriage] Failed to sync urgent email nudge:', e.message);
     }
 
+    // ── Lift the obligations out ────────────────────────────────────────────
+    //
+    // Triage's own chain ends at classification, and for months that was the
+    // whole of it: an ACTION-lane card said "this email needs attention" and
+    // nothing anywhere said "this is a thing you agreed to do". This asks the
+    // urgent and reply lanes what Nick has actually been asked for and queues
+    // it for REVIEW — never as a task, never auto-promoted.
+    //
+    // Awaited but never allowed to fail triage, exactly like the calendar sync
+    // below it: classifying the inbox is the job, this is a passenger. It reads
+    // `updated` rather than `classified` so it sees dismissals and promotions
+    // as they were just stored.
+    try {
+      await require('./email-actions').extractFromTriage(updated);
+    } catch (e) {
+      console.warn('[EmailTriage] Obligation extraction failed:', e.message);
+    }
+
     const urgentCount = classified.filter(e => e.lane === 'urgent').length;
     const replyCount = classified.filter(e => e.lane === 'reply').length;
     console.log(`[EmailTriage] Classified ${classified.length} emails, ${urgentCount} urgent, ${replyCount} need reply`);

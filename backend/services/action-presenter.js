@@ -332,7 +332,13 @@ const PRESENTERS = {
       field('MoSCoW', p.metadata?.moscow),
       field('Priority', p.metadata?.priority),
       field('Due', p.metadata?.dueDate || p.dueDate),
-      field('From note', p.sourcePath),
+      // A candidate no longer only ever comes from a note. Saying "from note:
+      // email:AAMk..." on an email-sourced row is a card describing itself
+      // wrongly on the screen where it is approved.
+      field(p.extractedFrom === 'email' ? 'From email' : 'From note',
+        p.extractedFrom === 'email'
+          ? [p.email?.from, p.email?.subject].filter(Boolean).join(' — ') || p.sourcePath
+          : p.sourcePath),
     ],
     blockers: trimmed(p.text) ? [] : ['No task text on this action.'],
   }),

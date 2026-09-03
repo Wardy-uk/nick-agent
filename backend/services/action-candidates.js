@@ -181,6 +181,20 @@ function markHandled(relativePath, semanticSignature, status, details = {}) {
   writeReviewState(relativePath, state);
 }
 
+/**
+ * What Nick has already said about this candidate, or null.
+ *
+ * The review state has always been read inside `syncNoteActionCandidates`; this
+ * exposes the same read to the other extractor (`email-actions`), so a rejected
+ * candidate is not re-raised from a second source. One reader, one meaning of
+ * "handled" — the alternative is two extractors disagreeing about whether Nick
+ * has already turned something down.
+ */
+function reviewStatusFor(relativePath, semanticSignature) {
+  if (!relativePath || !semanticSignature) return null;
+  return readReviewState(relativePath).handled[semanticSignature]?.status || null;
+}
+
 function rememberReviewedAction(action, status) {
   const payload = action?.payload || {};
   const relativePath = payload.sourcePath || null;
@@ -947,6 +961,7 @@ module.exports = {
   buildSemanticSignature,
   extractActionCandidates,
   rememberReviewedAction,
+  reviewStatusFor,
   syncNoteActionCandidates,
   shouldSkipPath,
 };
