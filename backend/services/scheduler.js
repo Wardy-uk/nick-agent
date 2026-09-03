@@ -270,51 +270,6 @@ function start() {
     }
   });
 
-  // ── Apple Calendar + Reminders, pulled from iCloud ────────────────────────
-  //
-  // Replaces a phone-initiated push that delivered ONE payload in its life. See
-  // `services/apple-caldav.js` for why the phone cannot be relied on to start
-  // this (Keychain is unreadable while the device is locked) and why it cannot
-  // be triggered remotely either.
-  //
-  // ⚠ Deliberately NOT a `TRACKED_JOBS` catch-up job. It compares live state on
-  // every pass and rewrites a moving window, so a missed run self-corrects and
-  // replaying an old one would write a stale diary over a fresh one — the same
-  // call as `notion-sync` and `bank-holidays`.
-  //
-  // Gated on being configured, checked INSIDE the tick so setting the credential
-  // in Settings takes effect at the next half hour with no restart.
-  cron.schedule('*/30 * * * *', async () => {
-    try {
-      const caldav = require('./apple-caldav');
-      if (!caldav.isConfigured()) return;
-
-      const r = await caldav.sync({ dryRun: false });
-      if (!r.ok) {
-        console.warn(`[Scheduler] Apple CalDAV sync refused: ${r.reason}${r.error ? ' — ' + r.error : ''}`);
-        return;
-      }
-      // A refusal to ingest is the loud case: it means the diary was NOT
-      // refreshed, and a silent skip there is indistinguishable from a quiet day.
-      if (!r.calendarIngested) {
-        console.warn(`[Scheduler] Apple CalDAV: calendar NOT ingested (${r.reason}) — `
-          + `${r.failures.map((f) => f.calendar).join(', ') || 'no calendars failed'}`);
-      } else {
-        console.log(`[Scheduler] Apple CalDAV: ${r.events} event(s), ${r.reminders} reminder(s)`);
-      }
-      // Never swallowed — an unexpandable rule means a series is under-reported,
-      // and a diary that reads emptier than it is books over real commitments.
-      for (const u of r.unsupportedRecurrence) {
-        console.warn(`[Scheduler] Apple CalDAV unexpanded recurrence in "${u.calendar}": ${u.summary} (${u.why})`);
-      }
-      for (const f of r.reminderFailures) {
-        console.warn(`[Scheduler] Apple CalDAV reminder list failed: ${f.list} — ${f.error}`);
-      }
-    } catch (e) {
-      console.error(`[Scheduler] Apple CalDAV sync failed: ${e.message}`);
-    }
-  });
-
   // Every 20 min in working hours — offer NOVA any 1-2-1 transcript that has landed in
   // the vault. Frequent because Nick processes a recording and then goes looking for it
   // in NOVA; a nightly sweep would mean the test he just ran shows nothing for hours.

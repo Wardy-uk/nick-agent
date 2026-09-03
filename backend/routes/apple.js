@@ -17,7 +17,6 @@
 const express = require('express');
 const router = express.Router();
 const appleIngest = require('../services/apple-ingest');
-const appleCaldav = require('../services/apple-caldav');
 
 router.post('/calendar', (req, res) => {
   try {
@@ -55,77 +54,32 @@ router.get('/status', (req, res) => {
   }
 });
 
-// ── CalDAV: the same data, pulled instead of pushed ──────────────────────────
+// ── Why there is no server-side pull here ────────────────────────────────────
 //
-// The push above depends on a Shortcuts automation running a Scriptable script
-// on a phone, which has delivered ONE push in its life — see the header of
-// `services/apple-caldav.js` for why, and why it cannot be fixed from here.
-// These routes are the server-side pull. The push routes stay mounted: they are
-// a working fallback, and nothing here writes until it has a complete read.
+// Tried and REMOVED, 3 Sep 2026. A CalDAV client against caldav.icloud.com was
+// built, tested and run against Nick's real account, and the answer was that the
+// data is not there:
 //
-// ⚠ Registration order matters — `/caldav/...` is declared after the literal
-// `/status` above and shares no prefix with it, but this router has form for the
-// literal-vs-parameter trap, so keep new literals above anything parameterised.
-
-router.get('/caldav/status', (req, res) => {
-  try {
-    res.json(appleCaldav.status());
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-/**
- * Read iCloud. DRY RUN BY DEFAULT — `apply: true` is required to write.
- *
- * The same two-step as `event-parser`, `one-to-one-booking` and `task-blocks`:
- * looking must be free, and the first thing anyone does with a new credential is
- * check what it can see. It also matters more here than usual, because a real
- * run reaches `clearCalendarWindow`.
- */
-router.post('/caldav/sync', async (req, res) => {
-  try {
-    const apply = (req.body || {}).apply === true;
-    const result = await appleCaldav.sync({ dryRun: !apply });
-    res.status(result.ok ? 200 : 400).json(result);
-  } catch (e) {
-    console.error('[AppleCalDAV] Sync failed:', e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-/** What the account can see, without reading or writing any events. */
-router.get('/caldav/collections', async (req, res) => {
-  try {
-    const d = await appleCaldav.discover();
-    res.json({ ok: true, collections: d.collections });
-  } catch (e) {
-    res.status(502).json({ ok: false, error: e.message });
-  }
-});
-
-/**
- * Store the Apple ID and app-specific password.
- *
- * ⚠ The credential is NEVER returned by any route — `configStatus()` reports
- * whether one is set and where it came from, never what it is. Stored in
- * `agent_state` rather than `.env` so a paste works with no restart and nothing
- * lands in the repo, which is PUBLIC (`notion-sync`'s rule, same reasoning).
- *
- * ⚠ It must be an APP-SPECIFIC password from appleid.apple.com. Apple refuses
- * the account password for CalDAV outright, and an app password is revocable on
- * its own without touching the Apple ID.
- */
-router.post('/caldav/credentials', (req, res) => {
-  try {
-    const { appleId, appPassword } = req.body || {};
-    if (!appleId || !appPassword) {
-      return res.status(400).json({ ok: false, error: 'appleId and appPassword are both required' });
-    }
-    res.json({ ok: true, ...appleCaldav.setCredentials(appleId, appPassword) });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
+//   · CALENDARS. iCloud CalDAV exposes only the six iCloud calendars, which hold
+//     dormant history — birthdays from 2003, a lapsed BSAC renewal, series that
+//     ended in 2020, and EIGHT events in the whole of 2026. Nick's actual diary
+//     lives in ward.nickj@gmail.com and 22 other Google/subscribed calendars that
+//     exist on the DEVICE. iCloud has never held them.
+//   · REMINDERS. The list comes back named "Reminders ⚠️" containing exactly two
+//     items: "Where are my reminders?" and "The creator of this list has upgraded
+//     these reminders". That is Apple's placeholder — upgraded Reminders lists are
+//     deliberately not served over CalDAV.
+//
+// Both were measured, not assumed. So EventKit on the phone is not an awkward way
+// to get this data, it is the ONLY way: it sees all 23 calendars and the real
+// Reminders store, and no server-side protocol does.
+//
+// Which means the push below is the design, and its one real fault is worth
+// fixing rather than routing around: the Scriptable script reads its API token
+// from the iOS Keychain, and Keychain items written with the default
+// accessibility are unreadable while the device is locked — so it works in the
+// hand and never in the pocket.
+//
+// Do not rebuild the CalDAV client. It worked; there was nothing to read.
 
 module.exports = router;

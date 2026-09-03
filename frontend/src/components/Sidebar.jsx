@@ -74,11 +74,11 @@ const SECONDARY_ITEMS = [
   // Label only. The view id stays `pi-health` so every deep link, ?view= param
   // and notification route keeps working — the same call as `today` for Now.
   { id: 'pi-health',  label: 'NEURO Health', icon: '▚' },
-  // ⚠ Notion Sync and Apple Sync USED to be entries here and now live inside
-  // Settings (Nick, 3 Sep 2026). Their view ids still route, so every deep link
-  // and ?view= param keeps working — the same call as `pi-health` and `today`.
-  // Do not re-add them here without moving them back out of AdminPanel, or the
-  // same panel mounts twice and two copies fight over one credential.
+  // ⚠ Notion Sync USED to be an entry here and now lives inside Settings (Nick,
+  // 3 Sep 2026). Its view id still routes, so every deep link and ?view= param
+  // keeps working — the same call as `pi-health` and `today`. Do not re-add it
+  // without moving the panel back out of AdminPanel, or it mounts twice and two
+  // copies fight over one credential.
   // `/api/catalogues` shipped with no UI at all — the routable-but-unreachable
   // hole this list already documents for `todos` and `decisions`. Sits by Notion
   // Sync because both are "a thing of Nick's kept somewhere else as well".

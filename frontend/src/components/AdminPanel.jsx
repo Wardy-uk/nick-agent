@@ -2,12 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { apiUrl, setPin as storePin } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import './AdminPanel.css';
-// Mounted as Settings sections rather than sidebar pages (Nick, 3 Sep 2026).
-// Both hold a credential and both have a failure that has to be readable, which
-// is what earned them a door of their own in the first place — but they are
+// Mounted as a Settings section rather than a sidebar page (Nick, 3 Sep 2026):
+// it holds a credential and has a failure that has to be readable, but it is
 // configuration, and configuration lives here.
 import NotionSyncPanel from './NotionSyncPanel';
-import AppleSyncPanel from './AppleSyncPanel';
 import VestaAccounts from './VestaAccounts';
 
 /**
@@ -1041,11 +1039,6 @@ export default function AdminPanel({ pushState = {} }) {
       <div className="admin-section">
         <div className="admin-section-title">Notion Sync</div>
         <NotionSyncPanel embedded />
-      </div>
-
-      <div className="admin-section">
-        <div className="admin-section-title">Apple Sync</div>
-        <AppleSyncPanel embedded />
       </div>
       <RescueTimeCard />
 

@@ -55,7 +55,6 @@ const FocusPanel = lazy(() => import('./components/FocusPanel'));
 const BriefingPanel = lazy(() => import('./components/BriefingPanel'));
 const PiHealthPanel = lazy(() => import('./components/PiHealthPanel'));
 const NotionSyncPanel = lazy(() => import('./components/NotionSyncPanel'));
-const AppleSyncPanel = lazy(() => import('./components/AppleSyncPanel'));
 const CataloguesPanel = lazy(() => import('./components/CataloguesPanel'));
 const ProfilePanel = lazy(() => import('./components/ProfilePanel'));
 const HealthPanel = lazy(() => import('./components/HealthPanel'));
@@ -326,7 +325,6 @@ function AuthenticatedApp() {
       case 'health': return <HealthPanel />;
       case 'pi-health': return <PiHealthPanel />;
       case 'notion-sync': return <NotionSyncPanel />;
-      case 'apple-sync': return <AppleSyncPanel />;
       case 'catalogues': return <CataloguesPanel />;
       case 'about-me': return <ProfilePanel />;
       case 'admin': return <AdminPanel pushState={pushState} />;
