@@ -1079,8 +1079,8 @@ function SuggestedTodoQueue({ items, actingId, selected, onToggleSelect, onSelec
     <section className="todo-suggestions">
       <div className="todo-suggestions-header">
         <div>
-          <div className="todo-suggestions-label">Extracted from notes</div>
-          <div className="todo-suggestions-copy">SARA spotted these in the vault. Approve the uncertain ones; the obvious ones are auto-added.</div>
+          <div className="todo-suggestions-label">Spotted, waiting on you</div>
+          <div className="todo-suggestions-copy">From your meeting notes and your email. Nothing here is a task until you approve it.</div>
         </div>
         <div className="todo-suggestions-header-right">
           <button className="btn btn-secondary btn-sm" onClick={allSelected ? onClearSelection : onSelectAll}>
