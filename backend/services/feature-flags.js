@@ -78,6 +78,16 @@ const FLAGS = [
     impact: 'costs money per photo',
   },
   {
+    key: 'jira_assigned_sync',
+    env: 'JIRA_ASSIGNED_SYNC_ENABLED',
+    default: false,
+    label: 'Turn Jira tickets assigned to you into tasks',
+    description: 'Hourly on weekdays: a ticket assigned to you becomes a task, and the task '
+      + 'closes when the ticket does. Preview exactly what it would do first — the dry run '
+      + 'on Jira status in NEURO Health works whether this is on or off.',
+    impact: 'creates and closes tasks in your list',
+  },
+  {
     key: 'dnd_vault_read_only',
     env: 'DND_VAULT_READ_ONLY',
     default: false,

@@ -278,12 +278,30 @@ app.get('/api/status', async (req, res) => {
     agent: 'NUERO',
     version: '1.0.0',
     uptime: process.uptime(),
-    jira: {
-      configured: jiraService.isConfigured(),
-      status: db.getState('jira_status') || 'unknown',
-      last_sync: db.getState('jira_last_sync'),
-      last_error: db.getState('jira_last_error')
-    },
+    // ⚠ `jira_status` / `jira_last_sync` / `jira_last_error` were read here and
+    // written NOWHERE. Their writer was deleted with the queue feature on 3 July
+    // 2026, so this block reported `status: "ok"` over a two-month-old timestamp
+    // for that entire period — and the Admin page rendered it as "connected ·
+    // Last sync 19:11". A reader outliving its writer, which is the same bug the
+    // queue cache itself was. The keys are left in `agent_state` (harmless, and
+    // deleting them is a destructive migration that buys nothing) but nothing
+    // reads them any more.
+    //
+    // `escalation_last_sync` is the real signal: the escalation poll is the only
+    // Jira read on a timer, every 300s. NEURO Health's Jira row judges the same
+    // key, so the two surfaces cannot disagree.
+    jira: (() => {
+      const lastSync = db.getState('escalation_last_sync');
+      const configured = jiraService.isConfigured();
+      return {
+        configured,
+        // "unknown" rather than "ok" when nothing has reported: a green light
+        // nobody earned is what this block was doing wrong in the first place.
+        status: !configured ? 'not-configured' : (lastSync ? 'ok' : 'unknown'),
+        last_sync: lastSync,
+        last_error: db.getState('escalation_last_error') || ''
+      };
+    })(),
     ai: aiRouting.getStatus(),
     ollamaReachable,
     obsidian: {

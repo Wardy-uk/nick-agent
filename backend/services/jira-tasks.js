@@ -50,8 +50,19 @@ const LINKS_KEY = 'jira_task_links';
 /** The stamp that makes a task Jira-owned. Read by `task-store`'s refusal. */
 const SOURCE = 'jira-assigned';
 
-/** Kill switch. Off by default: it writes real tasks into Nick's list. */
-const ENABLED = process.env.JIRA_ASSIGNED_SYNC_ENABLED === 'true';
+/**
+ * Kill switch. Off by default: it writes real tasks into Nick's list.
+ *
+ * ⚠ Read at CALL time, through the flag registry, not captured into a const at
+ * require time. It was the second form, which is exactly the shape
+ * `feature-flags.js` exists to undo: the value could only change with an .env
+ * edit and a pm2 restart, so the switch the scheduler's own comment claims
+ * "needs no restart to be read" demonstrably did. The environment still WINS
+ * where it is explicitly set — the registry only decides when it is not.
+ */
+function isEnabled() {
+  return require('./feature-flags').isEnabled('jira_assigned_sync');
+}
 
 /**
  * How many tickets one run will turn into tasks.
@@ -113,13 +124,22 @@ function taskTextFor(issue) {
  * so "what would this do" is answerable without doing it.
  */
 async function sync({ apply = false } = {}) {
-  if (!ENABLED) return { ok: false, reason: 'disabled (JIRA_ASSIGNED_SYNC_ENABLED)' };
+  // ⚠ Only APPLYING is gated. The dry run must work while the switch is OFF,
+  // because it is the thing you consult in order to decide whether to turn the
+  // switch on — gating it made the preview unavailable at exactly the moment it
+  // was wanted, and the switch is now one click away in Settings. Nothing below
+  // writes unless `apply`, so an ungated dry run costs two read-only JQL calls.
+  const enabled = isEnabled();
+  if (apply && !enabled) return { ok: false, reason: 'disabled (JIRA_ASSIGNED_SYNC_ENABLED)' };
   if (!jira.isConfigured()) return { ok: false, reason: 'Jira is not configured' };
 
   const links = readLinks();
   const result = {
     ok: true,
     dryRun: !apply,
+    // A preview of work that will never happen on its own reads exactly like a
+    // preview of work that will, so the answer says which it is.
+    enabled,
     assigned: 0,
     created: [],
     closed: [],
@@ -260,6 +280,6 @@ module.exports = {
   readLinks,
   taskTextFor,
   SOURCE,
-  ENABLED,
+  isEnabled,
   MAX_CREATE,
 };

@@ -223,10 +223,39 @@ test('creation is capped, and says so rather than filling the list silently', as
   assert.equal(res.capped, 5);
 });
 
-test('the sync refuses to run when it is switched off', async () => {
-  const real = jiraTasks.ENABLED;
-  assert.equal(typeof real, 'boolean');
-  // The flag is read at load; assert the shape of the refusal on a fresh read.
+test('the switch is read at call time, not captured at require time', () => {
+  assert.equal(typeof jiraTasks.isEnabled, 'function');
   const src = fs.readFileSync(path.join(__dirname, 'jira-tasks.js'), 'utf-8');
-  assert.match(src, /JIRA_ASSIGNED_SYNC_ENABLED === 'true'/);
+  // The whole point of moving this to the registry: a module-level const is why
+  // changing the switch needed a restart. If one comes back, this fails.
+  assert.doesNotMatch(src, /^const ENABLED\s*=/m,
+    'the switch must not be captured into a module-level const');
+  assert.match(src, /feature-flags'\)\.isEnabled\('jira_assigned_sync'\)/,
+    'the switch must be read through the flag registry, so Settings can set it');
+});
+
+test('APPLYING refuses when the switch is off, but the DRY RUN still answers', async () => {
+  const flags = require('./feature-flags');
+  const real = flags.isEnabled;
+  flags.isEnabled = (key) => (key === 'jira_assigned_sync' ? false : real(key));
+  try {
+    const applied = await withJira(
+      { assigned: { issues: [], complete: true }, states: { issues: [], complete: true } },
+      () => jiraTasks.sync({ apply: true }),
+    );
+    assert.equal(applied.ok, false);
+    assert.match(applied.reason, /disabled/);
+
+    // The preview is what you consult BEFORE flipping the switch, so it must
+    // work while the switch is off — and must say that it is off.
+    const preview = await withJira(
+      { assigned: { issues: [], complete: true }, states: { issues: [], complete: true } },
+      () => jiraTasks.sync({ apply: false }),
+    );
+    assert.equal(preview.ok, true);
+    assert.equal(preview.dryRun, true);
+    assert.equal(preview.enabled, false);
+  } finally {
+    flags.isEnabled = real;
+  }
 });

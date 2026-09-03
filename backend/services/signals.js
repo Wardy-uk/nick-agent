@@ -248,6 +248,44 @@ function snapshot(now = new Date()) {
     return { ...r, detail: `${row.n} cached events` };
   });
 
+  // ── Jira ──────────────────────────────────────────────────────────────────
+  //
+  // ⚠ The obvious key is `jira_last_sync`, and it is a TRAP. Nothing has written
+  // it since 3 July 2026 — the day the queue feature was deleted took its writer
+  // with it — so it is frozen at that date alongside `jira_status: "ok"`, and a
+  // row built on it would have shown a permanently stale light for a feature
+  // that works. Same species as the queue cache itself: a reader outliving its
+  // writer. (`/api/status` was still reading all three; fixed in the same change.)
+  //
+  // The live signal is the escalation poll, which runs every 300s and is the
+  // only Jira read on a timer. Checked rather than assumed.
+  guard('jira', 'Jira', 'escalations, and tickets assigned to you', () => {
+    const jira = require('./jira');
+    if (!jira.isConfigured()) return { state: 'off', why: 'no Jira credentials configured' };
+
+    const assignedOn = require('./feature-flags').isEnabled('jira_assigned_sync');
+    // Said on every row, whatever the poll's state: an off switch is a CHOICE
+    // and belongs beside the light rather than hidden behind a healthy one.
+    const assigned = `assigned-ticket sync ${assignedOn ? 'on' : 'off'}`;
+
+    const last = db.getState('escalation_last_sync');
+    if (!last) {
+      return {
+        state: 'never',
+        why: 'the escalation poll has not completed since this backend started',
+        detail: assigned,
+      };
+    }
+    // Polls every 5 minutes; three missed passes is a fault rather than a hiccup.
+    const r = rate(last, 5, now, { staleAfter: 20 });
+    const open = db.getState('escalation_count');
+    return {
+      ...r,
+      why: r.state === 'stale' ? 'the escalation poll has stopped answering' : undefined,
+      detail: `${open == null ? '?' : open} open escalation(s) · ${assigned}`,
+    };
+  });
+
   // ── Vault ─────────────────────────────────────────────────────────────────
   guard('vault', 'Obsidian vault', 'notes, people, meetings — everything she knows', () => {
     const obsidian = require('./obsidian');

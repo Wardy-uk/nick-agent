@@ -35,6 +35,21 @@ test('an opt-in switch defaults OFF — it writes to the outside world', () => {
   assert.equal(flags.isEnabled('day_planner'), false);
   assert.equal(flags.isEnabled('day_planner_health'), false);
   assert.equal(flags.isEnabled('dnd_vault_read_only'), false);
+  // Creates real tasks in the list Nick uses to decide what to do next, and
+  // closes them when the ticket closes. Deliberately opt-in.
+  assert.equal(flags.isEnabled('jira_assigned_sync'), false);
+});
+
+test('the Jira assigned-sync switch is offered in Settings, env-named and impact-labelled', () => {
+  // The switch existed as an env var only, so turning it on meant an SSH
+  // session, an .env edit and a pm2 restart. It is a menu option now, and the
+  // panel needs the env name to say WHY a locked switch cannot be changed.
+  const row = flags.list().find((f) => f.key === 'jira_assigned_sync');
+  assert.ok(row, 'jira_assigned_sync must appear in the switch list');
+  assert.equal(row.envVar, 'JIRA_ASSIGNED_SYNC_ENABLED');
+  assert.equal(row.default, false);
+  assert.ok(row.impact, 'a switch that writes tasks must declare an impact');
+  assert.equal(row.requires, null);
 });
 
 test('a KILL SWITCH defaults ON — flipping it would disable working behaviour', () => {
