@@ -229,6 +229,135 @@ function transcriptFor(fm) {
 }
 
 /**
+ * Nick's diary, as a way of answering "who was that recording with".
+ *
+ * The signals above all read the NOTE. When Plaud names no participants and the note links
+ * nobody — which is most of the HR-flavoured ones, "Performance Review: …", "Role
+ * Confirmation, Leave and WFH Arrangement" — there is nothing in the note to go on, and
+ * the sweep gave up. But the meeting was in the calendar with exactly one person invited,
+ * which is a better answer than "could not tell".
+ *
+ * ⚠ PLAUD TIMESTAMPS ARE UTC WITH NO MARKER ON THEM.
+ *
+ * `start_at: "2026-08-19T13:02:21"` is a 1-2-1 that started at 14:02, and Plaud's own web
+ * UI renders it as 14:02. Graph, meanwhile, is asked for London wall-clock (see the Prefer
+ * header in microsoft.fetchCalendarEvents) and answers with a naked local string. So the
+ * two sides are naked strings in DIFFERENT zones, and comparing them directly would have
+ * matched an afternoon recording against the morning's meetings all summer and worked
+ * perfectly all winter. Both are converted into one frame below before anything is
+ * compared.
+ */
+
+/** Recordings often start a minute or two either side of the booking. */
+const CALENDAR_SLACK_MS = 15 * 60 * 1000;
+
+const LONDON_PARTS = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+});
+
+/** An instant, expressed as London wall-clock in a UTC frame — comparable with Graph's. */
+function londonWallClockMs(instantMs) {
+  const p = {};
+  for (const part of LONDON_PARTS.formatToParts(new Date(instantMs))) p[part.type] = part.value;
+  // Some ICU builds render midnight as hour 24 under hour12:false.
+  const hour = Number(p.hour) % 24;
+  return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), hour, Number(p.minute), Number(p.second));
+}
+
+/** The London calendar date an instant falls on — which is not always the UTC one. */
+function londonDateStr(instantMs) {
+  return new Date(londonWallClockMs(instantMs)).toISOString().slice(0, 10);
+}
+
+/** A naked Plaud timestamp is UTC; one carrying a zone is taken at its word. */
+function plaudInstantMs(startAt) {
+  const raw = String(startAt || '').trim();
+  if (!raw) return null;
+  const ms = Date.parse(/[Zz]|[+-]\d{2}:?\d{2}$/.test(raw) ? raw : `${raw}Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** Graph's naked local string, in the same frame as londonWallClockMs. */
+function graphWallClockMs(dateTime) {
+  const raw = String(dateTime || '').trim();
+  if (!raw) return null;
+  const ms = Date.parse(/[Zz]|[+-]\d{2}:?\d{2}$/.test(raw) ? raw : `${raw}Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * The one direct report Nick's diary puts in the room while the recording was running.
+ *
+ * Pure, so the matching rules are testable without a Graph token. `events` is what
+ * microsoft.fetchCalendarEvents returns; null means the calendar could not be READ, which
+ * is not the same fact as "nothing was booked" and must never be reported as one.
+ */
+function attributeFromEvents(events, startAt, durationMs, reports) {
+  if (!Array.isArray(events) || !events.length) return { person: null, attribution: null };
+  const startMs = plaudInstantMs(startAt);
+  if (startMs === null) return { person: null, attribution: null };
+
+  const recStart = londonWallClockMs(startMs);
+  const recEnd = recStart + (Number(durationMs) > 0 ? Number(durationMs) : 0);
+
+  const byEmail = new Map();
+  const byName = new Map();
+  for (const p of reports) {
+    if (p.email) byEmail.set(String(p.email).toLowerCase(), p.name);
+    byName.set(p.name.toLowerCase(), p.name);
+  }
+
+  const found = new Set();
+  let overlapped = false;
+  for (const ev of events) {
+    if (ev.isAllDay) continue;
+    const showAs = String(ev.showAs || 'busy').toLowerCase();
+    if (showAs === 'cancelled' || showAs === 'free') continue;
+
+    const evStart = graphWallClockMs(ev.start);
+    const evEnd = graphWallClockMs(ev.end);
+    if (evStart === null || evEnd === null) continue;
+    if (!(evStart < recEnd + CALENDAR_SLACK_MS && evEnd > recStart - CALENDAR_SLACK_MS)) continue;
+    overlapped = true;
+
+    const people = [...(ev.attendees || [])];
+    if (ev.organizerEmail || ev.organizer) people.push({ name: ev.organizer, email: ev.organizerEmail });
+    for (const a of people) {
+      const hit = byEmail.get(String(a.email || '').toLowerCase())
+        || byName.get(String(a.name || '').trim().toLowerCase());
+      if (hit) found.add(hit);
+    }
+  }
+
+  if (!overlapped) return { person: null, attribution: null };
+  if (found.size === 1) {
+    return { person: [...found][0], attribution: "the only direct report in Nick's diary at that time" };
+  }
+  if (found.size > 1) {
+    // Say so rather than staying silent: "the diary says this was a group meeting" is a
+    // useful thing for the review screen to show, and it is not the same as no answer.
+    return { person: null, attribution: `${found.size} direct reports in the diary at that time — not a 1-2-1` };
+  }
+  return { person: null, attribution: null };
+}
+
+/** Nick's diary for one London date, fetched at most once per sweep. */
+async function eventsOnDate(dateStr, cache) {
+  if (cache.has(dateStr)) return cache.get(dateStr);
+  let events;
+  try {
+    const microsoft = require('./microsoft');
+    events = await microsoft.fetchCalendarEvents(dateStr, dateStr) || [];
+  } catch {
+    // null, deliberately: a calendar that could not be read must not read as an empty one.
+    events = null;
+  }
+  cache.set(dateStr, events);
+  return events;
+}
+
+/**
  * Is this note a 1-2-1, and on what grounds?
  *
  * `explicit` means somebody SAID so — the note is filed in the 1-2-1 tree, or the title
@@ -363,6 +492,9 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
   // Notes the soft frontmatter signal picked up but nobody could be attributed to. Not
   // failures — reported so a mis-detection is visible rather than silently dropped.
   const ignored = [];
+  // One Graph call per distinct day, and only for notes nothing else could attribute. A
+  // steady-state sweep has no new recordings and so makes none at all.
+  const calendarCache = new Map();
 
   for (const file of walk(meetingsDir, 0, [])) {
     let fm, body;
@@ -392,8 +524,25 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
       || String(fm.note_type || '').toLowerCase() === 'transcript';
     if (isTranscript) continue;
 
-    const { person, attribution } = attribute(fm, file, reports, body);
+    let { person, attribution } = attribute(fm, file, reports, body);
     const participants = participantsFrom(body);
+
+    // Nothing in the note named anybody — ask the diary. Last rather than first on
+    // purpose: who Plaud HEARD and who the note links are statements about the
+    // conversation that happened, while the calendar only says what was booked, and a
+    // 1-2-1 moved to a different person keeps the old invite. So this fills silence, it
+    // does not overrule an answer.
+    if (!person) {
+      const onDate = plaudInstantMs(fm.start_at) !== null
+        ? londonDateStr(plaudInstantMs(fm.start_at))
+        : date;
+      const events = await eventsOnDate(onDate, calendarCache);
+      const fromDiary = attributeFromEvents(events, fm.start_at, fm.duration_ms, reports);
+      if (fromDiary.person || fromDiary.attribution) {
+        person = fromDiary.person;
+        attribution = fromDiary.attribution;
+      }
+    }
 
     // A soft signal is only worth Nick's attention once we can say WHOSE 1-2-1 it was.
     // Offering the unattributable ones would fill the approval queue with team meetings
@@ -437,5 +586,8 @@ async function offerTranscripts({ apply = false, days = DEFAULT_DAYS } = {}) {
 
 module.exports = {
   offerTranscripts,
-  _internals: { attribute, readNote, peopleLinks, participantsFrom, summaryExcerptFrom, oneToOneSignal },
+  _internals: {
+    attribute, readNote, peopleLinks, participantsFrom, summaryExcerptFrom, oneToOneSignal,
+    attributeFromEvents, plaudInstantMs, londonDateStr,
+  },
 };

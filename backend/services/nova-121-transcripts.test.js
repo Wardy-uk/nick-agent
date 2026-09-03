@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const { _internals } = require('./nova-121-transcripts');
-const { attribute, peopleLinks, oneToOneSignal } = _internals;
+const { attribute, peopleLinks, oneToOneSignal, attributeFromEvents } = _internals;
 
 /**
  * Attribution is the dangerous part.
@@ -237,4 +237,90 @@ test('who was actually in the room still outranks the router', () => {
     at('Meetings/2026/08/x.md'), REPORTS, body);
   assert.equal(r.person, 'Nathan Rutland');
   assert.match(r.attribution, /heard speaking/);
+});
+
+/**
+ * Calendar matching, and the timezone trap underneath it.
+ *
+ * Plaud's API returns UTC with NO marker — `2026-08-19T13:02:21` is a 1-2-1 that started
+ * at 14:02, which Plaud's own UI shows as 14:02. Graph is asked for London wall-clock and
+ * also answers with a naked string. Two naked strings in different zones: compare them
+ * directly and the matching works perfectly from late October to late March and is an
+ * hour out for the rest of the year. These pin both sides of that.
+ */
+
+const DIARY = [
+  { name: 'Zoe Rees', email: 'zoe.rees@nurtur.tech' },
+  { name: 'Nathan Rutland', email: 'nathan.rutland@nurtur.tech' },
+];
+const ev = (start, end, attendees, extra = {}) => ({
+  start, end, subject: 'Catch-up',
+  attendees: attendees.map((a) => (typeof a === 'string' ? { name: a, email: '' } : a)),
+  ...extra,
+});
+
+test('BST: a 13:02 UTC recording matches the 14:00 meeting, not the 13:00 one', () => {
+  const events = [
+    ev('2026-08-19T13:00:00', '2026-08-19T13:30:00', ['Nathan Rutland']),
+    ev('2026-08-19T14:00:00', '2026-08-19T14:45:00', ['Zoe Rees']),
+  ];
+  // 34 minutes, the real duration of that recording.
+  const r = attributeFromEvents(events, '2026-08-19T13:02:21', 2047000, DIARY);
+  assert.equal(r.person, 'Zoe Rees', 'the naive string compare would have said Nathan');
+  assert.match(r.attribution, /diary/);
+});
+
+test('GMT: no offset to apply in winter, and the match still lands', () => {
+  const events = [ev('2026-01-14T10:00:00', '2026-01-14T10:30:00', ['Nathan Rutland'])];
+  const r = attributeFromEvents(events, '2026-01-14T10:02:00', 1500000, DIARY);
+  assert.equal(r.person, 'Nathan Rutland');
+});
+
+test('a report is matched on email even when the diary spells the name differently', () => {
+  const events = [ev('2026-08-19T14:00:00', '2026-08-19T14:45:00',
+    [{ name: 'Zoë Rees (Support)', email: 'Zoe.Rees@nurtur.tech' }])];
+  const r = attributeFromEvents(events, '2026-08-19T13:02:21', 2047000, DIARY);
+  assert.equal(r.person, 'Zoe Rees');
+});
+
+test('two direct reports in the diary is a team meeting, and says so', () => {
+  const events = [ev('2026-08-19T14:00:00', '2026-08-19T15:00:00', ['Zoe Rees', 'Nathan Rutland'])];
+  const r = attributeFromEvents(events, '2026-08-19T13:02:21', 2047000, DIARY);
+  assert.equal(r.person, null);
+  assert.match(r.attribution, /not a 1-2-1/);
+});
+
+test('all-day, cancelled and free events are not meetings', () => {
+  for (const extra of [{ isAllDay: true }, { showAs: 'cancelled' }, { showAs: 'free' }]) {
+    const events = [ev('2026-08-19T14:00:00', '2026-08-19T14:45:00', ['Zoe Rees'], extra)];
+    assert.equal(attributeFromEvents(events, '2026-08-19T13:02:21', 2047000, DIARY).person, null,
+      `${JSON.stringify(extra)} should not attribute`);
+  }
+});
+
+test('a meeting nowhere near the recording is not a match', () => {
+  const events = [ev('2026-08-19T09:00:00', '2026-08-19T09:30:00', ['Zoe Rees'])];
+  const r = attributeFromEvents(events, '2026-08-19T13:02:21', 2047000, DIARY);
+  assert.equal(r.person, null);
+  assert.equal(r.attribution, null, 'no overlap is silence, not a verdict');
+});
+
+test('a calendar that could not be read is silence, never "nothing was booked"', () => {
+  // The distinction matters: null must not be reported to Nick as a finding.
+  for (const events of [null, undefined, []]) {
+    const r = attributeFromEvents(events, '2026-08-19T13:02:21', 2047000, DIARY);
+    assert.equal(r.person, null);
+    assert.equal(r.attribution, null);
+  }
+});
+
+test('the organiser counts as somebody in the room', () => {
+  const events = [ev('2026-08-19T14:00:00', '2026-08-19T14:45:00', [],
+    { organizer: 'Zoe Rees', organizerEmail: 'zoe.rees@nurtur.tech' })];
+  assert.equal(attributeFromEvents(events, '2026-08-19T13:02:21', 2047000, DIARY).person, 'Zoe Rees');
+});
+
+test('a recording of unknown length still matches the meeting it started in', () => {
+  const events = [ev('2026-08-19T14:00:00', '2026-08-19T14:45:00', ['Zoe Rees'])];
+  assert.equal(attributeFromEvents(events, '2026-08-19T13:02:21', null, DIARY).person, 'Zoe Rees');
 });
