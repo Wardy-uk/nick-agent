@@ -59,6 +59,79 @@ test('the chat marker leaves the origin COLUMN null — a different question', (
   assert.equal(row.origin_proposed, 0, 'nothing was proposed, so nothing should be flagged as a guess');
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Every writer names itself.
+//
+// The chat-marker bug was only findable by hand-auditing 15 call sites. This is
+// the same shape as `action-presenter.test.js`: scan the source so the next one
+// fails at the moment it is written rather than during the next investigation.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SERVICE_DIRS = [__dirname, path.join(__dirname, '..', 'routes')];
+
+/** Every `createTask({ ... })` call in the backend, with its argument text. */
+function createTaskCallSites() {
+  const sites = [];
+  for (const dir of SERVICE_DIRS) {
+    for (const file of fs.readdirSync(dir)) {
+      if (!file.endsWith('.js') || file.endsWith('.test.js')) continue;
+      const src = fs.readFileSync(path.join(dir, file), 'utf8');
+      // task-store defines createTask; it is the callee, not a caller.
+      if (file === 'task-store.js') continue;
+      const re = /createTask\(\{/g;
+      let m;
+      while ((m = re.exec(src)) !== null) {
+        // Walk to the matching brace so a nested object cannot truncate the arg.
+        let depth = 0;
+        let i = m.index + m[0].length - 1;
+        for (; i < src.length; i++) {
+          if (src[i] === '{') depth++;
+          else if (src[i] === '}') { depth--; if (depth === 0) break; }
+        }
+        sites.push({
+          file,
+          line: src.slice(0, m.index).split('\n').length,
+          arg: src.slice(m.index, i + 1),
+        });
+      }
+    }
+  }
+  return sites;
+}
+
+test('every createTask call site names its source explicitly', () => {
+  const sites = createTaskCallSites();
+  // Positive control: a scan that finds nothing passes by absence, which is how
+  // a broken scan looks exactly like a clean codebase.
+  assert.ok(sites.length >= 10, `expected to find the known call sites, found ${sites.length}`);
+
+  const unnamed = sites.filter(s => !/\bsource:/.test(s.arg));
+  assert.deepEqual(unnamed.map(s => `${s.file}:${s.line}`), [],
+    'these createTask calls do not pass a source, so their tasks would be stored '
+    + '"unattributed" — every writer must name itself');
+});
+
+test('no call site re-implements the unnamed-writer default', () => {
+  // One place decides what an unnamed writer is called. A second `|| 'manual'`
+  // anywhere is how the two come to disagree — and `manual` specifically is the
+  // claim that a person typed it.
+  const offenders = createTaskCallSites()
+    .filter(s => /source:\s*[^,}]*\|\|\s*'manual'/.test(s.arg))
+    .map(s => `${s.file}:${s.line}`);
+  assert.deepEqual(offenders, [],
+    'a call site must not default its own source to "manual"');
+});
+
+test('the store default is unattributed, and says so out loud', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'task-store.js'), 'utf8');
+  assert.doesNotMatch(src, /source:\s*input\.source\s*\|\|\s*'manual'/,
+    'the silent manual default is the bug — it attributes unnamed writes to Nick');
+  assert.match(src, /'unattributed'/);
+  // The log line is the point: a default that fires in silence is what took so
+  // long to notice in the first place.
+  assert.match(src, /console\.warn\([^)]*no source/);
+});
+
 test('the caller passes the key the function actually reads', () => {
   // The bug was a key mismatch, not a wrong value, so the source is what pins
   // it: `trigger` alone reintroduces the fault with every test above still

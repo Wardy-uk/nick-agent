@@ -1784,7 +1784,11 @@ function addTodoToMasterList(text, options = {}) {
     moscow: explicitMoscow,
     priority: options.metadata?.priority || null,
     due_date: options.dueDate || null,
-    source: options.origin || 'manual',
+    // Passed through unset rather than defaulted here: `task-store.createTask`
+    // is the ONE place that decides what an unnamed writer is called, and a
+    // second copy of that default is how the two come to disagree. It used to
+    // read `|| 'manual'`, which is the claim this change exists to stop making.
+    source: options.origin || undefined,
     origin_path: options.sourcePath || null,
   });
 

@@ -263,7 +263,10 @@ function createTask(input = {}) {
   // a call Nick made — the same contract the 12 Aug MoSCoW import used.
   const explicitOrigin = normaliseOrigin(input.origin);
   const inferred = explicitOrigin ? null : inferOrigin({
-    source: input.source || 'manual',
+    // No source is no source. Substituting 'manual' here told the classifier a
+    // human typed it, which is the same untrue claim the stored default made —
+    // harmless today only because `inferOrigin` has no rule for either value.
+    source: input.source || null,
     msSource: input.ms_source || input.msSource || null,
     originPath: input.origin_path || null,
   });
@@ -340,7 +343,28 @@ function createTask(input = {}) {
     moscow_proposed: input.moscowProposed ? 1 : 0,
     priority: normPriority(input.priority),
     due_date: input.due_date || null,
-    source: input.source || 'manual',
+    // ⚠ NOT `|| 'manual'`. That fallback made "manual" a CLAIM rather than a
+    // fact: any writer that forgot to pass a source had its output silently
+    // attributed to Nick, which is how model output from the chat marker came to
+    // look like something he had typed himself. It fails in the one direction
+    // that reads as fine.
+    //
+    // `unattributed` is a positive, greppable value that cannot be mistaken for
+    // a person. Deliberately a STRING rather than null, unlike the `origin`
+    // column: origin has documented null semantics and a small set of readers,
+    // whereas `source` is read all over the estate (`/^MS /.test(t.source)`,
+    // `isJiraOwned`, task-dedupe, the wins ledger) and a null would turn a
+    // provenance gap into a crash somewhere unrelated.
+    //
+    // It should never fire — every call site passes a source explicitly, and
+    // `source-attribution` in this file's test suite scans for one that does
+    // not. If it ever does fire, the log line is the point: a silent default is
+    // exactly what took a year to notice.
+    source: input.source || (() => {
+      console.warn('[Tasks] createTask called with no source — stored as "unattributed". '
+        + `Every writer should name itself. Text: "${text.slice(0, 60)}"`);
+      return 'unattributed';
+    })(),
     origin_path: input.origin_path || null,
     origin_line: input.origin_line == null ? null : input.origin_line,
     context,

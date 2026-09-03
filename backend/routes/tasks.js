@@ -84,7 +84,15 @@ router.post('/', (req, res) => {
       // would give one question two answers. Absent is the normal case and does
       // not mean "low".
       criticality,
-      source: source || 'manual',
+      // ⚠ NOT `|| 'manual'`. This is the human-facing create endpoint, but it is
+      // reachable by any machine client holding the API token, so defaulting
+      // here asserted "a person typed this" on behalf of callers that never said
+      // so — the same untrue claim the store's old default made, one layer up.
+      // The only caller today (TodoPanel's Add task) sends `source: 'manual'`
+      // explicitly, because it is the one place that actually knows. Anything
+      // arriving unnamed is stored `unattributed` by task-store, which is the
+      // single place that decides what an unnamed writer is called.
+      source,
     });
     res.json({ ok: true, ...result });
   } catch (e) {
