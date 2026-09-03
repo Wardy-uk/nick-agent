@@ -21,6 +21,28 @@ function isConfigured() {
   return vaultPath && fs.existsSync(vaultPath);
 }
 
+/**
+ * The vault root, or a loud refusal.
+ *
+ * ⚠ `getVaultPath()` returns `''` when unset, and `path.join('', 'Daily')` is
+ * RELATIVE — so every writer that resolves a path from the root used to create
+ * its folder wherever the process happened to be running, write a real note
+ * into it, and report success. On a dev box that is inside the repo; `Daily/`
+ * and a `STANDUP.md` both turned up in the checkout that way. It is the capture
+ * drop-box bug (`path.join('', 'Tasks', 'Capture.md')`), and it has now been
+ * found in three separate writers, which is the argument for one accessor
+ * rather than six guards.
+ *
+ * It THROWS rather than returning null: these callers are about to write, and
+ * the failure has to be loud. Readers keep using `getVaultPath()` — an empty
+ * path simply fails `existsSync` and reads as "no vault", which is correct.
+ */
+function requireVaultPath() {
+  const vaultPath = getVaultPath();
+  if (!vaultPath) throw new Error('OBSIDIAN_VAULT_PATH is not configured — refusing to write outside the vault');
+  return vaultPath;
+}
+
 function todayDateString() {
   const d = new Date();
   return d.toISOString().split('T')[0]; // YYYY-MM-DD
@@ -56,7 +78,7 @@ function readTodayDailyNote() {
 }
 
 function writeTodayDailyNote(content) {
-  const dir = path.join(getVaultPath(), 'Daily');
+  const dir = path.join(requireVaultPath(), 'Daily');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const notePath = path.join(dir, `${todayDateString()}.md`);
   fs.writeFileSync(notePath, content, 'utf-8');
@@ -74,12 +96,14 @@ function appendToDailyNote(content) {
   // in the checkout. Null rather than a throw, because a daily-note append is
   // bookkeeping on the back of real work — losing the note must not fail the
   // thing that caused it.
-  const vault = getVaultPath();
-  if (!vault) {
+  // Returns null rather than throwing, unlike its siblings: a daily-note
+  // append is bookkeeping on the back of real work, and losing the note must
+  // not fail the thing that caused it.
+  if (!getVaultPath()) {
     console.warn('[Obsidian] OBSIDIAN_VAULT_PATH is not set — daily note not written');
     return null;
   }
-  const dir = path.join(vault, 'Daily');
+  const dir = path.join(requireVaultPath(), 'Daily');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const notePath = path.join(dir, `${todayDateString()}.md`);
   const existing = fs.existsSync(notePath) ? fs.readFileSync(notePath, 'utf-8') : '';
@@ -107,7 +131,8 @@ function readStandup() {
 }
 
 function writeStandup(content) {
-  const vaultPath = getVaultPath();
+  // Unset, this wrote STANDUP.md into the working directory.
+  const vaultPath = requireVaultPath();
   // Write to first found location, or default to root
   const candidates = [
     path.join(vaultPath, 'STANDUP.md'),
@@ -133,7 +158,7 @@ function readPersonNote(name) {
 
 // Update a person note: set frontmatter fields and optionally append a dated notes block
 function updatePersonNote(name, updates) {
-  const notePath = path.join(getVaultPath(), 'People', `${name}.md`);
+  const notePath = path.join(requireVaultPath(), 'People', `${name}.md`);
   if (!fs.existsSync(notePath)) return null;
 
   let content = fs.readFileSync(notePath, 'utf-8');
@@ -226,7 +251,7 @@ function findLatest121Prep(personName) {
 
 // Write a person note's full raw content (used by the vault note editor)
 function writePersonNoteRaw(name, content) {
-  const peopleDir = path.join(getVaultPath(), 'People');
+  const peopleDir = path.join(requireVaultPath(), 'People');
   if (!fs.existsSync(peopleDir)) fs.mkdirSync(peopleDir, { recursive: true });
   const notePath = path.join(peopleDir, `${name}.md`);
   fs.writeFileSync(notePath, content, 'utf-8');
@@ -244,7 +269,7 @@ function listPeopleNotes() {
 
 // Decision log
 function appendDecision(decisionText) {
-  const dir = path.join(getVaultPath(), 'Decision Log');
+  const dir = path.join(requireVaultPath(), 'Decision Log');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const logPath = path.join(dir, 'decisions.md');
   const rawEntry = `\n## ${todayDateString()}\n- ${decisionText}\n`;
@@ -1805,7 +1830,7 @@ function addTodoToMasterList(text, options = {}) {
 
 // Save a meeting note from chat
 function saveMeetingNoteFromChat(title, conversationSummary) {
-  const vaultPath = getVaultPath();
+  const vaultPath = requireVaultPath();
   const meetingsDir = path.join(vaultPath, 'Meetings');
   if (!fs.existsSync(meetingsDir)) fs.mkdirSync(meetingsDir, { recursive: true });
 
@@ -2072,6 +2097,7 @@ function findOrphanedNotes(maxResults = 10) {
 }
 
 module.exports = {
+  requireVaultPath,
   isConfigured,
   readTodayDailyNote,
   writeTodayDailyNote,
