@@ -462,6 +462,49 @@ function _buildPrep(meeting) {
         owed.push({ first, open });
       }
 
+      // ── What was agreed in their LAST 1-2-1 (item 20) ────────────────────
+      //
+      // `waiting_on` and this are different populations and both belong here.
+      // `waiting_on` is parsed out of meeting notes across the whole vault;
+      // these are the actions the person took on in a NOVA-run 1-2-1, written
+      // onto their People card by `nova-121-writeback` in Obsidian task syntax
+      // precisely so they could be found again — and until now nothing found
+      // them at the moment they matter, which is the next 1-2-1.
+      //
+      // Read through `action-items`, so the exclude list, the checkbox parsing
+      // and the person matching are the ones already in use rather than a
+      // second copy. Open only: a ticked box is a thing that got done.
+      //
+      // ⚠ Scoped to the PEOPLE CARD, not to everything the person is named in.
+      // "Here is what you agreed last time" is a specific, checkable claim; a
+      // vault-wide sweep would put anything mentioning them under a heading
+      // saying they committed to it, which is the failure the brief names.
+      for (const att of prep.attendees) {
+        const full = String(att.name || '').trim();
+        if (!full) continue;
+        try {
+          const items = require('../services/action-items')
+            .findActionItems({ person: full, status: 'open', daysBack: 365 })
+            .filter(i => String(i.file || '').startsWith('People/'));
+          if (items.length) {
+            att.agreedLastTime = items.slice(0, 5).map(i => ({
+              text: i.text,
+              dueDate: i.dueDate || null,
+              // The evidence, same rule as `waitingOn` above: a commitment put
+              // in front of Nick before he walks into a room with someone has
+              // to be checkable in one tap.
+              sourcePath: i.file || null,
+              lineNumber: i.lineNumber ?? null,
+            }));
+            att.agreedLastTimeTotal = items.length;
+          }
+        } catch (e) {
+          // Named, never swallowed — an unreadable vault must not render as a
+          // person who agreed to nothing.
+          prep.gaps.push({ input: `agreed-last-time:${full}`, why: e.message });
+        }
+      }
+
       // Oldest first, and only the worst few — the per-attendee blocks already
       // carry the detail, so the topic list is a pointer, not a second copy.
       owed.sort((a, b) => b.open[0].ageDays - a.open[0].ageDays);

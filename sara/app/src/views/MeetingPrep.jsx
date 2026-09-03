@@ -82,6 +82,31 @@ export default function MeetingPrep() {
                       ))}
                     </div>
                   )}
+
+                  {/* What they took on in their LAST 1-2-1 (item 20).
+                      A different population to the block above and worth
+                      keeping apart: these are actions the person accepted in a
+                      recorded conversation, written onto their People card, and
+                      the moment they matter is the next 1-2-1 — which is this
+                      screen. Read-only, and each one names the card it is on. */}
+                  {a.agreedLastTime?.length > 0 && (
+                    <div className="mp__owes">
+                      <div className="mp__owes-h">
+                        Agreed in your last 1-2-1 ({a.agreedLastTimeTotal ?? a.agreedLastTime.length})
+                      </div>
+                      {a.agreedLastTime.map((w, j) => (
+                        <div className="mp__owes-item" key={j}>
+                          <span className="mp__owes-text">{w.text}</span>
+                          {w.dueDate && <span className="mp__owes-age">due {w.dueDate}</span>}
+                          <span className="mp__owes-src">
+                            {w.sourcePath
+                              ? `from ${String(w.sourcePath).split('/').pop().replace(/\.md$/, '')}`
+                              : 'no source recorded — worth checking before raising'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
