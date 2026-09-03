@@ -308,7 +308,16 @@ function attributeFromEvents(events, startAt, durationMs, reports) {
     byName.set(p.name.toLowerCase(), p.name);
   }
 
-  const found = new Set();
+  // Per EVENT, never pooled across them.
+  //
+  // Nick's diary is rarely one meeting deep — a declined all-hands, a team stand-up he is
+  // optional on, and the actual 1-2-1 can all be sitting on the same half hour. Unioning
+  // the attendees of everything that overlaps answered "12 direct reports at that time"
+  // for a one-to-one disciplinary hearing, because a team meeting happened to run
+  // alongside it. So each event is judged on its own, and only events holding exactly one
+  // direct report can name anybody.
+  const soloEvents = new Set();
+  let biggest = 0;
   let overlapped = false;
   for (const ev of events) {
     if (ev.isAllDay) continue;
@@ -323,21 +332,27 @@ function attributeFromEvents(events, startAt, durationMs, reports) {
 
     const people = [...(ev.attendees || [])];
     if (ev.organizerEmail || ev.organizer) people.push({ name: ev.organizer, email: ev.organizerEmail });
+    const inThisEvent = new Set();
     for (const a of people) {
       const hit = byEmail.get(String(a.email || '').toLowerCase())
         || byName.get(String(a.name || '').trim().toLowerCase());
-      if (hit) found.add(hit);
+      if (hit) inThisEvent.add(hit);
     }
+    biggest = Math.max(biggest, inThisEvent.size);
+    if (inThisEvent.size === 1) soloEvents.add([...inThisEvent][0]);
   }
 
   if (!overlapped) return { person: null, attribution: null };
-  if (found.size === 1) {
-    return { person: [...found][0], attribution: "the only direct report in Nick's diary at that time" };
+  if (soloEvents.size === 1) {
+    return { person: [...soloEvents][0], attribution: "the only direct report in Nick's diary at that time" };
   }
-  if (found.size > 1) {
-    // Say so rather than staying silent: "the diary says this was a group meeting" is a
-    // useful thing for the review screen to show, and it is not the same as no answer.
-    return { person: null, attribution: `${found.size} direct reports in the diary at that time — not a 1-2-1` };
+  if (soloEvents.size > 1) {
+    // Two back-to-back 1-2-1s, and the recording spans the handover. Which one it is is
+    // exactly the question, so answer nothing and let Nick pick.
+    return { person: null, attribution: `${soloEvents.size} possible 1-2-1s in the diary at that time` };
+  }
+  if (biggest > 1) {
+    return { person: null, attribution: `${biggest} direct reports in the diary at that time — not a 1-2-1` };
   }
   return { person: null, attribution: null };
 }

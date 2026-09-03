@@ -324,3 +324,26 @@ test('a recording of unknown length still matches the meeting it started in', ()
   const events = [ev('2026-08-19T14:00:00', '2026-08-19T14:45:00', ['Zoe Rees'])];
   assert.equal(attributeFromEvents(events, '2026-08-19T13:02:21', null, DIARY).person, 'Zoe Rees');
 });
+
+test('a concurrent team meeting does not poison the 1-2-1 next to it', () => {
+  // The real failure: a one-to-one disciplinary hearing answered "12 direct reports at
+  // that time" because an all-hands was sitting on the same half hour. Judged per event,
+  // the 1-2-1 still names its person.
+  const events = [
+    ev('2026-08-19T14:00:00', '2026-08-19T15:00:00', ['Zoe Rees', 'Nathan Rutland'],
+      { subject: 'Team stand-up', showAs: 'busy' }),
+    ev('2026-08-19T14:00:00', '2026-08-19T14:45:00', ['Zoe Rees'], { subject: '1-2-1' }),
+  ];
+  const r = attributeFromEvents(events, '2026-08-19T13:02:21', 2047000, DIARY);
+  assert.equal(r.person, 'Zoe Rees');
+});
+
+test('back-to-back 1-2-1s the recording spans are not guessed between', () => {
+  const events = [
+    ev('2026-08-19T14:00:00', '2026-08-19T14:30:00', ['Zoe Rees']),
+    ev('2026-08-19T14:30:00', '2026-08-19T15:00:00', ['Nathan Rutland']),
+  ];
+  const r = attributeFromEvents(events, '2026-08-19T13:02:21', 2047000, DIARY);
+  assert.equal(r.person, null, 'which of the two it is, is exactly the question');
+  assert.match(r.attribution, /2 possible 1-2-1s/);
+});
