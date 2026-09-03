@@ -471,3 +471,49 @@
 }
 
 .admin-pin-consumers strong { opacity: 1; }
+
+/* ------------------------------------------------------- collapsible sections */
+/* Settings had become one long scroll and the tall cards buried everything under
+   them. Closed is the default for the big ones; the header keeps a hint so
+   folding a section can never hide that something needs attention. */
+
+.admin-collapsible-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.admin-collapsible-toggle:hover .admin-collapsible-label { text-decoration: underline; }
+.admin-collapsible-toggle:focus-visible { outline: 2px solid var(--text-muted); outline-offset: 3px; }
+
+.admin-collapsible-chevron {
+  flex: 0 0 auto;
+  font-size: 11px;
+  opacity: 0.7;
+  width: 12px;
+}
+
+.admin-collapsible-label { flex: 0 1 auto; }
+
+/* Stays visible while closed — this is what stops a folded section hiding a
+   problem. Pushed right so it reads as status rather than as part of the name. */
+.admin-collapsible-hint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: normal;
+}
+
+.admin-collapsible-body { margin-top: 12px; }
+
+/* A closed section is just its header, so it should not carry a card's worth of
+   padding underneath. */
+.admin-collapsible:not(.is-open) { padding-bottom: 12px; }

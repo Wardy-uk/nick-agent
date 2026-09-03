@@ -8,6 +8,58 @@ import './AdminPanel.css';
 import NotionSyncPanel from './NotionSyncPanel';
 import VestaAccounts from './VestaAccounts';
 
+
+/**
+ * A Settings section that folds away.
+ *
+ * Settings had become a single long scroll, and the tall cards — the Notion
+ * mapping table above all — buried everything under them.
+ *
+ * ⚠ THE RULE: collapsing must never hide that something needs attention.
+ * A section closed over a broken integration is the always-red banner's mirror
+ * image — one hides the warning, the other cries wolf, and both end with nobody
+ * reading it. So the header carries a `hint`, which stays visible closed, and
+ * anything wanting attention says so there.
+ *
+ * Open/closed is remembered per section in localStorage: it is a per-browser
+ * convenience, not state the server has any business knowing. A read that throws
+ * (private window, blocked site data) falls back to `defaultOpen` rather than
+ * breaking the page.
+ */
+export function CollapsibleSection({ title, hint = null, defaultOpen = false, children }) {
+  const key = 'neuro_settings_open:' + title;
+  const [open, setOpen] = useState(() => {
+    try {
+      const v = localStorage.getItem(key);
+      return v === null ? defaultOpen : v === '1';
+    } catch { return defaultOpen; }
+  });
+
+  const toggle = () => {
+    setOpen((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(key, next ? '1' : '0'); } catch { /* not worth breaking over */ }
+      return next;
+    });
+  };
+
+  return (
+    <div className={'admin-section admin-collapsible' + (open ? ' is-open' : '')}>
+      <button
+        type="button"
+        className="admin-section-title admin-collapsible-toggle"
+        onClick={toggle}
+        aria-expanded={open}
+      >
+        <span className="admin-collapsible-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
+        <span className="admin-collapsible-label">{title}</span>
+        {hint && <span className="admin-collapsible-hint">{hint}</span>}
+      </button>
+      {open && <div className="admin-collapsible-body">{children}</div>}
+    </div>
+  );
+}
+
 /**
  * Change the NEURO PIN.
  *
@@ -331,8 +383,7 @@ function FeatureSwitches() {
   if (!flags) return null;
 
   return (
-    <div className="admin-section">
-      <div className="admin-section-title">Switches</div>
+    <CollapsibleSection title="Switches">
       <div className="admin-ms-section">
         {flags.map((f) => (
           <div key={f.key} className={`admin-flag${f.blockedBy ? ' admin-flag--blocked' : ''}`}>
@@ -357,7 +408,7 @@ function FeatureSwitches() {
         ))}
         {error && <div className="admin-error">{error}</div>}
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }
 
@@ -962,13 +1013,11 @@ export default function AdminPanel({ pushState = {} }) {
         <ChangePinSection />
       </div>
 
-      <div className="admin-section">
-        <div className="admin-section-title">AI & SARA</div>
+      <CollapsibleSection title="AI & SARA">
         <AiSettingsSection />
-      </div>
+      </CollapsibleSection>
 
-      <div className="admin-section">
-        <div className="admin-section-title">Microsoft 365 Authentication</div>
+      <CollapsibleSection title="Microsoft 365 Authentication" hint={status.microsoft?.authenticated ? 'connected' : 'not connected'}>
         <div className="admin-ms-section">
           {status.microsoft?.authenticated && !deviceCode ? (
             <>
@@ -1032,14 +1081,13 @@ export default function AdminPanel({ pushState = {} }) {
           )}
           {authError && <div className="admin-error">{authError}</div>}
         </div>
-      </div>
+      </CollapsibleSection>
 
       <PlaudSyncCard plaud={status.plaud} onRefresh={fetchStatus} />
 
-      <div className="admin-section">
-        <div className="admin-section-title">Notion Sync</div>
+      <CollapsibleSection title="Notion Sync">
         <NotionSyncPanel embedded />
-      </div>
+      </CollapsibleSection>
       <RescueTimeCard />
 
       <VestaAccounts />
