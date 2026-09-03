@@ -124,6 +124,22 @@ function isUsable(v) {
 // mix on one payload. Discovery rather than a hardcoded `_2`, because the next
 // re-registration would break it again and would do so just as silently.
 
+// Every entity id that belongs to THIS phone, so `phoneEntity` can resolve the
+// suffix PER KEY rather than assuming one holds device-wide. Scoped to the base
+// deliberately: a set carrying every entity in HA would pull other people's
+// devices into this object, which is both wrong and noisy to log.
+function _phoneEntityIds(states, base) {
+  const esc = String(base).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // The boundary matters — `nicks_iphonex_*` is a different device.
+  const re = new RegExp(`^[a-z_]+\\.${esc}(?:_.+)?$`);
+  const out = new Set();
+  for (const e of states) {
+    if (!e || typeof e.entity_id !== 'string') continue;
+    if (re.test(e.entity_id)) out.add(e.entity_id);
+  }
+  return out;
+}
+
 // PURE. Returns the suffix to append to every phone entity id, and how that was
 // decided. No network, no clock beyond the timestamps in the data.
 function resolvePhoneEntities(states = [], configured = PHONE_PREFIX) {
@@ -131,6 +147,9 @@ function resolvePhoneEntities(states = [], configured = PHONE_PREFIX) {
   // reasonable thing for a person to have set, and it is the wrong shape rather
   // than a typo, so it is corrected instead of refused.
   const base = String(configured || '').replace(/_\d+$/, '');
+
+  // Which ids actually exist, so `phoneEntity` can decide per key.
+  const ids = _phoneEntityIds(states, base);
 
   // `_battery_level` is the anchor: every Companion install reports it, it is
   // never `unavailable` on a live phone, and it cannot collide with an
@@ -155,7 +174,7 @@ function resolvePhoneEntities(states = [], configured = PHONE_PREFIX) {
   if (!found.length) {
     // "We could not find the phone" must not read the same as "the phone is
     // quiet". Fall back to the bare base so behaviour is the historical one.
-    return { base, suffix: '', source: 'none', reportingAt: null, candidates: [] };
+    return { base, suffix: '', source: 'none', reportingAt: null, candidates: [], ids };
   }
 
   found.sort((a, b) => b.at - a.at);
@@ -166,13 +185,36 @@ function resolvePhoneEntities(states = [], configured = PHONE_PREFIX) {
     source: best.suffix === '' && base === configured ? 'configured' : 'discovered',
     reportingAt: best.at ? new Date(best.at).toISOString() : null,
     candidates: found.map(f => ({ entityId: f.entityId, at: f.at ? new Date(f.at).toISOString() : null })),
+    ids,
   };
 }
 
-/** The full entity id for one phone sensor, under the resolved suffix. */
+/**
+ * The full entity id for one phone sensor.
+ *
+ * ⚠ The suffix is resolved PER KEY, not device-wide (3 Sep 2026). When the
+ * Companion app gained Apple Health sensors, HA created them with NO suffix —
+ * `sensor.nicks_iphone_heart_rate` — while every pre-existing entity kept `_2`,
+ * because the health keys had never existed under the first registration and so
+ * collided with nothing. A device-wide suffix therefore asked for
+ * `sensor.nicks_iphone_heart_rate_2`, which does not exist, and every health read
+ * returned null — silently, and for the same reason as the five-week outage
+ * above: the entity was not stale, it was absent.
+ *
+ * So `suffix` is a DEFAULT and the entity set is the arbiter: prefer the suffixed
+ * id where it exists, fall back to the bare one, and only guess the suffixed form
+ * when neither is present — which keeps the historical behaviour for an empty or
+ * unreadable state list.
+ */
 function phoneEntity(resolved, domain, name) {
   const stem = name ? `${resolved.base}_${name}` : resolved.base;
-  return `${domain}.${stem}${resolved.suffix}`;
+  const suffixed = `${domain}.${stem}${resolved.suffix}`;
+  const ids = resolved && resolved.ids;
+  if (!ids || !ids.size) return suffixed;
+  if (ids.has(suffixed)) return suffixed;
+  const bare = `${domain}.${stem}`;
+  if (ids.has(bare)) return bare;
+  return suffixed;
 }
 
 // Logged once per changed answer rather than per call — this runs on every chat
