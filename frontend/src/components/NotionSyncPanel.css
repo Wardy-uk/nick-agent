@@ -275,3 +275,6 @@
   .ns-row-main { flex-direction: column; align-items: stretch; }
   .ns-arrow { display: none; }
 }
+
+/* See AppleSyncPanel.css — same reason. */
+.notion-sync.ns-embedded { padding: 0; max-width: none; }

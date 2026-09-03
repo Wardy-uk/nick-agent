@@ -95,7 +95,11 @@ function ConnectBox({ onSaved }) {
   );
 }
 
-export default function AppleSyncPanel() {
+/**
+ * `embedded` mounts this inside Settings rather than as a page of its own —
+ * see NotionSyncPanel for the same prop and the same reason.
+ */
+export default function AppleSyncPanel({ embedded = false }) {
   const [status, setStatus] = useState(null);
   const [statusError, setStatusError] = useState(null);
   const [collections, setCollections] = useState(null);
@@ -154,9 +158,9 @@ export default function AppleSyncPanel() {
   const previewClean = preview && preview.ok && preview.failures && preview.failures.length === 0;
 
   return (
-    <div className="apple-sync">
+    <div className={embedded ? 'apple-sync as-embedded' : 'apple-sync'}>
       <div className="as-head">
-        <h2>Apple Sync</h2>
+        {!embedded && <h2>Apple Sync</h2>}
         <p className="as-muted">
           Your personal calendar and Reminders, read from iCloud by NEURO itself.
           Nothing runs on your phone.

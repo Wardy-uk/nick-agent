@@ -167,7 +167,12 @@ const KINDS = [
   },
 ];
 
-export default function NotionSyncPanel() {
+/**
+ * `embedded` mounts this inside Settings rather than as a page of its own: it
+ * drops the page chrome (its own <h2> and page padding) so it reads as a section
+ * of Settings instead of a page nested in a page. Nothing else changes.
+ */
+export default function NotionSyncPanel({ embedded = false }) {
   const [state, setState] = useState(null);
   const [rows, setRows] = useState([]);
   const [dirty, setDirty] = useState(false);
@@ -265,7 +270,7 @@ export default function NotionSyncPanel() {
     load();
   };
 
-  if (!state) return <div className="notion-sync"><p className="ns-muted">Loading…</p></div>;
+  if (!state) return <div className={embedded ? 'notion-sync ns-embedded' : 'notion-sync'}><p className="ns-muted">Loading…</p></div>;
 
   // ── Coverage, derived from what is already on screen ───────────────────────
   //
@@ -351,9 +356,9 @@ export default function NotionSyncPanel() {
   const unmapped = coverageRows.filter((c) => c.kind === 'unmapped');
 
   return (
-    <div className="notion-sync">
+    <div className={embedded ? 'notion-sync ns-embedded' : 'notion-sync'}>
       <header className="ns-head">
-        <h2>Notion sync</h2>
+        {!embedded && <h2>Notion sync</h2>}
         <p className="ns-muted">
           Named Notion page trees, kept in step with Obsidian parent folders.
           Nothing is ever deleted on either side.

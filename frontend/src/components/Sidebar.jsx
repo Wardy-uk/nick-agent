@@ -74,15 +74,11 @@ const SECONDARY_ITEMS = [
   // Label only. The view id stays `pi-health` so every deep link, ?view= param
   // and notification route keeps working — the same call as `today` for Now.
   { id: 'pi-health',  label: 'NEURO Health', icon: '▚' },
-  // Configuration, but it writes to an external workspace, so it gets its own
-  // entry rather than hiding inside Settings — the mapping table is the whole
-  // safety model and needs to be somewhere Nick can actually find it.
-  { id: 'notion-sync', label: 'Notion Sync', icon: '⇄' },
-  // Personal calendar + Reminders, pulled from iCloud by NEURO itself. Sits by
-  // Notion Sync because both are "somebody else's system, kept in step with
-  // ours" — and it needs a door of its own because the credential lives here
-  // and a failed read has to be readable, not just logged.
-  { id: 'apple-sync', label: 'Apple Sync', icon: '⌘' },
+  // ⚠ Notion Sync and Apple Sync USED to be entries here and now live inside
+  // Settings (Nick, 3 Sep 2026). Their view ids still route, so every deep link
+  // and ?view= param keeps working — the same call as `pi-health` and `today`.
+  // Do not re-add them here without moving them back out of AdminPanel, or the
+  // same panel mounts twice and two copies fight over one credential.
   // `/api/catalogues` shipped with no UI at all — the routable-but-unreachable
   // hole this list already documents for `todos` and `decisions`. Sits by Notion
   // Sync because both are "a thing of Nick's kept somewhere else as well".

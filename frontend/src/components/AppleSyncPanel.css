@@ -119,3 +119,7 @@
 /* The one button that writes. Marked, but still disabled until a dry run has
    been done — the two-step is the safety, not the colour. */
 .apple-sync button.as-primary { border-color: var(--success); }
+
+/* Mounted as a Settings section rather than a page: the page chrome comes from
+   Settings, so this drops its own. */
+.apple-sync.as-embedded { padding: 0; max-width: none; }

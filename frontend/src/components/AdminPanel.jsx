@@ -2,6 +2,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { apiUrl, setPin as storePin } from '../api';
 import useCachedFetch from '../useCachedFetch';
 import './AdminPanel.css';
+// Mounted as Settings sections rather than sidebar pages (Nick, 3 Sep 2026).
+// Both hold a credential and both have a failure that has to be readable, which
+// is what earned them a door of their own in the first place — but they are
+// configuration, and configuration lives here.
+import NotionSyncPanel from './NotionSyncPanel';
+import AppleSyncPanel from './AppleSyncPanel';
 import VestaAccounts from './VestaAccounts';
 
 /**
@@ -369,222 +375,6 @@ function FeatureSwitches() {
  * working surface, not a setting — putting it here would bury it, and Settings
  * is where you come to connect a thing, not to operate it.
  */
-function NotionConnectCard({ notion, onRefresh }) {
-  const [token, setToken] = useState('');
-  const [error, setError] = useState(null);
-  const [busy, setBusy] = useState(false);
-
-  const post = async (path, body, method = 'POST') => {
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await fetch(apiUrl(`/api/notion-sync${path}`), {
-        method,
-        headers: body ? { 'Content-Type': 'application/json' } : undefined,
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const data = await r.json();
-      if (data.ok === false) setError(data.error || 'That did not work.');
-      else { setToken(''); onRefresh(); }
-    } catch (e) {
-      setError(e.message);
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <div className="admin-section">
-      <div className="admin-section-title">Notion</div>
-      <div className="admin-ms-section">
-        {!notion?.configured ? (
-          <>
-            <p className="admin-hint">
-              Create an integration at{' '}
-              <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer">
-                notion.so/my-integrations
-              </a>{' '}
-              with read, update and insert content capabilities, then paste its token here.
-              Afterwards, share each parent page with it in Notion (⋯ → Connections) — the
-              token on its own grants access to nothing.
-            </p>
-            <div className="admin-inline-form">
-              <input
-                type="password"
-                value={token}
-                placeholder="ntn_…"
-                autoComplete="off"
-                spellCheck="false"
-                onChange={(e) => setToken(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && token && post('/token', { token })}
-              />
-              <button
-                className="admin-btn"
-                disabled={!token || busy}
-                onClick={() => post('/token', { token })}
-              >
-                {busy ? 'Connecting…' : 'Connect Notion'}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="admin-hint">
-              {notion.mappings > 0
-                ? `${notion.mappings} folder${notion.mappings === 1 ? '' : 's'} mapped.`
-                : 'Connected, but no folders are mapped yet — nothing will sync until one is.'}
-              {' '}Map folders on the Notion Sync screen.
-            </p>
-            <label className="admin-toggle">
-              <input
-                type="checkbox"
-                checked={Boolean(notion.autoSync)}
-                disabled={busy}
-                onChange={(e) => post('/auto', { enabled: e.target.checked })}
-              />
-              <span>Sync automatically every 15 minutes</span>
-            </label>
-            {/* An env-set token cannot be changed from here, so no button is
-                offered rather than one that silently does nothing. */}
-            {notion.credentialSource === 'stored' && (
-              <button className="admin-btn" disabled={busy} onClick={() => post('/token', null, 'DELETE')}>
-                Disconnect
-              </button>
-            )}
-            {notion.credentialSource === 'env' && (
-              <p className="admin-hint">Token is set in the environment, so it can’t be changed here.</p>
-            )}
-          </>
-        )}
-        {error && <div className="admin-error">{error}</div>}
-      </div>
-    </div>
-  );
-}
-
-/**
- * RescueTime — the key, and whether it is actually watching.
- *
- * ⚠ The second line is the whole card. Measured over three months (2 Sep 2026),
- * RescueTime had 9 blind weekdays holding 19% of all recorded work — including
- * one where it logged 0.16h against 8.21h measured on the same machine — and its
- * own dashboard was green throughout. So this never says "Connected" and stops
- * there: it says whether RescueTime agrees with what NEURO's own agent measured.
- *
- * Self-contained rather than fed from the shared status payload: it is the only
- * consumer of these figures, and the agreement read is a join it would otherwise
- * push onto a status endpoint several other cards depend on.
- */
-export function RescueTimeCard() {
-  const [status, setStatus] = useState(null);
-  const [key, setKey] = useState('');
-  const [error, setError] = useState(null);
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch(apiUrl('/api/rescuetime/status'));
-      setStatus(await r.json());
-    } catch (e) {
-      setError(e.message);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const send = async (path, body, method = 'POST') => {
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await fetch(apiUrl(`/api/rescuetime${path}`), {
-        method,
-        headers: body ? { 'Content-Type': 'application/json' } : undefined,
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const data = await r.json();
-      if (data.ok === false) setError(data.error || (data.gaps && data.gaps[0] && data.gaps[0].why) || 'That did not work.');
-      else setKey('');
-      await load();
-    } catch (e) {
-      setError(e.message);
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <div className="admin-section">
-      <div className="admin-section-title">RescueTime</div>
-      <div className="admin-ms-section">
-        {!status?.configured ? (
-          <>
-            <p className="admin-hint">
-              Get a key from{' '}
-              <a href="https://www.rescuetime.com/anapi/manage" target="_blank" rel="noreferrer">
-                rescuetime.com/anapi/manage
-              </a>{' '}
-              and paste it here. NEURO takes the category and browser-domain split only —
-              never the productivity pulse, never window titles — and checks every day
-              against what its own desktop agent measured.
-            </p>
-            <div className="admin-inline-form">
-              <input
-                type="password"
-                value={key}
-                placeholder="API key"
-                autoComplete="off"
-                spellCheck="false"
-                onChange={(e) => setKey(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && key && send('/key', { key })}
-              />
-              <button className="admin-btn" disabled={!key || busy} onClick={() => send('/key', { key })}>
-                {busy ? 'Connecting…' : 'Connect RescueTime'}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            {/* Three distinct readings, and they must not look alike: not enough
-                data to judge, agreeing, and demonstrably missing days. */}
-            {status.state === 'calibrating' && (
-              <p className="admin-hint">
-                Connected. Checking it against your own desktop agent —{' '}
-                {status.judged} of {status.needed} comparable days so far, so there is not
-                yet enough overlap to say whether it is watching reliably.
-              </p>
-            )}
-            {status.state === 'agree' && (
-              <p className="admin-hint">
-                Agrees with the desktop agent on all {status.judged} measured days
-                {status.unknown ? ` (${status.unknown} more couldn't be compared)` : ''}.
-              </p>
-            )}
-            {status.state === 'under' && (
-              <div className="admin-error">
-                RescueTime under-reported on {status.under} of the last {status.judged} measured
-                days{status.days?.length ? `: ${status.days.slice(0, 5).join(', ')}` : ''}.
-                It is probably not running on every machine — its own dashboard will look fine.
-              </div>
-            )}
-            <div className="admin-inline-form">
-              <button className="admin-btn" disabled={busy} onClick={() => send('/sync', {})}>
-                {busy ? 'Syncing…' : 'Sync now'}
-              </button>
-              {/* An env-set key cannot be changed from here, so no button is offered
-                  rather than one that silently does nothing. */}
-              {status.credentialSource === 'stored' && (
-                <button className="admin-btn" disabled={busy} onClick={() => send('/key', null, 'DELETE')}>
-                  Disconnect
-                </button>
-              )}
-            </div>
-            {status.credentialSource === 'env' && (
-              <p className="admin-hint">Key is set in the environment, so it can’t be changed here.</p>
-            )}
-          </>
-        )}
-        {error && <div className="admin-error">{error}</div>}
-      </div>
-    </div>
-  );
-}
-
 function PlaudSyncCard({ plaud, onRefresh }) {
   const [syncing, setSyncing] = useState(false);
   const [result, setResult] = useState(null);
@@ -1136,7 +926,15 @@ export default function AdminPanel({ pushState = {} }) {
 
       <PlaudSyncCard plaud={status.plaud} onRefresh={fetchStatus} />
 
-      <NotionConnectCard notion={status.notion} onRefresh={fetchStatus} />
+      <div className="admin-section">
+        <div className="admin-section-title">Notion Sync</div>
+        <NotionSyncPanel embedded />
+      </div>
+
+      <div className="admin-section">
+        <div className="admin-section-title">Apple Sync</div>
+        <AppleSyncPanel embedded />
+      </div>
       <RescueTimeCard />
 
       <VestaAccounts />
