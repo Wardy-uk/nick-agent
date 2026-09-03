@@ -411,6 +411,14 @@ async function start() {
   await db.init();
   db.setState('imports_sweep_running', 'false');
 
+  // Bring stored dedupe keys up to the current key length. Idempotent, and it
+  // has to run BEFORE anything reads a task by its key: a row keyed at the old
+  // 80 characters is not findable by a key computed at 200, and nothing would
+  // say so — the lookups just return nothing and every caller carries on as
+  // though the task did not exist.
+  try { require('./services/task-store').rekeyAll(); }
+  catch (e) { console.warn('[task-store] re-key skipped:', e.message); }
+
   // Lift waiting-on out of the KV blob into its table. No-ops once done, and
   // leaves the KV copy in place as the rollback path.
   try { require('./services/waiting-on').migrateFromState(); }

@@ -49,11 +49,41 @@ function normalizeText(text) {
     .replace(/\s+/g, ' ');
 }
 
+/**
+ * How much of the normalised text the key keeps.
+ *
+ * ⚠ It was 80, and 80 is a latent way to LOSE A TASK. `dedupe_key` is UNIQUE
+ * and a second sighting FOLDS into the first, silently and by design — so two
+ * genuinely different commitments that happen to share their first eighty
+ * normalised characters become one row, and the second one simply never
+ * appears. That is not a far-fetched shape for the text this store actually
+ * holds: the commitments extracted from meeting notes routinely open with the
+ * same long preamble ("work with the rest of customer care to identify what the
+ * twelve customer-facing knowledge base articles...") and differ only in the
+ * clause that says what to DO. Eighty characters is roughly a dozen words.
+ *
+ * 200 is chosen rather than a hash because the key stays READABLE — it is
+ * inspected by hand when a fold looks wrong, and six callers outside this module
+ * compute it and look a task up by it. A hash would answer the collision
+ * question and make every one of those debugging sessions harder.
+ *
+ * ⚠ Changing this changes every stored key, so `rekeyAll()` below exists and
+ * runs at startup. Without it, a task whose text is longer than 80 characters
+ * would stop being findable by its own key the moment this shipped — the mirror
+ * suppression, focus-session matching and task-import folding all go through
+ * `getTaskByDedupeKey`, so it would present as duplicates appearing everywhere
+ * rather than as anything obviously to do with a key length.
+ */
+const KEY_LENGTH = 200;
+
+/** Room for the ` #domain` suffix a cross-domain clash appends. */
+const KEY_COLUMN_MAX = KEY_LENGTH + 20;
+
 function dedupeKey(text) {
   const norm = normalizeText(text);
-  // Long tails differ more often than they matter (a trailing clause, a reworded
-  // aside), so key on the first 80 normalised chars.
-  return norm.slice(0, 80) || norm;
+  // The tail differs more often than it matters (a trailing clause, a reworded
+  // aside), so the key is still a prefix rather than the whole string.
+  return norm.slice(0, KEY_LENGTH) || norm;
 }
 
 /** Numeric 1-3 priority → the high/normal/low string the rest of NEURO speaks. */
@@ -292,7 +322,7 @@ function createTask(input = {}) {
   let key = baseKey;
   let existing = db.getTaskByDedupeKey(key);
   if (existing && existing.domain && existing.domain !== domain) {
-    key = `${baseKey} #${domain}`.slice(0, 100);
+    key = `${baseKey} #${domain}`.slice(0, KEY_COLUMN_MAX);
     existing = db.getTaskByDedupeKey(key);
   }
 
@@ -471,7 +501,7 @@ function updateTask(id, fields = {}) {
     let key = dedupeKey(text);
     let clash = db.getTaskByDedupeKey(key);
     if (clash && clash.id !== id && clash.domain && clash.domain !== domain) {
-      key = `${key} #${domain}`.slice(0, 100);
+      key = `${key} #${domain}`.slice(0, KEY_COLUMN_MAX);
       clash = db.getTaskByDedupeKey(key);
     }
     if (clash && clash.id !== id) throw new Error(`Another task already has that text (#${clash.id})`);
@@ -625,7 +655,66 @@ function deleteTask(id) {
   return changed > 0;
 }
 
+/**
+ * Bring every stored `dedupe_key` up to the current KEY_LENGTH.
+ *
+ * Runs at startup, and is the other half of widening the key: a row keyed at 80
+ * characters is not findable by a key computed at 200, and nothing would have
+ * said so — `getTaskByDedupeKey` would simply return nothing and every caller
+ * would carry on as though the task did not exist.
+ *
+ * Idempotent: it only writes where the recomputed key differs, so a second run
+ * reports zero. Safe to widen through: a longer key is strictly more specific
+ * than the prefix it extends, so two rows that were distinct at 80 cannot
+ * collide at 200.
+ *
+ * ⚠ A row that WOULD collide is left alone and reported rather than written.
+ * That can only happen if two rows already share a longer prefix through some
+ * route this does not know about, and in that case refusing keeps both rows
+ * reachable — where writing would fail the UNIQUE constraint and take startup
+ * with it.
+ */
+function rekeyAll() {
+  let checked = 0;
+  let rekeyed = 0;
+  const refused = [];
+  try {
+    const rows = db.all('SELECT id, text, domain, dedupe_key FROM tasks');
+    const taken = new Map(rows.map(r => [r.dedupe_key, r.id]));
+    for (const row of rows) {
+      checked += 1;
+      let next = dedupeKey(row.text);
+      if (!next || next === row.dedupe_key) continue;
+      // Preserve the cross-domain suffix if this row carries one.
+      if (/ #(work|personal)$/.test(row.dedupe_key || '')) {
+        next = `${next} #${row.domain || 'work'}`.slice(0, KEY_COLUMN_MAX);
+        if (next === row.dedupe_key) continue;
+      }
+      const clash = taken.get(next);
+      if (clash != null && clash !== row.id) {
+        refused.push({ id: row.id, key: next, clashesWith: clash });
+        continue;
+      }
+      db.updateTaskRow(row.id, { dedupe_key: next });
+      taken.delete(row.dedupe_key);
+      taken.set(next, row.id);
+      rekeyed += 1;
+    }
+  } catch (e) {
+    console.warn('[TaskStore] Could not re-key tasks:', e.message);
+    return { ok: false, error: e.message, checked, rekeyed };
+  }
+  if (rekeyed) console.log(`[TaskStore] Re-keyed ${rekeyed}/${checked} task(s) to ${KEY_LENGTH}-char dedupe keys`);
+  if (refused.length) {
+    console.warn(`[TaskStore] ⚠ ${refused.length} task(s) left on their old key — the new one is already taken:`,
+      refused.map(r => `#${r.id} clashes with #${r.clashesWith}`).join(', '));
+  }
+  return { ok: true, checked, rekeyed, refused };
+}
+
 module.exports = {
+  KEY_LENGTH,
+  rekeyAll,
   activeTodos,
   counts,
   createTask,
