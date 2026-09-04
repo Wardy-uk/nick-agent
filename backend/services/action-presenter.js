@@ -31,6 +31,10 @@
  *   navigate — changes nothing; approving it just moves the screen.
  */
 
+// Pure, no DB, no I/O — safe on a module that is otherwise a pile of pure
+// renderers and is parsed by its own test.
+const { describeCandidateSource } = require('./candidate-provenance');
+
 const OUTBOUND = 'outbound';
 const WRITE = 'write';
 const NAVIGATE = 'navigate';
@@ -335,10 +339,16 @@ const PRESENTERS = {
       // A candidate no longer only ever comes from a note. Saying "from note:
       // email:AAMk..." on an email-sourced row is a card describing itself
       // wrongly on the screen where it is approved.
-      field(p.extractedFrom === 'email' ? 'From email' : 'From note',
-        p.extractedFrom === 'email'
-          ? [p.email?.from, p.email?.subject].filter(Boolean).join(' — ') || p.sourcePath
-          : p.sourcePath),
+      //
+      // ⚠ Shared with the TodoPanel review queue via `candidate-provenance`,
+      // deliberately: the same row is described on two screens, and a second
+      // copy of this logic is how they come to name different senders for one
+      // suggestion. The fallback to the raw path is gone with it — for an email
+      // that value is a Graph message id, which is not provenance.
+      field('From', (() => {
+        const src = describeCandidateSource(p);
+        return src ? [src.label, src.detail].filter(Boolean).join(' — ') : null;
+      })()),
     ],
     blockers: trimmed(p.text) ? [] : ['No task text on this action.'],
   }),

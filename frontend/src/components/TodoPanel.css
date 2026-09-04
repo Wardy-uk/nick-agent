@@ -150,6 +150,32 @@
   flex-wrap: wrap;
 }
 
+/* Where a suggestion came from, in words.
+
+   Deliberately NOT `.todo-source`'s monospace pill: that styling says "this is
+   an identifier", which is exactly the wrong signal here — this is a sender and
+   a subject, read as prose. The raw id lives in the title attribute for the
+   rare case somebody needs to match a row back to its source. */
+.todo-suggestion-source {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 1px 7px;
+  border-radius: 3px;
+  background: rgba(92, 100, 120, 0.15);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-suggestion-source.email {
+  background: rgba(90, 140, 200, 0.14);
+}
+
+.todo-suggestion-source-detail {
+  color: var(--text-muted);
+}
+
 .todo-header {
   display: flex;
   justify-content: space-between;
@@ -418,6 +444,19 @@
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+/* The task's NEURO id. Quiet — it is a handle you go looking for, not a fact
+   competing with the due date beside it. Monospace on purpose here (unlike the
+   suggestion source above): this one really is an identifier. */
+.todo-task-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  user-select: all;
 }
 
 .todo-source {

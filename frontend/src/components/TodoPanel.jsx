@@ -928,6 +928,25 @@ function rowKey(todo) {
 }
 
 /**
+ * The handle for a task, on the card.
+ *
+ * Nick asked for the id on every task card, and the reason is that a task you
+ * can NAME is one you can talk to SARA about, quote in a commit, or point at in
+ * a conversation — without it, referring to a task means retyping its wording
+ * and hoping it matches.
+ *
+ * ⚠ Only NEURO's own id is shown. A Microsoft mirror has no NEURO id, and its
+ * Graph id is a 150-character base64 blob — which is the very thing that made
+ * the suggestion cards unreadable, so putting one on a task card would be that
+ * bug moved rather than fixed. Those rows keep the source badge, which already
+ * says whose board the work is on, and get no id chip rather than a fake one.
+ * `null` here means "NEURO has no id for this", never "no id was recorded".
+ */
+function taskIdBadge(todo) {
+  return todo?.task_id ? `#${todo.task_id}` : null;
+}
+
+/**
  * Everything an open task card offers, wherever that card is rendered.
  *
  * Extracted so the Must Move lane and the full list below it show the SAME
@@ -989,6 +1008,11 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
       <div className="todo-text-col" onClick={() => onExpand(isExpanded ? null : rowKey(todo))} style={{ cursor: 'pointer' }}>
         <span className={`todo-text ${isExpanded ? '' : 'todo-text-truncated'}`}>{todo.text}</span>
         <div className="todo-meta-row">
+          {/* The task's own id, first, so the card can be NAMED. Absent on a
+              row NEURO does not own — see taskIdBadge. */}
+          {taskIdBadge(todo) && (
+            <span className="todo-task-id" title="NEURO task id — quote this to SARA or in a commit">{taskIdBadge(todo)}</span>
+          )}
           {todo.source && <span className={`todo-source ${sourceClass(todo.source)}`}>{todo.source}</span>}
           {/* NEURO's own state for a task Microsoft owns. First on the row,
               because it describes what is happening NOW rather than how the
@@ -1183,7 +1207,23 @@ function SuggestedTodoQueue({ items, actingId, selected, onToggleSelect, onSelec
               <div className="todo-suggestion-main" onClick={() => !batching && onToggleSelect(item.id)}>
                 <div className="todo-suggestion-text">{item.text}</div>
                 <div className="todo-suggestion-meta">
-                  {item.sourcePath && <span className="todo-source">{item.sourcePath}</span>}
+                  {/* Where it came from, in words. This used to render
+                      `item.sourcePath` raw — which for an email candidate is the
+                      Graph message id, 150 characters of base64 that identify
+                      the email to Microsoft and to nobody else. Nick cannot find
+                      that email, so he cannot check the claim, so the only safe
+                      thing left to do with the card is dismiss it. The words are
+                      composed on the server (`candidate-provenance`) and shared
+                      with the Actions approval card, so one suggestion cannot be
+                      attributed to two different senders on two screens. */}
+                  {item.provenance && (
+                    <span className={`todo-suggestion-source ${item.provenance.kind}`} title={item.provenance.ref || undefined}>
+                      {item.provenance.label}
+                      {item.provenance.detail && (
+                        <span className="todo-suggestion-source-detail"> · {item.provenance.detail}</span>
+                      )}
+                    </span>
+                  )}
                   <span className="todo-due">Confidence {Math.round((item.confidence || 0) * 100)}%</span>
                   {item.duplicateIds?.length > 0 && (
                     <span className="todo-due">+{item.duplicateIds.length} duplicate{item.duplicateIds.length > 1 ? 's' : ''}</span>
@@ -1363,6 +1403,11 @@ function MustMoveLane({ items, held, gaps, toggling, onToggle, onSetWip, onDefer
                   classification visible instead of merely plausible. */}
               {item.why && <div className="todo-suggestion-why">{item.why}</div>}
               <div className="todo-suggestion-meta">
+                {/* Same id as the list row below, so the same task reads the
+                    same way in both places. */}
+                {taskIdBadge(item) && (
+                  <span className="todo-task-id" title="NEURO task id — quote this to SARA or in a commit">{taskIdBadge(item)}</span>
+                )}
                 {/* WIP first, because it is the one tag that describes what is
                     happening now rather than how the task was filed. */}
                 {isWip && (

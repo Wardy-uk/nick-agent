@@ -10,6 +10,7 @@ const msQueue = require('../services/ms-push-queue');
 const msTask = require('../../shared/ms-task.cjs');
 const msLocal = require('../services/ms-task-local');
 const lifecycle = require('../services/attention-lifecycle');
+const candidateProvenance = require('../services/candidate-provenance');
 
 // How many pending capture_todo suggestions the todos payload will carry. The
 // queue hit 930 in August and collapsed to single figures once #108 made it
@@ -241,6 +242,13 @@ router.get('/', (req, res) => {
         confidence: action.confidence || 0,
         sourcePath: action.payload?.sourcePath || null,
         sourceLine: action.payload?.sourceLine || null,
+        // Where it came from, in words. The raw `sourcePath` above is kept for
+        // callers that match a row back to its source, but it is NOT what the
+        // card shows: for an email candidate it is a Graph message id, which
+        // identifies the email to Microsoft and to nobody else. Composed here
+        // rather than in the component so this queue and the Actions approval
+        // card cannot name two different senders for one suggestion.
+        provenance: candidateProvenance.describeCandidateSource(action.payload || {}),
         createdAt: action.created_at || null,
         duplicateIds: [],
       });
