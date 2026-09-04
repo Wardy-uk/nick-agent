@@ -117,6 +117,12 @@ router.get('/', (req, res) => {
       task_id: t.task_id || null,
       taskPriority: t.taskPriority || null,
       taskSource: t.taskSource || null,
+      // The ticket that closes this one, or null. Jira-linked tasks refuse a
+      // manual tick, and until the row could SAY so the checkbox just did
+      // nothing — so this field is the difference between a stated rule and a
+      // broken button. It went missing from this whitelist first time round,
+      // which is the drop the comment below is about, happening again.
+      jiraKey: t.jiraKey || null,
       notes: t.notes || null,
       originPath: t.originPath || null,
       text: t.text,
@@ -282,6 +288,10 @@ router.get('/focus', async (req, res) => {
         id: i + 1,
         task_id: t.task_id || null,
         taskPriority: t.taskPriority || null,
+        // Same field, second whitelist. Focus renders the same cards, so a
+        // Jira-linked task silently loses the one thing that explains why its
+        // checkbox refuses — the identical silent drop, one route along.
+        jiraKey: t.jiraKey || null,
         text: t.text,
         priority: t.priority || 'normal',
         due_date: t.due_date || null,
