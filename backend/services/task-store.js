@@ -103,7 +103,13 @@ function legacyPriority(row) {
  * moscow/context go into `meta` as well, because todo-intelligence.decorateTask()
  * only preserves an explicit classification when it arrives there.
  */
-function toTodoShape(row) {
+function toTodoShape(row, jiraKeys) {
+  // ⚠ Built here when the caller did not pass one, rather than defaulted to an
+  // empty map. A missing map would make every row read as "Jira does not close
+  // this", which is the answer that lets the silent refusal back in — the same
+  // reason an unread domain is null and never 0. Callers over a list pass one
+  // in so the ledger is read once, not per row.
+  const keys = jiraKeys || require('./jira-tasks').keysByTaskId();
   return {
     task_id: row.id,
     text: row.text,
@@ -147,6 +153,14 @@ function toTodoShape(row) {
     notes: row.notes || null,
     filePath: null,
     lineNumber: null,
+    // The ticket that closes this one, or null. Carried so the row can say so
+    // BEFORE the tick is refused: `updateTask` refuses a manual completion on a
+    // linked task (Nick's rule — completion follows the ticket, so there is
+    // never two places to close one thing), and until now nothing on any screen
+    // knew that. Read from the LEDGER, never from `source`: a ticket taken off
+    // Nick is unlinked and the task becomes his to close again, which is the
+    // whole reason `isJiraOwned` asks the link rather than the column.
+    jiraKey: keys[row.id] || null,
     originPath: row.origin_path || null,
     originLine: row.origin_line == null ? null : row.origin_line,
     createdAt: (row.created_at || '').split(' ')[0] || null,
@@ -197,13 +211,15 @@ function listTasks(filters = {}) {
 
 /** Active tasks in the legacy todo shape — what the vault parser merges in. */
 function activeTodos() {
+  const jiraKeys = require('./jira-tasks').keysByTaskId();
   return db.listTaskRows({ status: 'all', includeDone: false })
     .filter(r => r.status === 'open' || r.status === 'in-progress')
-    .map(toTodoShape);
+    .map(r => toTodoShape(r, jiraKeys));
 }
 
 function doneTodos(limit = 200) {
-  return db.listTaskRows({ status: 'done' }).slice(0, limit).map(toTodoShape);
+  const jiraKeys = require('./jira-tasks').keysByTaskId();
+  return db.listTaskRows({ status: 'done' }).slice(0, limit).map(r => toTodoShape(r, jiraKeys));
 }
 
 function getTask(id) {

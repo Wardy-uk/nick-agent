@@ -125,6 +125,36 @@ test('the refusal is in the store, so every completion path hits it', () => {
   assert.match(src, /keyForTask/);
 });
 
+test('the row SAYS which ticket closes it, before the tick is refused', () => {
+  // The refusal above was correct and invisible: the panel logged it to the
+  // console, so the checkbox on a linked task simply did nothing. A read path
+  // that cannot see the link cannot say anything either, whatever the UI does.
+  const taskId = jiraTasks.readLinks()['NT-14855'];
+  const row = taskStore.activeTodos().find(t => t.task_id === taskId);
+  assert.ok(row, 'the linked task is still in the open list');
+  assert.equal(row.jiraKey, 'NT-14855');
+});
+
+test('an unlinked task carries NO key — the field is never a decoration', () => {
+  // The negative half. `jiraKey` licenses a screen to say "you cannot tick
+  // this", so a truthy value on a task Nick owns would take the tick away from
+  // him — the failure in the opposite, worse direction.
+  const { id } = taskStore.createTask({ text: 'A task nobody in Jira has heard of', source: 'manual' });
+  const row = taskStore.activeTodos().find(t => t.task_id === id);
+  assert.equal(row.jiraKey, null);
+  taskStore.deleteTask(id);
+});
+
+test('keysByTaskId and keyForTask cannot disagree about who closes what', () => {
+  // Two answers to one question is how a read path comes to contradict the
+  // refusal it is supposed to be explaining.
+  const map = jiraTasks.keysByTaskId();
+  for (const [key, id] of Object.entries(jiraTasks.readLinks())) {
+    assert.equal(map[Number(id)], key);
+    assert.equal(jiraTasks.keyForTask(id), key);
+  }
+});
+
 test('dropping is still allowed — abandoning is not claiming it was finished', () => {
   const taskId = jiraTasks.readLinks()['NT-14855'];
   const updated = taskStore.updateTask(taskId, { status: 'dropped' });

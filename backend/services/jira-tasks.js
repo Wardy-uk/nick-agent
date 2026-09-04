@@ -107,6 +107,23 @@ function isJiraOwned(taskId) {
  * Nick's to edit, and a link that breaks when he rewords a task is a link that
  * silently hands completion back to nobody.
  */
+/**
+ * taskId → ticket key, for every live link.
+ *
+ * The READ-path twin of `keyForTask`. That one walks the whole ledger per task,
+ * which is right for a single completion and quadratic over a list of 150 —
+ * and, more to the point, nothing had ever asked this question on a read at
+ * all, so a row could not SAY that Jira closes it. A checkbox that answers 400
+ * with nothing on screen is indistinguishable from a broken one, which is
+ * exactly how "there is no manual tick" was experienced as "I cannot close
+ * this task".
+ */
+function keysByTaskId(links = readLinks()) {
+  const out = {};
+  for (const [key, id] of Object.entries(links)) out[Number(id)] = key;
+  return out;
+}
+
 function keyForTask(taskId, links = readLinks()) {
   for (const [key, id] of Object.entries(links)) if (Number(id) === Number(taskId)) return key;
   return null;
@@ -277,6 +294,7 @@ module.exports = {
   sync,
   isJiraOwned,
   keyForTask,
+  keysByTaskId,
   readLinks,
   taskTextFor,
   SOURCE,
