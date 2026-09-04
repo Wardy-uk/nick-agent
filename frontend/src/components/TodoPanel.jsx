@@ -474,6 +474,18 @@ function TaskControls({ todo, onPatch, busy, onRefresh }) {
           row rather than behind a screen you have to remember exists. */}
       <HouseholdToggle todo={todo} busy={busy} onSaved={onRefresh} />
 
+      {todo.jiraKey && (
+        <div className="todo-edit-group todo-edit-jira">
+          <span className="todo-edit-label">Closes</span>
+          <span className="todo-edit-note">
+            {todo.jiraKey} closes this one. Resolve the ticket in Jira and NEURO
+            closes the task &mdash; there is no manual tick, so there is never two
+            places to close one thing. Everything else on this card is still yours
+            to set, and Drop is still open to you if it is not work you will do.
+          </span>
+        </div>
+      )}
+
       {todo.originPath && (
         <div className="todo-edit-group">
           <span className="todo-edit-label">From</span>
@@ -915,6 +927,41 @@ function rowKey(todo) {
   return `pos:${todo.source}-${todo.id}`;
 }
 
+/**
+ * Everything an open task card offers, wherever that card is rendered.
+ *
+ * Extracted so the Must Move lane and the full list below it show the SAME
+ * controls from ONE place. The lane was read-only: a must could be ticked,
+ * marked WIP or deferred, and nothing else about it could be changed without
+ * scrolling down and finding the same task again in the list. That is the
+ * screen Nick works from first, so the fields he most wants to correct were
+ * the ones furthest away. Two copies of this block would be two cards free to
+ * disagree about what a task can be told.
+ */
+function TaskEditPanel({ todo, busy, onPatch, onRefresh }) {
+  if (todo.task_id) {
+    return <TaskControls todo={todo} busy={busy} onPatch={onPatch} onRefresh={onRefresh} />;
+  }
+  // A Microsoft task is editable too — Microsoft still owns it, so the edit is
+  // a PATCH to Graph rather than anything stored locally.
+  if (todo.ms_id) {
+    return (
+      <>
+        {/* NEURO's own view of the task first, because it always works — the
+            Graph half below refuses to render when Microsoft cannot be read,
+            and triage must not disappear with it. */}
+        <MsLocalControls todo={todo} onSaved={onRefresh} />
+        <MicrosoftTaskControls todo={todo} onSaved={onRefresh} />
+      </>
+    );
+  }
+  return (
+    <div className="todo-edit todo-edit-readonly">
+      Mirrored from {todo.source} — edit it there. Only tasks NEURO owns are editable here.
+    </div>
+  );
+}
+
 function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRefresh }) {
   // ⚠ The date is still shown, and still says how late the card is — what
   // changes is that it stops being painted as Nick's failure. Hiding the date
@@ -935,7 +982,9 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
         className={`todo-checkbox ${isToggling ? 'toggling' : ''}`}
         onClick={() => onToggle(todo)}
         disabled={isToggling || (!editable && !todo.filePath)}
-        title="Mark done"
+        title={todo.jiraKey
+          ? `${todo.jiraKey} closes this one — resolve it in Jira`
+          : 'Mark done'}
       />
       <div className="todo-text-col" onClick={() => onExpand(isExpanded ? null : rowKey(todo))} style={{ cursor: 'pointer' }}>
         <span className={`todo-text ${isExpanded ? '' : 'todo-text-truncated'}`}>{todo.text}</span>
@@ -1018,24 +1067,13 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
             {todo.msCounterpart.dueDate && ` — due ${formatDue(todo.msCounterpart.dueDate)}`}
           </div>
         )}
-        {isExpanded && editable && (
-          <TaskControls todo={todo} busy={Boolean(isToggling)} onPatch={(fields) => onPatch(todo, fields)} onRefresh={onRefresh} />
-        )}
-        {/* A Microsoft task is editable here now — Microsoft still owns it, so
-            the edit is a PATCH to Graph rather than anything stored locally. */}
-        {isExpanded && !editable && todo.ms_id && (
-          <>
-            {/* NEURO's own view of the task first, because it always works —
-                the Graph half below refuses to render when Microsoft cannot be
-                read, and triage must not disappear with it. */}
-            <MsLocalControls todo={todo} onSaved={onRefresh} />
-            <MicrosoftTaskControls todo={todo} onSaved={onRefresh} />
-          </>
-        )}
-        {isExpanded && !editable && !todo.ms_id && (
-          <div className="todo-edit todo-edit-readonly">
-            Mirrored from {todo.source} — edit it there. Only tasks NEURO owns are editable here.
-          </div>
+        {isExpanded && (
+          <TaskEditPanel
+            todo={todo}
+            busy={Boolean(isToggling)}
+            onPatch={(fields) => onPatch(todo, fields)}
+            onRefresh={onRefresh}
+          />
         )}
       </div>
       <span className={`todo-priority-badge ${todo.priority}`}>{todo.priority}</span>
@@ -1058,6 +1096,26 @@ function HoldNotice({ notice, onDismiss }) {
       and the outcome note is still empty ({notice.reason}). Add a couple of lines to{' '}
       <code>{notice.notePath}</code> and it closes on its own — or say there is nothing
       to write up under “waiting on a write-up”.
+    </div>
+  );
+}
+
+/**
+ * The tick was REFUSED, and the server said why.
+ *
+ * Separate from HoldNotice on purpose: a hold means the completion landed and is
+ * waiting for its write-up, a refusal means nothing moved at all. Rendering one
+ * as the other would tell Nick to go and write a note for a task that is still
+ * open. Until this existed the refusal was a console.error, so the checkbox for
+ * a Jira-linked task simply did nothing — a working rule ("the ticket closes
+ * it") experienced as a broken button, which is the failure this codebase
+ * refuses everywhere else.
+ */
+function RefusalNotice({ notice, onDismiss }) {
+  return (
+    <div className="todo-hold-notice todo-refusal-notice" onClick={onDismiss}>
+      <strong>Not closed.</strong>{' '}
+      &ldquo;{notice.text}&rdquo; &mdash; {notice.reason}
     </div>
   );
 }
@@ -1238,7 +1296,7 @@ function NotToday({ item, busy, onDefer }) {
   );
 }
 
-function MustMoveLane({ items, held, gaps, toggling, onToggle, onSetWip, onDefer, onUndefer, error, onDismissError }) {
+function MustMoveLane({ items, held, gaps, toggling, onToggle, onSetWip, onDefer, onUndefer, error, onDismissError, expanded, onExpand, onPatch, onRefresh }) {
   // ⚠ Not `!items.length`. Once a row can be snoozed, an empty lane has two
   // meanings — nothing qualified, or everything that did has been put off —
   // and rendering nothing would show a clear day over four deferred musts.
@@ -1276,6 +1334,13 @@ function MustMoveLane({ items, held, gaps, toggling, onToggle, onSetWip, onDefer
           // them.
           const msProgressIsOurs = pct == null || pct === 0 || pct === 50;
           const canToggleWip = Boolean(wipKey) && (item.task_id ? true : msProgressIsOurs);
+          // ⚠ Prefixed, deliberately NOT the bare rowKey the list below uses.
+          // A must-move task is usually in both places, so a shared key would
+          // open BOTH cards at once — two TaskControls over one task, each with
+          // its own unsaved draft and its own Save. One expansion state across
+          // the whole panel then means only ever one draft in flight.
+          const laneKey = `lane:${rowKey(item)}`;
+          const isExpanded = expanded === laneKey;
           return (
           <div key={item.id} className={`todo-suggestion-card${isWip ? ' todo-suggestion-card-wip' : ''}`}>
             <button
@@ -1284,7 +1349,11 @@ function MustMoveLane({ items, held, gaps, toggling, onToggle, onSetWip, onDefer
               title={canComplete ? 'Mark done' : 'Nothing here can complete this — open it in the list below'}
               onClick={() => onToggle(item)}
             />
-            <div className="todo-suggestion-main">
+            <div
+              className="todo-suggestion-main"
+              onClick={() => onExpand(isExpanded ? null : laneKey)}
+              title={isExpanded ? 'Close' : 'Open to edit MoSCoW, due date, priority and the rest'}
+            >
               <div className="todo-suggestion-text">{item.text}</div>
               {/* buildTodayLane returns a `why` per row and this rendered none
                   of it — so the one card claiming to "protect your day" never
@@ -1320,6 +1389,21 @@ function MustMoveLane({ items, held, gaps, toggling, onToggle, onSetWip, onDefer
                 )}
                 {item.due_date && <span className="todo-due">{formatDue(item.due_date)}</span>}
               </div>
+              {/* ⚠ Inside `main`, and its clicks stopped there. `main` is what
+                  toggles the card open, so a click on any control inside it
+                  would close the card underneath the button being pressed —
+                  the same bubbling trap TaskControls itself already guards
+                  against on the row below. */}
+              {isExpanded && (
+                <div className="todo-lane-edit" onClick={(e) => e.stopPropagation()}>
+                  <TaskEditPanel
+                    todo={item}
+                    busy={Boolean(toggling[toggleKey])}
+                    onPatch={(fields) => onPatch(item, fields)}
+                    onRefresh={onRefresh}
+                  />
+                </div>
+              )}
             </div>
             {/* Absent, not disabled, when nothing can hold the state — a
                 daily-note checkbox has neither a NEURO row nor an ms_id. */}
@@ -1420,6 +1504,10 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   // that silently refuses to complete is far worse than no hold at all, and it
   // is the one moment Nick needs to be told which note to go and write.
   const [holdNotice, setHoldNotice] = useState(null);
+  // A completion the server would not make, with its stated reason. Kept apart
+  // from holdNotice above because "held until you write it up" and "this is
+  // Jira's to close" ask for opposite things next.
+  const [refusalNotice, setRefusalNotice] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [showMoscow, setShowMoscow] = useState(false);
@@ -1757,8 +1845,16 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         // ticking a held task would show the opposite of what happened, and the
         // next refresh would silently un-tick it.
         if (res.ok && !held) setLocalDone(prev => ({ ...prev, [key]: todo.done ? 0 : 1 }));
-        else if (!res.ok) console.error('[TodoPanel] Task complete failed:', res.status);
         setHoldNotice(held ? { ...held, text: todo.text } : null);
+        // ⚠ A refusal is SHOWN, not logged. This was a console.error, so every
+        // guard in updateTask — the Jira link, and anything added later — reached
+        // Nick as a checkbox that did nothing at all. The server's own words are
+        // used verbatim: it is the one place that knows which ticket, and a
+        // second phrasing here is a second answer free to drift from it.
+        setRefusalNotice(res.ok ? null : {
+          text: todo.text,
+          reason: data?.error || `the server refused it (${res.status}) and gave no reason`,
+        });
         if (mode === 'focused') refreshFocus(); else await fetchTodos();
       } catch (e) { console.error('[TodoPanel] Task complete error:', e); }
       setToggling(prev => ({ ...prev, [key]: false }));
@@ -1860,6 +1956,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         )}
 
         {holdNotice && <HoldNotice notice={holdNotice} onDismiss={() => setHoldNotice(null)} />}
+        {refusalNotice && <RefusalNotice notice={refusalNotice} onDismiss={() => setRefusalNotice(null)} />}
 
         {/* Focus filter pills */}
         <div className="todo-filters">
@@ -2098,6 +2195,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         </div>
       )}
       {holdNotice && <HoldNotice notice={holdNotice} onDismiss={() => setHoldNotice(null)} />}
+        {refusalNotice && <RefusalNotice notice={refusalNotice} onDismiss={() => setRefusalNotice(null)} />}
       <div className="todo-header">
         <h2 className="todo-title">Todos</h2>
         <div className="todo-header-right">
@@ -2164,6 +2262,10 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         onUndefer={undeferFromLane}
         error={laneError}
         onDismissError={() => setLaneError(null)}
+        expanded={expanded}
+        onExpand={setExpanded}
+        onPatch={patchTask}
+        onRefresh={refreshAfterWrite}
       />
 
       <div className="todo-add">

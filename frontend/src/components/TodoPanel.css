@@ -1164,6 +1164,17 @@
   overflow-wrap: anywhere;
 }
 
+/* An open card in the Must Move lane. The edit panel sits inside the card's
+   text column, so it needs the card's own left alignment and a cursor that
+   stops claiming the whole column toggles the card — the controls do not. */
+.todo-lane-edit {
+  cursor: default;
+}
+
+.todo-lane-edit .todo-edit {
+  margin-top: 12px;
+}
+
 /* The Must Move lane can now be ticked off. The card is already flex, so the
    checkbox just needs to hold its size and sit against the top of a card whose
    reason line makes it two or three lines tall. */
