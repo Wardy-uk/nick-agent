@@ -193,6 +193,39 @@ async function buildContext(kind) {
     }
   }
 
+  // What actually got FINISHED. The task list below is the OPEN pool, so a task
+  // closed yesterday leaves it and leaves no trace anywhere else in this
+  // context — which is how SARA came to chase a commitment Nick had already
+  // ticked off and told her about at EOD the night before. The wins ledger is
+  // the one place a completion is recorded independently of the daily note:
+  // ticking a task in NEURO does not tick a note line.
+  //
+  // The morning asks about the day the accountability scan calls "yesterday",
+  // so the two cannot disagree about which day that was (on a Monday it is
+  // Friday). EOD asks about today, the day it is closing.
+  //
+  // ⚠ Commits are excluded — folded one row per repo per day, they would
+  // dominate a list whose job is to name closed COMMITMENTS. ⚠ A failed read
+  // is a NAMED GAP, never an empty list: "nothing was finished" and "I could
+  // not look" license opposite things to say.
+  try {
+    const wins = require('./wins');
+    const day = kind === 'eod'
+      ? ctx.dateKey
+      : (ctx.accountability?.yesterday?.date || _dateStr(_addDays(new Date(), -1)));
+    ctx.closed = {
+      known: true,
+      date: day,
+      items: wins.winsForDate(day)
+        .filter(w => w.source !== 'git')
+        .slice(0, 12)
+        .map(w => ({ text: w.text, source: w.source })),
+    };
+  } catch (e) {
+    console.warn('[StandupSession] Wins read failed:', e.message);
+    ctx.closed = { known: false, date: null, reason: e.message };
+  }
+
   try {
     const taskStore = require('./task-store');
     const today = ctx.dateKey;
@@ -217,10 +250,39 @@ function _renderContext(ctx) {
   parts.push(_renderSchedule(ctx.schedule || buildSchedule()));
 
   if (acc?.yesterday) {
-    parts.push(`YESTERDAY (${acc.yesterday.date}): committed to ${(acc.yesterday.focus || []).length} things, ${(acc.yesterday.focus || []).filter(f => f.done).length} done.`);
-    for (const f of (acc.yesterday.focus || []).slice(0, 6)) {
-      parts.push(`  [${f.done ? 'x' : ' '}] ${f.text}`);
+    // ⚠ This read acc.yesterday.focus, a key that object has never carried, so
+    // every standup opened with "committed to 0 things, 0 done" however full
+    // the note was, and the checkbox list beneath it was always empty. The
+    // counts were computed correctly all along and then not used.
+    const y = acc.yesterday;
+    parts.push(`YESTERDAY (${y.date}): committed to ${y.committed} thing${y.committed === 1 ? '' : 's'}, ${y.done} ticked off in the note.`);
+    for (const item of (y.items || []).slice(0, 6)) {
+      parts.push(`  [${item.done ? 'x' : ' '}] ${item.text}`);
     }
+    // What the EOD conversation itself reported. Distinct from a ticked box: it
+    // is his own account of the day, and until now it was written into the note
+    // and read back by nothing.
+    if (y.eodItems?.length) {
+      parts.push(`  At EOD he said these were done: ${y.eodItems.map(t => `"${t}"`).join('; ')}.`);
+    } else if (y.eodDone) {
+      parts.push('  He did an EOD but listed nothing as done.');
+    } else {
+      parts.push('  No EOD was done, so there is no account of how the day went.');
+    }
+  }
+
+  // Finished work, from the ledger rather than from a checkbox.
+  const closed = ctx.closed;
+  if (closed?.known) {
+    if (closed.items.length) {
+      parts.push(`\nFINISHED ON ${closed.date} (recorded by NEURO, independent of the note — treat these as DONE):`);
+      for (const c of closed.items) parts.push(`  - ${c.text} [${c.source}]`);
+      parts.push('If something below is on this list, it is done. Confirm and close it — do NOT chase it.');
+    } else {
+      parts.push(`\nFINISHED ON ${closed.date}: nothing was recorded as finished.`);
+    }
+  } else if (closed) {
+    parts.push('\nFINISHED WORK: could not be read. Do not treat anything below as untouched — say you cannot see what was closed.');
   }
 
   // The week's target, and whether it still needs setting. Deliberately placed
@@ -248,7 +310,13 @@ function _renderContext(ctx) {
   if (acc?.openCommitments?.length) {
     parts.push(`\nCARRIED (these are the ones to chase — a commitment on day 3+ needs a decision, not another carry):`);
     for (const c of acc.openCommitments.slice(0, 8)) {
-      parts.push(`  - "${c.text}" — carried ${c.daysCarried} day${c.daysCarried === 1 ? '' : 's'} [key: ${c.key}]`);
+      // A commitment he told an EOD he had finished is not one to chase again.
+      // It is his own account rather than a tick, so it is stated as evidence
+      // and never folded away: the standup asks him to confirm and close it.
+      const said = c.reportedDoneOn
+        ? ` — HE REPORTED THIS DONE AT EOD ON ${c.reportedDoneOn}; confirm and close it rather than chasing it`
+        : '';
+      parts.push(`  - "${c.text}" — carried ${c.daysCarried} day${c.daysCarried === 1 ? '' : 's'}${said} [key: ${c.key}]`);
     }
   }
 

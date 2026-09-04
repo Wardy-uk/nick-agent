@@ -40,8 +40,12 @@ function cleanTaskText(raw) {
 function parseDailyNote(content) {
   const focus = [];
   const carry = [];
+  const eodItems = [];
   let eodDone = false;
   let didntGo = null;
+  // Are we inside the EOD section's `**Done:**` list? Cleared by the next bold
+  // label, so "Tomorrow starts with" cannot be read back as work finished.
+  let inEodDone = false;
 
   let section = null;
   for (const line of content.split('\n')) {
@@ -51,6 +55,22 @@ function parseDailyNote(content) {
     if (/^##\s/.test(line)) { section = null; continue; }
 
     if (section === 'eod') {
+      // The `**Done:**` bullets are the only durable record of what the EOD
+      // conversation concluded — the session itself lives in agent_state under
+      // its own date key and is never loaded again. Discarding them is why the
+      // morning standup could not see work Nick reported finishing the night
+      // before, and chased a commitment he had already closed.
+      if (/^\s*\*\*Done:\*\*/i.test(line)) { inEodDone = true; continue; }
+      if (/^\s*\*\*/.test(line)) inEodDone = false;
+      if (inEodDone) {
+        const b = line.match(/^\s*-\s+(?:\[[ x>/]\]\s+)?(.+)$/i);
+        if (b) {
+          const text = cleanTaskText(b[1]);
+          if (text && !/^none$/i.test(text)) eodItems.push({ text, key: commitmentKey(text) });
+          continue;
+        }
+        if (line.trim()) inEodDone = false;
+      }
       const m = line.match(/\*\*Didn't go to plan:\*\*\s*(.+)/i);
       if (m && !/^nothing/i.test(m[1].trim())) didntGo = m[1].trim();
       continue;
@@ -66,7 +86,7 @@ function parseDailyNote(content) {
   }
 
   const standupDone = focus.length > 0 || /^##\s+Standup/im.test(content);
-  return { focus, carry, eodDone, didntGo, standupDone };
+  return { focus, carry, eodItems, eodDone, didntGo, standupDone };
 }
 
 /**
@@ -166,6 +186,15 @@ function buildAccountability({ lookbackDays = 14 } = {}) {
     }
   }
 
+  // What an EOD said was DONE, keyed the same way commitments are, newest day
+  // wins. This is evidence from Nick's own words, not a tick — so it never
+  // closes a commitment on its own. It is attached below so the standup can say
+  // "you told me this was done on Wednesday" instead of chasing it a fourth time.
+  const eodReported = new Map();
+  for (const day of [...withNotes].reverse()) {
+    for (const item of (day.eodItems || [])) eodReported.set(item.key, day.date);
+  }
+
   const openCommitments = [];
   for (const [key, entry] of tracked) {
     if (entry.lastDone || entry.dates.length === 0) continue;
@@ -175,6 +204,7 @@ function buildAccountability({ lookbackDays = 14 } = {}) {
       daysCarried: entry.dates.length,
       firstSeen: entry.dates[0],
       lastSeen: entry.dates[entry.dates.length - 1],
+      reportedDoneOn: eodReported.get(key) || null,
     });
   }
   openCommitments.sort((a, b) => b.daysCarried - a.daysCarried);
@@ -187,6 +217,8 @@ function buildAccountability({ lookbackDays = 14 } = {}) {
       date: previous.date,
       committed: all.length,
       done: all.filter(i => i.done).length,
+      items: all.map(i => ({ text: i.text, done: i.done })),
+      eodItems: (previous.eodItems || []).map(i => i.text),
       eodDone: !!previous.eodDone,
       unresolved: previous.didntGo || null,
     };
