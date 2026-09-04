@@ -368,7 +368,7 @@ test('a dismissed entry is compacted — the body is dead weight once it is gone
 
 test('old dismissed entries are pruned, and their verdict survives them', () => {
   db.setState('email_triage_feedback_rollup', '');
-  const retain = emailTriage._internals.DISMISSED_RETAIN_DAYS;
+  const retain = emailTriage._internals.DISMISSED_RETAIN_DAYS();
   emailTriage._internals.storeTriage([
     email({ id: 'old-1', dismissed: true, dismissedAt: daysAgo(retain + 1), dismissReason: 'not-relevant' }),
     email({ id: 'old-2', dismissed: true, dismissedAt: daysAgo(retain + 1), dismissReason: 'done' }),
@@ -620,4 +620,152 @@ test('a provider that answers nothing is a failed batch, not an empty verdict', 
     microsoft.isAuthenticated = realAuth;
     aiProvider.triageEmails = realTriage;
   }
+});
+
+// -- Muting a sender (4 Sep 2026) -------------------------------------------
+//
+// The bug: "Not relevant" was a statement about one MESSAGE, and the mail it
+// gets pressed on is a newsletter with a fresh id every day. Thirteen National
+// Club Golfer emails sat undismissed in the live store, ten dismissals deep.
+
+const { applySenderMute, readSenderRules, SENDER_MUTED, LOOKBACK_DAYS,
+  DISMISSED_RETAIN_DAYS } = emailTriage._internals;
+
+function clearRules() {
+  db.setState('email_triage_muted_senders', '{}');
+  db.setState('email_triage_feedback_rollup', '');
+}
+
+test('a dismissal outlives every fetch that can still return its id', () => {
+  // The other half of the same complaint: retention was a literal 7 while the
+  // lookback window had widened to 14, so a dismissal on mail still sitting in
+  // the Inbox was pruned on day 7 and re-fetched on day 8 as brand new mail.
+  assert.ok(DISMISSED_RETAIN_DAYS() > LOOKBACK_DAYS,
+    'a dismissed entry must survive longer than the window that can re-fetch it');
+});
+
+test('"not relevant" mutes the sender, and sweeps what is already in the panel', () => {
+  clearRules();
+  seed([
+    email({ id: 'golf-1', from: 'National Club Golfer', fromEmail: 'news@nationalclubgolfer.com' }),
+    email({ id: 'golf-2', from: 'National Club Golfer', fromEmail: 'NEWS@NationalClubGolfer.com' }),
+    email({ id: 'golf-3', from: 'National Club Golfer', fromEmail: 'news@nationalclubgolfer.com' }),
+    email({ id: 'colleague', fromEmail: 'phillipa@example.com' }),
+  ]);
+
+  const result = emailTriage.dismissEmail('golf-1', 'not-relevant');
+  assert.equal(result.muted.ok, true);
+  assert.equal(result.muted.muted, 'news@nationalclubgolfer.com', 'the address, lowercased');
+
+  const byId = new Map(emailTriage.getStoredTriage().map(e => [e.id, e]));
+  // The whole complaint: the twelve editions that arrived before he got round
+  // to pressing it are exactly the mail he is telling us he does not want.
+  assert.equal(byId.get('golf-2').dismissed, true, 'case differs, same sender');
+  assert.equal(byId.get('golf-2').dismissReason, SENDER_MUTED);
+  assert.equal(byId.get('golf-3').dismissed, true);
+  assert.equal(byId.get('colleague').dismissed, false, 'nobody else is touched');
+});
+
+test('the rule outlives the entries it produced - new mail is filed with no second press', () => {
+  clearRules();
+  seed([email({ id: 'golf-1', fromEmail: 'news@nationalclubgolfer.com' })]);
+  emailTriage.dismissEmail('golf-1', 'not-relevant');
+
+  // Tomorrow's edition: a different id, a different subject, and nothing left
+  // in the store that remembers it - only the rule.
+  const tomorrow = applySenderMute(
+    email({ id: 'golf-99', subject: 'Tiger Woods banned from driving', fromEmail: 'news@nationalclubgolfer.com' }),
+    readSenderRules(),
+  );
+  assert.equal(tomorrow.dismissed, true);
+  assert.equal(tomorrow.category, 'IGNORE');
+  assert.equal(tomorrow.lane, 'ignore');
+  assert.equal(tomorrow.urgent, false);
+});
+
+test('a muted sender is NOT a verdict Nick made about each message', () => {
+  clearRules();
+  seed([
+    email({ id: 'golf-1', fromEmail: 'news@nationalclubgolfer.com' }),
+    ...Array.from({ length: 12 }, (_, i) =>
+      email({ id: 'golf-x' + i, fromEmail: 'news@nationalclubgolfer.com' })),
+  ]);
+  emailTriage.dismissEmail('golf-1', 'not-relevant');
+
+  // One press, one verdict. Counting the twelve auto-filed ones would let a
+  // single mute swamp the whole #70 feedback score.
+  const fb = emailTriage.getDismissFeedback();
+  assert.equal(fb.judged, 1, 'he judged the sender once, not thirteen times');
+  assert.equal(fb.notRelevant, 1);
+});
+
+test('a mute never overwrites what Nick already recorded about a message', () => {
+  clearRules();
+  seed([
+    email({ id: 'golf-1', fromEmail: 'news@nationalclubgolfer.com' }),
+    email({ id: 'golf-done', fromEmail: 'news@nationalclubgolfer.com',
+      dismissed: true, dismissedAt: daysAgo(1), dismissReason: 'done' }),
+  ]);
+  emailTriage.dismissEmail('golf-1', 'not-relevant');
+
+  const done = emailTriage.getStoredTriage().find(e => e.id === 'golf-done');
+  assert.equal(done.dismissReason, 'done', 'his record of what he did with it stands');
+});
+
+test('an unusable sender is REFUSED, not muted as an empty rule', () => {
+  clearRules();
+  // A rule keyed on "" would match every email whose sender could not be read.
+  seed([email({ id: 'nofrom', fromEmail: null }), email({ id: 'other', fromEmail: 'a@b.com' })]);
+  const result = emailTriage.dismissEmail('nofrom', 'not-relevant');
+
+  assert.equal(result.muted.ok, false, 'and it says so rather than silently no-opping');
+  assert.ok(result.muted.reason);
+  assert.deepEqual(readSenderRules(), {});
+  assert.equal(emailTriage.getStoredTriage().find(e => e.id === 'other').dismissed, false);
+});
+
+test('Nicks own address is refused - the one rule with unbounded blast radius', () => {
+  clearRules();
+  seed([email({ id: 'self', fromEmail: 'NickW@Nurtur.tech' })]);
+  const result = emailTriage.dismissEmail('self', 'not-relevant',
+    { selfAddress: 'nickw@nurtur.tech' });
+
+  assert.equal(result.muted.ok, false);
+  assert.deepEqual(readSenderRules(), {},
+    'muting yourself would hide your own mail with no visible cause');
+});
+
+test('an unknown signed-in address does not break the button', () => {
+  // Refusing here would kill the feature on exactly the days Microsoft auth has
+  // expired. The recoverable half is the panel's list, not this check.
+  clearRules();
+  seed([email({ id: 'golf-1', fromEmail: 'news@nationalclubgolfer.com' })]);
+  const result = emailTriage.dismissEmail('golf-1', 'not-relevant', { selfAddress: null });
+
+  assert.equal(result.muted.ok, true);
+  assert.equal(emailTriage.listMutedSenders().length, 1, 'and it is listed, so it can be undone');
+});
+
+test('un-muting is possible, and does not resurrect what was filed', () => {
+  clearRules();
+  seed([
+    email({ id: 'golf-1', fromEmail: 'news@nationalclubgolfer.com' }),
+    email({ id: 'golf-2', fromEmail: 'news@nationalclubgolfer.com' }),
+  ]);
+  emailTriage.dismissEmail('golf-1', 'not-relevant');
+  assert.equal(emailTriage.listMutedSenders().length, 1);
+
+  assert.equal(emailTriage.unmuteSender('NEWS@nationalclubgolfer.com').ok, true, 'case-insensitive');
+  assert.deepEqual(emailTriage.listMutedSenders(), []);
+  // "Show me this sender from now on", not "put a fortnight of newsletters back".
+  assert.equal(emailTriage.getStoredTriage().find(e => e.id === 'golf-2').dismissed, true);
+  assert.equal(emailTriage.unmuteSender('news@nationalclubgolfer.com').ok, false, 'and says so');
+});
+
+test('"done" and "replied" mute nobody', () => {
+  clearRules();
+  seed([email({ id: 'a', fromEmail: 'colleague@nurtur.tech' })]);
+  emailTriage.dismissEmail('a', 'done');
+  assert.deepEqual(readSenderRules(), {},
+    'only "not relevant" is a statement about the sender');
 });

@@ -129,6 +129,32 @@ router.get('/triage/feedback', (req, res) => {
   }
 });
 
+// GET /api/email/triage/muted — the senders "Not relevant" has silenced.
+//
+// A rule the panel cannot show is a rule Nick cannot revoke, and a first-click
+// mute with no way back is the shape of this that would actually be dangerous.
+router.get('/triage/muted', (req, res) => {
+  try {
+    res.json({ ok: true, senders: emailTriage.listMutedSenders() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// DELETE /api/email/triage/muted/:address — un-mute a sender.
+//
+// Deliberately does not resurrect the mail it filed away: this says "show me
+// this sender from now on", not "put a fortnight of newsletters back".
+router.delete('/triage/muted/:address', (req, res) => {
+  try {
+    const result = emailTriage.unmuteSender(decodeURIComponent(req.params.address));
+    if (!result.ok) return res.status(404).json({ ok: false, error: result.reason });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // GET /api/email/triage/:emailId — fetch email detail, summary, and suggested reply
 router.get('/triage/:emailId', async (req, res) => {
   try {
@@ -351,8 +377,19 @@ router.post('/triage/dismiss/:emailId', async (req, res) => {
     }
 
     // #70 — the reason is the whole point of having two buttons.
-    emailTriage.dismissEmail(emailId, req.body?.reason);
-    res.json({ ok: true, markedRead, readError });
+    // `not-relevant` also mutes the sender (4 Sep 2026), and the result of THAT
+    // is returned so the panel can say so — a mute is a bigger statement than a
+    // dismissal and one that silently refused would be indistinguishable from
+    // one that worked.
+    // Who we are signed in as, so a "Not relevant" on Nick's own mail cannot
+    // mute him to himself. Read from the MSAL cache (local, no network) and
+    // never allowed to fail the dismissal — the mute proceeds without it, and
+    // the panel's list is what makes that recoverable.
+    let selfAddress = null;
+    try { selfAddress = await microsoft.getSignedInAddress(); } catch { /* proceed */ }
+
+    const result = emailTriage.dismissEmail(emailId, req.body?.reason, { selfAddress });
+    res.json({ ok: true, markedRead, readError, muted: result?.muted || null });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }

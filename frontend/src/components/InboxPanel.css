@@ -540,3 +540,45 @@
   line-height: 1.5;
   white-space: pre-wrap;
 }
+
+/* Muted senders (4 Sep 2026) — "Not relevant" mutes the sender on the first
+   press, so the rules have to be visible and revocable. Collapsed by default:
+   the list is not something to read, it is somewhere to go when a rule turns
+   out to be wrong. */
+.inbox-muted {
+  margin: 8px 0;
+}
+.inbox-muted-toggle {
+  background: none;
+  border: none;
+  color: var(--text-dim, #8a94a6);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.inbox-muted-toggle:hover { color: var(--text, #e6e9ef); }
+.inbox-muted-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0 0 0 14px;
+}
+.inbox-muted-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.inbox-muted-addr { color: var(--text, #e6e9ef); }
+.inbox-muted-sample { color: var(--text-dim, #8a94a6); font-style: italic; }
+.inbox-muted-undo {
+  background: none;
+  border: 1px solid var(--border, #2a3140);
+  border-radius: 4px;
+  color: var(--text-dim, #8a94a6);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.inbox-muted-undo:hover { color: var(--text, #e6e9ef); border-color: #4a5568; }

@@ -347,7 +347,7 @@ function EmailCard({ email, borderClass, onDismiss, dismissing, onReplied, onPro
           className="inbox-action-btn inbox-action-ignore"
           onClick={() => onDismiss(email.id, { reason: 'not-relevant' })}
           disabled={busy}
-          title="Triage should not have ranked this — recorded as a misclassification"
+          title="Files this and mutes the sender — nothing from this address will reach the panel again"
         >
           {busy ? '...' : 'Not relevant'}
         </button>
@@ -400,6 +400,11 @@ export default function InboxPanel({ focusContext }) {
   // view to hang a "Replied" badge on, so replies get their own section.
   const [replies, setReplies] = useState(null);
   const [repliesOpen, setRepliesOpen] = useState(false);
+  // 4 Sep 2026 - "Not relevant" now mutes the SENDER on the first press, and a
+  // rule the panel cannot show is a rule Nick cannot revoke. A one-click mute
+  // with no way back is the only genuinely dangerous shape this could take.
+  const [muted, setMuted] = useState(null);
+  const [mutedOpen, setMutedOpen] = useState(false);
 
   const fetchTriage = () => {
     fetch(apiUrl('/api/email/triage'))
@@ -415,7 +420,27 @@ export default function InboxPanel({ focusContext }) {
       .catch(() => {});
   };
 
-  useEffect(() => { fetchTriage(); fetchReplies(); }, []);
+  const fetchMuted = () => {
+    fetch(apiUrl('/api/email/triage/muted'))
+      .then(r => r.json())
+      // null stays null on a failure: "I could not read the rules" and "there
+      // are none" are different facts and only one of them is reassuring.
+      .then(data => setMuted(data?.ok ? (data.senders || []) : null))
+      .catch(() => setMuted(null));
+  };
+
+  const unmute = (address) => {
+    fetch(apiUrl(`/api/email/triage/muted/${encodeURIComponent(address)}`), { method: 'DELETE' })
+      .then(r => r.json().then(d => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (!ok) setDismissNote(d?.error ? `Could not un-mute: ${d.error}` : 'Could not un-mute.');
+        else setDismissNote(`${address} will show up again from now on. Mail already filed stays filed.`);
+        fetchMuted();
+      })
+      .catch(() => setDismissNote('Could not un-mute.'));
+  };
+
+  useEffect(() => { fetchTriage(); fetchReplies(); fetchMuted(); }, []);
 
   const runTriage = () => {
     setRunning(true);
@@ -440,7 +465,19 @@ export default function InboxPanel({ focusContext }) {
       .then(d => {
         // The dismiss still happened — this only reports the Outlook half failing.
         if (d?.readError) setDismissNote(d.readError);
+        // A mute is a bigger statement than a dismissal, so it is said out loud
+        // — and a REFUSED one especially, since a silent refusal is
+        // indistinguishable from a mute that worked until the next edition
+        // turns up, which is the bug this whole change exists to fix.
+        else if (d?.muted && d.muted.ok) {
+          setDismissNote(d.muted.alreadyMuted
+            ? `${d.muted.muted} was already muted — nothing from them will reach the panel.`
+            : `Muted ${d.muted.muted}. Future mail from this sender is filed automatically.`);
+        } else if (d?.muted && !d.muted.ok) {
+          setDismissNote(`Dismissed, but the sender was NOT muted — ${d.muted.reason}.`);
+        }
         fetchTriage();
+        fetchMuted();
         setDismissing(null);
       })
       .catch(() => setDismissing(null));
@@ -506,6 +543,36 @@ export default function InboxPanel({ focusContext }) {
           </button>
         </div>
       </div>
+
+      {/* Only rendered when there is something to say. An always-on panel of
+          rules is one nobody reads by week two; a hidden one is a rule Nick
+          cannot take back. null means the read FAILED, which is said plainly
+          rather than rendered as "no rules". */}
+      {muted === null && (
+        <div className="inbox-dismiss-note">
+          <span>Couldn't read your muted senders — this isn't confirmation there are none.</span>
+        </div>
+      )}
+      {Array.isArray(muted) && muted.length > 0 && (
+        <div className="inbox-muted">
+          <button className="inbox-muted-toggle" onClick={() => setMutedOpen(o => !o)}>
+            {mutedOpen ? '▾' : '▸'} {muted.length} muted sender{muted.length === 1 ? '' : 's'}
+          </button>
+          {mutedOpen && (
+            <ul className="inbox-muted-list">
+              {muted.map(m => (
+                <li key={m.address}>
+                  <span className="inbox-muted-addr">{m.name ? `${m.name} <${m.address}>` : m.address}</span>
+                  {m.sampleSubject && (
+                    <span className="inbox-muted-sample">muted on "{m.sampleSubject}"</span>
+                  )}
+                  <button className="inbox-muted-undo" onClick={() => unmute(m.address)}>Un-mute</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {dismissNote && (
         <div className="inbox-dismiss-note">

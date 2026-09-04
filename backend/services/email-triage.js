@@ -226,7 +226,14 @@ const INPUT_KEY = 'email_triage_input';
 // with their contribution to the feedback score ROLLED UP first, so pruning
 // costs history rather than throwing it away. The classifier's only free
 // feedback signal must not quietly reset every week.
-const DISMISSED_RETAIN_DAYS = 7;
+// DERIVED FROM THE LOOKBACK WINDOW, never a fixed number again. It was a
+// literal 7 while the comment above still described a 24-hour fetch, and the
+// window widened to 14 days on 1 Sep without it - so a dismissal on mail still
+// sitting in the Inbox was pruned at day 7, re-fetched on day 8, and came back
+// as new. "It keeps coming back", for the SAME email. A dismissed entry has to
+// outlive every fetch that can still return its id, so the retention is the
+// window plus a margin, computed from the window itself.
+const DISMISSED_RETAIN_DAYS = () => LOOKBACK_DAYS + 7;
 
 // ── How far back triage looks, and what it means to stop looking ────────────
 //
@@ -271,6 +278,143 @@ function compact(entry) {
   return out;
 }
 
+// -- Muting a sender (4 Sep 2026) -------------------------------------------
+//
+// "Not relevant" was a statement about ONE MESSAGE, and the mail it gets
+// pressed on is overwhelmingly a NEWSLETTER: a new id, a new subject, every
+// single day. Measured on the live store the morning this was found -
+// THIRTEEN National Club Golfer emails between 19 Aug and 3 Sep, thirteen
+// distinct ids, every one still undismissed, because dismissing yesterday's
+// edition says nothing about today's. Nick pressed the button ten times and
+// the classifier learned nothing, which teaches him the button does nothing.
+//
+// So the verdict is recorded against the SENDER ADDRESS rather than the
+// message, and it takes effect on the FIRST press (Nick's call, 4 Sep - the
+// alternative was earning it after two, and he wants one press to be the end
+// of it).
+//
+// THE RULE IS THE DURABLE THING, NOT THE DISMISSED ENTRY. Entries are
+// compacted and pruned by age; the rule is not. That is what makes muting
+// survive the pruning of the entries it produces, rather than depending on
+// them: a muted sender's mail is re-filed the moment it is seen again,
+// however many times its entry has been pruned.
+//
+// It mutes an ADDRESS, never a display name. "National Club Golfer" is
+// whatever the sender chooses to call itself this week and two senders can
+// share one; the address is the identity.
+const SENDER_RULES_KEY = 'email_triage_muted_senders';
+
+// NEURO's own act, not one of Nick's verdicts - so, exactly like `left-inbox`,
+// it is deliberately absent from DISMISS_REASONS (no caller can pass it) and
+// excluded from `isJudged`. Counting it would pad the #70 feedback score with
+// hundreds of verdicts nobody gave: Nick judged the SENDER once, and every
+// message auto-filed afterwards is that one verdict being applied, not a new
+// one being made.
+const SENDER_MUTED = 'sender-muted';
+
+// Lowercased and trimmed. Anything that is not a usable address returns null
+// and is REFUSED rather than normalised into a key - muting "" would be a rule
+// matching every email whose sender could not be read.
+function normaliseSender(address) {
+  const clean = String(address || '').trim().toLowerCase();
+  if (!clean || !clean.includes('@')) return null;
+  return clean;
+}
+
+function readSenderRules() {
+  try {
+    const raw = db.getState(SENDER_RULES_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
+}
+
+function writeSenderRules(rules) {
+  db.setState(SENDER_RULES_KEY, JSON.stringify(rules));
+}
+
+/**
+ * Record "never surface this sender again".
+ *
+ * Nick's OWN address is refused. He is the sender on anything he has sent to
+ * himself and on some meeting traffic, and a self-mute would silently hide his
+ * own mail with no visible cause - the one rule here whose blast radius is
+ * unbounded. The refusal is REPORTED, never swallowed, because a mute that did
+ * not happen looks identical from the panel to one that did.
+ *
+ * `selfAddress` is PASSED IN rather than read here, and that is deliberate:
+ * the real answer is `microsoft.getSignedInAddress()`, which is async while
+ * this path is synchronous, and an env var invented for the purpose would be a
+ * guessed identifier that reads as empty for ever (the `sleep_core_hours` /
+ * `meeting_alert` species - a wrong name returns nothing rather than failing).
+ * The route resolves it from the MSAL cache and hands it over.
+ *
+ * When it cannot be resolved the mute still PROCEEDS. Refusing would break the
+ * button on exactly the days Microsoft auth has expired, and the real safety
+ * net here is not this check - it is that every rule is listed in the panel and
+ * revocable in one click.
+ */
+function muteSender(address, { name = null, subject = null, selfAddress = null } = {}) {
+  const key = normaliseSender(address);
+  if (!key) return { ok: false, reason: 'no sender address on that email' };
+  const self = normaliseSender(selfAddress);
+  if (self && key === self) return { ok: false, reason: 'that is your own address' };
+
+  const rules = readSenderRules();
+  const existing = rules[key];
+  rules[key] = {
+    address: key,
+    name: name || existing?.name || null,
+    mutedAt: existing?.mutedAt || new Date().toISOString(),
+    // What it was pressed on, so a rule Nick does not recognise months later
+    // can be identified without going to Outlook to work out who this is.
+    sampleSubject: existing?.sampleSubject || subject || null,
+  };
+  writeSenderRules(rules);
+  return { ok: true, muted: key, alreadyMuted: !!existing };
+}
+
+function unmuteSender(address) {
+  const key = normaliseSender(address);
+  if (!key) return { ok: false, reason: 'not a valid address' };
+  const rules = readSenderRules();
+  if (!rules[key]) return { ok: false, reason: 'that sender is not muted' };
+  delete rules[key];
+  writeSenderRules(rules);
+  // Deliberately does NOT resurrect the entries it filed away. Un-muting says
+  // "show me this sender from now on", not "put a fortnight of newsletters
+  // back in the panel".
+  return { ok: true, unmuted: key };
+}
+
+function listMutedSenders() {
+  return Object.values(readSenderRules())
+    .sort((a, b) => String(b.mutedAt || '').localeCompare(String(a.mutedAt || '')));
+}
+
+/**
+ * PURE. Applies the sender rules to one entry.
+ *
+ * It never touches an entry Nick has already acted on - a `done` or a `replied`
+ * is his record of what he did with that message, and overwriting the reason
+ * with NEURO's own would erase a verdict the feedback score reads.
+ */
+function applySenderMute(entry, rules, now = new Date().toISOString()) {
+  if (entry.dismissed) return entry;
+  const key = normaliseSender(entry.fromEmail);
+  if (!key || !rules[key]) return entry;
+  return {
+    ...entry,
+    dismissed: true,
+    dismissedAt: now,
+    dismissReason: SENDER_MUTED,
+    category: 'IGNORE',
+    lane: 'ignore',
+    urgent: false,
+    needsReply: false,
+  };
+}
+
 function readRollup() {
   try {
     const raw = JSON.parse(db.getState(FEEDBACK_ROLLUP_KEY) || '{}');
@@ -292,7 +436,11 @@ function isJudged(e) {
   // telling the classifier anything — counting it would pad the feedback score
   // with verdicts nobody gave.
   return e.dismissed && e.dismissReason
-    && e.dismissReason !== 'unspecified' && e.dismissReason !== 'left-inbox';
+    && e.dismissReason !== 'unspecified' && e.dismissReason !== 'left-inbox'
+    // Nick judged the SENDER once. Every message auto-filed by that rule
+    // afterwards is the same verdict being applied, not a new one being made -
+    // counting them would let one mute press swamp the whole feedback score.
+    && e.dismissReason !== SENDER_MUTED;
 }
 
 // Anything judged that is about to leave the blob — pruned by age, or dropped
@@ -322,7 +470,7 @@ function foldIntoRollup(entries) {
  * feedback rollup on its way out.
  */
 function storeTriage(items, now = Date.now()) {
-  const cutoff = now - DISMISSED_RETAIN_DAYS * 86400000;
+  const cutoff = now - DISMISSED_RETAIN_DAYS() * 86400000;
   const kept = [];
   const expired = [];
 
@@ -336,7 +484,7 @@ function storeTriage(items, now = Date.now()) {
 
   if (expired.length) {
     foldIntoRollup(expired);
-    console.log(`[EmailTriage] Pruned ${expired.length} dismissed entries older than ${DISMISSED_RETAIN_DAYS}d`);
+    console.log(`[EmailTriage] Pruned ${expired.length} dismissed entries older than ${DISMISSED_RETAIN_DAYS()}d`);
   }
 
   db.setState('email_triage', JSON.stringify(kept));
@@ -466,6 +614,13 @@ async function runTriage({ force = false } = {}) {
       departed++;
     }
 
+    // A sender rule is durable and the entries it produces are not, so the
+    // rules are re-applied on every pass. That is what makes a mute survive the
+    // pruning of its own dismissed entries, and what files a muted sender's NEW
+    // mail without Nick having to press anything again.
+    const senderRules = readSenderRules();
+    let autoFiled = 0;
+
     for (const e of classified) {
       const prev = priorById.get(e.id);
       byId.set(e.id, applyPromotion({
@@ -478,7 +633,18 @@ async function runTriage({ force = false } = {}) {
       }));
     }
 
-    const updated = [...byId.values()];
+    let updated = [...byId.values()];
+    if (Object.keys(senderRules).length) {
+      const stamp = new Date().toISOString();
+      updated = updated.map((e) => {
+        const after = applySenderMute(e, senderRules, stamp);
+        if (after !== e) autoFiled++;
+        return after;
+      });
+      if (autoFiled) {
+        console.log(`[EmailTriage] ${autoFiled} email(s) auto-filed by a muted-sender rule`);
+      }
+    }
     if (departed) {
       console.log(`[EmailTriage] ${departed} entr${departed === 1 ? 'y' : 'ies'} no longer in the Inbox — closed as ${LEFT_INBOX}`);
     }
@@ -633,19 +799,46 @@ function getFlaggedItems() {
 const DISMISS_REASONS = new Set(['done', 'not-relevant', 'replied', 'unspecified']);
 const LEFT_INBOX = 'left-inbox';
 
-function dismissEmail(emailId, reason = 'unspecified') {
+function dismissEmail(emailId, reason = 'unspecified', { selfAddress = null } = {}) {
   const clean = DISMISS_REASONS.has(reason) ? reason : 'unspecified';
   const all = getStoredTriage();
-  const updated = all.map(e =>
+  const item = all.find(e => e.id === emailId);
+  const now = new Date().toISOString();
+  let updated = all.map(e =>
     e.id === emailId
-      ? { ...e, dismissed: true, dismissedAt: new Date().toISOString(), dismissReason: clean }
+      ? { ...e, dismissed: true, dismissedAt: now, dismissReason: clean }
       : e
   );
+
+  // "Not relevant" mutes the sender on the first press, and the rule is applied
+  // to what is ALREADY in the panel in the same breath. The twelve editions
+  // that arrived before Nick got round to pressing it are precisely the mail he
+  // is telling us he does not want, and leaving them sitting there would make
+  // the button look like it had half worked.
+  let muted = null;
+  if (clean === 'not-relevant' && item) {
+    muted = muteSender(item.fromEmail, { name: item.from, subject: item.subject, selfAddress });
+    if (muted.ok) {
+      const rules = readSenderRules();
+      let swept = 0;
+      updated = updated.map((e) => {
+        if (e.id === emailId) return e;
+        const after = applySenderMute(e, rules, now);
+        if (after !== e) swept++;
+        return after;
+      });
+      console.log(`[Triage] Muted ${muted.muted}`
+        + (swept ? ` - filed ${swept} already in the panel` : ''));
+    } else {
+      console.warn(`[Triage] Did NOT mute the sender of `
+        + `"${(item.subject || emailId).slice(0, 60)}" - ${muted.reason}`);
+    }
+  }
+
   storeTriage(updated);
   if (clean === 'not-relevant') {
     // Logged loudly on purpose: it is a misclassification report, and until
     // something consumes it the log is the only place it exists.
-    const item = all.find(e => e.id === emailId);
     console.log(`[Triage] Misranked — "${(item?.subject || emailId).slice(0, 80)}" `
       + `was ${item?.urgency || '?'}/${item?.category || '?'} and Nick says not relevant`);
   }
@@ -654,6 +847,11 @@ function dismissEmail(emailId, reason = 'unspecified') {
   // at the next triage run. Actioning mail and watching the count stay put is
   // exactly the bug this whole change exists to fix.
   try { require('./nudges').triggerUrgentEmailNudge(); } catch {}
+
+  // The caller says what happened to the SENDER, not just to the message - a
+  // refused mute (no address, or Nick's own) must reach the panel in words
+  // rather than being a silent no-op behind a button that looked like it fired.
+  return { ok: true, muted };
 }
 
 // ── "This should have been an action" (26 Aug 2026) ─────────────────────────
@@ -794,6 +992,12 @@ module.exports = {
   promoteEmail,
   getDismissFeedback,
   clearDismissed,
+  muteSender,
+  unmuteSender,
+  listMutedSenders,
   TRIAGE_CACHE_TTL,
-  _internals: { inputFingerprint, storeTriage, DISMISSED_RETAIN_DAYS, CLASSIFY_BATCH },
+  _internals: {
+    inputFingerprint, storeTriage, DISMISSED_RETAIN_DAYS, CLASSIFY_BATCH,
+    applySenderMute, normaliseSender, readSenderRules, SENDER_MUTED, LOOKBACK_DAYS,
+  },
 };
