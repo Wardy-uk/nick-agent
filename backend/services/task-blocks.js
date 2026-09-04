@@ -1233,6 +1233,257 @@ function saveNote(blockId, content, { baseHash = null } = {}) {
  * in `eventUpdate` so the caller can say so — the same shape the Microsoft task
  * push uses.
  */
+/**
+ * How many tasks one window may hold.
+ *
+ * Lives here rather than in the route now that two paths add to a block —
+ * `schedule` at the route and `addTask` below. A cap enforced in one of them is
+ * a cap the other walks past, which is the same argument the completion refusal
+ * is built on.
+ */
+const MAX_TASKS_PER_BLOCK = 12;
+
+/**
+ * The latest this block could run to without landing on something else.
+ *
+ * ⚠ PURE, and it returns `known` separately from the answer. "The diary says
+ * you are free until 15:00" and "I could not read the diary" license opposite
+ * behaviour, and only the first is a reason to lengthen a real event in a real
+ * calendar. A block extended blindly over a meeting is the one outcome worse
+ * than a block that is too short.
+ *
+ * ⚠ It reads `readCalendar`'s rows exactly as `findSlot` does — ISO `start`,
+ * and the same "cancelled and free-marked events are not walls, tentative ones
+ * are" rule, borrowed rather than re-decided. Two answers about what counts as
+ * busy is how the search that PLACED a block and the extension that lengthens
+ * it come to disagree about the same diary.
+ *
+ * The block's own row is excluded by construction: `readCalendar` folds NEURO's
+ * blocks in as events, and this one starts exactly where the block starts, so
+ * the `<= startMin` test drops it. A block cannot collide with itself.
+ */
+function latestEndFor(block, events, { known = true } = {}) {
+  if (!known) return { known: false, latestEndMin: null, blockedBy: null, reason: 'the diary could not be read' };
+  const startMin = toMin(block.start_time);
+  if (startMin == null) return { known: false, latestEndMin: null, blockedBy: null, reason: 'the block has no readable start' };
+
+  let limit = DAY_END_MIN;
+  let blockedBy = null;
+  for (const ev of events || []) {
+    if (!ev || ev.isAllDay) continue;
+    if (ev.showAs === 'cancelled' || ev.showAs === 'free') continue;
+    const day = String(ev.date || String(ev.start).split('T')[0]);
+    if (day !== block.date_key) continue;
+    const evStart = timeFit.minutesIntoDay(ev.start);
+    if (evStart == null || evStart <= startMin) continue;
+    if (evStart - timeFit.BUFFER_MINUTES < limit) {
+      limit = evStart - timeFit.BUFFER_MINUTES;
+      blockedBy = ev.subject || 'something else in the diary';
+    }
+  }
+  return { known: true, latestEndMin: limit, blockedBy, reason: null };
+}
+
+/**
+ * Put another task into a window that already exists.
+ *
+ * ── Why this is not "drop it and block them both again" ─────────────────────
+ *
+ * Because that is what Nick had to do, and it costs the membership — the same
+ * argument `reschedule` is built on. A block already holding four tasks is four
+ * re-selections in a picker to add a fifth, and his difficulty is INITIATION:
+ * a five-step way to add one task to a block is a task that never gets blocked.
+ *
+ * ── The window grows, and only as far as the diary allows ───────────────────
+ *
+ * Adding work to a fixed window is only overpacking it silently, so the block is
+ * EXTENDED by what the task is thought to take. But a real event in a real
+ * calendar cannot be lengthened over the top of the next meeting, so the new end
+ * is capped by `latestEndFor` and any shortfall is REPORTED rather than either
+ * refused or quietly swallowed — a deliberately tight window is Nick's call to
+ * make (`plan`'s rule); a double-booked one is not his call at all.
+ *
+ * ⚠ An unreadable diary extends NOTHING. The task is still added, because
+ * membership takes nobody else's time; only the extension needs to know what is
+ * around it.
+ *
+ * ── What it refuses ─────────────────────────────────────────────────────────
+ *
+ * ⚠ A block that has already PASSED. Putting a task into a window that has gone
+ * is a claim it was worked on then, which is precisely the evidence the write-up
+ * hold exists to demand. `reschedule` is the way to move a missed block.
+ *
+ * ⚠ A task already in ANOTHER open block. Two live blocks holding one task means
+ * two holds, two outcome notes, and a sweep with no way to say which sitting the
+ * evidence belongs to — `reschedule`'s membership rule, stated as a refusal
+ * rather than discovered as a bug.
+ */
+async function addTask(blockId, taskId, { extend = true, saveDue = true, now = new Date() } = {}) {
+  const block = db.getTaskBlockRow(blockId);
+  if (!block) return { ok: false, error: `No block #${blockId}` };
+  if (!['scheduled', 'awaiting-writeup'].includes(block.status)) {
+    return { ok: false, error: `Block #${blockId} is ${block.status} — it is not a window any more` };
+  }
+
+  const shared = require('../../shared/working-days.cjs');
+  const today = shared.toDateStr(now);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const passed = block.date_key < today
+    || (block.date_key === today && (toMin(block.end_time) ?? 0) <= nowMin);
+  if (passed) {
+    return {
+      ok: false,
+      passed: true,
+      error: `That window (${block.start_time} on ${block.date_key}) has already gone — move the block `
+        + 'to a new slot rather than adding work to a sitting that has already happened',
+    };
+  }
+
+  const resolved = resolveTasks([taskId]);
+  if (resolved.error) return { ok: false, error: resolved.error };
+  const task = resolved.tasks[0];
+
+  const items = db.listTaskBlockItems(blockId);
+  if (items.some(i => Number(i.task_id) === task.id)) {
+    // A fold, not a failure. Reported so the screen can say "already in there"
+    // rather than rendering a tap that appears to have done nothing.
+    return { ok: true, already: true, blockId, taskId: task.id, total: items.length };
+  }
+  if (items.length >= MAX_TASKS_PER_BLOCK) {
+    return {
+      ok: false,
+      error: `A block holds at most ${MAX_TASKS_PER_BLOCK} tasks — this one already has ${items.length}`,
+    };
+  }
+
+  const elsewhere = openBlocksWithTask(task.id).filter(b => Number(b.id) !== Number(blockId));
+  if (elsewhere.length) {
+    const other = elsewhere[0];
+    return {
+      ok: false,
+      elsewhereBlockId: other.id,
+      error: `That task is already blocked at ${other.start_time} on ${other.date_key}. One task, one `
+        + 'window — move that block instead, or take the task out of it first.',
+    };
+  }
+
+  // ── Extend, as far as the diary allows ────────────────────────────────────
+  const want = task.estimate_minutes ?? timeFit.ASSUMED_MINUTES;
+  const startMin = toMin(block.start_time);
+  const endMin = toMin(block.end_time);
+  const extension = {
+    by: 0, wanted: want, endTime: block.end_time, minutes: block.minutes,
+    reason: null, calendarKnown: true,
+  };
+
+  if (!extend) {
+    extension.reason = 'you asked for the window to stay as it is';
+  } else if (startMin != null && endMin != null) {
+    const events = readCalendar(now);
+    const limit = latestEndFor(block, events.rows, { known: events.known });
+    extension.calendarKnown = limit.known;
+    if (!limit.known) {
+      extension.reason = `${limit.reason} — the window was left as it is rather than lengthened over something unseen`;
+    } else {
+      const by = Math.max(0, Math.min(endMin + want, limit.latestEndMin) - endMin);
+      if (by < want) {
+        extension.reason = limit.blockedBy
+          ? `only ${by} of ${want} minutes were free before ${limit.blockedBy}`
+          : `only ${by} of ${want} minutes were free before the end of the working day`;
+      }
+      if (by > 0) {
+        extension.by = by;
+        extension.endTime = hhmm(endMin + by);
+        extension.minutes = block.minutes + by;
+      }
+    }
+  }
+
+  db.addTaskBlockItem(blockId, task.id, task.estimate_minutes ?? null);
+
+  // ⚠ A window holding anything un-estimated is an ASSUMED one, whatever it was
+  // before. Presenting a total that is part sum and part guess as a measurement
+  // is the one thing #87 rules out.
+  const nowAssumed = task.estimate_minutes == null || Boolean(block.minutes_assumed);
+  if (extension.by > 0) {
+    db.updateTaskBlockRow(blockId, {
+      end_time: extension.endTime,
+      minutes: extension.minutes,
+      minutes_assumed: nowAssumed ? 1 : 0,
+    });
+  } else if (nowAssumed && !block.minutes_assumed) {
+    db.updateTaskBlockRow(blockId, { minutes_assumed: 1 });
+  }
+
+  // The due date follows the block, exactly as it does on `schedule` — putting a
+  // task in the diary IS deciding when it is being done. Reported, never silent,
+  // and never allowed to fail the add.
+  let dueUpdate = null;
+  if (saveDue && (task.due_date || null) !== block.date_key) {
+    try {
+      require('./task-store').updateTask(task.id, { due_date: block.date_key });
+      dueUpdate = {
+        taskId: task.id,
+        from: task.due_date || null,
+        to: block.date_key,
+        later: Boolean(task.due_date) && task.due_date < block.date_key,
+      };
+    } catch (e) {
+      console.warn(`[TaskBlocks] Could not set due date for #${task.id}: ${e.message}`);
+    }
+  }
+
+  // ⚠ Deliberately NO estimate write-back. `schedule` writes one only for a
+  // single-task block, where the window IS the judgement about that task. This
+  // block now holds several, so splitting its window across them would invent a
+  // number per task.
+
+  const remaining = db.listTaskBlockItems(blockId);
+  writeChecklistToNote(blockId);
+
+  let eventUpdate = null;
+  if (block.event_id) {
+    try {
+      const microsoft = require('./microsoft');
+      eventUpdate = await microsoft.updateCalendarEvent(block.event_id, {
+        subject: `Focus: ${remaining.length} tasks`.slice(0, 200),
+        start: `${block.date_key}T${block.start_time}:00`,
+        end: `${block.date_key}T${extension.endTime}:00`,
+        body: [
+          ...remaining.map(i => `- ${i.text}  (NEURO #${i.task_id})`),
+          '',
+          'This block is not finished until the outcome note has something in it:',
+          `  ${block.note_path}`,
+        ].join('\n'),
+      });
+    } catch (e) {
+      eventUpdate = { updated: false, reason: 'error', detail: e.message };
+    }
+  }
+
+  const held = remaining.reduce((sum, i) => sum + (i.allotted_minutes ?? timeFit.ASSUMED_MINUTES), 0);
+  console.log(`[TaskBlocks] Task #${task.id} added to block #${blockId} (${remaining.length} tasks, +${extension.by}m)`);
+  return {
+    ok: true,
+    blockId,
+    taskId: task.id,
+    total: remaining.length,
+    extendedBy: extension.by,
+    wantedMinutes: extension.wanted,
+    endTime: extension.endTime,
+    minutes: extension.minutes,
+    minutesAssumed: nowAssumed,
+    // Stated, never enforced — a tight window is Nick's to choose, and a silent
+    // one is how a block stops meaning anything.
+    overpacked: held > extension.minutes,
+    extendNote: extension.reason,
+    calendarKnown: extension.calendarKnown,
+    estimateAssumed: task.estimate_minutes == null,
+    dueUpdate,
+    eventUpdate,
+  };
+}
+
 async function removeTask(blockId, taskId) {
   const block = db.getTaskBlockRow(blockId);
   if (!block) return { ok: false, error: `No block #${blockId}` };
@@ -1672,6 +1923,9 @@ module.exports = {
   refreshBlockStatus,
   settleTaskElsewhere,
   release,
+  MAX_TASKS_PER_BLOCK,
+  latestEndFor,
+  addTask,
   removeTask,
   reschedule,
   restore,

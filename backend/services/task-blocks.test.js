@@ -25,7 +25,7 @@ process.env.NEURO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'neu
 const {
   isOutcomeWritten, renderStub, outcomeNotePath, slugify, findSlot, resolveWindow,
   renderChecklist, parseChecklist, syncChecklistInNote, LIST_OPEN, LIST_CLOSE,
-  MIN_OUTCOME_CHARS, DAY_START_MIN, DAY_END_MIN, SEARCH_DAYS,
+  MIN_OUTCOME_CHARS, DAY_START_MIN, DAY_END_MIN, SEARCH_DAYS, latestEndFor,
 } = require('./task-blocks');
 
 const TASK = { id: 58, text: 'Build succession plan — cover for HoTS and emerging team leads' };
@@ -395,4 +395,64 @@ test('a ticked checklist still does not count as a write-up', () => {
   const all = syncChecklistInNote(renderStub(BATCH, BLOCK), BATCH.map(t => ({ ...t, awaiting: true })));
   assert.equal(isOutcomeWritten(all).written, false,
     'ticking boxes records what was done, it does not say what came of it');
+});
+
+// ---------------------------------------------------------------------------
+// Lengthening a block — the diary decides how far
+// ---------------------------------------------------------------------------
+
+const EXT_BLOCK = { id: 7, date_key: '2026-09-10', start_time: '10:00', end_time: '10:30' };
+const extEv = (start, end, over = {}) => ({
+  date: '2026-09-10', start: `2026-09-10T${start}:00`, end: `2026-09-10T${end}:00`,
+  subject: 'Standup', isAllDay: false, showAs: 'busy', ...over,
+});
+
+test('an empty diary lets a block run to the end of the working day', () => {
+  const r = latestEndFor(EXT_BLOCK, []);
+  assert.equal(r.known, true);
+  assert.equal(r.latestEndMin, DAY_END_MIN);
+  assert.equal(r.blockedBy, null);
+});
+
+test('the next meeting caps it, with a buffer, and is NAMED', () => {
+  const r = latestEndFor(EXT_BLOCK, [extEv('12:00', '12:30', { subject: '1-2-1 with Hope' })]);
+  // Below 12:00 by the buffer time-fit already uses — borrowed, not re-picked.
+  assert.ok(r.latestEndMin < 12 * 60);
+  assert.equal(r.blockedBy, '1-2-1 with Hope');
+});
+
+test('an unreadable diary caps NOTHING and says so — never a free afternoon', () => {
+  // ⚠ The whole point. A null limit read as "no wall" would lengthen a real
+  // event straight over a meeting nobody could see.
+  const r = latestEndFor(EXT_BLOCK, [], { known: false });
+  assert.equal(r.known, false);
+  assert.equal(r.latestEndMin, null);
+  assert.match(r.reason, /could not be read/);
+});
+
+test("free, cancelled and all-day events are not walls — findSlot's own rule", () => {
+  // Two answers about what counts as busy is how the search that PLACED a block
+  // and the extension that lengthens it come to disagree about one diary.
+  for (const over of [{ showAs: 'free' }, { showAs: 'cancelled' }, { isAllDay: true }]) {
+    const r = latestEndFor(EXT_BLOCK, [extEv('11:00', '11:30', over)]);
+    assert.equal(r.latestEndMin, DAY_END_MIN, JSON.stringify(over));
+  }
+  // A tentative one IS a wall, same rule.
+  assert.ok(latestEndFor(EXT_BLOCK, [extEv('11:00', '11:30', { showAs: 'tentative' })]).latestEndMin < 11 * 60);
+});
+
+test('a block cannot be capped by itself, or by anything behind it', () => {
+  // readCalendar folds NEURO's own blocks in as events, so this block is in the
+  // very list it is being measured against.
+  const self = extEv('10:00', '10:30', { subject: 'NEURO focus block' });
+  const earlier = extEv('09:00', '09:30');
+  const r = latestEndFor(EXT_BLOCK, [self, earlier]);
+  assert.equal(r.latestEndMin, DAY_END_MIN);
+});
+
+test("another day is not this block's wall", () => {
+  const r = latestEndFor(EXT_BLOCK, [
+    extEv('11:00', '11:30', { date: '2026-09-11', start: '2026-09-11T11:00:00' }),
+  ]);
+  assert.equal(r.latestEndMin, DAY_END_MIN);
 });

@@ -37,7 +37,9 @@ function readTaskIds(raw) {
   return String(raw ?? '').split(',').map(s => parseInt(s, 10)).filter(Number.isInteger);
 }
 
-const MAX_TASKS_PER_BLOCK = 12;
+// The service owns this — `addTask` enforces it too, and a cap living in one
+// of the two paths is a cap the other walks straight past.
+const MAX_TASKS_PER_BLOCK = taskBlocks.MAX_TASKS_PER_BLOCK;
 
 /**
  * A window has to be a real length. The upper bound is a whole working day: a
@@ -239,6 +241,36 @@ router.post('/:id/note', (req, res) => {
 // only the membership and its hold go. Removing the LAST task is refused —
 // an empty block is a window in the diary for nothing, and `drop` is the honest
 // way to say it is not happening.
+/**
+ * POST /api/task-blocks/:id/tasks — put another task into an existing window.
+ *
+ * The other half of the DELETE below, and the reason the "add to a focus block"
+ * picker can offer an existing block at all: without it the only way to put a
+ * fifth task into a four-task block was to drop the block and re-pick all five.
+ *
+ * `extend=false` keeps the window exactly as it is. Every refusal comes back as
+ * a 400 carrying the service's own words — this is a screen where "nothing
+ * happened" is the failure being designed out.
+ */
+router.post('/:id/tasks', async (req, res) => {
+  try {
+    const taskId = parseInt(req.body?.taskId, 10);
+    if (!Number.isInteger(taskId)) {
+      return res.status(400).json({ ok: false, error: 'taskId is required' });
+    }
+    const result = await taskBlocks.addTask(Number(req.params.id), taskId, {
+      // Absent means extend. Only an explicit `false` holds the window still —
+      // a missing field is not a request to leave it alone.
+      extend: req.body?.extend !== false,
+      now: new Date(),
+    });
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e) {
+    console.error('[TaskBlocks] Add task error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 router.delete('/:id/tasks/:taskId', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);

@@ -1076,3 +1076,186 @@ test('a finished block is not reopened by giving it a new slot', async () => {
   assert.equal(res.ok, false);
   assert.match(res.error, /dropped/);
 });
+
+// ---------------------------------------------------------------------------
+// Adding a task to a window that already exists
+// ---------------------------------------------------------------------------
+
+/** Graph is not reachable from a test; the membership is written before it anyway. */
+function withoutUpdate(fn) {
+  const microsoft = require('./microsoft');
+  const real = microsoft.updateCalendarEvent;
+  microsoft.updateCalendarEvent = async () => ({ updated: false, reason: 'no graph in tests' });
+  try { return fn(); } finally { microsoft.updateCalendarEvent = real; }
+}
+
+/**
+ * The diary, or the absence of one. `null` makes it UNREADABLE, which is a
+ * different fact from empty and has to stay testable as one.
+ */
+function withCalendar(rows, fn) {
+  const real = db.getCalendarEvents;
+  db.getCalendarEvents = rows === null
+    ? () => { throw new Error('calendar unreadable'); }
+    : () => rows;
+  try { return fn(); } finally { db.getCalendarEvents = real; }
+}
+
+// ⚠ Each block gets its OWN DAY, not just its own slot. readCalendar folds
+// NEURO's blocks in as events, so two fixtures on one day are walls to each
+// other and every extension would silently measure zero.
+let daySeq = 0;
+function nextDay() { return `2026-12-${String(++daySeq).padStart(2, '0')}`; }
+
+/** A 10:00-10:30 block on a day of its own, ahead of `at()`. */
+function ahead(text) {
+  const dateKey = nextDay();
+  const made = blockedTasks(text, { dateKey, startTime: '10:00' });
+  db.updateTaskBlockRow(made.blockId, { end_time: '10:30', minutes: 30, minutes_assumed: 0 });
+  return { ...made, dateKey };
+}
+const at = (dateKey, time = '09:00') => new Date(`${dateKey}T${time}:00`);
+
+test('a task joins an existing block, and the window grows by what it takes', async () => {
+  const { blockId, dateKey } = ahead('Draft the capacity note');
+  const extra = freshTask('Chase the Sandford escalation');
+  taskStore.updateTask(extra, { estimateMinutes: 30 });
+
+  const res = await withCalendar([], () => withoutUpdate(() =>
+    taskBlocks.addTask(blockId, extra, { now: at(dateKey) })));
+
+  assert.equal(res.ok, true, res.error);
+  assert.equal(res.total, 2);
+  assert.equal(res.extendedBy, 30);
+  assert.equal(db.getTaskBlockRow(blockId).end_time, '11:00');
+  assert.equal(db.getTaskBlockRow(blockId).minutes, 60);
+  assert.ok(db.listTaskBlockItems(blockId).some(i => i.task_id === extra));
+});
+
+test('an un-estimated task extends by the assumption, and the window says it is a guess', async () => {
+  const { blockId, dateKey } = ahead('Write the charter');
+  const extra = freshTask('Something nobody has sized');
+
+  const res = await withCalendar([], () => withoutUpdate(() =>
+    taskBlocks.addTask(blockId, extra, { now: at(dateKey) })));
+
+  assert.equal(res.estimateAssumed, true);
+  assert.equal(res.minutesAssumed, true);
+  assert.equal(db.getTaskBlockRow(blockId).minutes_assumed, 1);
+  // ⚠ And the guess is NOT written back onto the task. The window is shared, so
+  // splitting it across members would invent a number per task.
+  assert.equal(db.getTaskRow(extra).estimate_minutes, null);
+});
+
+test('the next meeting caps the extension, and the shortfall is REPORTED', async () => {
+  const { blockId, dateKey } = ahead('Prep the board pack');
+  const extra = freshTask('A two-hour job');
+  taskStore.updateTask(extra, { estimateMinutes: 120 });
+
+  const res = await withCalendar([{
+    start_time: `${dateKey}T11:00:00`, end_time: `${dateKey}T12:00:00`,
+    subject: 'SMT update', is_all_day: 0, show_as: 'busy',
+  }], () => withoutUpdate(() => taskBlocks.addTask(blockId, extra, { now: at(dateKey) })));
+
+  assert.equal(res.ok, true, 'overpacking is reported, never refused');
+  assert.ok(res.extendedBy > 0 && res.extendedBy < 120, `extended ${res.extendedBy}`);
+  assert.match(res.extendNote, /SMT update/);
+  assert.equal(res.overpacked, true);
+  assert.ok(db.getTaskBlockRow(blockId).end_time < '11:00');
+});
+
+test('an unreadable diary adds the task and lengthens NOTHING', async () => {
+  // ⚠ The refusal that matters. Lengthening blind would put a real event over a
+  // meeting nobody could see; the membership takes nobody else's time, so it
+  // still happens.
+  const { blockId, dateKey } = ahead('Review the runbook');
+  const extra = freshTask('Another thing entirely');
+
+  const res = await withCalendar(null, () => withoutUpdate(() =>
+    taskBlocks.addTask(blockId, extra, { now: at(dateKey) })));
+
+  assert.equal(res.ok, true, res.error);
+  assert.equal(res.calendarKnown, false);
+  assert.equal(res.extendedBy, 0);
+  assert.match(res.extendNote, /could not be read/);
+  assert.equal(db.getTaskBlockRow(blockId).end_time, '10:30');
+  assert.equal(db.listTaskBlockItems(blockId).length, 2);
+});
+
+test('a window that has already gone REFUSES — that is a sitting, not a plan', async () => {
+  const { blockId, dateKey } = ahead('Work from a window that has been');
+  const extra = freshTask('Work for a window that has been');
+
+  const res = await withCalendar([], () => withoutUpdate(() =>
+    taskBlocks.addTask(blockId, extra, { now: at(dateKey, '14:00') })));
+
+  assert.equal(res.ok, false);
+  assert.equal(res.passed, true);
+  assert.match(res.error, /already gone/);
+  assert.equal(db.listTaskBlockItems(blockId).length, 1, 'the refusal must not half-apply');
+});
+
+test('a task already blocked elsewhere is refused, and the other block is NAMED', async () => {
+  // Two live blocks holding one task is two holds, two outcome notes, and a
+  // sweep with no way to say which sitting the evidence belongs to.
+  const first = ahead('Sitting in its own block');
+  const second = ahead('A different block entirely');
+
+  const res = await withCalendar([], () => withoutUpdate(() =>
+    taskBlocks.addTask(second.blockId, first.taskId, { now: at(second.dateKey) })));
+
+  assert.equal(res.ok, false);
+  assert.equal(res.elsewhereBlockId, first.blockId);
+  assert.match(res.error, /already blocked at/);
+});
+
+test('adding the same task twice FOLDS and says so, rather than doing nothing', async () => {
+  const { blockId, taskId, dateKey } = ahead('The one already in there');
+
+  const res = await withCalendar([], () => withoutUpdate(() =>
+    taskBlocks.addTask(blockId, taskId, { now: at(dateKey) })));
+
+  assert.equal(res.ok, true);
+  assert.equal(res.already, true);
+  assert.equal(db.listTaskBlockItems(blockId).length, 1);
+});
+
+test('the due date follows the block, and pushing one out is reported as such', async () => {
+  const { blockId, dateKey } = ahead('The anchor task');
+  const extra = freshTask('Dated for another day', '2026-11-01');
+
+  const res = await withCalendar([], () => withoutUpdate(() =>
+    taskBlocks.addTask(blockId, extra, { now: at(dateKey) })));
+
+  assert.equal(db.getTaskRow(extra).due_date, dateKey);
+  assert.equal(res.dueUpdate.from, '2026-11-01');
+  assert.equal(res.dueUpdate.to, dateKey);
+  assert.equal(res.dueUpdate.later, true, 'pushing a deadline out is not the same act as pulling one in');
+});
+
+test('a released block is not a window any more', async () => {
+  const { blockId, dateKey } = ahead('Done and dusted');
+  db.updateTaskBlockRow(blockId, { status: 'released', release_reason: 'nothing to write up' });
+  const extra = freshTask('Far too late for this');
+
+  const res = await withCalendar([], () => withoutUpdate(() =>
+    taskBlocks.addTask(blockId, extra, { now: at(dateKey) })));
+
+  assert.equal(res.ok, false);
+  assert.match(res.error, /not a window any more/);
+});
+
+test("the cap is the service's, so both ways into a block honour one number", async () => {
+  const { blockId, dateKey } = ahead('First of many');
+  for (let i = 1; i < taskBlocks.MAX_TASKS_PER_BLOCK; i++) {
+    const id = freshTask(`Filler task number ${i} for the cap`);
+    const r = await withCalendar([], () => withoutUpdate(() =>
+      taskBlocks.addTask(blockId, id, { now: at(dateKey) })));
+    assert.equal(r.ok, true, `filler ${i}: ${r.error}`);
+  }
+  const overflow = freshTask('One task too many for the window');
+  const res = await withCalendar([], () => withoutUpdate(() =>
+    taskBlocks.addTask(blockId, overflow, { now: at(dateKey) })));
+  assert.equal(res.ok, false);
+  assert.match(res.error, /at most/);
+});

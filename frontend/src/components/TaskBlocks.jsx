@@ -117,12 +117,113 @@ function DueNote({ draft }) {
       </span>;
 }
 
+/**
+ * The blocks a task could join: still ahead, still a window.
+ *
+ * ⚠ Three answers, and they must stay apart. `error` is "I could not read your
+ * blocks", which is not "you have none" — rendering the first as the second
+ * sends Nick to create a second block on top of one he already has. `rows: []`
+ * with no error is genuinely nothing upcoming.
+ *
+ * A block that has PASSED is deliberately not offered: the server refuses it
+ * (adding work to a sitting that has been is a claim it was done then), and an
+ * option that always answers 400 is worse than no option.
+ */
+function useJoinableBlocks(open) {
+  const [state, setState] = useState({ loading: false, rows: [], error: null, loaded: false });
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    setState(s => ({ ...s, loading: true, error: null }));
+    fetch(apiUrl('/api/task-blocks'))
+      .then(r => r.json())
+      .then(body => {
+        if (!live) return;
+        if (!body.ok) throw new Error(body.error || 'could not read your blocks');
+        setState({
+          loading: false,
+          loaded: true,
+          error: null,
+          rows: (body.blocks || []).filter(b => !b.passed && b.status === 'scheduled'),
+        });
+      })
+      .catch(e => live && setState({ loading: false, loaded: true, rows: [], error: e.message }));
+    return () => { live = false; };
+  }, [open]);
+
+  return state;
+}
+
+/**
+ * What happened when the task joined a block.
+ *
+ * States the window it landed in AND what the window did, because those are two
+ * different facts and only the server knows the second: the block is lengthened
+ * by what the task is thought to take, capped by whatever is next in the diary.
+ * A shortfall is said out loud rather than left to be discovered at 11:00 —
+ * overpacking is Nick's call to make, but only if he is told.
+ */
+function AddOutcome({ result }) {
+  if (result.already) {
+    return <span className="blocks-outcome blocks-outcome-ok">Already in that block — nothing to do.</span>;
+  }
+  return (
+    <span className="blocks-outcome blocks-outcome-ok">
+      Added — that block now runs to {result.endTime} ({result.minutes} min, {result.total} tasks
+      {result.extendedBy > 0 ? `, +${result.extendedBy} min` : ', window unchanged'}).
+      {result.extendNote && <><br /><span className="blocks-warn">{result.extendNote}.</span></>}
+      {result.estimateAssumed && <><br /><span className="blocks-warn">No estimate on this task, so that length is a guess.</span></>}
+      {result.dueUpdate?.later && (
+        <><br /><span className="blocks-warn">
+          That pushed its due date out to {result.dueUpdate.to} (was {result.dueUpdate.from}).
+        </span></>
+      )}
+      {result.eventUpdate && result.eventUpdate.updated === false && (
+        <><br /><span className="blocks-warn">
+          The calendar event was not updated ({result.eventUpdate.reason}) — the block itself is right.
+        </span></>
+      )}
+    </span>
+  );
+}
+
 export function BlockTimeControl({ todo, busy }) {
   const [draft, setDraft] = useState(null);
   const [edited, setEdited] = useState(false);
-  const [state, setState] = useState('idle');   // idle | planning | drafted | saving | done | error
+  // idle | choose | planning | drafted | saving | done | adding | added | error
+  const [state, setState] = useState('idle');
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
+  const [addResult, setAddResult] = useState(null);
+  const joinable = useJoinableBlocks(state === 'choose');
+
+  /**
+   * Put this task into a window that already exists.
+   *
+   * ⚠ Every refusal is SHOWN. The server has a lot of reasons to say no here —
+   * the window has gone, the task is blocked elsewhere, the block is full — and
+   * each one names what to do instead. Swallowing them would leave a button
+   * that appears to do nothing, which is the failure this panel keeps hitting.
+   */
+  const addToBlock = useCallback(async (blockId) => {
+    setState('adding');
+    setError(null);
+    try {
+      const res = await fetch(apiUrl(`/api/task-blocks/${blockId}/tasks`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: todo.task_id }),
+      });
+      const body = await res.json();
+      if (!body.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setAddResult(body);
+      setState('added');
+    } catch (e) {
+      setError(e.message);
+      setState('error');
+    }
+  }, [todo.task_id]);
 
   const propose = useCallback(async (minutes = null) => {
     setState('planning');
@@ -165,6 +266,15 @@ export function BlockTimeControl({ todo, busy }) {
     }
   }, [todo.task_id, draft]);
 
+  if (state === 'added' && addResult) {
+    return (
+      <div className="todo-edit-group">
+        <span className="todo-edit-label">Focus</span>
+        <AddOutcome result={addResult} />
+      </div>
+    );
+  }
+
   if (state === 'done' && result) {
     return (
       <div className="todo-edit-group">
@@ -183,8 +293,52 @@ export function BlockTimeControl({ todo, busy }) {
       <span className="todo-edit-label">Calendar</span>
 
       {state === 'idle' && (
-        <button className="todo-edit-btn" disabled={busy} onClick={() => propose()}>Block time</button>
+        <button className="todo-edit-btn" disabled={busy} onClick={() => setState('choose')}>
+          Add to focus block
+        </button>
       )}
+
+      {/* Join one, or make one. Joining is offered FIRST because it is the
+          cheaper act and the one that had no route at all — a block already
+          holding four tasks used to mean dropping it and re-picking all five to
+          add a fifth, which is five steps to do a thing Nick had already
+          decided to do. */}
+      {state === 'choose' && (
+        <span className="blocks-choose">
+          {joinable.loading && <span className="blocks-quiet">Reading your blocks…</span>}
+
+          {/* ⚠ "I could not look" is never rendered as "you have none". */}
+          {joinable.error && (
+            <span className="blocks-warn">
+              Couldn't read your existing blocks ({joinable.error}) — you can still make a new one.
+            </span>
+          )}
+
+          {joinable.loaded && !joinable.error && joinable.rows.length === 0 && (
+            <span className="blocks-quiet">No blocks coming up.</span>
+          )}
+
+          {joinable.rows.map(b => (
+            <button
+              key={b.blockId}
+              className="todo-edit-btn"
+              disabled={busy}
+              title={`${b.tasks.length} task${b.tasks.length === 1 ? '' : 's'} in this window — `
+                + 'adding one lengthens it, as far as the next thing in your diary allows'}
+              onClick={() => addToBlock(b.blockId)}
+            >
+              {b.dateKey} {b.startTime}–{b.endTime} · {b.tasks.length}
+            </button>
+          ))}
+
+          <button className="todo-edit-btn active" disabled={busy} onClick={() => propose()}>
+            New block…
+          </button>
+          <button className="todo-edit-btn" onClick={() => setState('idle')}>Cancel</button>
+        </span>
+      )}
+
+      {state === 'adding' && <span className="blocks-quiet">Adding…</span>}
       {state === 'planning' && <span className="blocks-quiet">Looking for a slot…</span>}
 
       {state === 'drafted' && draft && (

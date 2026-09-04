@@ -180,6 +180,16 @@
   color: var(--text-primary);
 }
 
+/* Join a block, or make one. Same inline-wrap shape as the duration presets
+   below: this is a row of choices, not a menu, and it sits inside a card that
+   is already open. */
+.blocks-choose {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 /* Duration presets — coarse buckets, because "quick / half an hour / a couple
    of hours" is a judgement that gets made in one second. */
 .blocks-durations {
