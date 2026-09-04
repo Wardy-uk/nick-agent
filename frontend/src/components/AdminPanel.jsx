@@ -936,11 +936,6 @@ export default function AdminPanel({ pushState = {} }) {
         : 'Vault path not configured for Plaud import'
     },
     {
-      name: 'n8n',
-      status: status.n8n?.configured ? 'connected' : 'unconfigured',
-      detail: status.n8n?.configured ? 'API key set — workflows available' : 'N8N_API_KEY not set'
-    },
-    {
       name: 'Strava',
       status: status.strava?.authenticated ? 'connected'
         : status.strava?.configured ? 'disconnected'

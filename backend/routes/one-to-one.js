@@ -141,6 +141,46 @@ router.get('/pending-transcripts', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/1to1/open-actions — 1-2-1 commitments still owed, per person, from NOVA.
+ *
+ * NOVA owns `agent_121_actions` and is the only place a commitment made IN a 1-2-1 is
+ * recorded with a status. The People card used to render a count of NEURO tasks whose
+ * text happened to mention the person's name, under the words "N actions owed" — a fuzzy
+ * match over Nick's own todo list, presented on a 1-2-1 card as a fact about a colleague.
+ *
+ * ⚠ `ok:false` rather than an empty map when NOVA cannot be reached, and a person NOVA
+ * does not track is ABSENT from `agents` rather than present as 0. "Nothing owed",
+ * "not tracked" and "couldn't ask" are three different facts and the card renders each
+ * differently.
+ */
+router.get('/open-actions', async (req, res) => {
+  try {
+    const nova = require('../services/nova-client');
+    if (!nova.isConfigured()) return res.json({ ok: false, error: 'NOVA bridge not configured', agents: {} });
+    const data = await nova.get121State({ days: 60 });
+    const rows = data?.agents;
+    // The bridge answers `agents: null` on a DB error behind a 503; nova-client may also
+    // hand back a shape we did not expect. Neither is "nobody owes anything".
+    if (!Array.isArray(rows)) return res.json({ ok: false, error: 'NOVA returned no roster', agents: {} });
+    const agents = {};
+    for (const a of rows) {
+      if (a && a.agentName && Number.isFinite(a.openActions)) agents[a.agentName] = a.openActions;
+    }
+    // ⚠ A NOVA older than 2026-09-04 answers this route perfectly and carries no
+    // `openActions` at all — which would map to an empty object and render as a team
+    // that owes nothing, the reader-before-writer shape this repo keeps getting bitten
+    // by. A roster with names but not one countable field is an OLD BRIDGE, not a clean
+    // slate. (A roster that is genuinely empty is a different thing and stays ok:true.)
+    if (rows.length > 0 && Object.keys(agents).length === 0) {
+      return res.json({ ok: false, error: 'NOVA did not report action counts (bridge predates them)', agents: {} });
+    }
+    res.json({ ok: true, agents });
+  } catch (e) {
+    res.json({ ok: false, error: e.message, agents: {} });
+  }
+});
+
 // Propose a slot. Reads the calendar; creates nothing.
 router.post('/propose', async (req, res) => {
   try {

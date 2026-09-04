@@ -25,7 +25,6 @@ const nudgeRoutes = require('./routes/nudges');
 const todoRoutes = require('./routes/todos');
 const doNextRoutes = require('./routes/do-next');
 const microsoftRoutes = require('./routes/microsoft');
-const n8nRoutes = require('./routes/n8n');
 const vaultRoutes = require('./routes/vault');
 const vaultDndRoutes = require('./routes/vault-dnd');
 const vaultHygieneRoutes = require('./routes/vault-hygiene');
@@ -170,7 +169,6 @@ app.use('/api/nudges', nudgeRoutes);
 app.use('/api/todos', todoRoutes);
 app.use('/api/do-next', doNextRoutes);
 app.use('/api/microsoft', microsoftRoutes);
-app.use('/api/n8n', n8nRoutes);
 app.use('/api/vault', vaultRoutes);
 app.use('/api/vault-dnd', vaultDndRoutes);
 app.use('/api/vault-hygiene', vaultHygieneRoutes);
@@ -269,7 +267,6 @@ app.get('/api/status', async (req, res) => {
   const microsoftService = require('./services/microsoft');
   const aiRouting = require('./services/ai-routing');
 
-  const n8nService = require('./services/n8n');
   const msConfigured = microsoftService.isConfigured();
   const msAuthenticated = msConfigured ? await microsoftService.isAuthenticated() : false;
   const ollamaReachable = await aiRouting.checkOllama();
@@ -313,9 +310,11 @@ app.get('/api/status', async (req, res) => {
       bridge: microsoftService.isBridgeConfigured(),
       source: msAuthenticated ? 'msal' : microsoftService.isBridgeConfigured() ? 'nova-bridge' : 'none'
     },
-    n8n: {
-      configured: n8nService.isConfigured()
-    },
+    // ⚠ `n8n` was reported here until 2026-09-04 and meant only "N8N_API_KEY is set".
+    // The one thing NEURO used that key for was the 1-2-1 performance-review workflow,
+    // now retired in favour of NOVA's own prep — so the row described a capability that
+    // no longer existed. n8n still talks TO NEURO (the Jira ingest, training sync); those
+    // are inbound webhooks authenticated by the API token and need no key here.
     plaud: require('./services/plaud-sync').getStatus(),
     // Notion sync. Reports WHETHER a credential is set and which source answered
     // — never the token itself. `mappings` is the number of folder pairs, because

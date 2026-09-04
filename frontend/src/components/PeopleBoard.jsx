@@ -152,151 +152,6 @@ function get121Status(frontmatter, detectedLast) {
   return { status: 'ok', daysUntil, label: `Due ${due}` };
 }
 
-function ApprovalPanel({ approvals, onRefresh }) {
-  const [expanded, setExpanded] = useState(null); // id of expanded approval
-  const [additionalSteps, setAdditionalSteps] = useState({});
-  const [emailOverrides, setEmailOverrides] = useState({});
-  const [acting, setActing] = useState(null); // id being acted on
-  const [statusMsg, setStatusMsg] = useState({});
-
-  if (!approvals.length) return null;
-
-  const handleApprove = async (approval) => {
-    setActing(approval.id);
-    setStatusMsg({});
-    try {
-      const res = await fetch(apiUrl(`/api/n8n/121/approve/${approval.id}`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agentEmail: emailOverrides[approval.id] || approval.agentEmail,
-          agentName: approval.agentName,
-          additionalSteps: additionalSteps[approval.id] || '',
-          worstQaCount: 0,
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        // Auto-download the MD review file
-        const date = new Date().toISOString().split('T')[0];
-        const fileName = `${date} – ${approval.agentName} 30-Day Performance Review.md`;
-        let markdown = approval.markdown || '';
-        const extra = (additionalSteps[approval.id] || '').trim();
-        if (extra) {
-          const lines = extra.split('\n').map(s => '- [ ] ' + s.trim()).filter(s => s.length > 6).join('\n');
-          markdown = markdown.replace(/## Tracking/, lines + '\n\n## Tracking');
-        }
-        const frontmatter = `---\ntype: performance-review\nperson: "[[People/${approval.agentName}|${approval.agentName}]]"\ndate: ${date}\nsource: n8n-workflow\n---\n\n`;
-        const blob = new Blob([frontmatter + markdown], { type: 'text/markdown' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        a.click();
-        URL.revokeObjectURL(url);
-
-        setStatusMsg(prev => ({ ...prev, [approval.id]: { type: 'ok', text: 'Approved — file downloaded, workflow resumed' } }));
-        setTimeout(onRefresh, 1500);
-      } else {
-        setStatusMsg(prev => ({ ...prev, [approval.id]: { type: 'err', text: data.error || 'Approval failed' } }));
-      }
-    } catch (e) {
-      setStatusMsg(prev => ({ ...prev, [approval.id]: { type: 'err', text: e.message } }));
-    }
-    setActing(null);
-  };
-
-  const handleDismiss = async (approval) => {
-    setActing(approval.id);
-    try {
-      await fetch(apiUrl(`/api/n8n/121/dismiss/${approval.id}`), { method: 'POST' });
-      onRefresh();
-    } catch { /* ignore */ }
-    setActing(null);
-  };
-
-  return (
-    <div className="approval-panel">
-      <div className="approval-panel-header">
-        <span className="approval-panel-title">Pending Review Approvals</span>
-        <span className="approval-badge">{approvals.length}</span>
-      </div>
-      <div className="approval-list">
-        {approvals.map(a => (
-          <div key={a.id} className="approval-item">
-            <div className="approval-item-header">
-              <span className="approval-item-name">{a.agentName}</span>
-              <span className="approval-item-date">{new Date(a.receivedAt).toLocaleString()}</span>
-            </div>
-            {a.subject && <div className="approval-item-subject">{a.subject}</div>}
-            <button
-              className="approval-preview-toggle"
-              onClick={() => setExpanded(expanded === a.id ? null : a.id)}
-            >
-              {expanded === a.id ? 'Hide Preview' : 'Show Preview'}
-            </button>
-            {expanded === a.id && (
-              <>
-                <div
-                  className="approval-preview"
-                  dangerouslySetInnerHTML={{ __html: (a.draftHtml || '')
-                    .replace(/<a[^>]*Approve[^<]*<\/a>/gi, '')
-                    .replace(/<a[^>]*approve[^<]*<\/a>/gi, '')
-                    .replace(/<div[^>]*>[^<]*expire[^<]*<\/div>/gi, '')
-                    .replace(/DRAFT REVIEW/gi, 'REVIEW PREVIEW')
-                  }}
-                />
-                <div className="approval-email-override">
-                  <label>Send to email</label>
-                  <input
-                    type="email"
-                    placeholder={a.agentEmail}
-                    value={emailOverrides[a.id] || ''}
-                    onChange={e => setEmailOverrides(prev => ({ ...prev, [a.id]: e.target.value }))}
-                  />
-                </div>
-                <div className="approval-additional">
-                  <label>Additional next steps (one per line, optional)</label>
-                  <textarea
-                    rows={3}
-                    placeholder="e.g. Schedule follow-up with team lead..."
-                    value={additionalSteps[a.id] || ''}
-                    onChange={e => setAdditionalSteps(prev => ({ ...prev, [a.id]: e.target.value }))}
-                  />
-                </div>
-              </>
-            )}
-            {statusMsg[a.id] && (
-              <div className={`approval-status-msg ${statusMsg[a.id].type}`}>
-                {statusMsg[a.id].text}
-              </div>
-            )}
-            <div className="approval-actions">
-              <button
-                className="approval-btn-approve"
-                onClick={() => handleApprove(a)}
-                disabled={acting === a.id}
-              >
-                {acting === a.id ? 'Approving...' : 'Approve & Send'}
-              </button>
-              <button
-                className="approval-btn-dismiss"
-                onClick={() => handleDismiss(a)}
-                disabled={acting === a.id}
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// 1-2-1 prep used to live here (PrepViewer + a Generate Prep button). NOVA owns
-// prep now — the card shows what actually happened instead of what was prepped.
-
 /** The date of the newest 1-2-1 the detector can prove happened, if any. */
 function latest121(oneToOnes, name) {
   return oneToOnes?.[name]?.[0]?.date || null;
@@ -965,10 +820,23 @@ function normaliseCadence(raw) {
   return 'bi-weekly';
 }
 
-function UpdateForm({ name, frontmatter, onClose, onSaved }) {
+/**
+ * What is still Nick's to say about a person's 1-2-1s.
+ *
+ * ⚠ The `Last 1-2-1` and `Next 1-2-1 due` DATE INPUTS were removed on 2026-09-04. Both
+ * facts are DERIVED now and have been since 14 Aug: `one-to-one-detect` reads the date off
+ * the written-up meeting note, and `nova-121-writeback` moves `last-1-2-1` on NOVA's
+ * `completed_at`. The due date is recomputed from last + cadence at read time
+ * (`get121Status`), which is why the stored one goes stale within a day of a 1-2-1 and was
+ * ignored by the badge anyway. Typing a date here made this a fourth writer racing three
+ * detectors, against the rule the rest of the system runs on — a 1-2-1 is DETECTED, not
+ * declared. Both are shown, read-only, with where they came from.
+ *
+ * What is left is the three things nothing can detect: the cadence Nick chooses, the
+ * employment status HR holds and NEURO cannot read, and his own notes.
+ */
+function UpdateForm({ name, frontmatter, detectedLast, onClose, onSaved }) {
   const fm = frontmatter || {};
-  const [last121, setLast121] = useState(fm['last-1-2-1'] || '');
-  const [next121, setNext121] = useState(fm['next-1-2-1-due'] || '');
   const [cadence, setCadence] = useState(normaliseCadence(fm.cadence));
   const [employmentStatus, setEmploymentStatus] = useState(fm['employment-status'] || 'Permanent');
   const [notes, setNotes] = useState('');
@@ -978,17 +846,16 @@ function UpdateForm({ name, frontmatter, onClose, onSaved }) {
   const cadenceChanged = cadence !== normaliseCadence(fm.cadence);
 
   const handleSave = async () => {
-    if (!last121 && !next121 && !notes.trim() && !employmentStatus && !cadenceChanged) { setMsg('Fill in at least one field'); return; }
+    if (!notes.trim() && !employmentStatus && !cadenceChanged) { setMsg('Fill in at least one field'); return; }
     setSaving(true);
     try {
       const res = await fetch(apiUrl(`/api/obsidian/people/${encodeURIComponent(name)}/update`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          last121: last121 || undefined,
-          // Only send the date when it was edited — otherwise the backend can't
-          // tell "leave it alone" from "recompute it from the new cadence".
-          next121Due: next121 && next121 !== (fm['next-1-2-1-due'] || '') ? next121 : undefined,
+          // No dates. `last121` / `next121Due` are still accepted by the route (the
+          // migration script and the detector use them); this form no longer sends
+          // either, so the cadence change below is what recomputes the due date.
           cadence: cadenceChanged ? cadence : undefined,
           employmentStatus: employmentStatus || undefined,
           notes: notes.trim() || undefined
@@ -1012,12 +879,23 @@ function UpdateForm({ name, frontmatter, onClose, onSaved }) {
         <span className="update-form-title">Update 1-2-1 — {name}</span>
         <button className="update-form-close" onClick={onClose}>x</button>
       </div>
-      <label className="update-label">Last 1-2-1
-        <input type="date" className="update-input" value={last121} onChange={e => setLast121(e.target.value)} />
-      </label>
-      <label className="update-label">Next 1-2-1 due
-        <input type="date" className="update-input" value={next121} onChange={e => setNext121(e.target.value)} />
-      </label>
+      <div className="update-readonly">
+        <span className="update-readonly-label">Last 1-2-1</span>
+        <span className="update-readonly-value">
+          {detectedLast || fm['last-1-2-1'] || 'none found'}
+          <em>{detectedLast ? ' — from the meeting note' : (fm['last-1-2-1'] ? ' — stamped on the card' : '')}</em>
+        </span>
+      </div>
+      <div className="update-readonly">
+        <span className="update-readonly-label">Next due</span>
+        <span className="update-readonly-value">
+          {fm['next-1-2-1-due'] || 'not set'}<em> — recalculated from the last 1-2-1 and the cadence</em>
+        </span>
+      </div>
+      <span className="update-hint">
+        Dates are read from the written-up note and from NOVA when a 1-2-1 is completed —
+        they are not typed here. Use Book now or Move to change when the next one is.
+      </span>
       <label className="update-label">Cadence
         <select className="update-input" value={cadence} onChange={e => setCadence(e.target.value)}>
           {CADENCE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -1052,9 +930,6 @@ function UpdateForm({ name, frontmatter, onClose, onSaved }) {
 
 export default function PeopleBoard() {
   const [peopleData, setPeopleData] = useState({});
-  const [n8nConfigured, setN8nConfigured] = useState(false);
-  const [running121, setRunning121] = useState(null); // person name currently running
-  const [snapshotResult, setSnapshotResult] = useState(null); // { name, data }
   const [editingPerson, setEditingPerson] = useState(null); // person name being updated
   const [editingNote, setEditingNote] = useState(null); // person name whose raw note is being edited
   const [bookingFor, setBookingFor] = useState(null); // person name being booked
@@ -1062,7 +937,6 @@ export default function PeopleBoard() {
   const [bookingAll, setBookingAll] = useState(null); // names being batch-booked
   const [oneToOnes, setOneToOnes] = useState(null); // { [name]: [{date,title,highlights}] }
   const [autoExpanded, setAutoExpanded] = useState(() => sessionStorage.getItem('people-auto-expanded') === 'true');
-  const [pendingApprovals, setPendingApprovals] = useState([]);
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [viewMode, setViewMode] = useState('reports'); // reports | other
   const [personSummaries, setPersonSummaries] = useState({});
@@ -1070,6 +944,10 @@ export default function PeopleBoard() {
   // failing silently: it crosses the bridge to another machine, and the board must render
   // exactly the same when NOVA is unreachable.
   const [pendingTranscripts, setPendingTranscripts] = useState({});
+  // 1-2-1 commitments still owed, from NOVA — which is the only place a commitment made
+  // IN a 1-2-1 is recorded. `null` while unread and on any failure: a person NOVA does
+  // not track is ABSENT from the map, and that is deliberately not the same as 0.
+  const [openActions, setOpenActions] = useState(null);
 
   // Auto-expand removed — was opening overdue 1-2-1 forms on every page visit
 
@@ -1104,15 +982,13 @@ export default function PeopleBoard() {
     // Detected 1-2-1 history — what actually happened, read from meeting notes
     fetchOneToOnes();
 
-    // Check n8n status + pending approvals
-    fetch(apiUrl('/api/n8n/status'))
+    // What each person still owes off a 1-2-1. Same shape as pendingTranscripts: it
+    // crosses the bridge to another machine, so an unreachable NOVA leaves the count
+    // unrendered rather than rendering a zero nobody measured.
+    fetch(apiUrl('/api/1to1/open-actions'))
       .then(r => r.json())
-      .then(d => setN8nConfigured(d.configured))
-      .catch(() => {});
-    fetchApprovals();
-    // Poll for new approvals every 10s
-    const approvalTimer = setInterval(fetchApprovals, 10000);
-    return () => clearInterval(approvalTimer);
+      .then(j => setOpenActions(j?.ok ? (j.agents || {}) : null))
+      .catch(() => setOpenActions(null));
   }, []);
 
   const fetchOneToOnes = (refresh = false) => {
@@ -1120,55 +996,6 @@ export default function PeopleBoard() {
       .then(r => r.json())
       .then(d => setOneToOnes(d.byPerson || {}))
       .catch(() => setOneToOnes({}));
-  };
-
-  const fetchApprovals = () => {
-    fetch(apiUrl('/api/n8n/121/pending'))
-      .then(r => r.json())
-      .then(d => {
-        setPendingApprovals(d.approvals || []);
-        // Auto-dismiss snapshot banner once an approval appears
-        if (d.approvals?.length > 0) setSnapshotResult(null);
-      })
-      .catch(() => {});
-  };
-
-  const [snapshotOpts, setSnapshotOpts] = useState({}); // { [name]: { lookbackDays, nextStepsDays } }
-
-  const getOpts = (personName) => snapshotOpts[personName] || { lookbackDays: 31, nextStepsDays: 31 };
-  const setOpts = (personName, patch) => setSnapshotOpts(prev => ({
-    ...prev,
-    [personName]: { ...getOpts(personName), ...patch }
-  }));
-
-  const run121 = async (personName, mode = '30day') => {
-    setRunning121(personName);
-    setSnapshotResult(null);
-    setEditingPerson(null);
-    const opts = getOpts(personName);
-    const fm = peopleData[personName]?.frontmatter || {};
-    const isProbationary = /probation/i.test(fm['employment-status'] || '');
-    try {
-      const res = await fetch(apiUrl('/api/n8n/121'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nameHint: personName,
-          mode,
-          lookbackDays: opts.lookbackDays,
-          nextStepsDays: opts.nextStepsDays,
-          isProbationary
-        })
-      });
-      const data = await res.json();
-      setSnapshotResult({ name: personName, data });
-      // Refresh approvals after a delay (n8n takes time to process)
-      setTimeout(fetchApprovals, 15000);
-      setTimeout(fetchApprovals, 30000);
-    } catch (e) {
-      setSnapshotResult({ name: personName, data: { success: false, error: e.message } });
-    }
-    setRunning121(null);
   };
 
   const saraLine = buildTeamSaraLine(TEAMS, peopleData, personSummaries, oneToOnes);
@@ -1217,8 +1044,6 @@ export default function PeopleBoard() {
           >Other</button>
         </div>
       </div>
-
-      {viewMode === 'reports' && <ApprovalPanel approvals={pendingApprovals} onRefresh={fetchApprovals} />}
 
       {bookingAll && (
         <BookAllDialog
@@ -1276,22 +1101,6 @@ export default function PeopleBoard() {
         />
       )}
 
-      {snapshotResult && (
-        <div className={`snapshot-result ${snapshotResult.data.success ? 'success' : 'error'}`}>
-          <div className="snapshot-header">
-            <span className="snapshot-title">1-2-1 Snapshot: {snapshotResult.name}</span>
-            <button className="snapshot-close" onClick={() => setSnapshotResult(null)}>x</button>
-          </div>
-          <div className="snapshot-body">
-            {snapshotResult.data.success ? (
-              <div className="snapshot-message">{snapshotResult.data.message}</div>
-            ) : (
-              <div className="snapshot-error">{snapshotResult.data.error || 'Workflow failed'}</div>
-            )}
-          </div>
-        </div>
-      )}
-
       {viewMode === 'other' && (
         <AllPeopleSection
           excludeNames={Object.values(TEAMS).flat().map(p => p.name)}
@@ -1309,7 +1118,6 @@ export default function PeopleBoard() {
               const tags = vaultData?.tags || [];
               const fm = vaultData?.frontmatter || {};
               const sara = getSaraStatus(person, vaultData, personSummaries, latest121(oneToOnes, person.name));
-              const isRunning = running121 === person.name;
 
               return (
                 <div key={person.id} className={`person-card sara-status-${sara.tone}`} data-person={person.name}>
@@ -1340,13 +1148,20 @@ export default function PeopleBoard() {
                   {!vaultData?.exists && (
                     <span className="person-no-note">No vault note</span>
                   )}
-                  {/* A count, not the list. The actions themselves are on the People
-                      note and in NOVA's 1-2-1 — three copies of the same text was two
-                      too many, and it is the NUMBER that tells you whether to worry. */}
-                  {personSummaries[person.name]?.tasks?.length > 0 && (
+                  {/* 1-2-1 commitments still owed, counted by NOVA.
+                      ⚠ This USED to count NEURO tasks whose text happened to mention the
+                      person's name — a fuzzy match over Nick's own todo list, rendered on
+                      a 1-2-1 card under the words "actions owed", i.e. a claim about a
+                      colleague that nothing had measured. The real ledger is NOVA's
+                      `agent_121_actions`; the commitments themselves are on the People
+                      note (the writeback's block) and in NOVA — this is the NUMBER, which
+                      is what tells you whether to worry. Absent means NOVA does not track
+                      them or could not be asked; 0 means nothing owed and renders as
+                      nothing at all. */}
+                  {openActions?.[person.name] > 0 && (
                     <div className="person-card-tasks">
                       <span className="person-card-task-count">
-                        ☐ {personSummaries[person.name].tasks.length} action{personSummaries[person.name].tasks.length === 1 ? '' : 's'} owed
+                        ☐ {openActions[person.name]} 1-2-1 action{openActions[person.name] === 1 ? '' : 's'} owed
                       </span>
                     </div>
                   )}
@@ -1368,34 +1183,12 @@ export default function PeopleBoard() {
                       ))}
                     </div>
                   )}
-                  {n8nConfigured && (() => {
-                    const opts = getOpts(person.name);
+                  {(() => {
                     const empStatus = fm['employment-status'] || '';
                     const isProb = /probation/i.test(empStatus);
+                    if (!empStatus && !fm.cadence) return null;
                     return (
                       <div className="person-snapshot-opts">
-                        <label className="snapshot-opt">
-                          <span>Lookback</span>
-                          <select
-                            value={opts.lookbackDays}
-                            onChange={e => setOpts(person.name, { lookbackDays: Number(e.target.value) })}
-                          >
-                            <option value={7}>7 days</option>
-                            <option value={14}>14 days</option>
-                            <option value={31}>31 days</option>
-                          </select>
-                        </label>
-                        <label className="snapshot-opt">
-                          <span>Next steps</span>
-                          <select
-                            value={opts.nextStepsDays}
-                            onChange={e => setOpts(person.name, { nextStepsDays: Number(e.target.value) })}
-                          >
-                            <option value={7}>7 days</option>
-                            <option value={14}>14 days</option>
-                            <option value={31}>31 days</option>
-                          </select>
-                        </label>
                         {empStatus && (
                           <span className={`person-emp-status${isProb ? ' probation' : ''}`}>{empStatus}</span>
                         )}
@@ -1437,29 +1230,12 @@ export default function PeopleBoard() {
                     >
                       Move
                     </button>
-                    {n8nConfigured && (
-                      <button
-                        className={`person-121-btn ${isRunning ? 'running' : ''}`}
-                        onClick={() => run121(person.name)}
-                        disabled={isRunning || running121 !== null}
-                      >
-                        {isRunning ? 'Running...' : '1-2-1 Snapshot'}
-                      </button>
-                    )}
-                    {n8nConfigured && person.note && /improvement window/i.test(person.note) && (
-                      <button
-                        className={`person-weekly-btn ${isRunning ? 'running' : ''}`}
-                        onClick={() => run121(person.name, 'weekly')}
-                        disabled={isRunning || running121 !== null}
-                      >
-                        {isRunning ? 'Running...' : 'Weekly Review'}
-                      </button>
-                    )}
                   </div>
                   {editingPerson === person.name && (
                     <UpdateForm
                       name={person.name}
                       frontmatter={fm}
+                      detectedLast={latest121(oneToOnes, person.name)}
                       onClose={() => setEditingPerson(null)}
                       onSaved={() => {
                         fetch(apiUrl(`/api/obsidian/people/${encodeURIComponent(person.name)}`))
