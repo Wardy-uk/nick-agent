@@ -177,3 +177,25 @@ test('a day with nothing recorded says so, and says it differently', () => {
   });
   assert.match(rendered, /nothing was recorded as finished/);
 });
+
+test('a capped list says what it dropped — a truncated day reads as the whole of it', () => {
+  const rendered = session._renderContext({
+    dateKey: '2026-09-04',
+    closed: {
+      known: true,
+      date: '2026-09-03',
+      total: 19,
+      items: [{ text: 'Productivity metrics for Naomi', source: 'task' }],
+    },
+  });
+  assert.match(rendered, /18 more not listed/);
+});
+
+test('rituals are not finished work — the standup already says whether one happened', () => {
+  // Guards the gather, not the render: "Standup done" and "End of day done" are
+  // wins, and on the first live run the pair of them took two of the twelve
+  // slots off real commitments.
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'standup-session.js'), 'utf8');
+  assert.match(src, /w\.source !== 'ritual'/);
+  assert.match(src, /w\.source !== 'git'/);
+});

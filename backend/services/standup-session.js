@@ -132,6 +132,10 @@ function _renderSchedule(s) {
  * The model gets facts; it does not go looking for them mid-conversation, because
  * a standup that takes thirty seconds to think is a standup that gets skipped.
  */
+// How many finished items the context names. A cap, not a summary: whatever it
+// drops is reported as a count rather than quietly left out.
+const CLOSED_LIMIT = 15;
+
 async function buildContext(kind) {
   const ctx = { kind, dateKey: _today(), schedule: buildSchedule() };
 
@@ -205,21 +209,24 @@ async function buildContext(kind) {
   // Friday). EOD asks about today, the day it is closing.
   //
   // ⚠ Commits are excluded — folded one row per repo per day, they would
-  // dominate a list whose job is to name closed COMMITMENTS. ⚠ A failed read
-  // is a NAMED GAP, never an empty list: "nothing was finished" and "I could
-  // not look" license opposite things to say.
+  // dominate a list whose job is to name closed COMMITMENTS. Rituals go too:
+  // "Standup done" is already stated by the block above, and on the first live
+  // run the two of them took two of the twelve slots off real work. ⚠ A failed
+  // read is a NAMED GAP, never an empty list: "nothing was finished" and "I
+  // could not look" license opposite things to say. ⚠ And the cap is COUNTED,
+  // never swallowed — a truncated list of what he finished reads as the whole
+  // of it, which is the one thing this block exists to stop being wrong about.
   try {
     const wins = require('./wins');
     const day = kind === 'eod'
       ? ctx.dateKey
       : (ctx.accountability?.yesterday?.date || _dateStr(_addDays(new Date(), -1)));
+    const all = wins.winsForDate(day).filter(w => w.source !== 'git' && w.source !== 'ritual');
     ctx.closed = {
       known: true,
       date: day,
-      items: wins.winsForDate(day)
-        .filter(w => w.source !== 'git')
-        .slice(0, 12)
-        .map(w => ({ text: w.text, source: w.source })),
+      total: all.length,
+      items: all.slice(0, CLOSED_LIMIT).map(w => ({ text: w.text, source: w.source })),
     };
   } catch (e) {
     console.warn('[StandupSession] Wins read failed:', e.message);
@@ -277,6 +284,8 @@ function _renderContext(ctx) {
     if (closed.items.length) {
       parts.push(`\nFINISHED ON ${closed.date} (recorded by NEURO, independent of the note — treat these as DONE):`);
       for (const c of closed.items) parts.push(`  - ${c.text} [${c.source}]`);
+      const more = (closed.total || closed.items.length) - closed.items.length;
+      if (more > 0) parts.push(`  (and ${more} more not listed — he finished more than is shown here.)`);
       parts.push('If something below is on this list, it is done. Confirm and close it — do NOT chase it.');
     } else {
       parts.push(`\nFINISHED ON ${closed.date}: nothing was recorded as finished.`);
