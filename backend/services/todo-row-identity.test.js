@@ -72,14 +72,24 @@ test('nothing on the card writes until Save — the ONE call site', () => {
   // PATCH, which is also what stopped the list re-sorting the card out from
   // under the cursor mid-triage.
   //
-  // Pinned as a COUNT, because the failure mode being prevented is a future
-  // control quietly going back to writing on click — which would look fine on
-  // that control and reintroduce the moving-card bug for the whole card.
-  const calls = SOURCE.match(/onPatch\(/g) || [];
-  assert.strictEqual(
-    calls.length, 2,
-    'expected exactly two: the save() call and the prop wired in TodoItem. A third means something is writing on click again',
-  );
+  // ⚠ Pinned STRUCTURALLY rather than as a count. It was a count of two — the
+  // save() call plus the prop wired in TodoItem — and that broke the moment the
+  // Must Move lane started rendering the same card, which is a third perfectly
+  // correct prop wiring. A count fails on the safe change and would then be
+  // bumped to 3 by whoever hit it, which is how a guard quietly becomes a
+  // rubber stamp. What actually matters is the SHAPE of every call site: one
+  // write that sends the whole accumulated draft, and forwarding arrows that
+  // carry a caller's fields without inventing any.
+  const sites = [...SOURCE.matchAll(/onPatch\(([^)]*)\)/g)].map(m => m[1].trim());
+  assert.ok(sites.length >= 2, 'onPatch should still be both written and wired');
+  for (const args of sites) {
+    assert.ok(
+      args === 'changed' || /^[A-Za-z_$][\w$]*, fields$/.test(args),
+      `onPatch(${args}) writes something other than the accumulated draft — a control `
+      + 'is patching on click again, which re-sorts the card out from under the cursor',
+    );
+  }
+  assert.ok(sites.includes('changed'), 'the single write should send the whole accumulated draft');
   assert.ok(SOURCE.includes('await onPatch(changed)'), 'the single write should send the whole accumulated draft');
 });
 
