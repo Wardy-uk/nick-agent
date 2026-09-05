@@ -373,6 +373,50 @@ CREATE TABLE IF NOT EXISTS location_points (
 CREATE INDEX IF NOT EXISTS idx_location_points_tst ON location_points(tst);
 CREATE INDEX IF NOT EXISTS idx_location_points_device ON location_points(device_id, tst);
 
+-- Workouts, which are RECORDS rather than scalars.
+--
+-- `health_samples(metric, value, recorded_at)` is a numeric time series, and a
+-- workout is not one: it has a type, a span, and half a dozen measurements that
+-- only mean anything together. Flattening a run into six unrelated rows loses
+-- the fact that they were the same run, which is the only thing that makes it a
+-- workout rather than a coincidence.
+--
+-- This is what retires Strava. Every field Strava's `formatActivity()` reads —
+-- type, distance, duration, elevation, average heart rate — comes off a
+-- HealthKit workout too, and has been arriving in the FreeReps payload all
+-- along, counted and thrown away as an `UNSTORED_SECTION`.
+--
+-- ⚠ UNITS ARE FIXED HERE, not carried. Distance is METRES, energy is KCAL,
+-- duration is SECONDS, elevation is METRES. The wire format uses whatever the
+-- phone felt like (km, miles, kJ), and storing the number without the unit is
+-- how a 5km run becomes a 5-metre one. Conversion happens on the way in and an
+-- unrecognised unit is REFUSED rather than stored at unknown scale — the rule
+-- `UNIT_RULES` already applies to hrv and heart rate.
+--
+-- UNIQUE(source_uuid) folds a re-sent batch. HealthKit gives every workout a
+-- stable UUID, so a backfill that overlaps a daily sync is idempotent.
+CREATE TABLE IF NOT EXISTS health_workouts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_uuid TEXT UNIQUE,
+  activity_type TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  duration_seconds INTEGER,
+  distance_m REAL,
+  active_energy_kcal REAL,
+  elevation_m REAL,
+  avg_heart_rate REAL,
+  max_heart_rate REAL,
+  source TEXT NOT NULL DEFAULT 'apple-health',
+  -- Anything the phone sent that NEURO does not model, kept rather than
+  -- dropped: this parser was written without a real HAE workout payload to
+  -- read, so the first live one has to be able to tell us what we missed.
+  payload TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_health_workouts_started ON health_workouts(started_at);
+
 -- What a device says about ITSELF — battery, motion, connectivity, focus.
 --
 -- Everything here is currently read out of Home Assistant's iOS Companion app

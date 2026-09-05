@@ -129,6 +129,25 @@ router.post('/ingest', (req, res) => {
 
     const skipped = parsed.samples.length - inserted;
 
+    // Workouts are records rather than scalars and go to their own table. This
+    // is what retires Strava — the section has been arriving all along and was
+    // counted and discarded until 5 Sep 2026.
+    let workoutsInserted = 0;
+    try {
+      workoutsInserted = db.insertWorkouts(parsed.workouts);
+    } catch (e) {
+      // A workout failure must not lose the metrics that parsed alongside it.
+      console.error('[AppleHealth] Workout insert failed:', e.message);
+      parsed.rejected.push({ metric: 'workout', reason: e.message });
+    }
+    if (Object.keys(parsed.unknownWorkoutFields).length) {
+      // ⚠ Deliberately loud. The workout parser was written without a real HAE
+      // payload to read, so an unrecognised field is the only signal that a
+      // spelling was guessed wrong — and a workout stored with three null
+      // columns otherwise looks perfectly healthy.
+      console.warn('[AppleHealth] Unrecognised workout fields:', JSON.stringify(parsed.unknownWorkoutFields));
+    }
+
     // Rejections are grouped and logged rather than returned one by one: a
     // backfill can carry tens of thousands of points, and a response listing
     // every one is unreadable. A silent rejection would be worse, so the COUNT
@@ -166,6 +185,9 @@ router.post('/ingest', (req, res) => {
         receivedNotStored: parsed.unstored,
         excludedByConfig: parsed.excluded,
         ignoredCategorySamples: parsed.ignoredCategory,
+        workoutsReceived: parsed.workoutsReceived,
+        workoutsInserted,
+        unknownWorkoutFields: parsed.unknownWorkoutFields,
       },
     });
   } catch (e) {

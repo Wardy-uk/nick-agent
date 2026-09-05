@@ -256,18 +256,179 @@ function parseCategorySamples(samples, out) {
   }
 }
 
+// ── Workouts ─────────────────────────────────────────────────────────────────
+
+/**
+ * Distance and energy units, and what one of each is worth in the stored unit.
+ *
+ * Stored units are METRES and KCAL. ⚠ An unrecognised unit is REFUSED, never
+ * stored at unknown scale — the same rule `UNIT_RULES` applies to hrv, and for
+ * the same reason: a 5km run stored as 5 is not a small error, it is a
+ * different fact.
+ */
+const DISTANCE_UNITS = { m: 1, metre: 1, meter: 1, metres: 1, meters: 1, km: 1000, mi: 1609.344, mile: 1609.344, miles: 1609.344, yd: 0.9144 };
+const ENERGY_UNITS = { kcal: 1, cal: 0.001, kj: 0.239006, calories: 1, kilocalories: 1 };
+
+/**
+ * The fields this parser understands, in every spelling it has been taught.
+ *
+ * ⚠ This was written WITHOUT a real Health Auto Export workout payload to read
+ * — the section has always been counted and discarded, so there is no captured
+ * example anywhere in the repo. The spellings below cover HAE's documented
+ * shape and the obvious camelCase variants, and anything unrecognised is kept
+ * in `payload` and reported in `unknownFields`. That reporting is the point:
+ * the first live payload has to be able to tell us what we guessed wrong,
+ * rather than quietly storing a workout with three null columns.
+ */
+const WORKOUT_FIELDS = {
+  activityType: ['name', 'workoutActivityType', 'activityType', 'type'],
+  start: ['start', 'startDate', 'start_date'],
+  end: ['end', 'endDate', 'end_date'],
+  duration: ['duration'],
+  distance: ['distance', 'totalDistance'],
+  energy: ['activeEnergyBurned', 'activeEnergy', 'totalEnergyBurned'],
+  elevation: ['elevationUp', 'elevationAscended', 'totalElevationGain'],
+  avgHeartRate: ['avgHeartRate', 'averageHeartRate'],
+  maxHeartRate: ['maxHeartRate'],
+  sourceUuid: ['id', 'uuid', 'source_uuid'],
+};
+
+/** First present spelling of a field, or undefined. */
+function _field(w, names) {
+  for (const n of names) if (w[n] !== undefined && w[n] !== null) return w[n];
+  return undefined;
+}
+
+/**
+ * A measurement that may be a bare number or HAE's `{ qty, units }` object.
+ *
+ * Returns `{ ok, value }` in the stored unit, or `{ ok:false, reason }`. A bare
+ * number is taken at face value in the stored unit — that is a real assumption,
+ * and it is why the units table refuses anything it does not recognise rather
+ * than falling back to "probably metres".
+ */
+function _measure(raw, table, label, storedUnit) {
+  if (raw === undefined || raw === null) return { ok: true, value: null };
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? { ok: true, value: raw } : { ok: false, reason: `${label} is not a finite number` };
+  }
+  if (typeof raw === 'object') {
+    const qty = Number(raw.qty !== undefined ? raw.qty : raw.value);
+    if (!Number.isFinite(qty)) return { ok: false, reason: `${label} has no numeric qty` };
+    const units = String(raw.units || raw.unit || '').trim().toLowerCase();
+    if (!units) return { ok: true, value: qty };
+    const factor = table[units];
+    if (factor === undefined) {
+      return { ok: false, reason: `unexpected units "${raw.units || raw.unit}" for ${label} (expected ${storedUnit})` };
+    }
+    return { ok: true, value: qty * factor };
+  }
+  return { ok: false, reason: `${label} is neither a number nor a { qty, units }` };
+}
+
+/**
+ * Workouts, from `data.workouts`.
+ *
+ * This is what retires Strava: every field `strava.formatActivity()` reads —
+ * type, distance, duration, elevation, average heart rate — is here, and has
+ * been arriving in the payload all along only to be counted and thrown away.
+ *
+ * ⚠ The one thing that does NOT come across is Strava's `suffer_score`, which
+ * is proprietary and computed on their side. Nothing here reconstructs it, and
+ * nothing should: an invented effort score that looks like Strava's but is not
+ * would be worse than its absence.
+ *
+ * A workout with no parseable start is REJECTED rather than stamped with the
+ * ingest time. A run whose time is "whenever the phone got signal" is not a
+ * record of a run.
+ */
+function parseWorkouts(workouts, out) {
+  if (!Array.isArray(workouts)) return;
+
+  const known = new Set(Object.values(WORKOUT_FIELDS).flat());
+
+  for (const w of workouts) {
+    if (!w || typeof w !== 'object') continue;
+    out.workoutsReceived++;
+
+    const startedAt = parseHealthDate(_field(w, WORKOUT_FIELDS.start));
+    if (!startedAt) {
+      out.rejected.push({ metric: 'workout', reason: `unparseable workout start "${_field(w, WORKOUT_FIELDS.start)}"` });
+      continue;
+    }
+
+    const activityType = String(_field(w, WORKOUT_FIELDS.activityType) || '').trim();
+    if (!activityType) {
+      out.rejected.push({ metric: 'workout', reason: 'workout has no activity type' });
+      continue;
+    }
+
+    const distance = _measure(_field(w, WORKOUT_FIELDS.distance), DISTANCE_UNITS, 'distance', 'm');
+    const energy = _measure(_field(w, WORKOUT_FIELDS.energy), ENERGY_UNITS, 'activeEnergy', 'kcal');
+    const elevation = _measure(_field(w, WORKOUT_FIELDS.elevation), DISTANCE_UNITS, 'elevation', 'm');
+    const failed = [distance, energy, elevation].find((m) => !m.ok);
+    if (failed) {
+      // Refused whole rather than stored with the bad field nulled: a run with
+      // a silently missing distance reads as a treadmill session.
+      out.rejected.push({ metric: 'workout', reason: failed.reason });
+      continue;
+    }
+
+    const endedAt = parseHealthDate(_field(w, WORKOUT_FIELDS.end));
+    let durationSeconds = Number(_field(w, WORKOUT_FIELDS.duration));
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+      // Derived from the span when absent, which is what HealthKit means by
+      // duration anyway. Null when neither is available — never 0, which would
+      // render as an instantaneous workout.
+      const toMs = (sql) => Date.parse(`${sql.replace(' ', 'T')}Z`);
+      durationSeconds = endedAt ? Math.round((toMs(endedAt) - toMs(startedAt)) / 1000) : null;
+      if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) durationSeconds = null;
+    }
+
+    const hr = (names) => {
+      const m = _measure(_field(w, names), { bpm: 1, 'count/min': 1 }, 'heartRate', 'bpm');
+      return m.ok ? m.value : null;
+    };
+
+    const extras = {};
+    for (const k of Object.keys(w)) if (!known.has(k)) extras[k] = w[k];
+    if (Object.keys(extras).length) {
+      for (const k of Object.keys(extras)) out.unknownWorkoutFields[k] = (out.unknownWorkoutFields[k] || 0) + 1;
+    }
+
+    out.workouts.push({
+      sourceUuid: _field(w, WORKOUT_FIELDS.sourceUuid) || null,
+      activityType,
+      startedAt,
+      endedAt,
+      durationSeconds,
+      distanceM: distance.value,
+      activeEnergyKcal: energy.value,
+      elevationM: elevation.value,
+      avgHeartRate: hr(WORKOUT_FIELDS.avgHeartRate),
+      maxHeartRate: hr(WORKOUT_FIELDS.maxHeartRate),
+      payload: Object.keys(extras).length ? extras : null,
+    });
+  }
+}
+
 /**
  * Parse a whole payload.
  *
- * Returns what was understood AND what was not. The record-shaped sections
- * (workouts, ECG, audiograms, medications, state of mind, activity summaries,
+ * Returns what was understood AND what was not. The remaining record-shaped
+ * sections (ECG, audiograms, medications, state of mind, activity summaries,
  * vision prescriptions) do not fit `health_samples(metric, value, recorded_at)`
  * and are NOT stored — they are counted and named in `unstored` so the response
  * says so out loud. Accepting a payload and silently discarding half of it is
  * the failure mode this codebase keeps finding.
+ *
+ * ⚠ `workouts` LEFT this list on 5 Sep 2026 and now has its own table and
+ * parser above. It is the one record-shaped section with a consumer waiting for
+ * it — Strava — and leaving it counted-but-discarded meant paying an OAuth
+ * integration for data the phone was already sending.
  */
 const UNSTORED_SECTIONS = [
-  'workouts', 'ecg_recordings', 'audiograms', 'activity_summaries',
+  'ecg_recordings', 'audiograms', 'activity_summaries',
   'medications', 'vision_prescriptions', 'state_of_mind',
 ];
 
@@ -279,6 +440,9 @@ function parsePayload(body) {
     ignoredCategory: 0,
     unstored: {},
     excluded: {},
+    workouts: [],
+    workoutsReceived: 0,
+    unknownWorkoutFields: {},
   };
 
   const data = body && body.data;
@@ -288,6 +452,7 @@ function parsePayload(body) {
 
   parseMetrics(data.metrics, out, excludedMetrics());
   parseCategorySamples(data.category_samples, out);
+  parseWorkouts(data.workouts, out);
 
   for (const section of UNSTORED_SECTIONS) {
     const n = Array.isArray(data[section]) ? data[section].length : 0;
@@ -418,4 +583,8 @@ module.exports = {
   NEURO_ALIAS,
   UNIT_RULES,
   UNSTORED_SECTIONS,
+  parseWorkouts,
+  WORKOUT_FIELDS,
+  DISTANCE_UNITS,
+  ENERGY_UNITS,
 };

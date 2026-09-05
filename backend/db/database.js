@@ -1520,6 +1520,58 @@ function pruneLocationPoints(days = 90) {
   return info.changes;
 }
 
+// ── Workouts ──
+
+/**
+ * Store parsed workouts.
+ *
+ * INSERT OR IGNORE + UNIQUE(source_uuid) folds a re-sent batch — HealthKit
+ * gives every workout a stable UUID, so a backfill overlapping a daily sync is
+ * idempotent. ⚠ A workout with NO uuid still inserts (SQLite treats NULL as
+ * distinct in a UNIQUE index), so a source that omits ids will duplicate on
+ * replay. That is deliberate rather than overlooked: silently dropping an
+ * un-identified workout would lose a real one, and the alternative — matching
+ * on start time — would merge two genuinely different activities that began in
+ * the same minute.
+ */
+function insertWorkouts(rows) {
+  if (!rows || !rows.length) return 0;
+  let inserted = 0;
+  batchSaves(() => {
+    for (const w of rows) {
+      if (!w.activityType || !w.startedAt) continue;
+      const info = run(
+        `INSERT OR IGNORE INTO health_workouts
+           (source_uuid, activity_type, started_at, ended_at, duration_seconds,
+            distance_m, active_energy_kcal, elevation_m, avg_heart_rate, max_heart_rate, source, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          w.sourceUuid || null, w.activityType, w.startedAt, w.endedAt || null,
+          w.durationSeconds == null ? null : w.durationSeconds,
+          w.distanceM, w.activeEnergyKcal, w.elevationM,
+          w.avgHeartRate, w.maxHeartRate,
+          w.source || 'apple-health',
+          w.payload == null ? null : JSON.stringify(w.payload),
+        ]
+      );
+      inserted += info.changes;
+    }
+  });
+  return inserted;
+}
+
+/** Workouts started within an inclusive UTC 'YYYY-MM-DD HH:MM:SS' window. */
+function getWorkoutsBetween(fromSql, toSql, limit = 200) {
+  return all(
+    'SELECT * FROM health_workouts WHERE started_at >= ? AND started_at <= ? ORDER BY started_at ASC LIMIT ?',
+    [fromSql, toSql, limit]
+  );
+}
+
+function getLatestWorkout() {
+  return get('SELECT * FROM health_workouts ORDER BY started_at DESC LIMIT 1');
+}
+
 // ── Device status (what the phone says about itself) ──
 
 /**
@@ -2113,6 +2165,10 @@ module.exports = {
   getLocationPointsBetween,
   getLatestLocationPoint,
   pruneLocationPoints,
+  // Workouts (records, not scalars)
+  insertWorkouts,
+  getWorkoutsBetween,
+  getLatestWorkout,
   // Device status (device self-report)
   saveDeviceStatus,
   getLatestDeviceStatus,
