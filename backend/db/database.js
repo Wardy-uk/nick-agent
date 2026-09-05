@@ -1464,6 +1464,62 @@ function getLocationVisitsByPlace(placeName, limit = 50) {
   return all('SELECT * FROM location_visits WHERE place_name = ? ORDER BY date_key DESC LIMIT ?', [placeName, limit]);
 }
 
+// ── Location Points (device-pushed) ──
+
+/**
+ * Store raw position points from a device.
+ *
+ * INSERT OR IGNORE + UNIQUE(device_id, tst) make this idempotent, which the
+ * offline queue on the phone depends on: it re-sends any batch it did not see
+ * acknowledged, and a replay must fold rather than double-count. The return is
+ * the count of GENUINELY NEW rows, so the caller can tell a draining queue from
+ * one that is stuck re-sending the same points.
+ */
+function insertLocationPoints(rows) {
+  if (!rows || !rows.length) return 0;
+  let inserted = 0;
+  batchSaves(() => {
+    for (const r of rows) {
+      if (!Number.isFinite(r.lat) || !Number.isFinite(r.lng) || !Number.isFinite(r.tst)) continue;
+      const info = run(
+        `INSERT OR IGNORE INTO location_points (device_id, lat, lng, tst, accuracy, source)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [r.deviceId, r.lat, r.lng, r.tst, r.accuracy == null ? null : r.accuracy, r.source || 'ios']
+      );
+      inserted += info.changes;
+    }
+  });
+  return inserted;
+}
+
+/** Points in a unix-second window, oldest first — the order clustering expects. */
+function getLocationPointsBetween(fromTst, toTst, limit = 5000) {
+  return all(
+    'SELECT lat, lng, tst, accuracy, device_id FROM location_points WHERE tst >= ? AND tst <= ? ORDER BY tst ASC LIMIT ?',
+    [fromTst, toTst, limit]
+  );
+}
+
+/** The newest point from any device. Drives the staleness alarm. */
+function getLatestLocationPoint() {
+  return get('SELECT lat, lng, tst, accuracy, device_id FROM location_points ORDER BY tst DESC LIMIT 1');
+}
+
+/**
+ * Drop points older than `days`.
+ *
+ * Raw points are an INTERMEDIATE — `location_visits` is the durable record and
+ * is written from them. Significant-change reporting is perhaps a few hundred
+ * points a day, so this is housekeeping rather than a pressing cost, but an
+ * unbounded raw feed is the kind of table that is only noticed when the Pi's
+ * disk fills.
+ */
+function pruneLocationPoints(days = 90) {
+  const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+  const info = run('DELETE FROM location_points WHERE tst < ?', [cutoff]);
+  return info.changes;
+}
+
 function getFrequentLocations(daysBack = 30, minVisits = 2) {
   const cutoff = new Date(Date.now() - daysBack * 86400000).toISOString().split('T')[0];
   return all(
@@ -1992,6 +2048,11 @@ module.exports = {
   getLocationVisits,
   getLocationVisitsByPlace,
   getFrequentLocations,
+  // Location points (device-pushed)
+  insertLocationPoints,
+  getLocationPointsBetween,
+  getLatestLocationPoint,
+  pruneLocationPoints,
   // Tasks (source of truth)
   createTaskRow,
   getTaskRow,

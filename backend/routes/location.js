@@ -21,6 +21,80 @@ router.get('/status', (req, res) => {
   res.json({ configured: location.isConfigured() });
 });
 
+// ── Device-pushed position ───────────────────────────────────────────────────
+//
+// The door that lets a native iOS app be the position source, so the OwnTracks
+// chain (app → Mosquitto → Recorder → poll) stops being load-bearing. Both
+// paths are literal; registered together and before nothing in particular,
+// since this router has no parameterised sibling at the top level — but see the
+// route-order warning in `routes/mobile.js` before adding one.
+//
+// Auth is the app-level PIN / API-token middleware in server.js. Nothing here
+// is exempted: unlike the `/api/v1` FreeReps mount, which had to fall back to a
+// Tailscale-header source guard because that app has nowhere to put a
+// credential, a native app holds one in the Keychain properly.
+
+/**
+ * POST /api/location/points — a batch of positions from a device.
+ *
+ * Body: `{ deviceId, points: [{ lat, lon, tst, acc? }], source? }`
+ * `tst` is unix SECONDS (the OwnTracks convention the clustering expects).
+ *
+ * ⚠ 200 WITH A RECEIPT, even when individual points were rejected. The batch
+ * was accepted and every point is accounted for; a non-2xx would make the phone
+ * retry a queue it has already delivered, forever. Only a malformed BATCH is a
+ * 400, and only a storage failure is a 503 — which the device must retry,
+ * because in that case nothing was written.
+ */
+router.post('/points', (req, res) => {
+  const locationPoints = require('../services/location-points');
+  const body = req.body || {};
+
+  const batch = locationPoints.validateBatch({
+    deviceId: body.deviceId,
+    points: body.points,
+    nowSeconds: Math.floor(Date.now() / 1000),
+  });
+  if (!batch.ok) return res.status(400).json({ ok: false, error: batch.reason });
+
+  try {
+    const { stored, duplicate } = locationPoints.store(batch.deviceId, batch.accepted, body.source);
+    // Never log a coordinate. Counts describe the health of the feed without
+    // writing where Nick was into the process log.
+    if (stored > 0) console.log(`[Location] ${stored} new points from ${batch.deviceId}`);
+    res.json({
+      ok: true,
+      received: batch.received,
+      stored,
+      duplicate,
+      rejected: batch.rejected,
+      rejectedReasons: batch.rejectedReasons,
+    });
+  } catch (e) {
+    // Nothing was recorded, so the device must send this batch again.
+    console.error('[Location] point ingest failed:', e.message);
+    res.status(503).json({ ok: false, error: e.message, retryable: true });
+  }
+});
+
+/**
+ * GET /api/location/points/status — is the device feed alive?
+ *
+ * ⚠ This is the alarm for the free-provisioning 7-day expiry. When the app's
+ * signature lapses iOS stops launching it and background location dies with no
+ * error and no notification — the feed just goes quiet, which is exactly what a
+ * day at home looks like. `stale` is what makes that loud.
+ *
+ * Three states stay distinct here: `known:false` (nothing has ever arrived —
+ * never started, so no age is reported), `stale:true` (it worked and stopped),
+ * and `readable:false` (the store could not be read at all, which is a
+ * different fault from either).
+ */
+router.get('/points/status', (req, res) => {
+  const locationPoints = require('../services/location-points');
+  res.json({ ok: true, feed: locationPoints.freshness() });
+});
+
 // GET /api/location/places — list saved named places
 router.get('/places', (req, res) => {
   try {

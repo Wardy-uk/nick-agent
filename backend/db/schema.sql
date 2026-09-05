@@ -339,6 +339,40 @@ CREATE TABLE IF NOT EXISTS location_visits (
 CREATE INDEX IF NOT EXISTS idx_location_visits_date ON location_visits(date_key);
 CREATE INDEX IF NOT EXISTS idx_location_visits_place ON location_visits(place_name);
 
+-- Raw position points pushed BY a device, rather than polled FROM a recorder.
+--
+-- The OwnTracks path reads points out of the Recorder's HTTP API, so NEURO never
+-- owned a point. A native iOS app has nowhere to put one, which is why this
+-- table exists: it is the store `location.getTodayPoints()` range-queries when
+-- the phone is the source. Shape deliberately MATCHES the OwnTracks point
+-- (`lat`, `lon`, `tst`) so the clustering in `services/location.js` needs no
+-- second code path — see the mapping in `services/location-points.js`.
+--
+-- ⚠ `tst` is unix SECONDS, not milliseconds, because that is what OwnTracks
+-- emits and what `clusterPoints()` subtracts to get a duration. A device sending
+-- milliseconds makes every dwell ~1000x too long, which passes the 20-minute
+-- floor trivially and turns a drive-past into a working day.
+--
+-- UNIQUE(device_id, tst) is what makes the ingest idempotent: the phone keeps an
+-- offline queue and WILL re-send a batch it never saw acknowledged, so a replay
+-- has to fold rather than double-count.
+CREATE TABLE IF NOT EXISTS location_points (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lng REAL NOT NULL,
+  tst INTEGER NOT NULL,
+  accuracy REAL,
+  source TEXT NOT NULL DEFAULT 'ios',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(device_id, tst)
+);
+
+-- Range queries by time are the only read pattern (`getTodayPoints`), and the
+-- staleness check reads the newest row regardless of device.
+CREATE INDEX IF NOT EXISTS idx_location_points_tst ON location_points(tst);
+CREATE INDEX IF NOT EXISTS idx_location_points_device ON location_points(device_id, tst);
+
 -- MoSCoW task prioritisation (Phase 6A)
 CREATE TABLE IF NOT EXISTS task_moscow (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
