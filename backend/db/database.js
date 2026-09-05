@@ -1520,6 +1520,66 @@ function pruneLocationPoints(days = 90) {
   return info.changes;
 }
 
+// ── Device status (what the phone says about itself) ──
+
+/**
+ * Record a device's self-report, newest-wins.
+ *
+ * ⚠ The write is guarded on `reported_at` moving FORWARD, and that guard is the
+ * whole point. The phone queues reports while it is off the tailnet and drains
+ * them in whatever order it manages; a plain upsert would let a report observed
+ * at 09:00 and delivered at 14:05 overwrite one observed at 14:00. The phone's
+ * state would then rewind — showing `Walking` and 40% battery hours after it
+ * went still and charged — with nothing anywhere saying so.
+ *
+ * Returns true when the row was written, false when an older report was
+ * correctly ignored, so a caller can tell "stored" from "superseded".
+ */
+function saveDeviceStatus(s) {
+  const existing = get('SELECT reported_at FROM device_status WHERE device_id = ?', [s.deviceId]);
+  if (existing && existing.reported_at && existing.reported_at >= s.reportedAt) return false;
+
+  run(
+    `INSERT INTO device_status
+       (device_id, reported_at, received_at, battery_level, battery_state, connection_type,
+        ssid, geocoded_location, activity, activity_since, steps, distance_m,
+        floors_ascended, focus_mode, payload)
+     VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(device_id) DO UPDATE SET
+       reported_at = excluded.reported_at,
+       received_at = CURRENT_TIMESTAMP,
+       battery_level = excluded.battery_level,
+       battery_state = excluded.battery_state,
+       connection_type = excluded.connection_type,
+       ssid = excluded.ssid,
+       geocoded_location = excluded.geocoded_location,
+       activity = excluded.activity,
+       activity_since = excluded.activity_since,
+       steps = excluded.steps,
+       distance_m = excluded.distance_m,
+       floors_ascended = excluded.floors_ascended,
+       focus_mode = excluded.focus_mode,
+       payload = excluded.payload`,
+    [
+      s.deviceId, s.reportedAt,
+      s.batteryLevel, s.batteryState, s.connectionType, s.ssid, s.geocodedLocation,
+      s.activity, s.activitySince, s.steps, s.distanceM, s.floorsAscended,
+      s.focusMode == null ? null : (s.focusMode ? 1 : 0),
+      s.payload == null ? null : JSON.stringify(s.payload),
+    ]
+  );
+  return true;
+}
+
+/** The most recently OBSERVED device report, across devices. */
+function getLatestDeviceStatus() {
+  return get('SELECT * FROM device_status ORDER BY reported_at DESC LIMIT 1');
+}
+
+function getDeviceStatusFor(deviceId) {
+  return get('SELECT * FROM device_status WHERE device_id = ?', [deviceId]);
+}
+
 function getFrequentLocations(daysBack = 30, minVisits = 2) {
   const cutoff = new Date(Date.now() - daysBack * 86400000).toISOString().split('T')[0];
   return all(
@@ -2053,6 +2113,10 @@ module.exports = {
   getLocationPointsBetween,
   getLatestLocationPoint,
   pruneLocationPoints,
+  // Device status (device self-report)
+  saveDeviceStatus,
+  getLatestDeviceStatus,
+  getDeviceStatusFor,
   // Tasks (source of truth)
   createTaskRow,
   getTaskRow,

@@ -373,6 +373,45 @@ CREATE TABLE IF NOT EXISTS location_points (
 CREATE INDEX IF NOT EXISTS idx_location_points_tst ON location_points(tst);
 CREATE INDEX IF NOT EXISTS idx_location_points_device ON location_points(device_id, tst);
 
+-- What a device says about ITSELF — battery, motion, connectivity, focus.
+--
+-- Everything here is currently read out of Home Assistant's iOS Companion app
+-- (`services/ha.js getPhoneStatus`), which means NEURO's picture of what Nick is
+-- physically doing depends on a third-party app relaying sensors the phone
+-- already owns. A native app reports them directly; HA is then kept for
+-- smart-home ACTUATION, which is the only thing it is uniquely able to do.
+--
+-- ⚠ ONE ROW PER DEVICE, not a history. This is current state — "what is the
+-- phone doing now" — and the questions asked of it (is he moving, is he
+-- driving, is the phone dead) are all about the present. Motion HISTORY, if it
+-- is ever wanted, is a different table with a different shape; overloading this
+-- one would make every read a "latest per device" subquery.
+--
+-- ⚠ `reported_at` is when the DEVICE observed the state, `received_at` when the
+-- Pi was told. They differ by however long the phone was off the tailnet, and
+-- conflating them makes a queued report look current. The write is guarded on
+-- `reported_at` moving FORWARD — an offline queue can deliver an old report
+-- after a new one, and last-write-wins would then rewind the phone's state.
+CREATE TABLE IF NOT EXISTS device_status (
+  device_id TEXT PRIMARY KEY,
+  reported_at TEXT NOT NULL,
+  received_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  battery_level REAL,
+  battery_state TEXT,
+  connection_type TEXT,
+  ssid TEXT,
+  geocoded_location TEXT,
+  activity TEXT,
+  activity_since TEXT,
+  steps INTEGER,
+  distance_m REAL,
+  floors_ascended INTEGER,
+  focus_mode INTEGER,
+  -- The raw report, so a sensor the app learns to send before NEURO learns to
+  -- model it is kept rather than dropped on the floor.
+  payload TEXT
+);
+
 -- MoSCoW task prioritisation (Phase 6A)
 CREATE TABLE IF NOT EXISTS task_moscow (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
