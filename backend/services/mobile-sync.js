@@ -40,6 +40,11 @@ const KINDS = {
   CAPTURE_NOTE: 'capture.note',
   CAPTURE_TODO: 'capture.todo',
   TODO_COMPLETE: 'todo.complete',
+  // Acting on a nudge is SARA's whole loop — she comes to him, and the answer
+  // has to survive being given on a watch in a lift. Added 5 Sep 2026 for the
+  // native apps; the PWA calls the routes directly and does not use the outbox.
+  NUDGE_COMPLETE: 'nudge.complete',
+  NUDGE_SNOOZE: 'nudge.snooze',
 };
 const KNOWN_KINDS = new Set(Object.values(KINDS));
 
@@ -115,6 +120,31 @@ function validateOperation(op) {
     const taskId = Number(payload.taskId);
     if (!Number.isInteger(taskId) || taskId <= 0) {
       return { ok: false, reason: 'payload.taskId (a NEURO task id) is required' };
+    }
+    return { ok: true };
+  }
+
+  if (op.kind === KINDS.NUDGE_COMPLETE) {
+    const nudgeId = Number(payload.nudgeId);
+    if (!Number.isInteger(nudgeId) || nudgeId <= 0) {
+      return { ok: false, reason: 'payload.nudgeId is required' };
+    }
+    return { ok: true };
+  }
+
+  if (op.kind === KINDS.NUDGE_SNOOZE) {
+    // ⚠ Snooze is per-TYPE, not per-nudge — `snoozeNudge` writes `snooze_<type>`
+    // — so the type is what the device must send, and it is checked against the
+    // known list rather than passed through. An unrecognised type would write a
+    // junk state key that mutes nothing and never expires, and nothing would
+    // ever read it to notice.
+    const nudges = require('./nudges');
+    if (!isNonEmptyString(payload.type, 100) || !nudges.NUDGE_TYPES.includes(payload.type)) {
+      return { ok: false, reason: `payload.type must be one of ${nudges.NUDGE_TYPES.join(', ')}` };
+    }
+    if (payload.minutes !== undefined) {
+      const m = Number(payload.minutes);
+      if (!Number.isFinite(m) || m <= 0) return { ok: false, reason: 'payload.minutes must be positive' };
     }
     return { ok: true };
   }
@@ -267,10 +297,98 @@ function applyTodoComplete(payload) {
   };
 }
 
+/**
+ * Dismiss a nudge.
+ *
+ * ⚠ A nudge that is no longer active is NOT a conflict, which is the opposite
+ * call from `applyTodoComplete` and worth stating. Nudges auto-clear: a stale
+ * one is swept by `clearStaleNudges`, and completing the underlying thing
+ * clears it too. So a dismissal arriving for a nudge that has already gone is
+ * the SYSTEM WORKING, not a device holding an intent about something the server
+ * has never heard of. Reported as applied, with `alreadyGone` so the phone can
+ * tell the difference rather than showing a failure for a tick that was fine.
+ */
+function applyNudgeComplete(payload) {
+  const nudgeId = Number(payload.nudgeId);
+  const active = db.getActiveNudges();
+  const nudge = active.find((n) => n.id === nudgeId);
+
+  if (!nudge) {
+    return { canonicalId: `nudge:${nudgeId}`, detail: JSON.stringify({ alreadyGone: true }) };
+  }
+
+  db.completeNudge(nudgeId);
+  // Same side effect the route has, so a dismissal from the watch and one from
+  // the browser are the same event as far as the activity log is concerned.
+  try { require('./activity').trackNudgeDismiss(nudge.type); } catch {}
+  return {
+    canonicalId: `nudge:${nudgeId}`,
+    detail: JSON.stringify({ alreadyGone: false, type: nudge.type }),
+  };
+}
+
+/**
+ * Snooze a nudge type.
+ *
+ * ⚠ THE SNOOZE IS MEASURED FROM WHEN NICK TAPPED IT, NOT FROM WHEN IT LANDED.
+ * This is the one operation in the outbox whose meaning is time-relative, and
+ * replaying it naively is actively harmful: "snooze for 30 minutes" tapped at
+ * 09:00 and delivered at 13:00 would mute the nudge until 13:30 — three and a
+ * half hours of silence he never asked for, from an intent that expired long
+ * ago. `snoozeNudge()` computes `Date.now() + minutes`, so it cannot be used
+ * directly here.
+ *
+ * A snooze whose window has already passed is therefore SPENT: nothing is
+ * written and the receipt says so. Idempotency comes free — the ledger stops a
+ * replay before it reaches this function, and an expired one is a no-op anyway.
+ */
+function applyNudgeSnooze(payload, op) {
+  const nudges = require('./nudges');
+  const type = payload.type;
+  const requested = Number(payload.minutes);
+  const minutes = Number.isFinite(requested) && requested > 0
+    ? Math.min(Math.round(requested), 24 * 60)
+    : 30;
+
+  // The tap time the device recorded. Falling back to now when it is missing is
+  // the only safe default: without it there is no way to tell a fresh tap from
+  // a stale one, and treating an unknown as expired would silently drop a
+  // snooze he just asked for.
+  const tappedAtMs = op && op.createdAt ? Date.parse(op.createdAt) : NaN;
+  const basisMs = Number.isFinite(tappedAtMs) ? tappedAtMs : Date.now();
+  const untilMs = basisMs + minutes * 60 * 1000;
+
+  if (untilMs <= Date.now()) {
+    return {
+      canonicalId: `snooze:${type}`,
+      detail: JSON.stringify({ spent: true, minutes, reason: 'the snooze window had already passed' }),
+    };
+  }
+
+  // Written directly rather than through snoozeNudge(), which measures from now
+  // — see the warning above. The state key must match what getSnoozeState()
+  // reads, so this stays in step with `nudges.js`.
+  db.setState(`snooze_${type}`, String(untilMs));
+  try { require('./activity').trackNudgeSnooze(type); } catch {}
+  return {
+    canonicalId: `snooze:${type}`,
+    detail: JSON.stringify({
+      spent: false,
+      minutes,
+      until: new Date(untilMs).toISOString(),
+      // Named so a phone that queued for hours can explain a shortened snooze
+      // rather than appearing to have ignored the request.
+      measuredFrom: Number.isFinite(tappedAtMs) ? 'tap' : 'arrival',
+    }),
+  };
+}
+
 const APPLIERS = {
   [KINDS.CAPTURE_NOTE]: applyCaptureNote,
   [KINDS.CAPTURE_TODO]: applyCaptureTodo,
   [KINDS.TODO_COMPLETE]: applyTodoComplete,
+  [KINDS.NUDGE_COMPLETE]: applyNudgeComplete,
+  [KINDS.NUDGE_SNOOZE]: applyNudgeSnooze,
 };
 
 // ── The one entry point ──────────────────────────────────────────────────────
@@ -331,7 +449,10 @@ function applyOperation(deviceId, op, clientSchema) {
   }
 
   try {
-    const { canonicalId, detail } = APPLIERS[op.kind](op.payload);
+    // The whole operation is passed alongside the payload because `nudge.snooze`
+    // needs `createdAt` — when Nick TAPPED it, not when it arrived. Appliers
+    // that do not care simply ignore the second argument.
+    const { canonicalId, detail } = APPLIERS[op.kind](op.payload, op);
     db.run(
       `UPDATE mobile_sync_operations
          SET status = 'applied', canonical_id = ?, detail = ?, settled_at = ?
