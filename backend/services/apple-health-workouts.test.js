@@ -143,26 +143,29 @@ test('one bad workout does not lose the good ones beside it', () => {
   assert.deepEqual(out.workouts.map((w) => w.activityType), ['Outdoor Run', 'Walk']);
 });
 
-test('workouts have left UNSTORED_SECTIONS, and the rest have not', () => {
-  assert.equal(ah.UNSTORED_SECTIONS.includes('workouts'), false);
-  // Paired positive: the six sections still without a home are still declared,
-  // so the ingest keeps saying out loud what it received and did not store.
-  for (const s of ['ecg_recordings', 'audiograms', 'activity_summaries',
-    'medications', 'vision_prescriptions', 'state_of_mind']) {
-    assert.equal(ah.UNSTORED_SECTIONS.includes(s), true, `${s} should still be declared unstored`);
-  }
+test('workouts go to their own table rather than the document store', () => {
+  // Workouts left UNSTORED_SECTIONS first, on the strength of having a consumer
+  // already waiting (Strava). The other six followed later the same day when
+  // Nick asked for all health data, but to `health_records` as documents — so
+  // the list is now empty and a workout must NOT be swept up as a document.
+  assert.deepEqual(ah.UNSTORED_SECTIONS, []);
+  assert.equal(Object.keys(ah.RECORD_SECTIONS).includes('workouts'), false);
+
+  const r = ah.parsePayload({ data: { workouts: [RUN] } });
+  assert.equal(r.workouts.length, 1);
+  assert.equal(r.records.length, 0);            // paired negative: not double-stored
 });
 
 test('parsePayload threads workouts through with the metrics', () => {
   const r = ah.parsePayload({ data: {
     metrics: [{ name: 'step_count', units: 'count', data: [{ date: '2026-08-16 09:00:00 +0100', qty: 900 }] }],
     workouts: [RUN],
-    ecg_recordings: [{}, {}],
+    ecg_recordings: [{ id: 'e1' }, { id: 'e2' }],
   } });
   assert.equal(r.ok, true);
   assert.equal(r.samples.length, 1);            // metrics still parse
-  assert.equal(r.workouts.length, 1);           // and workouts now do too
+  assert.equal(r.workouts.length, 1);           // workouts take the table route
   assert.equal(r.workoutsReceived, 1);
-  assert.equal(r.unstored.ecg_recordings, 2);   // and the rest are still named
-  assert.equal(r.unstored.workouts, undefined);
+  assert.equal(r.records.length, 2);            // ECG takes the document route
+  assert.deepEqual(r.unstored, {});             // and nothing is discarded
 });

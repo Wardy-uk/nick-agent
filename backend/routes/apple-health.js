@@ -140,6 +140,22 @@ router.post('/ingest', (req, res) => {
       console.error('[AppleHealth] Workout insert failed:', e.message);
       parsed.rejected.push({ metric: 'workout', reason: e.message });
     }
+    // Document-shaped records: ECG, audiograms, activity summaries,
+    // medications, vision prescriptions, state of mind, and every non-sleep
+    // category sample. All of it was counted and discarded until 5 Sep 2026.
+    let recordsInserted = 0;
+    try {
+      recordsInserted = db.insertHealthRecords(parsed.records);
+    } catch (e) {
+      console.error('[AppleHealth] Record insert failed:', e.message);
+      parsed.rejected.push({ metric: 'record', reason: e.message });
+    }
+    if (Object.keys(parsed.recordsWithoutDate).length) {
+      // Stored anyway — a medication without a parseable date still carries the
+      // medication — but said out loud, because a whole section landing with no
+      // dates means a date field was named something this parser has not seen.
+      console.warn('[AppleHealth] Records stored without a date:', JSON.stringify(parsed.recordsWithoutDate));
+    }
     if (Object.keys(parsed.unknownWorkoutFields).length) {
       // ⚠ Deliberately loud. The workout parser was written without a real HAE
       // payload to read, so an unrecognised field is the only signal that a
@@ -188,6 +204,9 @@ router.post('/ingest', (req, res) => {
         workoutsReceived: parsed.workoutsReceived,
         workoutsInserted,
         unknownWorkoutFields: parsed.unknownWorkoutFields,
+        recordsReceived: parsed.recordsReceived,
+        recordsInserted,
+        recordsWithoutDate: parsed.recordsWithoutDate,
       },
     });
   } catch (e) {

@@ -1520,6 +1520,57 @@ function pruneLocationPoints(days = 90) {
   return info.changes;
 }
 
+// ── Health records (document-shaped) ──
+
+/**
+ * Store document-shaped health records losslessly.
+ *
+ * INSERT OR IGNORE + UNIQUE(kind, dedupe_key) makes a re-sent backfill fold.
+ * Unlike `health_workouts`, EVERY record has a key — a uuid when the payload
+ * carries one, a content hash when it does not — so there is no un-deduplicable
+ * case here.
+ */
+function insertHealthRecords(rows) {
+  if (!rows || !rows.length) return 0;
+  let inserted = 0;
+  batchSaves(() => {
+    for (const r of rows) {
+      if (!r.kind || !r.dedupeKey) continue;
+      const info = run(
+        `INSERT OR IGNORE INTO health_records
+           (kind, dedupe_key, record_type, label, started_at, ended_at, numeric_value, document, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          r.kind, r.dedupeKey, r.recordType || null, r.label || null,
+          r.startedAt || null, r.endedAt || null,
+          r.numericValue == null ? null : r.numericValue,
+          JSON.stringify(r.document), r.source || 'apple-health',
+        ]
+      );
+      inserted += info.changes;
+    }
+  });
+  return inserted;
+}
+
+/** Records of one kind in a window. `started_at` may be null, so those are excluded here. */
+function getHealthRecords(kind, fromSql, toSql, limit = 500) {
+  return all(
+    `SELECT * FROM health_records
+     WHERE kind = ? AND started_at >= ? AND started_at <= ?
+     ORDER BY started_at ASC LIMIT ?`,
+    [kind, fromSql, toSql, limit]
+  );
+}
+
+/** What is actually in there, by kind — the honest answer to "did it all arrive". */
+function getHealthRecordCounts() {
+  return all(
+    `SELECT kind, COUNT(*) AS n, MIN(started_at) AS earliest, MAX(started_at) AS latest
+     FROM health_records GROUP BY kind ORDER BY n DESC`
+  );
+}
+
 // ── Workouts ──
 
 /**
@@ -2165,6 +2216,10 @@ module.exports = {
   getLocationPointsBetween,
   getLatestLocationPoint,
   pruneLocationPoints,
+  // Health records (document-shaped)
+  insertHealthRecords,
+  getHealthRecords,
+  getHealthRecordCounts,
   // Workouts (records, not scalars)
   insertWorkouts,
   getWorkoutsBetween,

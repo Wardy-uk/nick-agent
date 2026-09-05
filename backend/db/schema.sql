@@ -373,6 +373,50 @@ CREATE TABLE IF NOT EXISTS location_points (
 CREATE INDEX IF NOT EXISTS idx_location_points_tst ON location_points(tst);
 CREATE INDEX IF NOT EXISTS idx_location_points_device ON location_points(device_id, tst);
 
+-- Everything Apple Health sends that is a DOCUMENT rather than a number.
+--
+-- ECG traces, audiograms, activity summaries, medications, vision
+-- prescriptions, state-of-mind entries, and every non-sleep category sample
+-- (mindful sessions, handwashing, and the whole symptom vocabulary). All of it
+-- used to be counted and thrown away, because `health_samples(metric, value,
+-- recorded_at)` is a numeric time series and none of these are one.
+--
+-- ⚠ ONE GENERIC TABLE, NOT SIX MODELLED ONES, and that is a deliberate choice
+-- rather than laziness. The workouts parser had to be written blind because no
+-- captured HAE payload for that section exists anywhere in this repo — and the
+-- same is true of all six of these. Inventing six schemas against guessed field
+-- names would bake those guesses into columns, where being wrong is expensive
+-- and silent. Storing the document losslessly means a wrong guess costs a query
+-- rather than a migration, and NOTHING is lost in the meantime. Promote a
+-- section to its own table once a real payload has been read.
+--
+-- `document` is the whole record verbatim. The columns beside it are an INDEX
+-- into it, not a replacement for it.
+--
+-- ⚠ `dedupe_key` is the source uuid when there is one and a content hash when
+-- there is not. HAE does not give every section an id, and without a stable key
+-- a re-sent backfill silently doubles the table — the failure `location_points`
+-- avoids with UNIQUE(device_id, tst) and `health_workouts` with UNIQUE(uuid).
+-- A content hash is the only key available for a record that carries no id, and
+-- it is exactly right for this: the same document IS the same observation.
+CREATE TABLE IF NOT EXISTS health_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  record_type TEXT,
+  label TEXT,
+  started_at TEXT,
+  ended_at TEXT,
+  numeric_value REAL,
+  document TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'apple-health',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(kind, dedupe_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_health_records_kind ON health_records(kind, started_at);
+CREATE INDEX IF NOT EXISTS idx_health_records_type ON health_records(record_type, started_at);
+
 -- Workouts, which are RECORDS rather than scalars.
 --
 -- `health_samples(metric, value, recorded_at)` is a numeric time series, and a

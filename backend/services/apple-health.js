@@ -1,5 +1,11 @@
 'use strict';
 
+// The only import in this file, and a node builtin rather than a dependency —
+// so the parser stays testable without a database, a network or a compiled
+// native module. Used solely to hash a document into a dedupe key for records
+// that arrive without an id.
+const crypto = require('crypto');
+
 /**
  * Apple Health ingestion — the transport half of #40.
  *
@@ -213,9 +219,14 @@ function parseMetrics(metrics, out, excluded) {
  * silently here would bake a day-boundary rule into the ingest where nothing
  * could see it. Nightly aggregation is a follow-up on top of this data.
  *
- * Non-sleep category samples (symptoms, handwashing, mindfulness…) are counted
- * and reported but NOT stored: they are events, not scalars, and coercing them
- * into a numeric time series would fill the table with metrics nothing reads.
+ * ⚠ Non-sleep category samples (symptoms, handwashing, mindfulness…) are stored
+ * as DOCUMENTS in `health_records`, as of 5 Sep 2026. They were previously
+ * counted and dropped, and the reasoning still holds as far as it went — they
+ * are events, not scalars, and coercing them into a numeric time series would
+ * fill `health_samples` with metrics nothing reads. The error was treating "it
+ * does not fit this table" as "it does not belong anywhere". `ignoredCategory`
+ * survives as a COUNT of how many took the document route, so the response
+ * still says out loud what happened to them.
  */
 function parseCategorySamples(samples, out) {
   if (!Array.isArray(samples)) return;
@@ -224,6 +235,12 @@ function parseCategorySamples(samples, out) {
     if (!s || typeof s !== 'object') continue;
     if (!SLEEP_TYPE_RE.test(String(s.type || ''))) {
       out.ignoredCategory++;
+      out.recordsReceived++;
+      const rec = toRecord('category_sample', s);
+      if (!rec.startedAt) {
+        out.recordsWithoutDate.category_sample = (out.recordsWithoutDate.category_sample || 0) + 1;
+      }
+      out.records.push(rec);
       continue;
     }
 
@@ -412,25 +429,120 @@ function parseWorkouts(workouts, out) {
   }
 }
 
+// ── Document-shaped records ──────────────────────────────────────────────────
+
+/**
+ * Sections that are DOCUMENTS rather than numbers, and the kind each stores as.
+ *
+ * ⚠ All of these were counted-and-discarded until 5 Sep 2026, when Nick asked
+ * for all health data to come in. `workouts` left first, to its own table,
+ * because it had a consumer already waiting (Strava). The rest go to
+ * `health_records` as documents — see the schema for why one generic table
+ * rather than six guessed ones.
+ */
+const RECORD_SECTIONS = {
+  ecg_recordings: 'ecg',
+  audiograms: 'audiogram',
+  activity_summaries: 'activity_summary',
+  medications: 'medication',
+  vision_prescriptions: 'vision_prescription',
+  state_of_mind: 'state_of_mind',
+};
+
+/** Every spelling of a date seen across HAE's sections. */
+const RECORD_START_FIELDS = ['start', 'start_date', 'startDate', 'date', 'dateIssued', 'timestamp'];
+const RECORD_END_FIELDS = ['end', 'end_date', 'endDate'];
+const RECORD_ID_FIELDS = ['id', 'uuid', 'source_uuid'];
+
+function _firstField(o, names) {
+  for (const n of names) if (o[n] !== undefined && o[n] !== null) return o[n];
+  return undefined;
+}
+
+/**
+ * A stable key for a record, so a re-sent backfill folds rather than doubling.
+ *
+ * The uuid when there is one. When there is not — and HAE does not give every
+ * section an id — a hash of the document, because the same document IS the same
+ * observation. Keys are sorted before hashing so two encodings of one record
+ * hash alike.
+ */
+function recordDedupeKey(record) {
+  const id = _firstField(record, RECORD_ID_FIELDS);
+  if (id) return String(id);
+  const canonical = JSON.stringify(record, Object.keys(record).sort());
+  return `sha256:${crypto.createHash('sha256').update(canonical).digest('hex')}`;
+}
+
+/**
+ * Turn one document into a stored record.
+ *
+ * ⚠ A record with NO parseable date is STORED, not refused — the opposite call
+ * from `parseWorkouts`, and deliberately so. A workout without a time is
+ * meaningless as a workout; a medication or a vision prescription without one
+ * still carries the medication. Losing it to a date-format guess would be
+ * precisely the silent discarding this change exists to end, so `started_at` is
+ * null and the count is reported instead.
+ */
+function toRecord(kind, raw) {
+  const rawValue = raw.value !== undefined ? raw.value : raw.valence;
+  const numericValue = rawValue !== undefined && rawValue !== null && Number.isFinite(Number(rawValue))
+    ? Number(rawValue)
+    : null;
+
+  return {
+    kind,
+    dedupeKey: recordDedupeKey(raw),
+    recordType: raw.type ? String(raw.type) : null,
+    label: raw.value_label ? String(raw.value_label) : (raw.name ? String(raw.name) : null),
+    startedAt: parseHealthDate(_firstField(raw, RECORD_START_FIELDS)) || null,
+    endedAt: parseHealthDate(_firstField(raw, RECORD_END_FIELDS)) || null,
+    // A natural scalar where one exists, as an INDEX into the document — never
+    // a replacement for it.
+    numericValue,
+    document: raw,
+  };
+}
+
+/**
+ * The six document sections, plus an alarm for any section we have never seen.
+ *
+ * ⚠ `unstored` INVERTS MEANING here. It used to be a standing list of sections
+ * discarded on purpose; it is now only sections this parser has never heard of.
+ * That makes it an alarm for something Apple or HAE has ADDED, rather than an
+ * inventory of things ignored by design — and an inventory nobody rereads is
+ * how "we know about that one" becomes "we forgot about that one".
+ */
+function parseRecordSections(data, out) {
+  for (const [section, kind] of Object.entries(RECORD_SECTIONS)) {
+    const rows = data[section];
+    if (!Array.isArray(rows)) continue;
+    for (const raw of rows) {
+      if (!raw || typeof raw !== 'object') continue;
+      out.recordsReceived++;
+      const rec = toRecord(kind, raw);
+      if (!rec.startedAt) out.recordsWithoutDate[kind] = (out.recordsWithoutDate[kind] || 0) + 1;
+      out.records.push(rec);
+    }
+  }
+
+  const known = new Set(['metrics', 'category_samples', 'workouts', ...Object.keys(RECORD_SECTIONS)]);
+  for (const key of Object.keys(data)) {
+    if (known.has(key)) continue;
+    const n = Array.isArray(data[key]) ? data[key].length : 0;
+    if (n > 0) out.unstored[key] = n;
+  }
+}
+
 /**
  * Parse a whole payload.
  *
- * Returns what was understood AND what was not. The remaining record-shaped
- * sections (ECG, audiograms, medications, state of mind, activity summaries,
- * vision prescriptions) do not fit `health_samples(metric, value, recorded_at)`
- * and are NOT stored — they are counted and named in `unstored` so the response
- * says so out loud. Accepting a payload and silently discarding half of it is
- * the failure mode this codebase keeps finding.
- *
- * ⚠ `workouts` LEFT this list on 5 Sep 2026 and now has its own table and
- * parser above. It is the one record-shaped section with a consumer waiting for
- * it — Strava — and leaving it counted-but-discarded meant paying an OAuth
- * integration for data the phone was already sending.
+ * Since 5 Sep 2026 there is no standing list of sections dropped on purpose:
+ * metrics and sleep become samples, workouts get their own table, and every
+ * other document section is stored in `health_records`. `unstored` catches only
+ * sections this parser has never heard of.
  */
-const UNSTORED_SECTIONS = [
-  'ecg_recordings', 'audiograms', 'activity_summaries',
-  'medications', 'vision_prescriptions', 'state_of_mind',
-];
+const UNSTORED_SECTIONS = [];
 
 function parsePayload(body) {
   const out = {
@@ -443,6 +555,9 @@ function parsePayload(body) {
     workouts: [],
     workoutsReceived: 0,
     unknownWorkoutFields: {},
+    records: [],
+    recordsReceived: 0,
+    recordsWithoutDate: {},
   };
 
   const data = body && body.data;
@@ -453,11 +568,7 @@ function parsePayload(body) {
   parseMetrics(data.metrics, out, excludedMetrics());
   parseCategorySamples(data.category_samples, out);
   parseWorkouts(data.workouts, out);
-
-  for (const section of UNSTORED_SECTIONS) {
-    const n = Array.isArray(data[section]) ? data[section].length : 0;
-    if (n > 0) out.unstored[section] = n;
-  }
+  parseRecordSections(data, out);
 
   return { ...out, ok: true };
 }
@@ -587,4 +698,8 @@ module.exports = {
   WORKOUT_FIELDS,
   DISTANCE_UNITS,
   ENERGY_UNITS,
+  RECORD_SECTIONS,
+  parseRecordSections,
+  recordDedupeKey,
+  toRecord,
 };
