@@ -142,19 +142,32 @@ test('sleep becomes per-segment hours, stamped at the segment start', () => {
   assert.equal(out.samples.length, 2);
 });
 
-test('record-shaped sections are reported as not stored, never silently discarded', () => {
+test('record-shaped sections are STORED now, and unstored means something new', () => {
   const out = ah.parsePayload({
     data: {
       metrics: [],
-      workouts: [{ id: 'w1' }, { id: 'w2' }],
       ecg_recordings: [{ id: 'e1' }],
+      audiograms: [{ id: 'a1' }, { id: 'a2' }],
       state_of_mind: [],
+      sleep_apnea_events: [{ id: 'x1' }],   // invented — a section we have never seen
     },
   });
-  // They do not fit health_samples(metric, value, recorded_at), so they are
-  // counted and named. Accepting a payload and quietly binning half of it is the
-  // failure mode this codebase keeps finding.
-  assert.deepEqual(out.unstored, { workouts: 2, ecg_recordings: 1 });
+
+  // ⚠ THIS TEST INVERTED ON 5 SEP 2026. It used to assert that record-shaped
+  // sections were counted and named in `unstored` — honest, but still a
+  // standing list of things thrown away on purpose. Nick asked for all health
+  // data, so they now go to `health_records` as documents (see the schema for
+  // why one generic table rather than six guessed ones), and `unstored` is left
+  // meaning only "a section this parser has never heard of".
+  //
+  // That inversion is the improvement: an inventory of deliberate omissions is
+  // one nobody rereads, whereas this is an alarm for a section Apple or HAE has
+  // ADDED.
+  assert.equal(out.records.length, 3);                        // ECG + two audiograms
+  assert.deepEqual(out.unstored, { sleep_apnea_events: 1 });  // only the unknown one
+  // An EMPTY section is absent from `unstored` rather than reported as 0 — the
+  // difference between "you sent none" and "you sent some and we binned them".
+  assert.equal(out.unstored.state_of_mind, undefined);
   assert.equal(out.samples.length, 0);
 });
 

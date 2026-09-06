@@ -237,9 +237,36 @@ function phoneResolution(states) {
 // --- Convenience views ----------------------------------------------------
 
 // Phone + presence snapshot — the data the Companion app actually reports.
+/**
+ * The phone's status, preferring what the phone said about ITSELF.
+ *
+ * ⚠ The device half is a FIELD-LEVEL fallback, not a swap. Two readings here
+ * have no native equivalent that can ship on free provisioning — `ssid` needs
+ * the Access WiFi Information entitlement, `audioOutput` has no third-party API
+ * at all — so a wholesale cutover would drop them silently. See
+ * `services/device-status.js merge()` for the three rules, the important one
+ * being that a STALE device report is ignored rather than merged: a phone whose
+ * signature lapsed still has a row saying `Walking`, and confidently wrong is
+ * worse than absent.
+ *
+ * ⚠ HA being unreachable is no longer fatal to this read. It used to return
+ * null the moment `states` was empty, which meant a working phone reporting
+ * directly still looked like no phone at all.
+ */
 async function getPhoneStatus() {
+  const deviceStatus = require('./device-status');
+  const device = deviceStatus.latest();
+
   const states = await getStates();
-  if (!states.length) return null;
+  if (!states.length) {
+    // No HA, but the phone may still be reporting. Merge over an empty base so
+    // every field carries its provenance exactly as it would otherwise.
+    return device ? deviceStatus.merge({ device, ha: null }) : null;
+  }
+  return deviceStatus.merge({ device, ha: await _haPhoneStatus(states) });
+}
+
+async function _haPhoneStatus(states) {
 
   const resolved = phoneResolution(states);
   const E = (domain, name) => phoneEntity(resolved, domain, name);

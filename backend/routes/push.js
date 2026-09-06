@@ -93,4 +93,73 @@ router.delete('/subscriptions', (req, res) => {
   }
 });
 
+// ── APNs, for the native apps ────────────────────────────────────────────────
+//
+// ⚠ Web Push cannot reach a native iOS app, so without these SARA has no way to
+// COME TO NICK — which is her whole premise. This is the REGISTRY half; the
+// sender needs an APNs signing key and therefore a paid Apple Developer
+// account. See `services/apns.js` for why stopping here is deliberate.
+//
+// ⚠ These sit on a router that is EXEMPT from the PIN middleware, because the
+// service worker cannot set headers. That exemption was written for Web Push
+// and these routes inherit it, which is why `/apns/status` truncates every
+// token it returns: a device token is the address of a push that bypasses the
+// lock screen, and this mount is reachable without a credential.
+
+/**
+ * POST /api/push/apns/register — record a device token.
+ *
+ * Body: `{ token, app?, environment?, deviceId?, bundleId? }`
+ *
+ * Re-registering the same token is a HEARTBEAT, not a duplicate — the app
+ * registers on every launch — and it clears any previous failure, because a
+ * token being presented by a live app is working now.
+ */
+router.post('/apns/register', (req, res) => {
+  const apns = require('../services/apns');
+  const v = apns.validate(req.body || {});
+  if (!v.ok) return res.status(400).json({ ok: false, error: v.reason });
+
+  try {
+    apns.register(v.registration);
+    // Never log the token itself.
+    console.log(`[APNs] Registered ${v.registration.app} (${v.registration.environment})`);
+    res.json({
+      ok: true,
+      // ⚠ Told plainly that nothing can be delivered yet. An app that registers
+      // successfully and then never receives anything would otherwise have no
+      // way to tell a broken push path from a quiet week.
+      canDeliver: false,
+      blockedBy: 'no APNs sender yet — needs a paid Apple Developer account',
+    });
+  } catch (e) {
+    console.error('[APNs] register failed:', e.message);
+    res.status(503).json({ ok: false, error: e.message, retryable: true });
+  }
+});
+
+/**
+ * DELETE /api/push/apns/register — forget a token.
+ * Used on sign-out, so a signed-out phone stops being a delivery target.
+ */
+router.delete('/apns/register', (req, res) => {
+  const token = (req.body && req.body.token) || req.query.token;
+  if (!token) return res.status(400).json({ ok: false, error: 'token is required' });
+  try {
+    res.json({ ok: true, removed: db.deleteApnsToken(String(token).toLowerCase()) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * GET /api/push/apns/status — what is registered, and why nothing arrives.
+ *
+ * ⚠ Reports `canDeliver: false` out loud rather than staying quiet. "NEURO has
+ * nothing to say" and "NEURO cannot say anything" are different facts.
+ */
+router.get('/apns/status', (req, res) => {
+  res.json({ ok: true, ...require('../services/apns').status() });
+});
+
 module.exports = router;

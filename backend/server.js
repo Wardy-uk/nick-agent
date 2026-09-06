@@ -192,6 +192,10 @@ app.use('/api/health', healthRoutes);
 // source address instead.
 app.use('/api/v1', appleHealthRoutes);
 app.use('/api/location', locationRoutes);
+// What the phone says about ITSELF — battery, motion, connectivity. Behind the
+// PIN like everything else: a native app holds a credential properly, so this
+// needs none of the source-address guarding `/api/v1` above resorts to.
+app.use('/api/device', require('./routes/device'));
 app.use('/api/jira', jiraRoutes);
 app.use('/api/escalation', escalationRoutes);
 app.use('/api/focus', focusRoutes);

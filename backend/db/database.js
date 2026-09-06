@@ -1464,6 +1464,274 @@ function getLocationVisitsByPlace(placeName, limit = 50) {
   return all('SELECT * FROM location_visits WHERE place_name = ? ORDER BY date_key DESC LIMIT ?', [placeName, limit]);
 }
 
+// ── Location Points (device-pushed) ──
+
+/**
+ * Store raw position points from a device.
+ *
+ * INSERT OR IGNORE + UNIQUE(device_id, tst) make this idempotent, which the
+ * offline queue on the phone depends on: it re-sends any batch it did not see
+ * acknowledged, and a replay must fold rather than double-count. The return is
+ * the count of GENUINELY NEW rows, so the caller can tell a draining queue from
+ * one that is stuck re-sending the same points.
+ */
+function insertLocationPoints(rows) {
+  if (!rows || !rows.length) return 0;
+  let inserted = 0;
+  batchSaves(() => {
+    for (const r of rows) {
+      if (!Number.isFinite(r.lat) || !Number.isFinite(r.lng) || !Number.isFinite(r.tst)) continue;
+      const info = run(
+        `INSERT OR IGNORE INTO location_points (device_id, lat, lng, tst, accuracy, source)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [r.deviceId, r.lat, r.lng, r.tst, r.accuracy == null ? null : r.accuracy, r.source || 'ios']
+      );
+      inserted += info.changes;
+    }
+  });
+  return inserted;
+}
+
+/** Points in a unix-second window, oldest first — the order clustering expects. */
+function getLocationPointsBetween(fromTst, toTst, limit = 5000) {
+  return all(
+    'SELECT lat, lng, tst, accuracy, device_id FROM location_points WHERE tst >= ? AND tst <= ? ORDER BY tst ASC LIMIT ?',
+    [fromTst, toTst, limit]
+  );
+}
+
+/** The newest point from any device. Drives the staleness alarm. */
+function getLatestLocationPoint() {
+  return get('SELECT lat, lng, tst, accuracy, device_id FROM location_points ORDER BY tst DESC LIMIT 1');
+}
+
+/**
+ * Drop points older than `days`.
+ *
+ * Raw points are an INTERMEDIATE — `location_visits` is the durable record and
+ * is written from them. Significant-change reporting is perhaps a few hundred
+ * points a day, so this is housekeeping rather than a pressing cost, but an
+ * unbounded raw feed is the kind of table that is only noticed when the Pi's
+ * disk fills.
+ */
+function pruneLocationPoints(days = 90) {
+  const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+  const info = run('DELETE FROM location_points WHERE tst < ?', [cutoff]);
+  return info.changes;
+}
+
+// ── APNs tokens ──
+
+/**
+ * Record or refresh a device token.
+ *
+ * ⚠ An UPSERT, not an insert. The app registers on every launch, so the same
+ * token arrives repeatedly and an insert-only path would either throw on the
+ * UNIQUE or duplicate the row. Re-registration is a heartbeat.
+ *
+ * ⚠ A previous failure is CLEARED on re-registration. A token that failed last
+ * week and is being presented again by a live app is working now; leaving it
+ * marked dead would exclude the device for ever, silently.
+ */
+function saveApnsToken(reg) {
+  run(
+    `INSERT INTO apns_tokens (token, device_id, app, environment, bundle_id, registered_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+     ON CONFLICT(token) DO UPDATE SET
+       device_id = excluded.device_id,
+       app = excluded.app,
+       environment = excluded.environment,
+       bundle_id = excluded.bundle_id,
+       last_seen_at = CURRENT_TIMESTAMP,
+       last_failed_at = NULL,
+       failure_reason = NULL`,
+    [reg.token, reg.deviceId || null, reg.app, reg.environment, reg.bundleId || null]
+  );
+  return true;
+}
+
+function getApnsTokens(app = null) {
+  return app
+    ? all('SELECT * FROM apns_tokens WHERE app = ? ORDER BY last_seen_at DESC', [app])
+    : all('SELECT * FROM apns_tokens ORDER BY last_seen_at DESC');
+}
+
+/** Mark a token dead, so the next send skips it rather than rediscovering it. */
+function markApnsTokenFailed(token, reason) {
+  const info = run(
+    'UPDATE apns_tokens SET last_failed_at = CURRENT_TIMESTAMP, failure_reason = ? WHERE token = ?',
+    [String(reason || 'unknown').slice(0, 200), token]
+  );
+  return info.changes > 0;
+}
+
+function deleteApnsToken(token) {
+  return run('DELETE FROM apns_tokens WHERE token = ?', [token]).changes > 0;
+}
+
+// ── Health records (document-shaped) ──
+
+/**
+ * Store document-shaped health records losslessly.
+ *
+ * INSERT OR IGNORE + UNIQUE(kind, dedupe_key) makes a re-sent backfill fold.
+ * Unlike `health_workouts`, EVERY record has a key — a uuid when the payload
+ * carries one, a content hash when it does not — so there is no un-deduplicable
+ * case here.
+ */
+function insertHealthRecords(rows) {
+  if (!rows || !rows.length) return 0;
+  let inserted = 0;
+  batchSaves(() => {
+    for (const r of rows) {
+      if (!r.kind || !r.dedupeKey) continue;
+      const info = run(
+        `INSERT OR IGNORE INTO health_records
+           (kind, dedupe_key, record_type, label, started_at, ended_at, numeric_value, document, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          r.kind, r.dedupeKey, r.recordType || null, r.label || null,
+          r.startedAt || null, r.endedAt || null,
+          r.numericValue == null ? null : r.numericValue,
+          JSON.stringify(r.document), r.source || 'apple-health',
+        ]
+      );
+      inserted += info.changes;
+    }
+  });
+  return inserted;
+}
+
+/** Records of one kind in a window. `started_at` may be null, so those are excluded here. */
+function getHealthRecords(kind, fromSql, toSql, limit = 500) {
+  return all(
+    `SELECT * FROM health_records
+     WHERE kind = ? AND started_at >= ? AND started_at <= ?
+     ORDER BY started_at ASC LIMIT ?`,
+    [kind, fromSql, toSql, limit]
+  );
+}
+
+/** What is actually in there, by kind — the honest answer to "did it all arrive". */
+function getHealthRecordCounts() {
+  return all(
+    `SELECT kind, COUNT(*) AS n, MIN(started_at) AS earliest, MAX(started_at) AS latest
+     FROM health_records GROUP BY kind ORDER BY n DESC`
+  );
+}
+
+// ── Workouts ──
+
+/**
+ * Store parsed workouts.
+ *
+ * INSERT OR IGNORE + UNIQUE(source_uuid) folds a re-sent batch — HealthKit
+ * gives every workout a stable UUID, so a backfill overlapping a daily sync is
+ * idempotent. ⚠ A workout with NO uuid still inserts (SQLite treats NULL as
+ * distinct in a UNIQUE index), so a source that omits ids will duplicate on
+ * replay. That is deliberate rather than overlooked: silently dropping an
+ * un-identified workout would lose a real one, and the alternative — matching
+ * on start time — would merge two genuinely different activities that began in
+ * the same minute.
+ */
+function insertWorkouts(rows) {
+  if (!rows || !rows.length) return 0;
+  let inserted = 0;
+  batchSaves(() => {
+    for (const w of rows) {
+      if (!w.activityType || !w.startedAt) continue;
+      const info = run(
+        `INSERT OR IGNORE INTO health_workouts
+           (source_uuid, activity_type, started_at, ended_at, duration_seconds,
+            distance_m, active_energy_kcal, elevation_m, avg_heart_rate, max_heart_rate, source, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          w.sourceUuid || null, w.activityType, w.startedAt, w.endedAt || null,
+          w.durationSeconds == null ? null : w.durationSeconds,
+          w.distanceM, w.activeEnergyKcal, w.elevationM,
+          w.avgHeartRate, w.maxHeartRate,
+          w.source || 'apple-health',
+          w.payload == null ? null : JSON.stringify(w.payload),
+        ]
+      );
+      inserted += info.changes;
+    }
+  });
+  return inserted;
+}
+
+/** Workouts started within an inclusive UTC 'YYYY-MM-DD HH:MM:SS' window. */
+function getWorkoutsBetween(fromSql, toSql, limit = 200) {
+  return all(
+    'SELECT * FROM health_workouts WHERE started_at >= ? AND started_at <= ? ORDER BY started_at ASC LIMIT ?',
+    [fromSql, toSql, limit]
+  );
+}
+
+function getLatestWorkout() {
+  return get('SELECT * FROM health_workouts ORDER BY started_at DESC LIMIT 1');
+}
+
+// ── Device status (what the phone says about itself) ──
+
+/**
+ * Record a device's self-report, newest-wins.
+ *
+ * ⚠ The write is guarded on `reported_at` moving FORWARD, and that guard is the
+ * whole point. The phone queues reports while it is off the tailnet and drains
+ * them in whatever order it manages; a plain upsert would let a report observed
+ * at 09:00 and delivered at 14:05 overwrite one observed at 14:00. The phone's
+ * state would then rewind — showing `Walking` and 40% battery hours after it
+ * went still and charged — with nothing anywhere saying so.
+ *
+ * Returns true when the row was written, false when an older report was
+ * correctly ignored, so a caller can tell "stored" from "superseded".
+ */
+function saveDeviceStatus(s) {
+  const existing = get('SELECT reported_at FROM device_status WHERE device_id = ?', [s.deviceId]);
+  if (existing && existing.reported_at && existing.reported_at >= s.reportedAt) return false;
+
+  run(
+    `INSERT INTO device_status
+       (device_id, reported_at, received_at, battery_level, battery_state, connection_type,
+        ssid, geocoded_location, activity, activity_since, steps, distance_m,
+        floors_ascended, focus_mode, payload)
+     VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(device_id) DO UPDATE SET
+       reported_at = excluded.reported_at,
+       received_at = CURRENT_TIMESTAMP,
+       battery_level = excluded.battery_level,
+       battery_state = excluded.battery_state,
+       connection_type = excluded.connection_type,
+       ssid = excluded.ssid,
+       geocoded_location = excluded.geocoded_location,
+       activity = excluded.activity,
+       activity_since = excluded.activity_since,
+       steps = excluded.steps,
+       distance_m = excluded.distance_m,
+       floors_ascended = excluded.floors_ascended,
+       focus_mode = excluded.focus_mode,
+       payload = excluded.payload`,
+    [
+      s.deviceId, s.reportedAt,
+      s.batteryLevel, s.batteryState, s.connectionType, s.ssid, s.geocodedLocation,
+      s.activity, s.activitySince, s.steps, s.distanceM, s.floorsAscended,
+      s.focusMode == null ? null : (s.focusMode ? 1 : 0),
+      s.payload == null ? null : JSON.stringify(s.payload),
+    ]
+  );
+  return true;
+}
+
+/** The most recently OBSERVED device report, across devices. */
+function getLatestDeviceStatus() {
+  return get('SELECT * FROM device_status ORDER BY reported_at DESC LIMIT 1');
+}
+
+function getDeviceStatusFor(deviceId) {
+  return get('SELECT * FROM device_status WHERE device_id = ?', [deviceId]);
+}
+
 function getFrequentLocations(daysBack = 30, minVisits = 2) {
   const cutoff = new Date(Date.now() - daysBack * 86400000).toISOString().split('T')[0];
   return all(
@@ -1992,6 +2260,28 @@ module.exports = {
   getLocationVisits,
   getLocationVisitsByPlace,
   getFrequentLocations,
+  // Location points (device-pushed)
+  insertLocationPoints,
+  getLocationPointsBetween,
+  getLatestLocationPoint,
+  pruneLocationPoints,
+  // APNs tokens (native push registry)
+  saveApnsToken,
+  getApnsTokens,
+  markApnsTokenFailed,
+  deleteApnsToken,
+  // Health records (document-shaped)
+  insertHealthRecords,
+  getHealthRecords,
+  getHealthRecordCounts,
+  // Workouts (records, not scalars)
+  insertWorkouts,
+  getWorkoutsBetween,
+  getLatestWorkout,
+  // Device status (device self-report)
+  saveDeviceStatus,
+  getLatestDeviceStatus,
+  getDeviceStatusFor,
   // Tasks (source of truth)
   createTaskRow,
   getTaskRow,

@@ -1,5 +1,11 @@
 'use strict';
 
+// The only import in this file, and a node builtin rather than a dependency —
+// so the parser stays testable without a database, a network or a compiled
+// native module. Used solely to hash a document into a dedupe key for records
+// that arrive without an id.
+const crypto = require('crypto');
+
 /**
  * Apple Health ingestion — the transport half of #40.
  *
@@ -213,9 +219,14 @@ function parseMetrics(metrics, out, excluded) {
  * silently here would bake a day-boundary rule into the ingest where nothing
  * could see it. Nightly aggregation is a follow-up on top of this data.
  *
- * Non-sleep category samples (symptoms, handwashing, mindfulness…) are counted
- * and reported but NOT stored: they are events, not scalars, and coercing them
- * into a numeric time series would fill the table with metrics nothing reads.
+ * ⚠ Non-sleep category samples (symptoms, handwashing, mindfulness…) are stored
+ * as DOCUMENTS in `health_records`, as of 5 Sep 2026. They were previously
+ * counted and dropped, and the reasoning still holds as far as it went — they
+ * are events, not scalars, and coercing them into a numeric time series would
+ * fill `health_samples` with metrics nothing reads. The error was treating "it
+ * does not fit this table" as "it does not belong anywhere". `ignoredCategory`
+ * survives as a COUNT of how many took the document route, so the response
+ * still says out loud what happened to them.
  */
 function parseCategorySamples(samples, out) {
   if (!Array.isArray(samples)) return;
@@ -224,6 +235,12 @@ function parseCategorySamples(samples, out) {
     if (!s || typeof s !== 'object') continue;
     if (!SLEEP_TYPE_RE.test(String(s.type || ''))) {
       out.ignoredCategory++;
+      out.recordsReceived++;
+      const rec = toRecord('category_sample', s);
+      if (!rec.startedAt) {
+        out.recordsWithoutDate.category_sample = (out.recordsWithoutDate.category_sample || 0) + 1;
+      }
+      out.records.push(rec);
       continue;
     }
 
@@ -256,20 +273,276 @@ function parseCategorySamples(samples, out) {
   }
 }
 
+// ── Workouts ─────────────────────────────────────────────────────────────────
+
+/**
+ * Distance and energy units, and what one of each is worth in the stored unit.
+ *
+ * Stored units are METRES and KCAL. ⚠ An unrecognised unit is REFUSED, never
+ * stored at unknown scale — the same rule `UNIT_RULES` applies to hrv, and for
+ * the same reason: a 5km run stored as 5 is not a small error, it is a
+ * different fact.
+ */
+const DISTANCE_UNITS = { m: 1, metre: 1, meter: 1, metres: 1, meters: 1, km: 1000, mi: 1609.344, mile: 1609.344, miles: 1609.344, yd: 0.9144 };
+const ENERGY_UNITS = { kcal: 1, cal: 0.001, kj: 0.239006, calories: 1, kilocalories: 1 };
+
+/**
+ * The fields this parser understands, in every spelling it has been taught.
+ *
+ * ⚠ This was written WITHOUT a real Health Auto Export workout payload to read
+ * — the section has always been counted and discarded, so there is no captured
+ * example anywhere in the repo. The spellings below cover HAE's documented
+ * shape and the obvious camelCase variants, and anything unrecognised is kept
+ * in `payload` and reported in `unknownFields`. That reporting is the point:
+ * the first live payload has to be able to tell us what we guessed wrong,
+ * rather than quietly storing a workout with three null columns.
+ */
+const WORKOUT_FIELDS = {
+  activityType: ['name', 'workoutActivityType', 'activityType', 'type'],
+  start: ['start', 'startDate', 'start_date'],
+  end: ['end', 'endDate', 'end_date'],
+  duration: ['duration'],
+  distance: ['distance', 'totalDistance'],
+  energy: ['activeEnergyBurned', 'activeEnergy', 'totalEnergyBurned'],
+  elevation: ['elevationUp', 'elevationAscended', 'totalElevationGain'],
+  avgHeartRate: ['avgHeartRate', 'averageHeartRate'],
+  maxHeartRate: ['maxHeartRate'],
+  sourceUuid: ['id', 'uuid', 'source_uuid'],
+};
+
+/** First present spelling of a field, or undefined. */
+function _field(w, names) {
+  for (const n of names) if (w[n] !== undefined && w[n] !== null) return w[n];
+  return undefined;
+}
+
+/**
+ * A measurement that may be a bare number or HAE's `{ qty, units }` object.
+ *
+ * Returns `{ ok, value }` in the stored unit, or `{ ok:false, reason }`. A bare
+ * number is taken at face value in the stored unit — that is a real assumption,
+ * and it is why the units table refuses anything it does not recognise rather
+ * than falling back to "probably metres".
+ */
+function _measure(raw, table, label, storedUnit) {
+  if (raw === undefined || raw === null) return { ok: true, value: null };
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? { ok: true, value: raw } : { ok: false, reason: `${label} is not a finite number` };
+  }
+  if (typeof raw === 'object') {
+    const qty = Number(raw.qty !== undefined ? raw.qty : raw.value);
+    if (!Number.isFinite(qty)) return { ok: false, reason: `${label} has no numeric qty` };
+    const units = String(raw.units || raw.unit || '').trim().toLowerCase();
+    if (!units) return { ok: true, value: qty };
+    const factor = table[units];
+    if (factor === undefined) {
+      return { ok: false, reason: `unexpected units "${raw.units || raw.unit}" for ${label} (expected ${storedUnit})` };
+    }
+    return { ok: true, value: qty * factor };
+  }
+  return { ok: false, reason: `${label} is neither a number nor a { qty, units }` };
+}
+
+/**
+ * Workouts, from `data.workouts`.
+ *
+ * This is what retires Strava: every field `strava.formatActivity()` reads —
+ * type, distance, duration, elevation, average heart rate — is here, and has
+ * been arriving in the payload all along only to be counted and thrown away.
+ *
+ * ⚠ The one thing that does NOT come across is Strava's `suffer_score`, which
+ * is proprietary and computed on their side. Nothing here reconstructs it, and
+ * nothing should: an invented effort score that looks like Strava's but is not
+ * would be worse than its absence.
+ *
+ * A workout with no parseable start is REJECTED rather than stamped with the
+ * ingest time. A run whose time is "whenever the phone got signal" is not a
+ * record of a run.
+ */
+function parseWorkouts(workouts, out) {
+  if (!Array.isArray(workouts)) return;
+
+  const known = new Set(Object.values(WORKOUT_FIELDS).flat());
+
+  for (const w of workouts) {
+    if (!w || typeof w !== 'object') continue;
+    out.workoutsReceived++;
+
+    const startedAt = parseHealthDate(_field(w, WORKOUT_FIELDS.start));
+    if (!startedAt) {
+      out.rejected.push({ metric: 'workout', reason: `unparseable workout start "${_field(w, WORKOUT_FIELDS.start)}"` });
+      continue;
+    }
+
+    const activityType = String(_field(w, WORKOUT_FIELDS.activityType) || '').trim();
+    if (!activityType) {
+      out.rejected.push({ metric: 'workout', reason: 'workout has no activity type' });
+      continue;
+    }
+
+    const distance = _measure(_field(w, WORKOUT_FIELDS.distance), DISTANCE_UNITS, 'distance', 'm');
+    const energy = _measure(_field(w, WORKOUT_FIELDS.energy), ENERGY_UNITS, 'activeEnergy', 'kcal');
+    const elevation = _measure(_field(w, WORKOUT_FIELDS.elevation), DISTANCE_UNITS, 'elevation', 'm');
+    const failed = [distance, energy, elevation].find((m) => !m.ok);
+    if (failed) {
+      // Refused whole rather than stored with the bad field nulled: a run with
+      // a silently missing distance reads as a treadmill session.
+      out.rejected.push({ metric: 'workout', reason: failed.reason });
+      continue;
+    }
+
+    const endedAt = parseHealthDate(_field(w, WORKOUT_FIELDS.end));
+    let durationSeconds = Number(_field(w, WORKOUT_FIELDS.duration));
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+      // Derived from the span when absent, which is what HealthKit means by
+      // duration anyway. Null when neither is available — never 0, which would
+      // render as an instantaneous workout.
+      const toMs = (sql) => Date.parse(`${sql.replace(' ', 'T')}Z`);
+      durationSeconds = endedAt ? Math.round((toMs(endedAt) - toMs(startedAt)) / 1000) : null;
+      if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) durationSeconds = null;
+    }
+
+    const hr = (names) => {
+      const m = _measure(_field(w, names), { bpm: 1, 'count/min': 1 }, 'heartRate', 'bpm');
+      return m.ok ? m.value : null;
+    };
+
+    const extras = {};
+    for (const k of Object.keys(w)) if (!known.has(k)) extras[k] = w[k];
+    if (Object.keys(extras).length) {
+      for (const k of Object.keys(extras)) out.unknownWorkoutFields[k] = (out.unknownWorkoutFields[k] || 0) + 1;
+    }
+
+    out.workouts.push({
+      sourceUuid: _field(w, WORKOUT_FIELDS.sourceUuid) || null,
+      activityType,
+      startedAt,
+      endedAt,
+      durationSeconds,
+      distanceM: distance.value,
+      activeEnergyKcal: energy.value,
+      elevationM: elevation.value,
+      avgHeartRate: hr(WORKOUT_FIELDS.avgHeartRate),
+      maxHeartRate: hr(WORKOUT_FIELDS.maxHeartRate),
+      payload: Object.keys(extras).length ? extras : null,
+    });
+  }
+}
+
+// ── Document-shaped records ──────────────────────────────────────────────────
+
+/**
+ * Sections that are DOCUMENTS rather than numbers, and the kind each stores as.
+ *
+ * ⚠ All of these were counted-and-discarded until 5 Sep 2026, when Nick asked
+ * for all health data to come in. `workouts` left first, to its own table,
+ * because it had a consumer already waiting (Strava). The rest go to
+ * `health_records` as documents — see the schema for why one generic table
+ * rather than six guessed ones.
+ */
+const RECORD_SECTIONS = {
+  ecg_recordings: 'ecg',
+  audiograms: 'audiogram',
+  activity_summaries: 'activity_summary',
+  medications: 'medication',
+  vision_prescriptions: 'vision_prescription',
+  state_of_mind: 'state_of_mind',
+};
+
+/** Every spelling of a date seen across HAE's sections. */
+const RECORD_START_FIELDS = ['start', 'start_date', 'startDate', 'date', 'dateIssued', 'timestamp'];
+const RECORD_END_FIELDS = ['end', 'end_date', 'endDate'];
+const RECORD_ID_FIELDS = ['id', 'uuid', 'source_uuid'];
+
+function _firstField(o, names) {
+  for (const n of names) if (o[n] !== undefined && o[n] !== null) return o[n];
+  return undefined;
+}
+
+/**
+ * A stable key for a record, so a re-sent backfill folds rather than doubling.
+ *
+ * The uuid when there is one. When there is not — and HAE does not give every
+ * section an id — a hash of the document, because the same document IS the same
+ * observation. Keys are sorted before hashing so two encodings of one record
+ * hash alike.
+ */
+function recordDedupeKey(record) {
+  const id = _firstField(record, RECORD_ID_FIELDS);
+  if (id) return String(id);
+  const canonical = JSON.stringify(record, Object.keys(record).sort());
+  return `sha256:${crypto.createHash('sha256').update(canonical).digest('hex')}`;
+}
+
+/**
+ * Turn one document into a stored record.
+ *
+ * ⚠ A record with NO parseable date is STORED, not refused — the opposite call
+ * from `parseWorkouts`, and deliberately so. A workout without a time is
+ * meaningless as a workout; a medication or a vision prescription without one
+ * still carries the medication. Losing it to a date-format guess would be
+ * precisely the silent discarding this change exists to end, so `started_at` is
+ * null and the count is reported instead.
+ */
+function toRecord(kind, raw) {
+  const rawValue = raw.value !== undefined ? raw.value : raw.valence;
+  const numericValue = rawValue !== undefined && rawValue !== null && Number.isFinite(Number(rawValue))
+    ? Number(rawValue)
+    : null;
+
+  return {
+    kind,
+    dedupeKey: recordDedupeKey(raw),
+    recordType: raw.type ? String(raw.type) : null,
+    label: raw.value_label ? String(raw.value_label) : (raw.name ? String(raw.name) : null),
+    startedAt: parseHealthDate(_firstField(raw, RECORD_START_FIELDS)) || null,
+    endedAt: parseHealthDate(_firstField(raw, RECORD_END_FIELDS)) || null,
+    // A natural scalar where one exists, as an INDEX into the document — never
+    // a replacement for it.
+    numericValue,
+    document: raw,
+  };
+}
+
+/**
+ * The six document sections, plus an alarm for any section we have never seen.
+ *
+ * ⚠ `unstored` INVERTS MEANING here. It used to be a standing list of sections
+ * discarded on purpose; it is now only sections this parser has never heard of.
+ * That makes it an alarm for something Apple or HAE has ADDED, rather than an
+ * inventory of things ignored by design — and an inventory nobody rereads is
+ * how "we know about that one" becomes "we forgot about that one".
+ */
+function parseRecordSections(data, out) {
+  for (const [section, kind] of Object.entries(RECORD_SECTIONS)) {
+    const rows = data[section];
+    if (!Array.isArray(rows)) continue;
+    for (const raw of rows) {
+      if (!raw || typeof raw !== 'object') continue;
+      out.recordsReceived++;
+      const rec = toRecord(kind, raw);
+      if (!rec.startedAt) out.recordsWithoutDate[kind] = (out.recordsWithoutDate[kind] || 0) + 1;
+      out.records.push(rec);
+    }
+  }
+
+  const known = new Set(['metrics', 'category_samples', 'workouts', ...Object.keys(RECORD_SECTIONS)]);
+  for (const key of Object.keys(data)) {
+    if (known.has(key)) continue;
+    const n = Array.isArray(data[key]) ? data[key].length : 0;
+    if (n > 0) out.unstored[key] = n;
+  }
+}
+
 /**
  * Parse a whole payload.
  *
- * Returns what was understood AND what was not. The record-shaped sections
- * (workouts, ECG, audiograms, medications, state of mind, activity summaries,
- * vision prescriptions) do not fit `health_samples(metric, value, recorded_at)`
- * and are NOT stored — they are counted and named in `unstored` so the response
- * says so out loud. Accepting a payload and silently discarding half of it is
- * the failure mode this codebase keeps finding.
+ * Since 5 Sep 2026 there is no standing list of sections dropped on purpose:
+ * metrics and sleep become samples, workouts get their own table, and every
+ * other document section is stored in `health_records`. `unstored` catches only
+ * sections this parser has never heard of.
  */
-const UNSTORED_SECTIONS = [
-  'workouts', 'ecg_recordings', 'audiograms', 'activity_summaries',
-  'medications', 'vision_prescriptions', 'state_of_mind',
-];
+const UNSTORED_SECTIONS = [];
 
 function parsePayload(body) {
   const out = {
@@ -279,6 +552,12 @@ function parsePayload(body) {
     ignoredCategory: 0,
     unstored: {},
     excluded: {},
+    workouts: [],
+    workoutsReceived: 0,
+    unknownWorkoutFields: {},
+    records: [],
+    recordsReceived: 0,
+    recordsWithoutDate: {},
   };
 
   const data = body && body.data;
@@ -288,11 +567,8 @@ function parsePayload(body) {
 
   parseMetrics(data.metrics, out, excludedMetrics());
   parseCategorySamples(data.category_samples, out);
-
-  for (const section of UNSTORED_SECTIONS) {
-    const n = Array.isArray(data[section]) ? data[section].length : 0;
-    if (n > 0) out.unstored[section] = n;
-  }
+  parseWorkouts(data.workouts, out);
+  parseRecordSections(data, out);
 
   return { ...out, ok: true };
 }
@@ -418,4 +694,12 @@ module.exports = {
   NEURO_ALIAS,
   UNIT_RULES,
   UNSTORED_SECTIONS,
+  parseWorkouts,
+  WORKOUT_FIELDS,
+  DISTANCE_UNITS,
+  ENERGY_UNITS,
+  RECORD_SECTIONS,
+  parseRecordSections,
+  recordDedupeKey,
+  toRecord,
 };

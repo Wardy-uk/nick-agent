@@ -111,6 +111,44 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- APNs device tokens, for the native apps.
+--
+-- Web Push cannot reach a native iOS app, so SARA has no way to COME TO NICK —
+-- which is her entire premise. This is the registry half; the sender needs an
+-- APNs key, which needs a paid Apple Developer account.
+--
+-- ⚠ REGISTERED BUT NOT YET SENT TO. That is deliberate rather than half-built:
+-- the app can register from day one, so the moment the account exists the only
+-- missing piece is the signing key. Nothing here pretends a token is reachable.
+--
+-- ⚠ A DEVICE TOKEN IS NOT STABLE. iOS reissues it on reinstall, restore, and
+-- occasionally on update, so the same phone appears as a new row and the old
+-- token starts failing. The token is therefore the identity (UNIQUE), and
+-- `device_id` groups a phone's successive tokens so a stale one can be retired
+-- without guessing. APNs reports dead tokens on send; `last_failed_at` is where
+-- that gets recorded rather than being discovered again every hour.
+--
+-- ⚠ `environment` matters. A token minted against the sandbox APNs gateway is
+-- INVALID against production and vice versa, and the failure is a generic
+-- BadDeviceToken that reads like a bad token rather than a wrong gateway. A
+-- development build and a TestFlight build of the same app produce different
+-- ones, so it is stored rather than assumed.
+CREATE TABLE IF NOT EXISTS apns_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
+  device_id TEXT,
+  app TEXT NOT NULL DEFAULT 'neuro',
+  environment TEXT NOT NULL DEFAULT 'development',
+  bundle_id TEXT,
+  registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_failed_at DATETIME,
+  failure_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_apns_tokens_device ON apns_tokens(device_id);
+CREATE INDEX IF NOT EXISTS idx_apns_tokens_app ON apns_tokens(app);
+
 -- Every notification NEURO decided to send, and what became of it.
 --
 -- Until this existed the only record was console.log, so "why didn't I get the
@@ -338,6 +376,167 @@ CREATE TABLE IF NOT EXISTS location_visits (
 
 CREATE INDEX IF NOT EXISTS idx_location_visits_date ON location_visits(date_key);
 CREATE INDEX IF NOT EXISTS idx_location_visits_place ON location_visits(place_name);
+
+-- Raw position points pushed BY a device, rather than polled FROM a recorder.
+--
+-- The OwnTracks path reads points out of the Recorder's HTTP API, so NEURO never
+-- owned a point. A native iOS app has nowhere to put one, which is why this
+-- table exists: it is the store `location.getTodayPoints()` range-queries when
+-- the phone is the source. Shape deliberately MATCHES the OwnTracks point
+-- (`lat`, `lon`, `tst`) so the clustering in `services/location.js` needs no
+-- second code path — see the mapping in `services/location-points.js`.
+--
+-- ⚠ `tst` is unix SECONDS, not milliseconds, because that is what OwnTracks
+-- emits and what `clusterPoints()` subtracts to get a duration. A device sending
+-- milliseconds makes every dwell ~1000x too long, which passes the 20-minute
+-- floor trivially and turns a drive-past into a working day.
+--
+-- UNIQUE(device_id, tst) is what makes the ingest idempotent: the phone keeps an
+-- offline queue and WILL re-send a batch it never saw acknowledged, so a replay
+-- has to fold rather than double-count.
+CREATE TABLE IF NOT EXISTS location_points (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lng REAL NOT NULL,
+  tst INTEGER NOT NULL,
+  accuracy REAL,
+  source TEXT NOT NULL DEFAULT 'ios',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(device_id, tst)
+);
+
+-- Range queries by time are the only read pattern (`getTodayPoints`), and the
+-- staleness check reads the newest row regardless of device.
+CREATE INDEX IF NOT EXISTS idx_location_points_tst ON location_points(tst);
+CREATE INDEX IF NOT EXISTS idx_location_points_device ON location_points(device_id, tst);
+
+-- Everything Apple Health sends that is a DOCUMENT rather than a number.
+--
+-- ECG traces, audiograms, activity summaries, medications, vision
+-- prescriptions, state-of-mind entries, and every non-sleep category sample
+-- (mindful sessions, handwashing, and the whole symptom vocabulary). All of it
+-- used to be counted and thrown away, because `health_samples(metric, value,
+-- recorded_at)` is a numeric time series and none of these are one.
+--
+-- ⚠ ONE GENERIC TABLE, NOT SIX MODELLED ONES, and that is a deliberate choice
+-- rather than laziness. The workouts parser had to be written blind because no
+-- captured HAE payload for that section exists anywhere in this repo — and the
+-- same is true of all six of these. Inventing six schemas against guessed field
+-- names would bake those guesses into columns, where being wrong is expensive
+-- and silent. Storing the document losslessly means a wrong guess costs a query
+-- rather than a migration, and NOTHING is lost in the meantime. Promote a
+-- section to its own table once a real payload has been read.
+--
+-- `document` is the whole record verbatim. The columns beside it are an INDEX
+-- into it, not a replacement for it.
+--
+-- ⚠ `dedupe_key` is the source uuid when there is one and a content hash when
+-- there is not. HAE does not give every section an id, and without a stable key
+-- a re-sent backfill silently doubles the table — the failure `location_points`
+-- avoids with UNIQUE(device_id, tst) and `health_workouts` with UNIQUE(uuid).
+-- A content hash is the only key available for a record that carries no id, and
+-- it is exactly right for this: the same document IS the same observation.
+CREATE TABLE IF NOT EXISTS health_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  record_type TEXT,
+  label TEXT,
+  started_at TEXT,
+  ended_at TEXT,
+  numeric_value REAL,
+  document TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'apple-health',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(kind, dedupe_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_health_records_kind ON health_records(kind, started_at);
+CREATE INDEX IF NOT EXISTS idx_health_records_type ON health_records(record_type, started_at);
+
+-- Workouts, which are RECORDS rather than scalars.
+--
+-- `health_samples(metric, value, recorded_at)` is a numeric time series, and a
+-- workout is not one: it has a type, a span, and half a dozen measurements that
+-- only mean anything together. Flattening a run into six unrelated rows loses
+-- the fact that they were the same run, which is the only thing that makes it a
+-- workout rather than a coincidence.
+--
+-- This is what retires Strava. Every field Strava's `formatActivity()` reads —
+-- type, distance, duration, elevation, average heart rate — comes off a
+-- HealthKit workout too, and has been arriving in the FreeReps payload all
+-- along, counted and thrown away as an `UNSTORED_SECTION`.
+--
+-- ⚠ UNITS ARE FIXED HERE, not carried. Distance is METRES, energy is KCAL,
+-- duration is SECONDS, elevation is METRES. The wire format uses whatever the
+-- phone felt like (km, miles, kJ), and storing the number without the unit is
+-- how a 5km run becomes a 5-metre one. Conversion happens on the way in and an
+-- unrecognised unit is REFUSED rather than stored at unknown scale — the rule
+-- `UNIT_RULES` already applies to hrv and heart rate.
+--
+-- UNIQUE(source_uuid) folds a re-sent batch. HealthKit gives every workout a
+-- stable UUID, so a backfill that overlaps a daily sync is idempotent.
+CREATE TABLE IF NOT EXISTS health_workouts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_uuid TEXT UNIQUE,
+  activity_type TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  duration_seconds INTEGER,
+  distance_m REAL,
+  active_energy_kcal REAL,
+  elevation_m REAL,
+  avg_heart_rate REAL,
+  max_heart_rate REAL,
+  source TEXT NOT NULL DEFAULT 'apple-health',
+  -- Anything the phone sent that NEURO does not model, kept rather than
+  -- dropped: this parser was written without a real HAE workout payload to
+  -- read, so the first live one has to be able to tell us what we missed.
+  payload TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_health_workouts_started ON health_workouts(started_at);
+
+-- What a device says about ITSELF — battery, motion, connectivity, focus.
+--
+-- Everything here is currently read out of Home Assistant's iOS Companion app
+-- (`services/ha.js getPhoneStatus`), which means NEURO's picture of what Nick is
+-- physically doing depends on a third-party app relaying sensors the phone
+-- already owns. A native app reports them directly; HA is then kept for
+-- smart-home ACTUATION, which is the only thing it is uniquely able to do.
+--
+-- ⚠ ONE ROW PER DEVICE, not a history. This is current state — "what is the
+-- phone doing now" — and the questions asked of it (is he moving, is he
+-- driving, is the phone dead) are all about the present. Motion HISTORY, if it
+-- is ever wanted, is a different table with a different shape; overloading this
+-- one would make every read a "latest per device" subquery.
+--
+-- ⚠ `reported_at` is when the DEVICE observed the state, `received_at` when the
+-- Pi was told. They differ by however long the phone was off the tailnet, and
+-- conflating them makes a queued report look current. The write is guarded on
+-- `reported_at` moving FORWARD — an offline queue can deliver an old report
+-- after a new one, and last-write-wins would then rewind the phone's state.
+CREATE TABLE IF NOT EXISTS device_status (
+  device_id TEXT PRIMARY KEY,
+  reported_at TEXT NOT NULL,
+  received_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  battery_level REAL,
+  battery_state TEXT,
+  connection_type TEXT,
+  ssid TEXT,
+  geocoded_location TEXT,
+  activity TEXT,
+  activity_since TEXT,
+  steps INTEGER,
+  distance_m REAL,
+  floors_ascended INTEGER,
+  focus_mode INTEGER,
+  -- The raw report, so a sensor the app learns to send before NEURO learns to
+  -- model it is kept rather than dropped on the floor.
+  payload TEXT
+);
 
 -- MoSCoW task prioritisation (Phase 6A)
 CREATE TABLE IF NOT EXISTS task_moscow (

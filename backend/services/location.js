@@ -21,6 +21,10 @@ const MIN_DWELL_MINUTES = 20;
  * as #65's "configured is not the same claim as works".
  */
 function isConfigured() {
+  // A device that has actually pushed a point is the strongest possible answer
+  // to "is there a source" — it is evidence rather than configuration, which is
+  // exactly what the comment above says this check kept getting wrong.
+  try { if (require('./location-points').hasAnyPoints()) return true; } catch {}
   if (process.env.OWNTRACKS_RECORDER_URL) return true;
   try { return require('./ha').isConfigured(); } catch { return false; }
 }
@@ -32,15 +36,25 @@ function lastSource() { return _lastSource; }
 /**
  * Today's position points, from whichever source has them.
  *
- * OwnTracks first (it is the higher-fidelity feed when it exists), Home
- * Assistant second. The same live → fallback shape as `working-days`, and
- * `lastSource()` always names which one answered rather than leaving the
- * archive to assume.
+ * The DEVICE first (the phone is the origin of every one of these feeds, so a
+ * point it pushed itself has travelled through the least machinery), OwnTracks
+ * second, Home Assistant third. The same live → fallback shape as
+ * `working-days`, and `lastSource()` always names which one answered rather
+ * than leaving the archive to assume.
  *
  * ⚠ An empty result from one source means "this source had nothing", NOT "Nick
  * went nowhere" — which is exactly why it falls through rather than returning.
+ *
+ * ⚠ The ladder is what makes the OwnTracks retirement SAFE rather than a
+ * cutover. While the iOS app is on free provisioning its signature expires
+ * weekly and it stops reporting with no error; OwnTracks staying underneath
+ * means such a week degrades to the old feed instead of to no feed. Delete the
+ * middle rung only once the app can stay installed.
  */
 async function getTodayPoints() {
+  const device = _getDevicePoints();
+  if (device.length) { _lastSource = 'ios'; return device; }
+
   const ot = await _getOwnTracksPoints();
   if (ot.length) { _lastSource = 'owntracks'; return ot; }
 
@@ -83,6 +97,29 @@ function _todayRange(now = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
   const d = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
   return { from: `${d}T00:00:00`, to: `${d}T23:59:59` };
+}
+
+/**
+ * Today's points as pushed by a device, from NEURO's own store.
+ *
+ * ⚠ Local getters, deliberately — `_todayRange()` above carries the scar of
+ * `toISOString()` naming the wrong day through BST, and this is the same
+ * boundary computed in unix seconds instead of a recorder query string.
+ */
+function _todayBoundsSeconds(now = new Date()) {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  return { from: Math.floor(start.getTime() / 1000), to: Math.floor(end.getTime() / 1000) };
+}
+
+function _getDevicePoints() {
+  try {
+    const { from, to } = _todayBoundsSeconds();
+    return require('./location-points').pointsBetween(from, to);
+  } catch (e) {
+    console.warn('[Location] Device point read failed:', e.message);
+    return [];
+  }
 }
 
 // Fetch today's location points from OwnTracks Recorder
@@ -298,6 +335,7 @@ module.exports = {
   isConfigured,
   lastSource,
   _todayRange,
+  _todayBoundsSeconds,
   getTodayPoints,
   getTodayDwells,
   getCachedDwells,
