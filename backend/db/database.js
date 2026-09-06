@@ -1520,6 +1520,55 @@ function pruneLocationPoints(days = 90) {
   return info.changes;
 }
 
+// ── APNs tokens ──
+
+/**
+ * Record or refresh a device token.
+ *
+ * ⚠ An UPSERT, not an insert. The app registers on every launch, so the same
+ * token arrives repeatedly and an insert-only path would either throw on the
+ * UNIQUE or duplicate the row. Re-registration is a heartbeat.
+ *
+ * ⚠ A previous failure is CLEARED on re-registration. A token that failed last
+ * week and is being presented again by a live app is working now; leaving it
+ * marked dead would exclude the device for ever, silently.
+ */
+function saveApnsToken(reg) {
+  run(
+    `INSERT INTO apns_tokens (token, device_id, app, environment, bundle_id, registered_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+     ON CONFLICT(token) DO UPDATE SET
+       device_id = excluded.device_id,
+       app = excluded.app,
+       environment = excluded.environment,
+       bundle_id = excluded.bundle_id,
+       last_seen_at = CURRENT_TIMESTAMP,
+       last_failed_at = NULL,
+       failure_reason = NULL`,
+    [reg.token, reg.deviceId || null, reg.app, reg.environment, reg.bundleId || null]
+  );
+  return true;
+}
+
+function getApnsTokens(app = null) {
+  return app
+    ? all('SELECT * FROM apns_tokens WHERE app = ? ORDER BY last_seen_at DESC', [app])
+    : all('SELECT * FROM apns_tokens ORDER BY last_seen_at DESC');
+}
+
+/** Mark a token dead, so the next send skips it rather than rediscovering it. */
+function markApnsTokenFailed(token, reason) {
+  const info = run(
+    'UPDATE apns_tokens SET last_failed_at = CURRENT_TIMESTAMP, failure_reason = ? WHERE token = ?',
+    [String(reason || 'unknown').slice(0, 200), token]
+  );
+  return info.changes > 0;
+}
+
+function deleteApnsToken(token) {
+  return run('DELETE FROM apns_tokens WHERE token = ?', [token]).changes > 0;
+}
+
 // ── Health records (document-shaped) ──
 
 /**
@@ -2216,6 +2265,11 @@ module.exports = {
   getLocationPointsBetween,
   getLatestLocationPoint,
   pruneLocationPoints,
+  // APNs tokens (native push registry)
+  saveApnsToken,
+  getApnsTokens,
+  markApnsTokenFailed,
+  deleteApnsToken,
   // Health records (document-shaped)
   insertHealthRecords,
   getHealthRecords,

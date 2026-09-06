@@ -111,6 +111,44 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- APNs device tokens, for the native apps.
+--
+-- Web Push cannot reach a native iOS app, so SARA has no way to COME TO NICK —
+-- which is her entire premise. This is the registry half; the sender needs an
+-- APNs key, which needs a paid Apple Developer account.
+--
+-- ⚠ REGISTERED BUT NOT YET SENT TO. That is deliberate rather than half-built:
+-- the app can register from day one, so the moment the account exists the only
+-- missing piece is the signing key. Nothing here pretends a token is reachable.
+--
+-- ⚠ A DEVICE TOKEN IS NOT STABLE. iOS reissues it on reinstall, restore, and
+-- occasionally on update, so the same phone appears as a new row and the old
+-- token starts failing. The token is therefore the identity (UNIQUE), and
+-- `device_id` groups a phone's successive tokens so a stale one can be retired
+-- without guessing. APNs reports dead tokens on send; `last_failed_at` is where
+-- that gets recorded rather than being discovered again every hour.
+--
+-- ⚠ `environment` matters. A token minted against the sandbox APNs gateway is
+-- INVALID against production and vice versa, and the failure is a generic
+-- BadDeviceToken that reads like a bad token rather than a wrong gateway. A
+-- development build and a TestFlight build of the same app produce different
+-- ones, so it is stored rather than assumed.
+CREATE TABLE IF NOT EXISTS apns_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
+  device_id TEXT,
+  app TEXT NOT NULL DEFAULT 'neuro',
+  environment TEXT NOT NULL DEFAULT 'development',
+  bundle_id TEXT,
+  registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_failed_at DATETIME,
+  failure_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_apns_tokens_device ON apns_tokens(device_id);
+CREATE INDEX IF NOT EXISTS idx_apns_tokens_app ON apns_tokens(app);
+
 -- Every notification NEURO decided to send, and what became of it.
 --
 -- Until this existed the only record was console.log, so "why didn't I get the
