@@ -551,3 +551,56 @@ test('the lookahead reaches a full week, so a weekly rhythm is not missed', () =
   assert.equal(a.events[0].subject, 'hiking');
   assert.equal(a.scope, 'saturday', 'and it must be named, not called tomorrow');
 });
+
+const { sessionMatchesCard } = require('./attention');
+
+// ── A session already running on the card ────────────────────────────────────
+//
+// Found live: a session had been running on "Stand up a temporary single view"
+// for sixteen minutes and its own card still offered **Start this**, with
+// nothing saying it was under way. Pressing it again force-switches, which
+// (until the same day's fix) destroyed the running session outright.
+
+test('a card whose task is already running is matched', () => {
+  const session = { taskId: null, text: 'Stand up a temporary single view of aged/blocked/cross-team tickets' };
+  const card = { title: 'Stand up a temporary single view of aged/blocked/cross-team tickets', meta: {} };
+  assert.equal(sessionMatchesCard(session, card), true);
+});
+
+test('a shrunk session still belongs to the card it started from', () => {
+  // The step changes on a shrink and the task does not. Matching on nextStep
+  // would lose the card at exactly the moment the marker is most useful.
+  const session = {
+    taskId: null,
+    text: 'Rewrite the escalation policy',
+    nextStep: 'open the doc and list the headings',
+  };
+  assert.equal(
+    sessionMatchesCard(session, { title: 'Rewrite the escalation policy', meta: {} }),
+    true,
+  );
+  assert.equal(
+    sessionMatchesCard(session, { title: 'open the doc and list the headings', meta: {} }),
+    false,
+  );
+});
+
+test('a different card is not marked as running', () => {
+  const session = { taskId: null, text: 'Weekly risk meeting prep' };
+  assert.equal(
+    sessionMatchesCard(session, { title: 'Stand up a temporary single view', meta: {} }),
+    false,
+  );
+});
+
+test('task ids win over wording when both sides have one', () => {
+  const session = { taskId: 42, text: 'whatever the session was called' };
+  assert.equal(sessionMatchesCard(session, { title: 'a different title', meta: { task_id: 42 } }), true);
+  assert.equal(sessionMatchesCard(session, { title: 'a different title', meta: { task_id: 43 } }), false);
+});
+
+test('no session, or an unreadable card, matches nothing', () => {
+  assert.equal(sessionMatchesCard(null, { title: 'x', meta: {} }), false);
+  assert.equal(sessionMatchesCard({ text: 'x' }, null), false);
+  assert.equal(sessionMatchesCard({ text: '' }, { title: '', meta: {} }), false);
+});

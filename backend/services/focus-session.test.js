@@ -149,6 +149,37 @@ test('starting something else interrupts the first thing, it does not discard it
   assert.equal(forced.ok, true);
   assert.equal(forced.interrupted, true);
   assert.equal(fs2.current(T0 + 21 * MIN).text, 'Escalation');
+
+  // ⚠ THE HALF THIS TEST WAS NAMED AFTER AND NEVER CHECKED.
+  //
+  // It asserted only that the NEW session was current, which is true whether
+  // the old one was archived or destroyed — and it was destroyed: `_pause` then
+  // `_write(existing)`, then `_write(session)` overwrote the same single KV row
+  // and nothing was ever archived. Twenty minutes of work, its shrinks and its
+  // elapsed time simply vanished, on the one path AttentionCard uses.
+  //
+  // A green test whose name makes a claim its assertions do not check is how
+  // that shipped, so the claim is now asserted.
+  const history = fs2.history();
+  const parked = history.find((s) => s.text === 'Original work');
+  assert.ok(parked, 'the interrupted session must survive in history');
+  assert.equal(parked.endedReason, 'switched', 'switched is neither abandoned nor completed');
+  assert.equal(parked.actualMinutes, 20, 'and it keeps the focus time it actually had');
+});
+
+test('a switch records what was interrupted, including what it had been cut down to', () => {
+  reset();
+  fs2.start({ text: 'Rewrite the escalation policy', minutes: 60 }, T0);
+  fs2.shrink({ step: 'open the doc and list the headings' }, T0 + 5 * MIN);
+  fs2.start({ text: 'Something urgent', minutes: 15, force: true }, T0 + 12 * MIN);
+
+  const parked = fs2.history().find((s) => s.text === 'Rewrite the escalation policy');
+  assert.ok(parked);
+  // The shrink is the most useful thing the session recorded — losing it loses
+  // the evidence `friction` and `initiation-signals` both read.
+  assert.equal(parked.shrinks, 1);
+  assert.equal(parked.finalStep, 'open the doc and list the headings');
+  assert.equal(parked.originalText, 'Rewrite the escalation policy');
 });
 
 test('an arriving escalation is noted but never pauses on Nick\'s behalf', () => {

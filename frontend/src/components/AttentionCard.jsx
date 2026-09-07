@@ -204,6 +204,24 @@ export default function AttentionCard({
         <p className={`att-card__outcome att-card__outcome--${outcome.kind}`}>{outcome.text}</p>
       )}
 
+      {/*
+        Already being worked on. The server drops `start` from the permitted set
+        when a session is running on this very card, so the button cannot be
+        offered — but a card that merely loses a button says nothing, and the
+        thing Nick needs to know is that he is ALREADY on it.
+
+        ⚠ Says how long and what it was cut down to, because after a shrink the
+        card's title and the thing actually being done are different, and the
+        step is the half that lets him pick the thread back up.
+      */}
+      {card.session && (
+        <p className="att-card__session">
+          In progress — {card.session.elapsedMinutes} min
+          {card.session.nextStep ? <> · on “{card.session.nextStep}”</> : null}
+          {card.session.status !== 'active' ? ` · ${card.session.status}` : ''}
+        </p>
+      )}
+
       <div className="att-card__actions">
         {permitted.includes('open') && (
           <button className="att-card__btn" type="button" onClick={open}>{LABELS.open}</button>

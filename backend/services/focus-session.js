@@ -396,11 +396,32 @@ function start({ taskId = null, text = '', minutes = null, force = false, source
     if (!force) {
       return { ok: false, reason: 'session-active', session: _decorate(existing, now) };
     }
+    // ⚠ ARCHIVED, not merely paused. This used to `_pause` the running session
+    // and `_write` it — and then `_write(session)` two dozen lines below
+    // overwrote the same single KV row with the new one. The paused session was
+    // never archived, so a forced switch DESTROYED it: no history entry, no
+    // elapsed time, no record of the shrinks, nothing. It simply vanished.
+    //
+    // That is the exact failure the stale branch immediately below already
+    // refuses ("a stale session cannot silently vanish because something new
+    // started"), and it broke this file's own rule 5 — interrupting is supposed
+    // to REPLACE nothing silently. Reachable from AttentionCard, which
+    // force-switches, so it was one tap away on the busiest surface.
+    //
+    // ⚠ It is archived as ENDED, not parked: there is one live slot, so the old
+    // session cannot keep running alongside the new one. `switched` says what
+    // actually happened rather than borrowing `abandoned` (a decision Nick made)
+    // or `completed` (a claim about the work). What it costs is that the
+    // interrupted session cannot be RESUMED — it is a record, not a thread to
+    // pick up — and that is worth being explicit about rather than implying the
+    // return prompt will offer it.
     _pause(existing, {
       source: 'task-switch',
       detail: `switched to "${String(text).slice(0, 60)}"`,
     }, now);
-    _write(existing);
+    existing.endedAt = new Date(now).toISOString();
+    existing.endedReason = 'switched';
+    _archive(existing, now);
   } else if (existing) {
     // A stale session cannot silently vanish because something new started —
     // that is exactly the thread this feature exists to keep. It is closed as

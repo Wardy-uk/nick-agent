@@ -894,16 +894,56 @@ async function build({ now = new Date(), view = null, ask = null } = {}) {
     // client can act on what it is looking at without a second lookup — and so
     // the widget, the Surface and the notification all name the same record.
     const byKey = new Map(records.map((r) => [r.dedupe_key, r]));
+    /* eslint-disable no-use-before-define */
+
+    // ── Is a session already running on this card? ─────────────────────────
+    //
+    // Found live: a session had been running on "Stand up a temporary single
+    // view" for sixteen minutes and its own card still offered **Start this**,
+    // with nothing anywhere saying it was already under way. Pressing it again
+    // either 409s or force-switches — and a force-switch is how a session gets
+    // silently replaced.
+    //
+    // ⚠ Decided HERE rather than in each client, so the desktop card, the phone
+    // Surface, the kiosk and the widget cannot disagree about whether the thing
+    // in front of Nick is already being worked on. Same rule that keeps `say`,
+    // `speech` and `tab` composed server-side.
+    //
+    // ⚠ Never allowed to fail the feed: an unreadable session leaves every card
+    // exactly as it was, which is the behaviour before this existed.
+    let running = null;
+    try {
+      running = require('./focus-session').current();
+    } catch (e) {
+      console.warn('[Attention] session read failed, cards unmarked:', e.message);
+    }
+
     const stamp = (card) => {
       if (!card || card.kind !== 'item') return card;
       const row = byKey.get(lifecycle.dedupeKeyFor(card));
       if (!row) return card;
+      const presented = lifecycle.present(row);
+      const onThis = sessionMatchesCard(running, card);
       return {
         ...card,
         recordId: row.id,
         state: row.state,
-        evidence: lifecycle.present(row).evidence,
-        actions: lifecycle.present(row).actions,
+        evidence: presented.evidence,
+        // ⚠ `start` is REMOVED rather than merely styled differently. A button
+        // that would force-switch the very session it belongs to is worse than
+        // no button, and the client must not have to remember that.
+        actions: onThis ? presented.actions.filter((a) => a !== 'start') : presented.actions,
+        // What is running, so the card can say so in the words the session card
+        // already uses rather than inventing its own.
+        session: onThis
+          ? {
+            id: running.id,
+            status: running.status,
+            elapsedMinutes: running.elapsedMinutes,
+            nextStep: running.nextStep || null,
+            stale: Boolean(running.stale),
+          }
+          : null,
       };
     };
     gated.primary = stamp(gated.primary);
@@ -1094,4 +1134,42 @@ async function build({ now = new Date(), view = null, ask = null } = {}) {
   };
 }
 
-module.exports = { build, gather, gate, sayLine, agendaFor, SECONDARY_MAX };
+/**
+ * Is the running focus session about THIS card? PURE.
+ *
+ * ⚠ Matched the same way `focus-session.start` resolved the task in the first
+ * place — a task id when both have one, otherwise `task-store.dedupeKey` over
+ * the wording. That equivalence is the whole point: the card that WOULD start
+ * this session is exactly the card that must show it as already running. Any
+ * looser rule marks the wrong card; any stricter one leaves `Start this` on a
+ * card whose session is live, which is the bug being fixed.
+ *
+ * ⚠ `session.text`, never `nextStep`. Shrinking changes the step and leaves the
+ * task alone, so a session cut down to "open the doc and list the headings"
+ * still belongs to the card it started from — matching on the step would lose
+ * the card the moment it became most useful.
+ *
+ * Returns false rather than throwing on anything unreadable: an unmatched card
+ * simply behaves as it did before this existed.
+ */
+function sessionMatchesCard(session, card) {
+  if (!session || !card) return false;
+
+  const cardTaskId = card.meta?.task_id ?? card.meta?.taskId ?? null;
+  if (session.taskId != null && cardTaskId != null) {
+    return Number(session.taskId) === Number(cardTaskId);
+  }
+
+  const title = card.title || card.text || '';
+  if (!title || !session.text) return false;
+  try {
+    const { dedupeKey } = require('./task-store');
+    return dedupeKey(session.text) === dedupeKey(title);
+  } catch {
+    // No task store to normalise with — fall back to an exact trimmed compare
+    // rather than guessing, and rather than failing the whole feed.
+    return String(session.text).trim() === String(title).trim();
+  }
+}
+
+module.exports = { build, gather, gate, sayLine, agendaFor, sessionMatchesCard, SECONDARY_MAX };

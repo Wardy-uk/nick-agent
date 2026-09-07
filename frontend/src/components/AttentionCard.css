@@ -132,3 +132,12 @@
 .att-card__btn--do:hover:not(:disabled) { background: #234159; }
 
 .att-card__btn--quiet { color: #7c8394; }
+
+/* A session is already running on this card. Stated, not warned about — being
+   mid-way through something is the good case, and the server has already
+   removed the Start button so this is the only thing that says why. */
+.att-card__session {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  color: var(--accent);
+}
