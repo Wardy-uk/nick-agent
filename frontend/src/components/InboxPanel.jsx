@@ -405,6 +405,11 @@ export default function InboxPanel({ focusContext }) {
   // with no way back is the only genuinely dangerous shape this could take.
   const [muted, setMuted] = useState(null);
   const [mutedOpen, setMutedOpen] = useState(false);
+  // 7 Sep 2026 — "Clear all" on the FYI section. Two-step: the confirm quotes
+  // the count the SERVER just measured, not the one this component happens to
+  // be rendering, so what Nick agrees to is what goes.
+  const [clearingFyi, setClearingFyi] = useState(false);
+  const [confirmClearFyi, setConfirmClearFyi] = useState(null);
 
   const fetchTriage = () => {
     fetch(apiUrl('/api/email/triage'))
@@ -438,6 +443,45 @@ export default function InboxPanel({ focusContext }) {
         fetchMuted();
       })
       .catch(() => setDismissNote('Could not un-mute.'));
+  };
+
+  const askClearFyi = () => {
+    setDismissNote('');
+    setClearingFyi(true);
+    fetch(apiUrl('/api/email/triage/clear-fyi'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dryRun: true }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        setClearingFyi(false);
+        // Nothing to clear is a real answer, not a confirmation with a zero in
+        // it — asking "clear 0 emails?" reads as the button being broken.
+        if (!d?.ok) setDismissNote('Could not work out what would be cleared.');
+        else if (!d.cleared) setDismissNote('Nothing in the FYI section to clear.');
+        else setConfirmClearFyi(d.cleared);
+      })
+      .catch(() => { setClearingFyi(false); setDismissNote('Could not work out what would be cleared.'); });
+  };
+
+  const clearFyi = () => {
+    setClearingFyi(true);
+    fetch(apiUrl('/api/email/triage/clear-fyi'), { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        setConfirmClearFyi(null);
+        setClearingFyi(false);
+        setDismissNote(d?.ok
+          ? `Cleared ${d.cleared} from the FYI section. Nothing owed was touched.`
+          : 'Could not clear the section.');
+        fetchTriage();
+      })
+      .catch(() => {
+        setConfirmClearFyi(null);
+        setClearingFyi(false);
+        setDismissNote('Could not clear the section.');
+      });
   };
 
   useEffect(() => { fetchTriage(); fetchReplies(); fetchMuted(); }, []);
@@ -630,6 +674,25 @@ export default function InboxPanel({ focusContext }) {
           >
             {fyiOpen ? '▾' : '▸'} FYI ({fyiTotal})
           </button>
+          {confirmClearFyi == null ? (
+            <button
+              className="inbox-section-clear"
+              onClick={askClearFyi}
+              disabled={clearingFyi}
+            >
+              {clearingFyi ? 'Checking…' : 'Clear all'}
+            </button>
+          ) : (
+            <span className="inbox-section-confirm">
+              Clear {confirmClearFyi}? Nothing in Action, Delegate or promoted is touched.
+              <button className="inbox-section-clear danger" onClick={clearFyi} disabled={clearingFyi}>
+                {clearingFyi ? 'Clearing…' : 'Yes, clear'}
+              </button>
+              <button className="inbox-section-clear" onClick={() => setConfirmClearFyi(null)}>
+                Cancel
+              </button>
+            </span>
+          )}
           {/* Mail that vanishes with no stated cause reads as a bug. Say the
               rule, and take the number from the server so the two cannot
               disagree. */}

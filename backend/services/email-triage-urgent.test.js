@@ -866,3 +866,64 @@ test('purge applies the rule, and dryRun changes nothing', () => {
   assert.equal(stored.filter(e => e.dismissed).length, 1);
   assert.equal(stored.filter(e => !e.dismissed)[0].id, 'p2');
 });
+
+// ── "Clear all" on the FYI section (7 Sep 2026) ─────────────────────────────
+
+const clearOf = items => emailTriage._internals.clearInformational(items, { now: NOW });
+
+test('clear all closes the whole section, whatever its age', () => {
+  const out = clearOf([
+    info({ id: 'a', received: before(1) }),
+    info({ id: 'b', category: 'IGNORE', received: before(30) }),
+  ]);
+  assert.equal(out.cleared, 2);
+  assert.ok(out.entries.every(e => e.dismissReason === 'section-cleared'));
+});
+
+test('clear all cannot reach work — ACTION, DELEGATE and promoted survive', () => {
+  const out = clearOf([
+    info({ id: 'a', category: 'ACTION', lane: 'reply' }),
+    info({ id: 'b', category: 'DELEGATE' }),
+    info({ id: 'c', promoted: true }),
+  ]);
+  assert.equal(out.cleared, 0);
+});
+
+test('clear all keeps a verdict Nick already gave', () => {
+  const out = clearOf([info({ dismissed: true, dismissReason: 'not-relevant' })]);
+  assert.equal(out.cleared, 0);
+  assert.equal(out.entries[0].dismissReason, 'not-relevant');
+});
+
+test('one press is one gesture — it does not become N verdicts', () => {
+  // The sender-mute rule with the multiplier applied all at once: scoring the
+  // classifier on the size of the pile rather than on how often it was wrong.
+  seed(Array.from({ length: 50 }, (_, i) => info({
+    id: `bulk-${i}`, dismissed: true, dismissReason: 'section-cleared', dismissedAt: before(1),
+  })).concat([email({
+    id: 'real', dismissed: true, dismissReason: 'not-relevant', dismissedAt: before(1),
+  })]));
+  assert.equal(emailTriage.getDismissFeedback().judged, 1);
+});
+
+test('clearFyiSection previews without writing, then writes', () => {
+  seed([info({ id: 'c1' }), info({ id: 'c2', received: before(1) }), email({ id: 'keep' })]);
+  const preview = emailTriage.clearFyiSection({ dryRun: true });
+  assert.equal(preview.cleared, 2);
+  assert.equal(emailTriage.getStoredTriage().filter(e => e.dismissed).length, 0);
+
+  const done = emailTriage.clearFyiSection();
+  assert.equal(done.cleared, 2);
+  const live = emailTriage.getStoredTriage().filter(e => !e.dismissed);
+  assert.deepEqual(live.map(e => e.id), ['keep']);
+});
+
+test('the section the sweep clears is the section the heading counts', () => {
+  // Both read one predicate, so "Clear all" cannot leave a row the count
+  // included, nor take one it did not.
+  const { isInformational } = emailTriage._internals;
+  const items = [info({ id: 'a' }), info({ id: 'b', category: 'IGNORE' }),
+    email({ id: 'c' }), info({ id: 'd', promoted: true })];
+  const counted = items.filter(isInformational).length;
+  assert.equal(clearOf(items).cleared, counted);
+});

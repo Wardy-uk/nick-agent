@@ -93,3 +93,18 @@ test('a nonsense window is refused rather than applied', async () => {
   }
   assert.equal(emailTriage.getStoredTriage().filter(e => e.dismissed).length, 0);
 });
+
+test('POST /triage/clear-fyi clears the section and nothing else', async () => {
+  seed();
+  const preview = await post('/api/email/triage/clear-fyi', { dryRun: true });
+  assert.equal(preview.status, 200);
+  assert.equal(preview.json.cleared, 3);
+  assert.equal(emailTriage.getStoredTriage().filter(e => e.dismissed).length, 0);
+
+  const res = await post('/api/email/triage/clear-fyi');
+  assert.equal(res.json.cleared, 3);
+  // The POSITIVE half: the ACTION email is still standing, so the button
+  // reached the clear handler rather than something that swept the store.
+  const live = emailTriage.getStoredTriage().filter(e => !e.dismissed).map(e => e.id);
+  assert.deepEqual(live, ['old-action']);
+});

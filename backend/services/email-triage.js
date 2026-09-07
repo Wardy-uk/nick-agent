@@ -457,6 +457,14 @@ const AGE_OUT_DAYS = Number(process.env.EMAIL_TRIAGE_FYI_AGE_DAYS || 7);
 const AGE_OUT_CATEGORIES = new Set(['FYI', 'IGNORE']);
 const AGED_OUT = 'aged-out';
 
+// The one definition of "in the FYI section, and still standing". Both sweeps
+// read it, so the timed one and the manual one cannot come to disagree about
+// what the section contains — which is the whole reason "Clear all" is safe to
+// offer next to a heading whose count comes from somewhere else.
+function isInformational(e) {
+  return !e.dismissed && !e.promoted && AGE_OUT_CATEGORIES.has(e.category);
+}
+
 /**
  * PURE. Closes informational entries older than the age-out window.
  *
@@ -472,8 +480,7 @@ function ageOutInformational(entries, { now = Date.now(), days = AGE_OUT_DAYS } 
   let aged = 0;
 
   const out = entries.map((e) => {
-    if (e.dismissed || e.promoted) return e;
-    if (!AGE_OUT_CATEGORIES.has(e.category)) return e;
+    if (!isInformational(e)) return e;
     const arrived = e.received ? Date.parse(e.received) : NaN;
     if (!Number.isFinite(arrived) || arrived >= cutoff) return e;
     aged++;
@@ -481,6 +488,58 @@ function ageOutInformational(entries, { now = Date.now(), days = AGE_OUT_DAYS } 
   });
 
   return { entries: aged ? out : entries, aged };
+}
+
+// -- Clear all (7 Sep 2026) -------------------------------------------------
+//
+// The seven-day rule took the section from 715 to 234, Nick read what was left
+// and said none of it was relevant. The per-card buttons are the wrong tool for
+// that: 234 presses to say one thing.
+//
+// It closes exactly what the FYI section RENDERS - the same `isInformational`
+// predicate the timed sweep uses, so the button cannot clear something the
+// heading was not counting, and cannot leave behind something it was. ACTION,
+// DELEGATE and anything promoted are untouched at any age, so the one genuinely
+// bad outcome - a bulk press taking work with it - is impossible by
+// construction rather than by the caller passing the right filter.
+//
+// ⚠ `section-cleared` is its OWN reason and is excluded from `isJudged`, and
+// that is a deliberate call rather than an oversight. Nick says he read them,
+// and that is true - but the gesture costs one click whether the section holds
+// five emails or five hundred, so counting it as N verdicts would make the
+// classifier's score a function of HOW BIG THE PILE GOT rather than of how
+// often it was wrong. That is the sender-mute rule (one press must not swamp
+// the score) with the multiplier applied all at once instead of over a
+// fortnight. The per-card "Not relevant" is still the way to teach it, and it
+// still mutes the sender.
+const SECTION_CLEARED = 'section-cleared';
+
+/**
+ * PURE. Closes everything the FYI section is currently showing.
+ *
+ * Deliberately takes no age: "clear all" is a statement about what is on the
+ * screen, and an age filter here would silently leave rows behind.
+ */
+function clearInformational(entries, { now = Date.now() } = {}) {
+  const stamp = new Date(now).toISOString();
+  let cleared = 0;
+  const out = entries.map((e) => {
+    if (!isInformational(e)) return e;
+    cleared++;
+    return { ...e, dismissed: true, dismissedAt: stamp, dismissReason: SECTION_CLEARED };
+  });
+  return { entries: cleared ? out : entries, cleared };
+}
+
+/**
+ * Clear the FYI section now. `dryRun` is the count the confirmation quotes, so
+ * the number Nick agrees to is the number that goes.
+ */
+function clearFyiSection({ dryRun = false } = {}) {
+  const stored = getStoredTriage();
+  const { entries, cleared } = clearInformational(stored);
+  if (cleared && !dryRun) storeTriage(entries);
+  return { ok: true, cleared, dryRun, remaining: entries.filter(e => !e.dismissed).length };
 }
 
 /**
@@ -522,7 +581,11 @@ function isJudged(e) {
     && e.dismissReason !== SENDER_MUTED
     // Same again for the age-out sweep: a timed-out FYI is NEURO deciding
     // nobody was ever going to read it, not Nick saying it was misfiled.
-    && e.dismissReason !== AGED_OUT;
+    && e.dismissReason !== AGED_OUT
+    // And the bulk clear. One click is one gesture however many rows it
+    // covered; N verdicts out of it would score the classifier on the size of
+    // the pile rather than on how often it was wrong.
+    && e.dismissReason !== SECTION_CLEARED;
 }
 
 // Anything judged that is about to leave the blob — pruned by age, or dropped
@@ -1095,10 +1158,12 @@ module.exports = {
   unmuteSender,
   listMutedSenders,
   purgeAgedInformational,
+  clearFyiSection,
   TRIAGE_CACHE_TTL,
   _internals: {
     inputFingerprint, storeTriage, DISMISSED_RETAIN_DAYS, CLASSIFY_BATCH,
     ageOutInformational, AGE_OUT_DAYS, AGED_OUT, AGE_OUT_CATEGORIES,
+    clearInformational, SECTION_CLEARED, isInformational,
     applySenderMute, normaliseSender, readSenderRules, SENDER_MUTED, LOOKBACK_DAYS,
   },
 };

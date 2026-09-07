@@ -181,6 +181,19 @@ router.post('/triage/purge-fyi', (req, res) => {
   }
 });
 
+// POST /api/email/triage/clear-fyi — clear the whole FYI section.
+//
+// `dryRun` is what the confirmation quotes, so the number Nick agrees to is the
+// number that actually goes. It clears only what that section renders — ACTION,
+// DELEGATE and anything promoted are out of reach of this button entirely.
+router.post('/triage/clear-fyi', (req, res) => {
+  try {
+    res.json(emailTriage.clearFyiSection({ dryRun: req.body?.dryRun === true }));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // GET /api/email/triage/:emailId — fetch email detail, summary, and suggested reply
 router.get('/triage/:emailId', async (req, res) => {
   try {
