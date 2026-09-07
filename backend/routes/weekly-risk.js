@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * Weekly Risk & Anomaly Summary + Management Actions Log — PIP competencies 2/3/4.
+ * Weekly Risk & Anomaly Summary + Management Actions Log — PIP competencies 2/3/4,
+ * plus the deliverable tracker over both (`/deliverables`).
  *
  * Read paths are free; the only thing that leaves NEURO is `publish`, which
  * writes a note into the vault. Nothing here emails, sends or notifies anybody —
@@ -14,6 +15,7 @@ const router = express.Router();
 
 const weeklyRisk = require('../services/weekly-risk');
 const managementLog = require('../services/management-log');
+const pipDeliverables = require('../services/pip-deliverables');
 const db = require('../db/database');
 
 function fail(res, err, code = 500) {
@@ -191,6 +193,26 @@ router.post('/reopen', (req, res) => {
     const result = weeklyRisk.reopen(week);
     if (!result.ok) return res.status(409).json({ error: 'That week has not been sent, so there is nothing to reopen' });
     res.json({ ok: true, week, sent: weeklyRisk.sentSummary(result.record), already: Boolean(result.already) });
+  } catch (err) { fail(res, err); }
+});
+
+// ── Deliverables ─────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/weekly-risk/deliverables — what Nick owes Chris and what exists.
+ *
+ * A tracker, deliberately not a burn-down: counts of what was produced, names
+ * of what was not, and dates. No percentage and no grade — Chris assesses the
+ * PIP, and a tool that scores it produces a number to argue with instead of a
+ * list to act on. See the service header.
+ *
+ * Read-only, and every figure is LIFTED from weekly-risk's own stores and
+ * `management-log.assess()` rather than recomputed, so this cannot disagree
+ * with the two screens it summarises.
+ */
+router.get('/deliverables', (req, res) => {
+  try {
+    res.json(pipDeliverables.build());
   } catch (err) { fail(res, err); }
 });
 

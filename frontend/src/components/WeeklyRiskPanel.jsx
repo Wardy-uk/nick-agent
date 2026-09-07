@@ -42,6 +42,87 @@ function Stat({ label, value, sub, tone = 'neutral' }) {
   );
 }
 
+/**
+ * What Nick owes Chris, and what exists. A TRACKER, not a burn-down.
+ *
+ * All the judgement is in `services/pip-deliverables.js`; this renders it and
+ * adds nothing. Three rules survive into the markup:
+ *
+ *  - No percentage, no bar, no RAG. Chris assesses the PIP; a score here is a
+ *    number to argue with instead of a list to act on.
+ *  - "Written" and "sent" stay visibly apart — a draft on disk is not something
+ *    Chris has received, and conflating them is the expensive mistake.
+ *  - A failed read says so and never renders as a clean record. "I couldn't
+ *    look" and "you didn't do it" are opposite facts and only one accuses him.
+ */
+function DeliverableTracker({ data }) {
+  if (!data) return null;
+  const { window: win, weekly, log, gaps = [], known } = data;
+
+  const currentLabel = {
+    sent: 'sent to Chris',
+    'written-not-sent': 'written — not sent yet',
+    due: 'due by midday today',
+    late: 'not written yet',
+  }[weekly?.current?.state] || 'unknown';
+
+  return (
+    <section className="wr-section wr-deliverables">
+      <h3>What you owe Chris</h3>
+      <p className="wr-hint">
+        {win.daysToReview > 0
+          ? `${win.daysToReview} days to the review on ${fmtUk(win.review)}, ${win.daysToEnd} to ${fmtUk(win.end)}.`
+          : `Review passed ${fmtUk(win.review)} — ${win.daysToEnd} days to ${fmtUk(win.end)}.`}
+      </p>
+
+      <div className="wr-deliv-row">
+        <span className="wr-deliv-item">
+          <strong>This week:</strong> {currentLabel}
+        </span>
+        <span className="wr-deliv-item">
+          <strong>{weekly.sent}</strong> of {weekly.owed} weekly summaries sent
+          {/* Counted from the cadence agreed on 12 Aug, not from the PIP start —
+              weeks before the standard existed were never owed. */}
+          <em className="wr-deliv-note"> since {fmtUk(weekly.owedFrom)}</em>
+        </span>
+      </div>
+
+      {weekly.producedNotSent.length > 0 && (
+        <p className="wr-deliv-warn">
+          Written but not sent: {weekly.producedNotSent.map(fmtUk).join(', ')}.
+        </p>
+      )}
+      {weekly.missing.length > 0 && (
+        <p className="wr-deliv-warn">
+          No report for: {weekly.missing.map(fmtUk).join(', ')}.
+        </p>
+      )}
+
+      {log && (
+        <ul className="wr-deliv-log">
+          <li>
+            <strong>{log.baselineStillOpen}</strong> of {log.baselineCount} baseline items still open
+            <em className="wr-deliv-note"> — target zero by {fmtUk(log.baselineTargetDate)}</em>
+          </li>
+          <li><strong>{log.lateLogged}</strong> logged later than two working days</li>
+          <li><strong>{log.missingOwner + log.missingDue}</strong> open items missing an owner or a due date</li>
+          {log.hrUnknown > 0 && (
+            <li className="wr-deliv-note">
+              {log.hrUnknown} item(s) where People HR has not been answered either way — not a gap, a question for you.
+            </li>
+          )}
+        </ul>
+      )}
+
+      {!known && (
+        <p className="wr-deliv-warn">
+          Couldn’t read {gaps.map(g => g.source).join(', ')} — this is not a record of nothing done.
+        </p>
+      )}
+    </section>
+  );
+}
+
 /** A delta that says which way is good. Compliance is higher-is-better. */
 function Delta({ value }) {
   if (value === null || value === undefined) return <span className="wr-delta wr-delta-none">—</span>;
@@ -73,6 +154,7 @@ export default function WeeklyRiskPanel() {
   // `report` because it moves on its own: approving does not rebuild the
   // report, and reopening does not re-fetch the queue.
   const [sendState, setSendState] = useState(null);
+  const [deliverables, setDeliverables] = useState(null);
   const [showApproval, setShowApproval] = useState(false);
   const [confirmReopen, setConfirmReopen] = useState(false);
 
@@ -85,15 +167,20 @@ export default function WeeklyRiskPanel() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [r, l, ss] = await Promise.all([
+      const [r, l, ss, dl] = await Promise.all([
         fetch(apiUrl('/api/weekly-risk')).then(res => res.json()),
         fetch(apiUrl('/api/weekly-risk/log')).then(res => res.json()),
         fetch(apiUrl('/api/weekly-risk/send-status')).then(res => res.json()).catch(() => null),
+        // Never allowed to fail the panel: this is a summary of the two reads
+        // above, so a page that refused to render without it would take the
+        // report itself down for a tracker.
+        fetch(apiUrl('/api/weekly-risk/deliverables')).then(res => res.json()).catch(() => null),
       ]);
       if (r.error) throw new Error(r.error);
       setReport(r);
       setLog(l);
       setSendState(ss && !ss.error ? ss : null);
+      setDeliverables(dl && !dl.error ? dl : null);
       // Seed the form from what is stored, so a half-finished week reopens
       // where it was left rather than blank.
       setDraft({
@@ -325,6 +412,8 @@ export default function WeeklyRiskPanel() {
         </div>
         <button className="wr-refresh" onClick={load} type="button">Rebuild</button>
       </header>
+
+      <DeliverableTracker data={deliverables} />
 
       {/* The gate, first. These block publication, so they are not a footnote. */}
       {blockers.length > 0 && (
