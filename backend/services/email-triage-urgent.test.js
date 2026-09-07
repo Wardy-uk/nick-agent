@@ -769,3 +769,100 @@ test('"done" and "replied" mute nobody', () => {
   assert.deepEqual(readSenderRules(), {},
     'only "not relevant" is a statement about the sender');
 });
+
+// ── The FYI section ages out (7 Sep 2026) ───────────────────────────────────
+//
+// 715 informational emails standing in one collapsed section. The rule closes
+// them; what these pin is everything it must NOT close.
+
+const AGE_DAY = 86400000;
+const NOW = Date.parse('2026-09-07T12:00:00Z');
+const aged = (items, opts = {}) =>
+  emailTriage._internals.ageOutInformational(items, { now: NOW, ...opts });
+const before = d => new Date(NOW - d * AGE_DAY).toISOString();
+
+function info(over = {}) {
+  return email({
+    id: 'info-1', category: 'FYI', lane: 'fyi', urgency: 'low',
+    received: before(10), ...over,
+  });
+}
+
+test('FYI older than the window is closed, and stamped as NEURO acting', () => {
+  const out = aged([info()]);
+  assert.equal(out.aged, 1);
+  assert.equal(out.entries[0].dismissed, true);
+  assert.equal(out.entries[0].dismissReason, 'aged-out');
+});
+
+test('the sweep covers IGNORE too — the section is 715, the category is 224', () => {
+  // The panel renders FYI and IGNORE under one "FYI (N)" heading. Sweeping the
+  // category alone clears a third of what Nick is looking at, which reads as a
+  // fix that did not work.
+  const out = aged([info({ id: 'a' }), info({ id: 'b', category: 'IGNORE', lane: 'ignore' })]);
+  assert.equal(out.aged, 2);
+});
+
+test('inside the window is left alone, and the array is returned unchanged', () => {
+  const items = [info({ received: before(6) })];
+  const out = aged(items);
+  assert.equal(out.aged, 0);
+  // Identity, so a caller can skip the write.
+  assert.equal(out.entries, items);
+});
+
+test('ACTION and DELEGATE never age out, at any age', () => {
+  const out = aged([
+    info({ id: 'a', category: 'ACTION', lane: 'reply', received: before(90) }),
+    info({ id: 'b', category: 'DELEGATE', received: before(90) }),
+  ]);
+  assert.equal(out.aged, 0);
+});
+
+test('a promoted entry is never aged out', () => {
+  // "Keep this in front of me" is Nick overruling the classifier; a NEURO rule
+  // does not get to overrule that back.
+  const out = aged([info({ promoted: true, category: 'FYI' })]);
+  assert.equal(out.aged, 0);
+});
+
+test('no readable received date means KEPT, never guessed old', () => {
+  assert.equal(aged([info({ received: null })]).aged, 0);
+  assert.equal(aged([info({ received: 'not a date' })]).aged, 0);
+});
+
+test('an already-dismissed entry keeps Nick\'s own verdict', () => {
+  const out = aged([info({
+    dismissed: true, dismissReason: 'not-relevant', dismissedAt: before(9),
+  })]);
+  assert.equal(out.aged, 0);
+  assert.equal(out.entries[0].dismissReason, 'not-relevant');
+});
+
+test('days <= 0 switches the rule OFF rather than ageing everything out', () => {
+  assert.equal(aged([info({ received: before(400) })], { days: 0 }).aged, 0);
+  assert.equal(aged([info({ received: before(400) })], { days: NaN }).aged, 0);
+});
+
+test('an aged-out email is NOT a verdict — it stays out of the feedback score', () => {
+  seed([
+    info({ id: 'x', dismissed: true, dismissReason: 'aged-out', dismissedAt: before(1) }),
+    email({ id: 'y', dismissed: true, dismissReason: 'not-relevant', dismissedAt: before(1) }),
+  ]);
+  const fb = emailTriage.getDismissFeedback();
+  // One judged verdict, Nick's. Hundreds of timed-out FYIs must not swamp it.
+  assert.equal(fb.judged, 1);
+});
+
+test('purge applies the rule, and dryRun changes nothing', () => {
+  seed([info({ id: 'p1' }), info({ id: 'p2', received: before(2) })]);
+  const preview = emailTriage.purgeAgedInformational({ dryRun: true });
+  assert.equal(preview.aged, 1);
+  assert.equal(emailTriage.getStoredTriage().filter(e => e.dismissed).length, 0);
+
+  const done = emailTriage.purgeAgedInformational();
+  assert.equal(done.aged, 1);
+  const stored = emailTriage.getStoredTriage();
+  assert.equal(stored.filter(e => e.dismissed).length, 1);
+  assert.equal(stored.filter(e => !e.dismissed)[0].id, 'p2');
+});

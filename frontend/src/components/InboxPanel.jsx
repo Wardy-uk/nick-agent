@@ -630,6 +630,14 @@ export default function InboxPanel({ focusContext }) {
           >
             {fyiOpen ? '▾' : '▸'} FYI ({fyiTotal})
           </button>
+          {/* Mail that vanishes with no stated cause reads as a bug. Say the
+              rule, and take the number from the server so the two cannot
+              disagree. */}
+          {fyiOpen && triage?.fyiAgeOutDays > 0 && (
+            <p className="inbox-section-note">
+              Cleared automatically after {triage.fyiAgeOutDays} days — nothing here is waiting on you.
+            </p>
+          )}
           {fyiOpen && [...fyi, ...ignore].map(e => (
             <EmailCard key={e.id} email={e} borderClass="urgency-low" onDismiss={dismiss} dismissing={dismissing} onReplied={handleReplied} onPromote={promote} />
           ))}

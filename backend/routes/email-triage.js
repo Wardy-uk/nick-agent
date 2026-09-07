@@ -105,6 +105,10 @@ router.get('/triage', async (req, res) => {
       ok: true,
       available,
       detail: available ? null : (mail.lastTokenError || 'Mail access is degraded.'),
+      // The panel says how long informational mail survives. Served rather than
+      // written into the component, or the screen states a window the sweep is
+      // not actually using the day either one changes.
+      fyiAgeOutDays: emailTriage._internals.AGE_OUT_DAYS,
       ...data
     });
   } catch (e) {
@@ -150,6 +154,28 @@ router.delete('/triage/muted/:address', (req, res) => {
     const result = emailTriage.unmuteSender(decodeURIComponent(req.params.address));
     if (!result.ok) return res.status(404).json({ ok: false, error: result.reason });
     res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/email/triage/purge-fyi — clear informational mail older than the
+// age-out window, now.
+//
+// The rule runs on every scheduled triage pass; this is the manual press, and
+// `dryRun` is the preview behind it — so the confirmation quotes a real number
+// rather than an estimate. Registered ABOVE `/triage/:emailId` on principle:
+// every parameterised POST here carries a second segment, so nothing swallows
+// it TODAY (measured, not assumed), but this router has shipped a literal path
+// read as an email id twice already.
+router.post('/triage/purge-fyi', (req, res) => {
+  try {
+    const dryRun = req.body?.dryRun === true;
+    const days = req.body?.days === undefined ? undefined : Number(req.body.days);
+    if (days !== undefined && (!Number.isFinite(days) || days <= 0)) {
+      return res.status(400).json({ ok: false, error: 'days must be a positive number' });
+    }
+    res.json(emailTriage.purgeAgedInformational({ dryRun, ...(days === undefined ? {} : { days }) }));
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }

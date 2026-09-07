@@ -415,6 +415,85 @@ function applySenderMute(entry, rules, now = new Date().toISOString()) {
   };
 }
 
+// -- The FYI section ages out (7 Sep 2026) ----------------------------------
+//
+// 715 informational emails standing in one collapsed section, oldest 20 days
+// old. Nick: "ain't no way I'm ever going to get to them." That is the correct
+// reading of the number - a pile that only grows is one nobody opens, and its
+// count then makes every other number on the panel harder to read.
+//
+// SO IT IS THE **SECTION** THIS SWEEPS, NOT THE FYI CATEGORY. Measured on the
+// live store the morning it was asked for: the store held 224 FYI and 491
+// IGNORE, and the panel renders BOTH under one "FYI (715)" heading. Sweeping
+// the category alone would clear 224 of the 715 he is looking at and leave the
+// heading reading 491 - a fix that appears not to have worked. What he named
+// is what the screen says.
+//
+// ACTION and DELEGATE are never touched, at any age. "Nothing leaves the panel
+// by age" is the rule that fixed the 24-hour window, and it still holds for
+// everything that is actually owed - only the informational lanes age out, and
+// only because being informational is precisely the claim that not reading
+// them costs nothing.
+//
+// A PROMOTED entry is never aged out either. Promotion means "you filed this
+// wrong, keep it in front of me" - it already re-categorises to ACTION, so the
+// category test covers it, but the guard is explicit because the whole point
+// of that button is that a NEURO rule does not get to overrule Nick.
+//
+// The age is the RECEIVED date, not when it was classified: a re-classified
+// email is not a new one, and keying on classification time would reset every
+// email's clock on any pass that re-read it.
+//
+// An entry with no readable received date is KEPT. Not knowing how old
+// something is is not evidence that it is old, and a guess here silently
+// deletes mail from the panel.
+//
+// `aged-out` is NEURO's own act, not one of Nick's verdicts - so, exactly like
+// `left-inbox` and `sender-muted`, it is absent from DISMISS_REASONS (no
+// caller can pass it) and excluded from `isJudged`. Counting hundreds of
+// timed-out FYIs as "Nick said not relevant" would swamp the #70 feedback
+// score with verdicts nobody gave.
+const AGE_OUT_DAYS = Number(process.env.EMAIL_TRIAGE_FYI_AGE_DAYS || 7);
+const AGE_OUT_CATEGORIES = new Set(['FYI', 'IGNORE']);
+const AGED_OUT = 'aged-out';
+
+/**
+ * PURE. Closes informational entries older than the age-out window.
+ *
+ * Returns the ORIGINAL array when nothing qualifies, so a caller can use
+ * identity to decide whether a write is needed.
+ */
+function ageOutInformational(entries, { now = Date.now(), days = AGE_OUT_DAYS } = {}) {
+  // 0 or a nonsense value switches the rule off rather than ageing everything
+  // out at once, which is the failure direction that cannot be undone.
+  if (!Number.isFinite(days) || days <= 0) return { entries, aged: 0 };
+  const cutoff = now - days * 86400000;
+  const stamp = new Date(now).toISOString();
+  let aged = 0;
+
+  const out = entries.map((e) => {
+    if (e.dismissed || e.promoted) return e;
+    if (!AGE_OUT_CATEGORIES.has(e.category)) return e;
+    const arrived = e.received ? Date.parse(e.received) : NaN;
+    if (!Number.isFinite(arrived) || arrived >= cutoff) return e;
+    aged++;
+    return { ...e, dismissed: true, dismissedAt: stamp, dismissReason: AGED_OUT };
+  });
+
+  return { entries: aged ? out : entries, aged };
+}
+
+/**
+ * Apply the rule to the stored blob now. The scheduled triage does this on
+ * every pass; this is the manual press and the preview behind it.
+ */
+function purgeAgedInformational({ dryRun = false, days = AGE_OUT_DAYS } = {}) {
+  const stored = getStoredTriage();
+  const { entries, aged } = ageOutInformational(stored, { days });
+  if (aged && !dryRun) storeTriage(entries);
+  return { ok: true, aged, dryRun, days, remaining: entries.filter(e => !e.dismissed).length };
+}
+
 function readRollup() {
   try {
     const raw = JSON.parse(db.getState(FEEDBACK_ROLLUP_KEY) || '{}');
@@ -440,7 +519,10 @@ function isJudged(e) {
     // Nick judged the SENDER once. Every message auto-filed by that rule
     // afterwards is the same verdict being applied, not a new one being made -
     // counting them would let one mute press swamp the whole feedback score.
-    && e.dismissReason !== SENDER_MUTED;
+    && e.dismissReason !== SENDER_MUTED
+    // Same again for the age-out sweep: a timed-out FYI is NEURO deciding
+    // nobody was ever going to read it, not Nick saying it was misfiled.
+    && e.dismissReason !== AGED_OUT;
 }
 
 // Anything judged that is about to leave the blob — pruned by age, or dropped
@@ -555,6 +637,15 @@ async function runTriage({ force = false } = {}) {
     const fingerprint = inputFingerprint(emails);
     const stored = getStoredTriage();
     if (!force && fingerprint === db.getState(INPUT_KEY) && stored.length > 0) {
+      // The age-out sweep still runs. It is a function of the CLOCK, not of the
+      // mail, so gating it behind "new mail arrived" would leave an FYI that
+      // crossed the seven-day line sitting in the section until something else
+      // landed — a rule that only fires when it happens to be convenient.
+      const swept = ageOutInformational(stored);
+      if (swept.aged) {
+        storeTriage(swept.entries);
+        console.log(`[EmailTriage] Aged out ${swept.aged} informational email(s) older than ${AGE_OUT_DAYS}d`);
+      }
       // We DID look — the panel's "last triage" is a statement about when NEURO
       // last checked the inbox, and it checked.
       db.setState('email_triage_time', String(Date.now()));
@@ -647,6 +738,14 @@ async function runTriage({ force = false } = {}) {
     }
     if (departed) {
       console.log(`[EmailTriage] ${departed} entr${departed === 1 ? 'y' : 'ies'} no longer in the Inbox — closed as ${LEFT_INBOX}`);
+    }
+
+    // LAST of the three sweeps, and after the merge, so it judges the category
+    // this pass just assigned rather than the one the previous pass did.
+    const swept = ageOutInformational(updated);
+    updated = swept.entries;
+    if (swept.aged) {
+      console.log(`[EmailTriage] Aged out ${swept.aged} informational email(s) older than ${AGE_OUT_DAYS}d`);
     }
 
     storeTriage(updated);
@@ -995,9 +1094,11 @@ module.exports = {
   muteSender,
   unmuteSender,
   listMutedSenders,
+  purgeAgedInformational,
   TRIAGE_CACHE_TTL,
   _internals: {
     inputFingerprint, storeTriage, DISMISSED_RETAIN_DAYS, CLASSIFY_BATCH,
+    ageOutInformational, AGE_OUT_DAYS, AGED_OUT, AGE_OUT_CATEGORIES,
     applySenderMute, normaliseSender, readSenderRules, SENDER_MUTED, LOOKBACK_DAYS,
   },
 };
