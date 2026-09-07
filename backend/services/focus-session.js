@@ -777,6 +777,7 @@ module.exports = {
   setNextStep,
   stepAway,
   ASSUMED_MINUTES,
+  HISTORY_LIMIT,
   PAUSE_STALE_MINUTES,
   STALE_FLOOR_MINUTES,
   STALE_MULTIPLE,

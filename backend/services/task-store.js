@@ -650,6 +650,39 @@ function updateTask(id, fields = {}) {
     } catch {}
   }
 
+  // ── Triage is work, and it was the last kind NEURO could not see ──────────
+  //
+  // Deciding a task's shape — when it is due, how long it will take, whether it
+  // is a MUST — is what makes the task startable, and none of it was recorded
+  // anywhere. So the surfaces that reward effort could only ever reward
+  // finishing, and the estimate pipeline that `time-fit` and `day-planner` both
+  // starve for had nothing encouraging it to be fed.
+  //
+  // ⚠ LOGGED ON A REAL CHANGE ONLY, exactly as `task_done` is logged on the
+  // transition. Re-saving a task with the same values records nothing —
+  // without that, the one-PATCH save from TaskEditPanel would log a triage
+  // every time Nick opened a card and pressed Save out of habit.
+  //
+  // ⚠ The fields are the ones that decide the SHAPE of the work. `text`,
+  // `notes` and `status` are deliberately absent: rewriting the wording is
+  // editing, and finishing is already counted. Counting either here would make
+  // one act land in two ledgers.
+  const TRIAGE_FIELDS = ['moscow', 'priority', 'due_date', 'estimate_minutes', 'origin', 'domain'];
+  const triaged = TRIAGE_FIELDS.filter((f) => f in patch && String(patch[f] ?? '') !== String(row[f] ?? ''));
+  if (triaged.length) {
+    try {
+      db.logActivity('task_triaged', {
+        taskId: id,
+        text: row.text,
+        fields: triaged,
+        // Whether this task had an estimate BEFORE. The read counts first
+        // estimates separately, because that is the number the planner needs
+        // and re-estimating a task that already had one is a different act.
+        estimateWasSet: row.estimate_minutes != null,
+      });
+    } catch {}
+  }
+
   scheduleExport();
 
   const updated = db.getTaskRow(id);

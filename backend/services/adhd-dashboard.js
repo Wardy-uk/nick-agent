@@ -396,6 +396,20 @@ async function build() {
     console.warn('[ADHD] Session state unavailable:', e.message);
   }
 
+  // What the sessions say about STARTING. Folded in here rather than fetched
+  // separately, because this page is read at moments of low executive function
+  // and a second round trip is a second chance to be slow.
+  //
+  // ⚠ It is a DERIVED read over the same history `session` above came from — no
+  // store, no counter — so it cannot drift from it. Never allowed to fail the
+  // build: momentum is the point of the page and a starts count is beside it.
+  let signals = null;
+  try {
+    signals = require('./initiation-signals').build(now);
+  } catch (e) {
+    console.warn('[ADHD] Session signals unavailable:', e.message);
+  }
+
   const payload = {
     generatedAt: now.toISOString(),
     dateKey,
@@ -403,6 +417,10 @@ async function build() {
     rightNow,
     session: session.session,
     recovery: session.recovery,
+    // The counterpart to `momentum`, which counts finishing. Nick's blocker is
+    // initiation, so the half of the loop that is actually hard had no number
+    // anywhere until this landed.
+    signals,
     momentum: _momentum(dateKey),
     winsToday: _winsToday(dateKey),
     avoidance: _avoidance(dateKey),

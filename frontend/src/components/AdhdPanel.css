@@ -422,3 +422,84 @@
   cursor: pointer;
 }
 .adhd__quick-start:hover { color: var(--text-primary); border-color: var(--accent); }
+
+/* ── Getting going ──────────────────────────────────────────────────────────
+   Starts, triage and the shrink ladders. Deliberately quieter than the big
+   "finished" number above it: this is evidence the day has begun, not a second
+   score competing with the first. */
+.adhd__init {
+  margin-top: 0.9rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.adhd__init-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.2rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.adhd__init-stat strong { color: var(--text-primary); font-size: 1rem; }
+
+.adhd__init-note {
+  display: block;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-style: normal;
+  margin-top: 0.15rem;
+}
+
+.adhd__init-live {
+  color: var(--accent);
+  font-size: 0.78rem;
+}
+
+/* The ladder. A fact about the work — no warning colour, no badge, nothing
+   that reads as a mark against the person who cut the task down. */
+.adhd__init-ladder {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.adhd__init-ladder li { margin-top: 0.25rem; line-height: 1.4; }
+.adhd__init-from { text-decoration: line-through; opacity: 0.7; }
+.adhd__init-to { color: var(--text-primary); }
+.adhd__init-arrow { opacity: 0.5; }
+
+.adhd__init-gap {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* ── The close-out ──────────────────────────────────────────────────────────
+   What the session took against what Nick said it would. One neutral treatment
+   for all four kinds: `under` is not a prize and `over` is not a warning, they
+   are both just information about how long the work takes. */
+.adhd__closeout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-left: 3px solid var(--accent);
+}
+.adhd__closeout-say {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+.adhd__closeout-x {
+  flex: none;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.adhd__closeout-x:hover { color: var(--text-primary); }

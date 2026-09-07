@@ -5,6 +5,7 @@
  *
  * GET  /api/session            — current session + the return prompt, one read
  * GET  /api/session/history    — the last few sessions, planned vs actual
+ * GET  /api/session/signals    — starts, shrink ladders, estimate accuracy
  * POST /api/session/start      — { taskId?, text?, minutes?, force? }
  * POST /api/session/pause      — { reason?, source? }
  * POST /api/session/resume
@@ -23,6 +24,7 @@
 const express = require('express');
 const router = express.Router();
 const session = require('../services/focus-session');
+const signals = require('../services/initiation-signals');
 
 router.get('/', (req, res) => {
   try {
@@ -36,6 +38,22 @@ router.get('/history', (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 20, 50);
     res.json({ sessions: session.history().slice(0, limit) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * What the sessions say about STARTING — starts today and this week against
+ * Nick's own median, the shrink ladders, and planned-vs-actual over the
+ * sessions where the estimate was his.
+ *
+ * Read-only and derived: it adds no store and no counter, so it cannot drift
+ * from the history it is computed from.
+ */
+router.get('/signals', (req, res) => {
+  try {
+    res.json(signals.build());
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -153,11 +171,29 @@ router.post('/check-in', (req, res) => {
 
 router.post('/finish', (req, res) => {
   try {
-    res.json(session.finish({
+    const result = session.finish({
       completeTask: Boolean(req.body?.completeTask),
       // Optional. An empty reflection is a perfectly good outcome.
       reflection: req.body?.reflection || null,
-    }));
+    });
+
+    // The close-out line. This is the only moment the real duration is known
+    // while Nick is still thinking about the task, and `day-planner` has been
+    // learning from these pairs since it shipped without ever telling him one.
+    //
+    // ⚠ Never allowed to fail the finish: the session IS closed by the time we
+    // get here, and reporting an error over completed work is the shape that
+    // makes a working feature read as a broken one.
+    let closeout = null;
+    try {
+      closeout = signals.estimateCloseout({
+        plannedMinutes: result.session?.plannedMinutes ?? null,
+        plannedAssumed: result.session?.plannedAssumed !== false,
+        actualMinutes: result.actualMinutes,
+      });
+    } catch { /* bookkeeping; the finish stands */ }
+
+    res.json({ ...result, closeout });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

@@ -43,6 +43,78 @@ async function api(path, options = {}) {
 //
 // All the judgement is in services/adhd-dashboard.js. This file only renders.
 
+/**
+ * Getting going — starts, triage and the shrink ladders.
+ *
+ * All the judgement is server-side in `services/initiation-signals.js`; this
+ * renders what it decided and adds nothing of its own. Three rules survive into
+ * the markup and are worth not undoing:
+ *
+ *  - A shrink is stated as a fact about the WORK ("cut down to"), never as a
+ *    count against Nick. No "you struggled with", no warning colour.
+ *  - A capped count says so. `complete: false` means the history cap may have
+ *    eaten part of the window, so the number is a floor.
+ *  - Nothing renders at all on a day with no evidence and no gaps. An empty
+ *    block that says "0 started" first thing in the morning is a reproach for
+ *    not having begun a day that has barely started.
+ */
+function InitiationRow({ signals }) {
+  if (!signals) return null;
+
+  const starts = signals.starts || {};
+  const triage = signals.triage || {};
+  const ladder = signals.shrinks?.ladder || [];
+  const gaps = signals.gaps || [];
+
+  const nothingYet = !starts.today && !triage.today && ladder.length === 0;
+  if (nothingYet && gaps.length === 0) return null;
+
+  return (
+    <div className="adhd__init">
+      <div className="adhd__init-stats">
+        <span className="adhd__init-stat">
+          <strong>{starts.today ?? 0}</strong> started
+          {/* His own median weekday, never zero and never a streak. Shown only
+              when there is enough history for it to be a real comparison. */}
+          {starts.typical > 0 && starts.today > starts.typical && (
+            <em className="adhd__init-note">above your usual {starts.typical}</em>
+          )}
+        </span>
+        <span className="adhd__init-stat">
+          <strong>{triage.today ?? 0}</strong> triaged
+          {triage.firstEstimatesToday > 0 && (
+            <em className="adhd__init-note">
+              {triage.firstEstimatesToday} first estimate{triage.firstEstimatesToday === 1 ? '' : 's'}
+            </em>
+          )}
+        </span>
+        {starts.live && <span className="adhd__init-live">one running now</span>}
+      </div>
+
+      {ladder.length > 0 && (
+        <ul className="adhd__init-ladder">
+          {ladder.map((rung) => (
+            <li key={rung.id}>
+              <span className="adhd__init-from">{rung.from}</span>
+              <span className="adhd__init-arrow" aria-hidden="true"> → </span>
+              <span className="adhd__init-to">{rung.to}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {starts.complete === false && (
+        <p className="adhd__init-gap">{starts.incompleteWhy}</p>
+      )}
+      {gaps.length > 0 && (
+        <p className="adhd__init-gap">
+          Couldn’t read {gaps.map((g) => g.source).join(', ')} — this is not a count of zero.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function AdhdPanel({ onNavigate }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   // The canonical feed. Everything on this page that proposes WORK comes from
@@ -64,6 +136,9 @@ export default function AdhdPanel({ onNavigate }) {
 
   // The "make it smaller" box. Null when closed; a string while being typed.
   const [smaller, setSmaller] = useState(null);
+
+  // What the last finished session took against what Nick said it would.
+  const [closeout, setCloseout] = useState(null);
 
   useEffect(() => { load(); }, [load]);
 
@@ -95,6 +170,14 @@ export default function AdhdPanel({ onNavigate }) {
         return sessionPost(path, { ...(body || {}), force: true });
       }
       if (!res.ok) throw new Error(json.error || `${res.status} ${res.statusText}`);
+      // The close-out line, phrased server-side. This is the only moment the
+      // real duration is known while Nick is still thinking about the task, and
+      // it is what turns an estimate into something he can calibrate — the
+      // planner has been learning from these pairs for weeks without ever
+      // telling him one. Cleared on the next session action, never dismissed by
+      // a timer: a message that vanishes on its own is one he will miss.
+      if (json.closeout?.say) setCloseout(json.closeout);
+      else setCloseout(null);
       load();
     } catch (e) {
       setState((s) => ({ ...s, error: e.message }));
@@ -197,7 +280,7 @@ export default function AdhdPanel({ onNavigate }) {
   if (error) return <div className="adhd"><div className="adhd__card adhd__card--err">{error}</div></div>;
   if (!data) return null;
 
-  const { shape, momentum, winsToday, avoidance, quickWins, session, recovery } = data;
+  const { shape, momentum, winsToday, avoidance, quickWins, session, recovery, signals } = data;
 
   return (
     <div className="adhd">
@@ -443,6 +526,25 @@ export default function AdhdPanel({ onNavigate }) {
         the day has been credited.
       */}
       <div className="adhd__solo">
+        {/*
+          What the last session actually took. Rendered above Momentum because
+          that is where the eye already is the moment a session closes, and it
+          is dismissed by hand rather than by a timer — a line that disappears
+          on its own is one he will miss.
+
+          ⚠ Never praise and never reproach: on an assumed plan there is nothing
+          of his to compare with, and the wording says so instead of reporting a
+          miss against NEURO's own 30-minute guess.
+        */}
+        {closeout && (
+          <section className={`adhd__card adhd__closeout adhd__closeout--${closeout.kind}`}>
+            <p className="adhd__closeout-say">{closeout.say}</p>
+            <button type="button" className="adhd__closeout-x" onClick={() => setCloseout(null)}>
+              Got it
+            </button>
+          </section>
+        )}
+
         {/* ── Momentum ── */}
         <section className="adhd__card">
           <h3 className="adhd__h">Momentum</h3>
@@ -463,6 +565,19 @@ export default function AdhdPanel({ onNavigate }) {
               )}
             </div>
           </div>
+
+          {/*
+            ── Getting going ──
+            The counterpart to the number above it, and the reason this block
+            exists at all: everything else on this card counts FINISHING, and
+            finishing is not the half Nick struggles with. A start counts here
+            even if it went nowhere, because rewarding only the starts that
+            became finishes is the surface immediately above.
+
+            Deliberately quieter than the big number rather than competing with
+            it — this is evidence that the day has begun, not a second score.
+          */}
+          <InitiationRow signals={signals} />
 
           <div className="adhd__spark" role="img" aria-label={`Last 7 days: ${momentum.last7.map(d => d.done).join(', ')} finished`}>
             {momentum.last7.map((d) => (

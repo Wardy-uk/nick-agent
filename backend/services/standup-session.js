@@ -233,6 +233,25 @@ async function buildContext(kind) {
     ctx.closed = { known: false, date: null, reason: e.message };
   }
 
+  // ── Effort that did not finish ────────────────────────────────────────────
+  //
+  // `closed` above is finished work, and on a bad day it is empty. But a day
+  // where Nick started four things, cut two of them down to something startable
+  // and put estimates on six tasks is NOT an empty day — it is a day of exactly
+  // the work he finds hardest, and until this landed the EOD could not see any
+  // of it. So the one evening that could say "you got going on four things"
+  // instead had nothing true to say on the days that most needed it.
+  //
+  // ⚠ Never allowed to fail the session: it is context, and a reflection that
+  // refuses to start because a derived count could not be read is worse than
+  // one that runs without it.
+  try {
+    ctx.initiation = require('./initiation-signals').build(new Date());
+  } catch (e) {
+    console.warn('[StandupSession] Initiation signals unavailable:', e.message);
+    ctx.initiation = null;
+  }
+
   try {
     const taskStore = require('./task-store');
     const today = ctx.dateKey;
@@ -292,6 +311,28 @@ function _renderContext(ctx) {
     }
   } else if (closed) {
     parts.push('\nFINISHED WORK: could not be read. Do not treat anything below as untouched — say you cannot see what was closed.');
+  }
+
+  // Effort that did not necessarily finish. This is the half a completion
+  // ledger cannot see, and on a hard day it is the only true good news there is.
+  const init = ctx.initiation;
+  if (init && init.known) {
+    const bits = [];
+    if (init.starts?.today) bits.push(`started ${init.starts.today} thing(s)`);
+    if (init.triage?.today) bits.push(`decided the shape of ${init.triage.today} task(s)`);
+    if (init.triage?.firstEstimatesToday) {
+      bits.push(`put a first estimate on ${init.triage.firstEstimatesToday} of them`);
+    }
+    if (bits.length) {
+      parts.push(`\nGETTING GOING: he ${bits.join(', ')}.`);
+      // ⚠ The wording matters more here than anywhere else in this block. A
+      // task cut down is a fact about the WORK, and phrasing it as a struggle
+      // is the one thing `friction.js` and `initiation-signals` both forbid.
+      for (const rung of (init.shrinks?.ladder || []).slice(0, 2)) {
+        parts.push(`  - cut "${rung.from}" down to "${rung.to}" to get it started`);
+      }
+      parts.push('This is the work he finds hardest. If the day finished nothing, this is still a day of real effort — say so, once, without ceremony.');
+    }
   }
 
   // The week's target, and whether it still needs setting. Deliberately placed
@@ -401,6 +442,15 @@ You are running this — you started it, he did not come and find you.
 2. Reflect back what actually happened from the context — work, movement, what
    he finished — but as material for the conversation, not as a list to confirm.
    Do not ask "what did you get done?" when you can already see it.
+   ⚠ NEURO DETECTED this, he did not report it, so some of it he will genuinely
+   not remember doing — ADHD working memory drops finished work and the day then
+   feels emptier than it was. Naming one or two specific things he had forgotten
+   is the single most useful thing this conversation does. Say them as fact, not
+   as a quiz, and never as "you forgot".
+   ⚠ If the day finished little but the GETTING GOING block has something in it,
+   lead with that instead. Starting things and cutting them down to a size he
+   could begin is the work he finds hardest, and a day of it is not a wasted day.
+   Do not spin it and do not congratulate him for it — state it and move on.
 3. Follow what he gives you. If the thing on his mind is a person, or how tired
    he is, or something that has nothing to do with Nurtur, go there. A day is
    not only its tasks and this is the one ritual that can say so.
