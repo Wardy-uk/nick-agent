@@ -265,7 +265,11 @@ const TODO_MESSAGES = [
     "Those todos aren't going to complete themselves. Shockingly.",
     "Still here. Still watching the todos age. Pick one.",
     "The todo list has been waiting longer than your last Jira ticket.",
-    "Fun fact: crossing off a todo releases dopamine. You could have had that dopamine 15 minutes ago.",
+    // Points at the next action rather than at a window that has closed. The
+    // original ran "...you could have had that dopamine 15 minutes ago", which
+    // is guilt about the past wearing a joke — and the one thing this tier is
+    // not for. Wry is noticing; it is not scoring the last quarter of an hour.
+    "Fun fact: crossing off a todo releases dopamine. There's one right there.",
     "The todo is just sitting there. Judging you softly. With tiny todo eyes.",
     "At what point does 'overdue' become 'legendary'? You're approaching it.",
     "I checked: the todos are still there. I will continue checking. Every 15 minutes.",

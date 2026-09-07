@@ -17,12 +17,17 @@ export default function StandupsPanel() {
       .finally(() => setLoading(false));
   }, [days]);
 
-  const streakCount = entries.filter(e => e.standup).length;
+  // ⚠ This is a COUNT of days logged in the window, not a streak — the days it
+  // counts need not be consecutive, so "12-day streak" could be twelve days
+  // scattered across a month. It was the last streak left in NEURO after the
+  // wins one was retired for being unbreakable, and it was measuring something
+  // different from what it said. Named for what it actually is.
+  const loggedCount = entries.filter(e => e.standup).length;
   const missCount = entries.filter(e => !e.standup).length;
   const saraLine = missCount === 0
-    ? `${streakCount}-day streak. Keep it up.`
+    ? `${loggedCount} of ${entries.length} days logged.`
     : missCount === 1
-    ? `${streakCount} of ${entries.length} days logged. One miss.`
+    ? `${loggedCount} of ${entries.length} days logged. One miss.`
     : `${missCount} missed standups in ${days} days. That's drift.`;
 
   if (loading) return <div className="standups-panel"><div className="standups-loading">Loading...</div></div>;
