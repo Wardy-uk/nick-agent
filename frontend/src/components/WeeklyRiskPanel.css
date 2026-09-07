@@ -459,3 +459,21 @@
   font-size: 0.85rem;
   line-height: 1.6;
 }
+
+.wr-deliv-unsent { list-style: none; margin: 0.35rem 0; padding: 0; }
+.wr-deliv-unsent li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.15rem 0;
+}
+.wr-deliv-mark {
+  background: none;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.75rem;
+  color: inherit;
+  cursor: pointer;
+}
+.wr-deliv-mark:disabled { opacity: 0.5; cursor: default; }

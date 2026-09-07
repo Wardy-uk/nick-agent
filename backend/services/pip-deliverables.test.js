@@ -24,9 +24,9 @@ test('a published week that was never sent is not counted as sent', () => {
     weekly: [{ week: '2026-08-10', published: true, sent: false }],
     today: TODAY,
   });
-  assert.equal(r.weekly.produced, 1);
-  assert.equal(r.weekly.sent, 0, 'a draft on disk is not a thing Chris has received');
-  assert.ok(r.weekly.producedNotSent.includes('2026-08-10'), 'and it must be named');
+  assert.equal(r.weekly.built, 1);
+  assert.equal(r.weekly.sendRecorded, 0, 'a draft on disk is not a thing Chris has received');
+  assert.ok(r.weekly.noSendRecord.includes('2026-08-10'), 'and it must be named');
 });
 
 test('a sent week counts as both produced and sent', () => {
@@ -34,9 +34,9 @@ test('a sent week counts as both produced and sent', () => {
     weekly: [{ week: '2026-08-10', published: true, sent: true }],
     today: TODAY,
   });
-  assert.equal(r.weekly.produced, 1);
-  assert.equal(r.weekly.sent, 1);
-  assert.equal(r.weekly.producedNotSent.length, 0);
+  assert.equal(r.weekly.built, 1);
+  assert.equal(r.weekly.sendRecorded, 1);
+  assert.equal(r.weekly.noSendRecord.length, 0);
 });
 
 test('a sent week is never listed as missing', () => {
@@ -44,7 +44,66 @@ test('a sent week is never listed as missing', () => {
     weekly: [{ week: '2026-08-10', published: false, sent: true }],
     today: TODAY,
   });
-  assert.ok(!r.weekly.missing.includes('2026-08-10'));
+  assert.ok(!r.weekly.notBuilt.includes('2026-08-10'));
+});
+
+// ── The deadline is the first WORKING day, not Monday ────────────────────────
+//
+// Found in the first live reading, not by a test: w/c 31 Aug 2026 opened on the
+// Summer bank holiday, Nick produced and sent the report on the Tuesday, and a
+// Monday-midday rule called it late. Every case below uses that real week.
+
+const AUG_BH = new Set(['2026-08-31']); // Summer bank holiday, a Monday
+
+test('a bank-holiday Monday moves the deadline to Tuesday midday', () => {
+  assert.equal(pip.firstWorkingDay('2026-08-31', AUG_BH), '2026-09-01');
+  assert.equal(pip.firstWorkingDay('2026-08-17', AUG_BH), '2026-08-17', 'an ordinary week still opens on Monday');
+});
+
+test('nothing is late on a bank-holiday Monday afternoon', () => {
+  const r = pip.assess({ weekly: [], today: '2026-08-31', nowHour: 16, nonWorking: AUG_BH });
+  assert.equal(r.weekly.current.state, 'due', 'the office was shut');
+  assert.ok(!r.weekly.notBuilt.includes('2026-08-31'));
+  assert.equal(r.weekly.current.dueDay, '2026-09-01');
+});
+
+test('it is late on the Tuesday afternoon, once the deadline has actually passed', () => {
+  const r = pip.assess({ weekly: [], today: '2026-09-01', nowHour: 16, nonWorking: AUG_BH });
+  assert.equal(r.weekly.current.state, 'late');
+});
+
+test('the real w/c 31 Aug — published Tuesday — is not late', () => {
+  const r = pip.assess({
+    weekly: [{ week: '2026-08-31', published: true, sent: false }],
+    today: '2026-09-01',
+    nowHour: 16,
+    nonWorking: AUG_BH,
+  });
+  assert.equal(r.weekly.current.state, 'written-no-send-record');
+  assert.ok(!r.weekly.notBuilt.includes('2026-08-31'));
+});
+
+test('without a holiday set it degrades to Mon–Fri, the documented behaviour', () => {
+  // The shared module's contract. build() names this as a gap rather than
+  // letting a bank holiday silently read as a missed deadline again.
+  assert.equal(pip.firstWorkingDay('2026-08-31', undefined), '2026-08-31');
+});
+
+// ── "No send recorded" is not "not sent" ─────────────────────────────────────
+
+test('a week with no send record never claims it was not sent', () => {
+  const r = pip.assess({
+    weekly: [{ week: '2026-08-17', published: true, sent: false }],
+    today: TODAY,
+  });
+  // NEURO only ever learns about a send it made itself. A report mailed from
+  // Outlook is invisible here for ever, so the field names and the caveat are
+  // what stop the payload asserting something nothing measured.
+  assert.ok(r.weekly.noSendRecord.includes('2026-08-17'));
+  assert.equal(r.weekly.sendRecordsAreNeuroOnly, true, 'the caveat travels with the count');
+  const flat = JSON.stringify(r).toLowerCase();
+  assert.ok(!flat.includes('notsent'), 'no field may assert a send did not happen');
+  assert.ok(!flat.includes('unsent'));
 });
 
 // ── Refusal 2: a week before the cadence existed is not owed ─────────────────
@@ -53,7 +112,7 @@ test('weeks before the cadence was agreed are never counted as missed', () => {
   const r = pip.assess({ weekly: [], today: TODAY });
   // The PIP began 27 Jul; the Monday-midday cadence was agreed 12 Aug.
   for (const week of ['2026-07-27', '2026-08-03']) {
-    assert.ok(!r.weekly.missing.includes(week), `${week} predates the standard`);
+    assert.ok(!r.weekly.notBuilt.includes(week), `${week} predates the standard`);
   }
   assert.equal(r.weekly.owedFrom, '2026-08-10');
 });
@@ -71,13 +130,13 @@ test('the owed count starts at the cadence, not at the PIP start', () => {
 test('on Monday morning the current week is due, not late', () => {
   const r = pip.assess({ weekly: [], today: '2026-08-31', nowHour: 9 });
   assert.equal(r.weekly.current.state, 'due');
-  assert.ok(!r.weekly.missing.includes('2026-08-31'), 'not missed before midday');
+  assert.ok(!r.weekly.notBuilt.includes('2026-08-31'), 'not missed before midday');
 });
 
 test('on Monday afternoon with nothing written it is late', () => {
   const r = pip.assess({ weekly: [], today: '2026-08-31', nowHour: 14 });
   assert.equal(r.weekly.current.state, 'late');
-  assert.ok(r.weekly.missing.includes('2026-08-31'));
+  assert.ok(r.weekly.notBuilt.includes('2026-08-31'));
 });
 
 test('later in the week with nothing written it is late whatever the hour', () => {
@@ -91,7 +150,7 @@ test('a week written but not sent says exactly that', () => {
     today: '2026-08-31',
     nowHour: 14,
   });
-  assert.equal(r.weekly.current.state, 'written-not-sent');
+  assert.equal(r.weekly.current.state, 'written-no-send-record');
 });
 
 // ── Refusal 3: an unreadable store is a gap, never a miss ────────────────────

@@ -55,14 +55,14 @@ function Stat({ label, value, sub, tone = 'neutral' }) {
  *  - A failed read says so and never renders as a clean record. "I couldn't
  *    look" and "you didn't do it" are opposite facts and only one accuses him.
  */
-function DeliverableTracker({ data }) {
+function DeliverableTracker({ data, onMarkSent, busy }) {
   if (!data) return null;
   const { window: win, weekly, log, gaps = [], known } = data;
 
   const currentLabel = {
-    sent: 'sent to Chris',
-    'written-not-sent': 'written — not sent yet',
-    due: 'due by midday today',
+    sent: 'recorded as sent',
+    'written-no-send-record': 'written — NEURO has no record of it going',
+    due: `due by midday on ${fmtUk(weekly?.current?.dueDay)}`,
     late: 'not written yet',
   }[weekly?.current?.state] || 'unknown';
 
@@ -80,21 +80,45 @@ function DeliverableTracker({ data }) {
           <strong>This week:</strong> {currentLabel}
         </span>
         <span className="wr-deliv-item">
-          <strong>{weekly.sent}</strong> of {weekly.owed} weekly summaries sent
+          <strong>{weekly.built}</strong> of {weekly.owed} written
           {/* Counted from the cadence agreed on 12 Aug, not from the PIP start —
               weeks before the standard existed were never owed. */}
           <em className="wr-deliv-note"> since {fmtUk(weekly.owedFrom)}</em>
         </span>
       </div>
 
-      {weekly.producedNotSent.length > 0 && (
-        <p className="wr-deliv-warn">
-          Written but not sent: {weekly.producedNotSent.map(fmtUk).join(', ')}.
-        </p>
+      {/*
+        ⚠ "No send recorded", never "not sent". NEURO only learns about a send it
+        made itself through the approve-in-Actions flow — a report emailed from
+        Outlook is invisible here for ever. Saying "not sent" would state as fact
+        something nothing measured, about the one deliverable his job depends on.
+      */}
+      {weekly.noSendRecord.length > 0 && (
+        <div className="wr-deliv-warn">
+          <p>Written, but NEURO has no record of {weekly.noSendRecord.length === 1 ? 'it' : 'them'} going:</p>
+          <ul className="wr-deliv-unsent">
+            {weekly.noSendRecord.map(week => (
+              <li key={week}>
+                w/c {fmtUk(week)}
+                <button
+                  type="button"
+                  className="wr-deliv-mark"
+                  disabled={busy === `mark-${week}`}
+                  onClick={() => onMarkSent(week)}
+                >
+                  {busy === `mark-${week}` ? 'Recording…' : 'I sent this'}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="wr-deliv-note">
+            NEURO only sees sends it made itself, so this is not a claim you didn’t send them.
+          </p>
+        </div>
       )}
-      {weekly.missing.length > 0 && (
+      {weekly.notBuilt.length > 0 && (
         <p className="wr-deliv-warn">
-          No report for: {weekly.missing.map(fmtUk).join(', ')}.
+          No report was built for: {weekly.notBuilt.map(fmtUk).join(', ')}.
         </p>
       )}
 
@@ -413,7 +437,21 @@ export default function WeeklyRiskPanel() {
         <button className="wr-refresh" onClick={load} type="button">Rebuild</button>
       </header>
 
-      <DeliverableTracker data={deliverables} />
+      <DeliverableTracker
+        data={deliverables}
+        busy={busy}
+        onMarkSent={async (week) => {
+          // Records only — nothing leaves NEURO here. The confirm is because a
+          // send record is evidence about a deliverable his job depends on, and
+          // a mis-tap that quietly asserts one is worse than an extra click.
+          if (!window.confirm(`Record w/c ${fmtUk(week)} as sent to Chris?\n\nThis records it in NEURO. It does not send anything.`)) return;
+          const r = await post('/api/weekly-risk/mark-sent', { week }, `mark-${week}`);
+          if (r?.ok) {
+            setNotice({ tone: 'good', text: `Recorded w/c ${fmtUk(week)} as sent.` });
+            load();
+          }
+        }}
+      />
 
       {/* The gate, first. These block publication, so they are not a footnote. */}
       {blockers.length > 0 && (

@@ -81,7 +81,18 @@ const PIP_END = '2026-10-11';
  */
 const WEEKLY_OWED_FROM = '2026-08-10';
 
-/** The weekly summary is due by midday on the Monday it commences. */
+/**
+ * The weekly summary is due by midday on the first WORKING day of its week.
+ *
+ * ⚠ NOT "Monday", and the difference is not pedantry — it was wrong in the very
+ * first live reading. w/c 31 Aug 2026 opened on the Summer bank holiday, Nick
+ * produced and sent the report on the Tuesday, and a Monday-midday rule calls
+ * that late. `shared/working-days.cjs` exists precisely because five separate
+ * Mon-Fri checks in this repo each meant nothing more than Mon-Fri; this file
+ * made it six. A tracker that manufactures a missed deadline out of a bank
+ * holiday is worse than no tracker, because the thing it gets wrong is an
+ * accusation.
+ */
 const WEEKLY_DUE_HOUR = 12;
 
 // ── Time ─────────────────────────────────────────────────────────────────────
@@ -143,7 +154,7 @@ function weeksOwed(fromWeek, toDate) {
  * through: `producedNotSent` is its own list because a draft on disk is not a
  * thing Chris has received.
  */
-function assessWeekly(records = [], { today = dateKey(), nowHour = 0 } = {}) {
+function assessWeekly(records = [], { today = dateKey(), nowHour = 0, nonWorking } = {}) {
   const owed = weeksOwed(WEEKLY_OWED_FROM, today);
   const currentWeek = weekCommencing(today);
   const byWeek = new Map();
@@ -151,53 +162,78 @@ function assessWeekly(records = [], { today = dateKey(), nowHour = 0 } = {}) {
     if (r && r.week) byWeek.set(r.week, r);
   }
 
-  const produced = [];
-  const sent = [];
-  const producedNotSent = [];
-  const missing = [];
+  const built = [];
+  const sendRecorded = [];
+  const noSendRecord = [];
+  const notBuilt = [];
 
   for (const week of owed) {
     const rec = byWeek.get(week);
-    const isCurrent = week === currentWeek;
 
-    if (rec?.sent) { sent.push(week); produced.push(week); continue; }
+    if (rec?.sent) { sendRecorded.push(week); built.push(week); continue; }
     if (rec?.published) {
-      produced.push(week);
-      // A draft that exists and has not gone. Named for the current week too:
-      // "written, not sent" is exactly the state worth being told about on the
-      // Monday it is still fixable.
-      producedNotSent.push(week);
+      built.push(week);
+      // ⚠ "NO SEND RECORDED", never "not sent". NEURO only ever learns about a
+      // send it made itself (`markSent`, from the approve-in-Actions flow). A
+      // report Nick mailed from Outlook is invisible here for ever, so calling
+      // this "not sent" states as fact something nothing measured — and states
+      // it about the one deliverable his job depends on.
+      noSendRecord.push(week);
       continue;
     }
 
-    // Refusal 4: the current week is not late until midday Monday has passed.
-    if (isCurrent && nowHour < WEEKLY_DUE_HOUR && today === week) continue;
-    missing.push(week);
+    // Refusal 4, now with the right deadline: the current week is not late
+    // until midday on its first WORKING day has passed.
+    if (week === currentWeek && !pastDue(week, today, nowHour, nonWorking)) continue;
+    notBuilt.push(week);
   }
 
+  const cur = byWeek.get(currentWeek);
   const current = {
     week: currentWeek,
-    produced: Boolean(byWeek.get(currentWeek)?.published),
-    sent: Boolean(byWeek.get(currentWeek)?.sent),
-    // `due` before midday Monday, `late` after it with nothing produced, and
-    // `done` once it has gone. Three states, because "not yet" and "overdue"
-    // license completely different things to do about it.
-    state: byWeek.get(currentWeek)?.sent
+    dueDay: firstWorkingDay(currentWeek, nonWorking),
+    built: Boolean(cur?.published),
+    sendRecorded: Boolean(cur?.sent),
+    // Four states. `written-no-send-record` is deliberately not called
+    // "not sent" — see above.
+    state: cur?.sent
       ? 'sent'
-      : byWeek.get(currentWeek)?.published
-        ? 'written-not-sent'
-        : (today === currentWeek && nowHour < WEEKLY_DUE_HOUR) ? 'due' : 'late',
+      : cur?.published
+        ? 'written-no-send-record'
+        : pastDue(currentWeek, today, nowHour, nonWorking) ? 'late' : 'due',
   };
 
   return {
     owedFrom: WEEKLY_OWED_FROM,
     owed: owed.length,
-    produced: produced.length,
-    sent: sent.length,
-    producedNotSent,
-    missing,
+    built: built.length,
+    sendRecorded: sendRecorded.length,
+    noSendRecord,
+    notBuilt,
+    // ⚠ The load-bearing caveat, carried in the payload rather than left to
+    // each surface to remember. A count of recorded sends is not a count of
+    // sends, and every consumer has to be able to say so.
+    sendRecordsAreNeuroOnly: true,
     current,
   };
+}
+
+/** The first working day of a week — Monday unless Monday is a holiday. */
+function firstWorkingDay(week, nonWorking) {
+  const wd = require('../../shared/working-days.cjs');
+  const monday = parseLocal(week);
+  if (!monday) return week;
+  return wd.isWorkingDay(monday, nonWorking)
+    ? week
+    : wd.toDateStr(wd.nextWorkingDay(monday, nonWorking));
+}
+
+/** Has this week's midday deadline passed? */
+function pastDue(week, today, nowHour, nonWorking) {
+  const due = firstWorkingDay(week, nonWorking);
+  if (today > due) return true;
+  if (today < due) return false;
+  return nowHour >= WEEKLY_DUE_HOUR;
 }
 
 // ── The window ───────────────────────────────────────────────────────────────
@@ -229,10 +265,10 @@ function assessWindow(today = dateKey()) {
  * read. Nothing is recomputed from it — the figures are lifted, so this screen
  * and the management log cannot disagree about the same competency.
  */
-function assess({ weekly = [], log = null, today = dateKey(), nowHour = 0, gaps = [] } = {}) {
+function assess({ weekly = [], log = null, today = dateKey(), nowHour = 0, gaps = [], nonWorking } = {}) {
   const out = {
     window: assessWindow(today),
-    weekly: assessWeekly(weekly, { today, nowHour }),
+    weekly: assessWeekly(weekly, { today, nowHour, nonWorking }),
     log: null,
     gaps,
     // Refusal 3. A tracker that could not read its sources must never render
@@ -297,7 +333,19 @@ function build(now = new Date()) {
     gaps.push({ source: 'management-log', why: e.message });
   }
 
-  return assess({ weekly, log, today, nowHour: now.getHours(), gaps });
+  // ⚠ Failing to read the holiday set degrades to Mon–Fri, which is the
+  // documented behaviour of the shared module — and here that means a bank
+  // holiday could again read as a missed deadline, so it is a NAMED GAP rather
+  // than a silent fallback. `working-days` never fails open to "every weekday
+  // works" on its own; this is the one place that choice becomes visible.
+  let nonWorking;
+  try {
+    nonWorking = require('./working-days').holidaySet();
+  } catch (e) {
+    gaps.push({ source: 'working-days', why: `${e.message} — deadlines fall back to Mon–Fri` });
+  }
+
+  return assess({ weekly, log, today, nowHour: now.getHours(), gaps, nonWorking });
 }
 
 module.exports = {
@@ -306,6 +354,8 @@ module.exports = {
   // Exported for tests — the pure halves carry the judgement worth pinning.
   assessWeekly,
   assessWindow,
+  firstWorkingDay,
+  pastDue,
   weeksOwed,
   weekCommencing,
   daysBetween,

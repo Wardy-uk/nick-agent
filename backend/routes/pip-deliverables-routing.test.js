@@ -76,15 +76,15 @@ test('it reads weekly-risk’s real stores, not a shape of zeroes', async () => 
 
   const { body } = await get('/api/weekly-risk/deliverables');
   assert.ok(
-    body.weekly.producedNotSent.includes(week),
+    body.weekly.noSendRecord.includes(week),
     `a published week must be read back as written-not-sent — got ${JSON.stringify(body.weekly)}`,
   );
-  assert.equal(body.weekly.current.state, 'written-not-sent');
+  assert.equal(body.weekly.current.state, 'written-no-send-record');
 });
 
 test('a published week is never reported as sent', async () => {
   const { body } = await get('/api/weekly-risk/deliverables');
-  assert.equal(body.weekly.sent, 0, 'nothing has been sent in this scratch DB');
+  assert.equal(body.weekly.sendRecorded, 0, 'nothing has been sent in this scratch DB');
 });
 
 test('the payload carries no score, percentage or grade', async () => {
@@ -99,6 +99,59 @@ test('it is read-only — asking does not publish, send or write a report', asyn
   const before = db.getState('weekly_risk_sent_2026-08-31');
   await get('/api/weekly-risk/deliverables');
   assert.equal(db.getState('weekly_risk_sent_2026-08-31'), before, 'a read must not mark anything sent');
+});
+
+// ── Recording a send Nick made himself ───────────────────────────────────────
+//
+// `markSent` had no route at all — reachable from the approve-in-Actions
+// executor and nowhere else — so a report emailed from Outlook could never be
+// recorded and the tracker said "no send recorded" for ever.
+
+const post = async (p, body) => {
+  const res = await fetch(`${base}${p}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  return { status: res.status, body: await res.json() };
+};
+
+test('POST /mark-sent records a send and the tracker stops asking', async () => {
+  const week = pip.weekCommencing(pip.dateKey(new Date()));
+
+  const before = await get('/api/weekly-risk/deliverables');
+  assert.ok(before.body.weekly.noSendRecord.includes(week), 'setup: the week should be written with no send');
+
+  const { status, body } = await post('/api/weekly-risk/mark-sent', { week });
+  assert.equal(status, 200);
+  assert.ok(body.sent?.sentAt, 'the record must carry when it went');
+
+  // ⚠ Stamped as reported rather than observed. NEURO seeing its own send and
+  // Nick telling it about one are not the same evidence, and anything reading
+  // these back has to be able to tell them apart.
+  const weeklyRisk = require('../services/weekly-risk');
+  assert.equal(weeklyRisk.sentRecord(week).reportedByNick, true);
+
+  const after = await get('/api/weekly-risk/deliverables');
+  assert.ok(!after.body.weekly.noSendRecord.includes(week), 'it must stop being asked about');
+  assert.equal(after.body.weekly.sendRecorded, before.body.weekly.sendRecorded + 1);
+});
+
+test('marking the same week twice is refused rather than counted twice', async () => {
+  const week = pip.weekCommencing(pip.dateKey(new Date()));
+  const { status, body } = await post('/api/weekly-risk/mark-sent', { week });
+  assert.equal(status, 409);
+  assert.ok(body.sent, 'the existing record comes back so the screen can name it');
+});
+
+test('mark-sent records and never sends — no mail leaves NEURO', async () => {
+  // A source scan: the route may reach markSent and nothing that delivers.
+  const src = fs.readFileSync(path.join(__dirname, 'weekly-risk.js'), 'utf8');
+  const block = src.slice(src.indexOf("router.post('/mark-sent'"), src.indexOf('// ── Management log'));
+  assert.ok(block.includes('markSent'), 'positive control — the block was found');
+  for (const banned of ['sendMail', 'queueSend', 'graphWrite', 'sendToAll', 'testSend']) {
+    assert.ok(!block.includes(banned), `mark-sent must not be able to ${banned}`);
+  }
 });
 
 test('the management-log half answers with real competency figures', async () => {

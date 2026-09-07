@@ -1671,6 +1671,38 @@ ${report.blockers.length
  * time this runs; refusing here would report a delivered report as a failure,
  * which is the one thing worse than losing the bookkeeping.
  */
+/**
+ * Record a send that happened OUTSIDE NEURO — Nick mailed it from Outlook.
+ *
+ * ⚠ Deliberately a separate, named operation rather than the route calling
+ * `markSent` directly. `weekly-risk-send-routing.test.js` asserts that no route
+ * in this area records a send, and it is right to: the panel and the Actions
+ * queue both approve through the same executor, so a hook in a route is one the
+ * other screen walks straight past. That invariant is about the APPROVAL path
+ * and stays intact. This is the other case entirely — there is no action, no
+ * approval and nothing to execute, because the mail has already gone.
+ *
+ * It exists because `markSent` had no route at all, so a report sent by hand
+ * could never be recorded and the tracker said "no send recorded" for ever.
+ *
+ * The record is STAMPED `reportedByNick`, because the two are not the same
+ * evidence: one is NEURO observing its own act, the other is Nick telling it
+ * what happened. Anything reading these back must be able to tell them apart.
+ */
+function recordExternalSend(week, { recipients = [], subject = null, sentAt = null } = {}) {
+  const rec = markSent(week, { actionId: null, recipients, subject, sentAt });
+  if (!rec) return null;
+  const stamped = { ...rec, reportedByNick: true };
+  try {
+    db.setState(SENT_KEY(week), JSON.stringify(stamped));
+  } catch (e) {
+    // The send IS recorded; only the provenance stamp failed. Losing the stamp
+    // is worse than silent, so it is logged — but it must not undo the record.
+    console.warn('[WeeklyRisk] Recorded the send but could not stamp its origin:', e.message);
+  }
+  return stamped;
+}
+
 function markSent(week, { actionId = null, recipients = [], subject = null, body = null, sentAt = null } = {}) {
   try {
     const existing = sentRecord(week);
@@ -1762,7 +1794,7 @@ function publishedAt(week = weekCommencing()) {
 
 module.exports = {
   snapshot, assess, render, build, publish, publishedAt, queueSend, testSend,
-  markSent, sentRecord, sentSummary, isLocked, reopen,
+  markSent, recordExternalSend, sentRecord, sentSummary, isLocked, reopen,
   getManual, setManual, manualBlockers, emptyManual, carryForward,
   weekCommencing, previousWeek, buildTrend, consecutiveBelowTarget, ragBucket,
   toEmailHtml, markdownToEmailHtml,

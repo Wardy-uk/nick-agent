@@ -216,6 +216,51 @@ router.get('/deliverables', (req, res) => {
   } catch (err) { fail(res, err); }
 });
 
+/**
+ * POST /api/weekly-risk/mark-sent — record a send Nick made himself.
+ *
+ * ⚠ `markSent` had NO ROUTE. It was reachable only from the approve-in-Actions
+ * executor, so a report emailed from Outlook — which is how the real ones have
+ * gone — left no record anywhere, and the tracker could only ever say "no send
+ * recorded" for ever. Same species as `capture-links.setScopes`, which shipped
+ * reachable from the test suite and nothing else.
+ *
+ * It RECORDS, it does not send: nothing leaves NEURO here. That is what makes
+ * it safe without the approval gate — the gate exists to stop mail reaching
+ * Chris by accident, and this route cannot send mail at all.
+ *
+ * `sentAt` is accepted so a send from a previous day can be recorded honestly
+ * rather than being stamped with the moment Nick got round to telling NEURO.
+ */
+router.post('/mark-sent', (req, res) => {
+  try {
+    const week = req.body?.week || weeklyRisk.weekCommencing();
+    const existing = weeklyRisk.sentRecord(week);
+    if (existing && !existing.reopenedAt) {
+      return res.status(409).json({
+        error: 'That week is already recorded as sent.',
+        sent: weeklyRisk.sentSummary(existing),
+      });
+    }
+    // ⚠ `recordExternalSend`, NOT `markSent`. The approval path's recording
+    // belongs to the executor — a hook in a route is one the Actions queue
+    // walks straight past — and `weekly-risk-send-routing.test.js` pins that.
+    // This is the other case: no action, no approval, the mail has already gone.
+    // The record is stamped `reportedByNick`, because NEURO observing its own
+    // send and Nick reporting one are not the same evidence.
+    const rec = weeklyRisk.recordExternalSend(week, {
+      recipients: Array.isArray(req.body?.recipients) ? req.body.recipients : [],
+      subject: req.body?.subject || null,
+      sentAt: req.body?.sentAt || null,
+    });
+    // markSent swallows its own errors and returns null. Reporting that as a
+    // success would leave the tracker still saying "no send recorded" one
+    // refresh later, with nothing to explain why.
+    if (!rec) return res.status(500).json({ error: 'Could not record the send.' });
+    res.json({ ok: true, week, sent: weeklyRisk.sentSummary(rec) });
+  } catch (err) { fail(res, err, 400); }
+});
+
 // ── Management log ───────────────────────────────────────────────────────────
 
 /** GET /api/weekly-risk/log — rows plus the competency 3/4 assessment. */
