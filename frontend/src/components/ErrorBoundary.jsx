@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import './ErrorBoundary.css';
+import { isStaleChunkError } from '../staleChunk';
 
 /**
  * One panel throwing must not take the whole app with it.
@@ -49,19 +50,8 @@ import './ErrorBoundary.css';
  */
 const RELOAD_GUARD = 'neuro_chunk_reload';
 
-export function isStaleChunkError(error) {
-  const text = `${error?.name || ''} ${error?.message || ''}`.toLowerCase();
-  return (
-    // Chrome / Firefox
-    text.includes('failed to fetch dynamically imported module')
-    || text.includes('error loading dynamically imported module')
-    // Safari and iOS — the wording Nick actually saw
-    || text.includes('importing a module script failed')
-    // The MIME complaint, when a shell was served in place of a chunk
-    || (text.includes('module script') && text.includes('mime type'))
-    || text.includes('chunkloaderror')
-  );
-}
+export { isStaleChunkError };
+
 
 export default class ErrorBoundary extends Component {
   constructor(props) {

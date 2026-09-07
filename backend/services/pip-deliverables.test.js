@@ -20,13 +20,15 @@ const TODAY = '2026-09-03';
 // ── Refusal 1: produced and sent are different facts ─────────────────────────
 
 test('a published week that was never sent is not counted as sent', () => {
+  // A week AFTER the recorder existed, or the silence would be unmeasurable
+  // rather than outstanding — see the send-recorder block below.
   const r = pip.assess({
-    weekly: [{ week: '2026-08-10', published: true, sent: false }],
-    today: TODAY,
+    weekly: [{ week: '2026-09-07', published: true, sent: false }],
+    today: '2026-09-10',
   });
   assert.equal(r.weekly.built, 1);
   assert.equal(r.weekly.sendRecorded, 0, 'a draft on disk is not a thing Chris has received');
-  assert.ok(r.weekly.noSendRecord.includes('2026-08-10'), 'and it must be named');
+  assert.ok(r.weekly.noSendRecord.includes('2026-09-07'), 'and it must be named');
 });
 
 test('a sent week counts as both produced and sent', () => {
@@ -93,17 +95,58 @@ test('without a holiday set it degrades to Mon–Fri, the documented behaviour',
 
 test('a week with no send record never claims it was not sent', () => {
   const r = pip.assess({
-    weekly: [{ week: '2026-08-17', published: true, sent: false }],
-    today: TODAY,
+    weekly: [{ week: '2026-09-07', published: true, sent: false }],
+    today: '2026-09-10',
   });
   // NEURO only ever learns about a send it made itself. A report mailed from
   // Outlook is invisible here for ever, so the field names and the caveat are
   // what stop the payload asserting something nothing measured.
-  assert.ok(r.weekly.noSendRecord.includes('2026-08-17'));
+  assert.ok(r.weekly.noSendRecord.includes('2026-09-07'));
   assert.equal(r.weekly.sendRecordsAreNeuroOnly, true, 'the caveat travels with the count');
   const flat = JSON.stringify(r).toLowerCase();
   assert.ok(!flat.includes('notsent'), 'no field may assert a send did not happen');
   assert.ok(!flat.includes('unsent'));
+});
+
+// ── A week before the RECORDER existed cannot be measured either ─────────────
+//
+// markSent landed 2026-09-01 12:43. Both sends NEURO actually made went before
+// it — w/c 17 Aug on the 17th, w/c 31 Aug at 11:31 on 1 Sep, 72 minutes early —
+// both evidenced by executed send_weekly_risk_report actions. Their silence is
+// a fact about NEURO's history, not about Nick.
+
+test('a week that predates the send recorder is unmeasurable, not outstanding', () => {
+  const r = pip.assess({
+    weekly: [
+      { week: '2026-08-17', published: true, sent: false },
+      { week: '2026-08-31', published: true, sent: false },
+    ],
+    today: TODAY,
+  });
+  assert.deepEqual(r.weekly.sendUnmeasurable, ['2026-08-17', '2026-08-31']);
+  assert.equal(r.weekly.noSendRecord.length, 0, 'neither may be chased — nothing was recording');
+});
+
+test('an unmeasurable week is still counted as built', () => {
+  const r = pip.assess({
+    weekly: [{ week: '2026-08-17', published: true, sent: false }],
+    today: TODAY,
+  });
+  assert.equal(r.weekly.built, 1, 'the publish record is real and predates nothing');
+});
+
+test('a week after the recorder existed IS chased when no send is recorded', () => {
+  const r = pip.assess({
+    weekly: [{ week: '2026-09-07', published: true, sent: false }],
+    today: '2026-09-10',
+  });
+  assert.ok(r.weekly.noSendRecord.includes('2026-09-07'));
+  assert.equal(r.weekly.sendUnmeasurable.length, 0);
+});
+
+test('the boundary is reported so no surface has to hard-code it', () => {
+  const r = pip.assess({ weekly: [], today: TODAY });
+  assert.equal(r.weekly.sendRecordingFrom, '2026-09-01');
 });
 
 // ── Refusal 2: a week before the cadence existed is not owed ─────────────────

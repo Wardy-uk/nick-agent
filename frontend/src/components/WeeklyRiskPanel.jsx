@@ -116,6 +116,18 @@ function DeliverableTracker({ data, onMarkSent, busy }) {
           </p>
         </div>
       )}
+      {/*
+        ⚠ Written BEFORE NEURO could record a send at all (markSent landed
+        1 Sep 12:43, and both real sends went before it). Their silence is a
+        fact about NEURO's history, not about Nick — so they are stated and
+        never chased. Rendered as a note, not a warning.
+      */}
+      {weekly.sendUnmeasurable?.length > 0 && (
+        <p className="wr-deliv-note">
+          {weekly.sendUnmeasurable.map(fmtUk).join(', ')} — written before NEURO
+          could record a send at all, so there is nothing to check.
+        </p>
+      )}
       {weekly.notBuilt.length > 0 && (
         <p className="wr-deliv-warn">
           No report was built for: {weekly.notBuilt.map(fmtUk).join(', ')}.
@@ -280,6 +292,32 @@ export default function WeeklyRiskPanel() {
       confirmOn('publish', 'Published');
       setNotice({ tone: 'ok', text: `Published to the vault: ${out.path}` });
       load();
+    }
+  }
+
+  /**
+   * Drop a log row that was never Nick's management action.
+   *
+   * ⚠ Deliberately NOT "answer No". No writes a confirmed People HR gap, which
+   * reaches Chris as a finding — using it to tidy an item off the list would
+   * invent a compliance failure. This says the row does not belong in the log
+   * at all, which is a different claim and the true one.
+   *
+   * Destructive and irreversible, so it names the item in the confirm rather
+   * than asking "are you sure?" about a row the mouse happens to be near.
+   */
+  async function removeLogRow(id, label) {
+    if (!window.confirm(`Remove this from the management log?\n\n${label}\n\nThis deletes the row. It cannot be undone.`)) return;
+    setBusy(`hr${id}`);
+    try {
+      const res = await fetch(apiUrl(`/api/weekly-risk/log/${id}`), { method: 'DELETE' });
+      if (!res.ok) throw new Error('Could not remove it');
+      setNotice({ tone: 'ok', text: 'Removed from the management log.' });
+      load();
+    } catch (e) {
+      setNotice({ tone: 'bad', text: e.message });
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -862,6 +900,26 @@ export default function WeeklyRiskPanel() {
                     <span className="wr-hr-buttons">
                       <button type="button" onClick={() => setHr(h.id, true)} disabled={busy === `hr${h.id}`}>Yes</button>
                       <button type="button" onClick={() => setHr(h.id, false)} disabled={busy === `hr${h.id}`}>No</button>
+                      {/*
+                        ⚠ The third answer, and it needed its own button rather
+                        than being folded into "No". "No" writes hr_logged = 0,
+                        which is a CONFIRMED People HR gap and goes to Chris as a
+                        finding. Using it to clear an item that is nothing to do
+                        with Nick would manufacture a compliance failure against
+                        him — the opposite of what he meant by pressing it.
+
+                        "Not mine" removes the log row entirely, because the
+                        claim is that it was never his management action. It is
+                        destructive and has no undo, hence the confirm.
+                      */}
+                      <button
+                        type="button"
+                        className="wr-hr-drop"
+                        disabled={busy === `hr${h.id}`}
+                        onClick={() => removeLogRow(h.id, `${h.person ? `${h.person} — ` : ''}${h.summary}`)}
+                      >
+                        Not mine
+                      </button>
                     </span>
                   </div>
                 ))}

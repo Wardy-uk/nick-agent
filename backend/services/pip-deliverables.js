@@ -82,6 +82,28 @@ const PIP_END = '2026-10-11';
 const WEEKLY_OWED_FROM = '2026-08-10';
 
 /**
+ * The first week whose SEND could possibly have been recorded.
+ *
+ * ⚠ `weekly-risk.markSent` did not exist until commit 67f0d90 on 2026-09-01 at
+ * 12:43. Both reports NEURO has actually sent went BEFORE it — w/c 17 Aug on
+ * 17 Aug, and w/c 31 Aug at 11:31 on 1 Sep, seventy-two minutes before the
+ * recorder was deployed. Both are evidenced by executed `send_weekly_risk_report`
+ * actions in `sara_actions`; neither could have left a send record, because
+ * nothing was writing one.
+ *
+ * So for those weeks "no send recorded" is not a fact about Nick, it is a fact
+ * about NEURO's own history — a READER THAT PREDATES ITS WRITER'S DATA, which
+ * is the mirror of the stale-Jira-cache bug and just as invisible. Reporting it
+ * as an outstanding item would ask him to re-record sends that demonstrably
+ * happened, every week, for ever.
+ *
+ * Weeks before this are reported as UNMEASURABLE and are never chased. A week
+ * is only measurable if it began on or after the recorder existed — w/c 31 Aug
+ * contains the deploy, so it stays unmeasurable rather than half-measurable.
+ */
+const SEND_RECORDING_FROM = '2026-09-01';
+
+/**
  * The weekly summary is due by midday on the first WORKING day of its week.
  *
  * ⚠ NOT "Monday", and the difference is not pedantry — it was wrong in the very
@@ -165,6 +187,7 @@ function assessWeekly(records = [], { today = dateKey(), nowHour = 0, nonWorking
   const built = [];
   const sendRecorded = [];
   const noSendRecord = [];
+  const sendUnmeasurable = [];
   const notBuilt = [];
 
   for (const week of owed) {
@@ -173,11 +196,14 @@ function assessWeekly(records = [], { today = dateKey(), nowHour = 0, nonWorking
     if (rec?.sent) { sendRecorded.push(week); built.push(week); continue; }
     if (rec?.published) {
       built.push(week);
+      // ⚠ A week that predates the recorder is UNMEASURABLE, not outstanding.
+      // Nothing was writing send records then, so its silence says nothing
+      // about whether Nick sent it — and both real sends fall here.
+      if (week < SEND_RECORDING_FROM) { sendUnmeasurable.push(week); continue; }
       // ⚠ "NO SEND RECORDED", never "not sent". NEURO only ever learns about a
-      // send it made itself (`markSent`, from the approve-in-Actions flow). A
-      // report Nick mailed from Outlook is invisible here for ever, so calling
-      // this "not sent" states as fact something nothing measured — and states
-      // it about the one deliverable his job depends on.
+      // send it made itself (`markSent`, from the approve-in-Actions flow), so
+      // calling this "not sent" would state as fact something nothing measured
+      // — about the one deliverable his job depends on.
       noSendRecord.push(week);
       continue;
     }
@@ -209,6 +235,10 @@ function assessWeekly(records = [], { today = dateKey(), nowHour = 0, nonWorking
     built: built.length,
     sendRecorded: sendRecorded.length,
     noSendRecord,
+    // Weeks whose send NEURO could never have recorded. Carried so a surface
+    // can say "I cannot know" instead of leaving a silent hole in the counts.
+    sendUnmeasurable,
+    sendRecordingFrom: SEND_RECORDING_FROM,
     notBuilt,
     // ⚠ The load-bearing caveat, carried in the payload rather than left to
     // each surface to remember. A count of recorded sends is not a count of
@@ -364,5 +394,6 @@ module.exports = {
   PIP_REVIEW,
   PIP_END,
   WEEKLY_OWED_FROM,
+  SEND_RECORDING_FROM,
   WEEKLY_DUE_HOUR,
 };

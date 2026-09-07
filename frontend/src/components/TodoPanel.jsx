@@ -2163,6 +2163,15 @@ export default function TodoPanel({ focusContext, onClearContext }) {
     return c;
   }, [activeTodos]);
 
+  // ⚠ Counted over EVERY active task, Microsoft mirrors included — unlike the
+  // origin counts above, which skip rows with no task_id because origin is a
+  // NEURO field those rows cannot carry. A due date is not: a Planner card has
+  // one or it does not, and an undated one is just as invisible to the planner.
+  const noDueCount = useMemo(
+    () => activeTodos.filter(t => !t.due_date).length,
+    [activeTodos],
+  );
+
   // ⚠ The pin outranks every filter. A card said "open THIS", and dropping it
   // into a filtered list is the same dead end as not linking at all — the row
   // may not be in the filter that happens to be selected.
@@ -2186,6 +2195,16 @@ export default function TodoPanel({ focusContext, onClearContext }) {
     });
   } else if (filter === 'high') {
     filtered = activeTodos.filter(t => t.priority === 'high');
+  } else if (filter === 'nodue') {
+    // ⚠ Positively "has no date", never "is not overdue". An undated task is
+    // invisible to every date-driven surface NEURO has — the Must Move lane,
+    // time-fit, the day planner — so it cannot be found by any of the filters
+    // beside this one, which is exactly why it needed its own.
+    //
+    // It is also PIP competency 3: every open management item needs an owner
+    // and a date, and the weekly report counts the ones missing a date. This is
+    // the screen where that number gets worked down.
+    filtered = activeTodos.filter(t => !t.due_date);
   } else if (filter === 'commitment' || filter === 'improvement') {
     filtered = activeTodos.filter(t => t.origin === filter);
   } else if (filter === 'unclassified') {
@@ -2333,6 +2352,9 @@ export default function TodoPanel({ focusContext, onClearContext }) {
           ...(mustDoTodos.length > 0 ? [{ key: 'mustdo', label: `Must Do (${mustDoTodos.length})` }] : []),
           { key: 'overdue', label: `Overdue (${overdueTodos.length})` },
           { key: 'today', label: 'Due today' },
+          // Counted, because the whole point is to watch it go down — and an
+          // uncounted filter chip gives no reason to press it.
+          { key: 'nodue', label: `No due date (${noDueCount})` },
           { key: 'high', label: 'High priority' },
           // Nick's own split. Full labels rather than the badge's short forms:
           // a filter is a labelled control with room, and these have to read the

@@ -477,3 +477,12 @@
   cursor: pointer;
 }
 .wr-deliv-mark:disabled { opacity: 0.5; cursor: default; }
+
+/* "Not mine" — removes the row. Distinct from Yes/No, which answer a question
+   about People HR; this says the item was never Nick's to log. Muted rather
+   than red: it is a correction, not a warning. */
+.wr-hr-drop {
+  opacity: 0.75;
+  font-size: 0.75rem;
+}
+.wr-hr-drop:hover { opacity: 1; }
