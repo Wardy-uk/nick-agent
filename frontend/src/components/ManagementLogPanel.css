@@ -241,3 +241,30 @@
 .ml-sg-head:hover { background: var(--bg-subtle, rgba(255, 255, 255, 0.03)); }
 .ml-sg .ml-edit { padding: 4px 12px 14px; }
 .ml-sg code { font-size: 11px; opacity: 0.8; word-break: break-all; }
+
+/* The collapsed row carries both actions, so a card that needs no editing can
+   be dealt with in one tap. The text takes the space it needs and the buttons
+   hold their width — a wrapped label reads as a broken control. */
+.ml-sg-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ml-sg-text { min-width: 0; }
+.ml-sg-buttons { display: flex; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
+.ml-sg-buttons button {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+.ml-sg-buttons button:hover:not(:disabled) { border-color: var(--text-muted); }
+.ml-sg-buttons button:disabled { opacity: 0.45; cursor: not-allowed; }
+.ml-sg-no { color: var(--text-muted) !important; }
+.ml-sg-no:hover:not(:disabled) { color: var(--text) !important; }

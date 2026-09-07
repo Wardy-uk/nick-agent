@@ -163,19 +163,35 @@ function namesWord(haystack, needle) {
 }
 
 /**
- * Is this note a formal 1-2-1?
+ * Is this note a FORMAL 1-2-1 — one of Nick's recurring cadence?
  *
- * ⚠ Three tests, and all three are needed. `meeting-type` is the reliable
- * signal where it exists, but older PLAUD notes predate the field; the
- * `Meetings/1-2-1/<Person>/` tree catches those; and 1-2-1s ALSO live loose in
- * `Meetings/YYYY/MM/` with the words in the title ("2026-04-22 – 1-1 Nathan
- * 1-2-1 Return-to-Work…"), which neither of the first two would catch.
+ * ⚠ **`meeting-type: "1-1"` IS NOT THAT TEST, and reading it as one was a real
+ * bug (7 Sep 2026).** Nick did three return-to-work meetings the week of 1 Sep
+ * and none were offered. All three carry `meeting-type: "1-1"`, because PLAUD
+ * applies that label to ANY TWO-PERSON MEETING — it is a fact about how many
+ * voices were in the room, not about Nick's cadence.
+ *
+ * What that swallowed, measured across the live vault, is the most loggable
+ * population there is: three return-to-work meetings, a **formal disciplinary
+ * hearing**, a PIP meeting, "Employee Health, Reasonable Adjustments and Role
+ * Transition for Kayleigh", "Employee Retention Discussion — Addressing Burnout
+ * and Systemic Issues", "Performance Intervention Note — Call Handling Deficit
+ * and Accountability Plan for Naomi", a payroll issue and an HR flexible-work
+ * escalation. Absence and conduct management is exactly what competency 3 is
+ * about; excluding it left the routine and dropped the serious.
+ *
+ * So the test is now only the two signals that evidence the CADENCE rather than
+ * the headcount:
+ *
+ *   1. filed under `Meetings/1-2-1/<Person>/` — a curation decision somebody made
+ *   2. a TITLE that names it as one — "1-1 Heidi Power", "One-to-one Zoe Rees"
+ *
+ * ⚠ This deliberately lets a 1-2-1 through when it is filed loose AND titled
+ * without the words. That is the right direction to be wrong in: a stray 1-2-1
+ * is one dismissal, and a dismissal sticks, whereas a missed disciplinary
+ * hearing is a compliance record that never gets written.
  */
 function isOneToOne(note) {
-  const type = String(note.frontmatter['meeting-type'] || '').trim().toLowerCase();
-  if (type) {
-    if (type === '1-1' || type === '1-2-1' || type === 'one-to-one' || type === '1:1') return true;
-  }
   const rel = String(note.relativePath || '').replace(/\\/g, '/');
   if (/(^|\/)1-2-1(\/|$)/i.test(rel)) return true;
   return TITLE_121.test(String(note.frontmatter.title || '')) || TITLE_121.test(path.basename(rel));

@@ -189,11 +189,19 @@ export default function ManagementLogPanel({ onNavigate }) {
     });
   }
 
-  async function acceptSuggestion(sg) {
+  /**
+   * Log a suggestion.
+   *
+   * `payload` is the edited draft when the card is open, and the suggestion's
+   * own defaults when it is logged straight from the header — Nick's ask,
+   * 7 Sep 2026: most cards need no editing, and making him expand one to act on
+   * it is the friction this whole section exists to remove.
+   */
+  async function acceptSuggestion(sg, payload) {
     setBusy(`sg${sg.id}`);
     setNotice(null);
     try {
-      const out = await send('/api/weekly-risk/log-suggestions/accept', 'POST', { id: sg.id, ...sDraft });
+      const out = await send('/api/weekly-risk/log-suggestions/accept', 'POST', { id: sg.id, ...payload });
       setOpenSuggestion(null);
       setSDraft(null);
       setNotice({
@@ -209,6 +217,32 @@ export default function ManagementLogPanel({ onNavigate }) {
     } finally {
       setBusy(null);
     }
+  }
+
+  /**
+   * Log it straight from the header, with the suggestion's own values.
+   *
+   * ⚠ Except when the note names more than one report: `person` is null there
+   * BY DESIGN — the service refuses to guess which of two or three people a
+   * conversation was about — so this opens the card and says what is needed
+   * rather than logging a compliance record against nobody. A one-tap action
+   * that quietly does something different is worse than one that asks.
+   */
+  function quickAccept(sg) {
+    if (sg.people.length > 1) {
+      openSuggest(sg);
+      setNotice({ tone: 'bad', text: `That note names ${sg.people.length} people — pick who it was with before logging it.` });
+      return;
+    }
+    acceptSuggestion(sg, {
+      type: sg.type,
+      summary: sg.summary,
+      person: sg.person,
+      owner: 'Nick',
+      entryDate: sg.entryDate,
+      dueDate: '',
+      action: '',
+    });
   }
 
   async function dismissSuggestion(id) {
@@ -418,18 +452,38 @@ export default function ManagementLogPanel({ onNavigate }) {
                 onClick={() => openSuggest(sg)}
                 onKeyDown={e => { if (e.key === 'Enter') openSuggest(sg); }}
               >
-                <span className="ml-summary">{sg.summary}</span>
-                <span className="ml-meta">
-                  <span>{fmtUk(sg.entryDate)}</span>
-                  <span>{sg.people.join(', ')}</span>
-                  {sg.meetingType && <span>{sg.meetingType}</span>}
-                  {/* ⚠ Stated, never applied silently — accepting this writes it
-                      as logged on the note's own date, and that is the one thing
-                      here that changes a compliance figure. */}
-                  {sg.contemporaneous
-                    ? <span>records as logged {fmtUk(sg.recordedAt)}</span>
-                    : <span className="ml-bad">no timestamp — would log as today</span>}
-                </span>
+                <div className="ml-sg-text">
+                  <span className="ml-summary">{sg.summary}</span>
+                  <span className="ml-meta">
+                    <span>{fmtUk(sg.entryDate)}</span>
+                    <span>{sg.people.join(', ')}</span>
+                    {sg.meetingType && <span>{sg.meetingType}</span>}
+                    {/* ⚠ Stated, never applied silently — accepting this writes
+                        it as logged on the note's own date, and that is the one
+                        thing here that changes a compliance figure. */}
+                    {sg.contemporaneous
+                      ? <span>records as logged {fmtUk(sg.recordedAt)}</span>
+                      : <span className="ml-bad">no timestamp — would log as today</span>}
+                  </span>
+                </div>
+
+                {/* ⚠ Both actions on the COLLAPSED row — Nick's ask, 7 Sep 2026.
+                    Most cards need no editing, and making him expand one to act
+                    on it is the friction this section exists to remove. Clicks
+                    are stopped, or pressing either would also toggle the card
+                    open underneath the button. Opening it stays available for
+                    the ones worth rewording first. */}
+                <div className="ml-sg-buttons" onClick={e => e.stopPropagation()}>
+                  <button type="button" onClick={() => quickAccept(sg)} disabled={busy === `sg${sg.id}`}>
+                    {busy === `sg${sg.id}` ? 'Logging…' : 'Log it'}
+                  </button>
+                  <button
+                    type="button" className="ml-sg-no"
+                    onClick={() => dismissSuggestion(sg.id)} disabled={busy === `sg${sg.id}`}
+                  >
+                    Not a management conversation
+                  </button>
+                </div>
               </div>
 
               {openSuggestion === sg.id && sDraft && (
@@ -510,11 +564,11 @@ export default function ManagementLogPanel({ onNavigate }) {
                   </p>
 
                   <div className="ml-actions">
-                    <button type="button" onClick={() => acceptSuggestion(sg)} disabled={busy === `sg${sg.id}`}>
-                      {busy === `sg${sg.id}` ? 'Logging…' : 'Log it'}
-                    </button>
-                    <button type="button" onClick={() => dismissSuggestion(sg.id)} disabled={busy === `sg${sg.id}`}>
-                      Not a management conversation
+                    {/* The edited version. The header's button logs the
+                        suggestion as it stands; this one logs what is on
+                        screen. */}
+                    <button type="button" onClick={() => acceptSuggestion(sg, sDraft)} disabled={busy === `sg${sg.id}`}>
+                      {busy === `sg${sg.id}` ? 'Logging…' : 'Log it with these changes'}
                     </button>
                   </div>
                 </div>

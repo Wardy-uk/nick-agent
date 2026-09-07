@@ -55,8 +55,52 @@ const run = (notes, over = {}) => s.assess({ notes, roster: ROSTER, rows: [], di
 
 // ── Formal 1-2-1s are excluded, three ways ──────────────────────────────────
 
-test('a 1-2-1 is excluded by its meeting-type', () => {
-  const a = run([note({ frontmatter: { 'meeting-type': '1-1', title: 'Catch-up with Maria', people: ['Maria Pappa'] } })]);
+test('a 1-2-1 is excluded by its title', () => {
+  const a = run([note({ frontmatter: { title: '1-1 Heidi Power', people: ['Heidi Power'] } })]);
+  assert.equal(a.suggestions.length, 0);
+  assert.equal(a.skipped.oneToOne, 1);
+});
+
+// ── The return-to-work regression, 7 Sep 2026 ───────────────────────────────
+
+test('meeting-type "1-1" alone does NOT make it a formal 1-2-1', () => {
+  // ⚠ THE BUG. Nick did three return-to-work meetings the week of 1 Sep and
+  // none were offered: PLAUD stamps `meeting-type: "1-1"` on ANY TWO-PERSON
+  // meeting, so reading it as "this is the 1-2-1 cadence" swallowed absence and
+  // conduct management — exactly what competency 3 is about. Live title and
+  // frontmatter, verbatim.
+  const a = run([note({
+    relativePath: 'Meetings/2026/09/2026-09-04 – Meeting Return-to-Work, Health and Wellbeing.md',
+    frontmatter: {
+      'meeting-type': '1-1',
+      title: '09-04 Meeting: Return-to-Work, Health and Wellbeing, Work Adjustments, and Upcoming Medical Consultation - Nathan Rutland with Manager Nick Ward',
+      date: '2026-09-04',
+      people: ['Nathan Rutland'],
+    },
+  })]);
+  assert.equal(a.suggestions.length, 1, 'a return-to-work is a management conversation, not a routine 1-2-1');
+  assert.equal(a.suggestions[0].person, 'Nathan Rutland');
+});
+
+test('a disciplinary hearing labelled 1-1 by PLAUD is still offered', () => {
+  // The most serious thing that label was hiding. Live note.
+  const a = run([note({
+    frontmatter: {
+      'meeting-type': '1-1',
+      title: 'Formal Disciplinary Hearing on Overtime Approval, Working Time Compliance, SLO Reporting, and Workplace Support',
+      people: ['Maria Pappa'],
+    },
+  })]);
+  assert.equal(a.suggestions.length, 1);
+});
+
+test('but a note FILED under the 1-2-1 tree is still excluded, whatever its title', () => {
+  // The curation signal survives — that is somebody's decision about what the
+  // note is, rather than a count of voices in the room.
+  const a = run([note({
+    relativePath: 'Meetings/1-2-1/Maria Pappa/2026-08-20 – Wellbeing and KPI review.md',
+    frontmatter: { title: 'Wellbeing and KPI review', people: ['Maria Pappa'] },
+  })]);
   assert.equal(a.suggestions.length, 0);
   assert.equal(a.skipped.oneToOne, 1);
 });
@@ -304,7 +348,7 @@ test('newest first — last week needs an owner more than June does', () => {
 
 test('every skip reason is counted, so nothing is dropped silently', () => {
   const a = run([
-    note({ relativePath: 'a.md', frontmatter: { plaud_id: 'a', 'meeting-type': '1-1', people: ['Maria Pappa'] } }),
+    note({ relativePath: 'Meetings/1-2-1/Maria Pappa/a.md', frontmatter: { plaud_id: 'a', people: ['Maria Pappa'] } }),
     note({ relativePath: 'b.md', frontmatter: { plaud_id: 'b', title: 'Nothing to do with the team' } }),
     note({ relativePath: 'c.md', frontmatter: { plaud_id: 'c', type: 'meeting-prep', people: ['Maria Pappa'] } }),
   ]);
