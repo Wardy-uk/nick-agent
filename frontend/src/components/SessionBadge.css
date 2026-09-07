@@ -1,0 +1,58 @@
+/* The running session, in the topbar, on every page.
+   Ambient: it reports and it links. No animation that demands attention — a
+   pulsing badge on permanent display is a nag, and this feature is pull-only. */
+.session-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 22rem;
+  padding: 0.25rem 0.6rem;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.session-badge:hover { border-color: var(--accent); }
+
+.session-badge__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+/* The four states read differently, because they mean different things and
+   have different ways back. A parked session must not look like running work. */
+.session-badge--paused .session-badge__dot,
+.session-badge--interrupted .session-badge__dot { background: var(--text-muted); }
+.session-badge--needs-smaller .session-badge__dot { background: var(--warn, #d99a2b); }
+.session-badge--stale .session-badge__dot { background: var(--warn, #d99a2b); }
+
+.session-badge__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+.session-badge__text strong {
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-badge__text em {
+  font-style: normal;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+/* On a narrow screen the words go and the dot stays: "something is running" is
+   the half worth keeping when there is no room for which thing. */
+@media (max-width: 720px) {
+  .session-badge { max-width: none; padding: 0.25rem; }
+  .session-badge__text { display: none; }
+}

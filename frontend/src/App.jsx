@@ -8,6 +8,7 @@ import InstallBanner from './components/InstallBanner';
 import usePushNotifications from './usePushNotifications';
 import useCachedFetch from './useCachedFetch';
 import CacheIndicator from './components/CacheIndicator';
+import SessionBadge from './components/SessionBadge';
 import './App.css';
 
 // ── Eager: the surfaces used from a standing start ───────────────────────────
@@ -336,6 +337,7 @@ function AuthenticatedApp() {
   return (
     <div className="app-layout">
       <Topbar status={status} onMenuToggle={() => setSidebarOpen(o => !o)} onChatToggle={() => setChatOpen(o => !o)} chatOpen={chatOpen} weekend={weekend} onWeekendOverride={() => setWeekendOverride(o => !o)} weekendOverride={weekendOverride}>
+        <SessionBadge onNavigate={handleNavigate} activeView={activeView} />
         <CacheIndicator status={worstStatus} cacheAge={worstCacheAge} />
       </Topbar>
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}

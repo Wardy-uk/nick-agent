@@ -350,6 +350,79 @@ function MoscowReview({ onClose }) {
  * shared Save would make one button whose blast radius ranges from "changed a
  * letter" to "put this on the internet".
  */
+/**
+ * Pick this task up NOW.
+ *
+ * The task list had no way to start a focus session on anything — three
+ * surfaces could start one (the Now card, quick wins, TimeFitCard) and none of
+ * them was the screen where Nick actually browses his work. So starting meant
+ * going to Now and hoping the thing he wanted was the card it had chosen.
+ *
+ * ⚠ It navigates NOWHERE and needs no `onNavigate`. The session is server-side
+ * state and `SessionBadge` renders it in the topbar on every page, so starting
+ * from here shows up immediately without yanking him off the list he is working
+ * through — which would undo the point of being able to start from it.
+ *
+ * A session already running comes back 409 with that session attached, which is
+ * a QUESTION rather than an error: it names what he is on and offers the swap,
+ * exactly as AdhdPanel does. Choosing not to swap must leave both alone.
+ */
+function StartSessionControl({ todo }) {
+  const [state, setState] = useState(null); // null | 'busy' | 'started' | error string
+
+  async function start(force) {
+    setState('busy');
+    try {
+      const res = await fetch(apiUrl('/api/session/start'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: todo.task_id ?? null,
+          text: todo.text,
+          // The task's own estimate when it has one, so the session is measured
+          // against a number Nick set rather than the assumed thirty — which is
+          // what makes the close-out line worth reading.
+          minutes: todo.estimateMinutes ?? null,
+          force: Boolean(force),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.status === 409 && json.session) {
+        const swap = window.confirm(
+          `You're ${json.session.elapsedMinutes} minutes into "${json.session.text}".\n\nPark it and start this instead?`
+        );
+        if (!swap) { setState(null); return; }
+        return start(true);
+      }
+      if (!res.ok) throw new Error(json.error || `${res.status}`);
+      setState('started');
+    } catch (e) {
+      setState(e.message);
+    }
+    return undefined;
+  }
+
+  return (
+    <div className="todo-edit-group">
+      <label className="todo-edit-label">Focus</label>
+      <button
+        type="button"
+        className="todo-edit-btn"
+        disabled={state === 'busy'}
+        onClick={(e) => { e.stopPropagation(); start(false); }}
+      >
+        {state === 'busy' ? 'Starting…' : 'Start now'}
+      </button>
+      {state === 'started' && (
+        <span className="todo-edit-note">Running — it's in the bar at the top.</span>
+      )}
+      {state && !['busy', 'started'].includes(state) && (
+        <span className="todo-edit-note todo-edit-note--bad">Couldn't start: {state}</span>
+      )}
+    </div>
+  );
+}
+
 function TaskControls({ todo, onPatch, busy, onRefresh }) {
   // Drafted under the PATCH field names, not the row's — `taskPriority` on the
   // row is `priority` on the wire, and drafting under the display name is how
@@ -538,6 +611,13 @@ function TaskControls({ todo, onPatch, busy, onRefresh }) {
           which is also the only kind that can be blocked — a Microsoft mirror
           has no row to hang the block on. */}
       <BlockTimeControl todo={todo} busy={busy} />
+
+      {/* Picking it up NOW, as opposed to blocking time for it later. The two
+          belong side by side because they are the same thought at two horizons,
+          and this one had no button anywhere outside the Now tab — so the screen
+          where Nick actually browses his work could not start a session on any
+          of it. */}
+      <StartSessionControl todo={todo} />
 
       {/* Share with the house — the same instinct as blocking time: it is a
           thought you have while LOOKING at the task, so it lives on the open
