@@ -316,6 +316,13 @@ function assess({ weekly = [], log = null, today = dateKey(), nowHour = 0, gaps 
       missingDue: log.missingDue?.length ?? 0,
       // Competency 4: the 27 Jul baseline, which must reach zero by the review.
       baselineStillOpen: log.baseline?.stillOpen ?? null,
+      // ⚠ THREE answers, not one. `baselineKnown: false` means the figure was
+      // never recorded — the PIP leaves it blank and the log postdates the
+      // baseline date — and `baselineCount` is then null, NEVER 0. Reporting a
+      // zero here told Nick an outstanding PIP deliverable was already met.
+      baselineKnown: log.baseline?.known !== false,
+      baselineSource: log.baseline?.source ?? null,
+      baselineReason: log.baseline?.reason ?? null,
       baselineCount: log.baseline?.count ?? null,
       baselineTargetDate: log.baseline?.targetDate ?? PIP_REVIEW,
       // The post-review standard, visible before it is the thing being judged.

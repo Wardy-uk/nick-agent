@@ -486,3 +486,49 @@
   font-size: 0.75rem;
 }
 .wr-hr-drop:hover { opacity: 1; }
+
+/* ── Logging a management conversation ─────────────────────────────────────
+   The entry form leads the management-log section: before it, POST
+   /api/weekly-risk/log had no caller in either frontend, so there was no way
+   in from the screen that shows the compliance figures it drives. */
+.wr-log-add {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+.wr-log-add .wr-field:last-of-type { margin-bottom: 0; }
+.wr-log-add .wr-actions { margin-top: 12px; padding-top: 0; border-top: none; }
+.wr-optional { color: var(--text-muted); font-weight: normal; }
+
+.wr-panel input[type="text"],
+.wr-panel input[type="date"],
+.wr-panel select {
+  width: 100%;
+  padding: 7px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.wr-panel select:focus,
+.wr-panel input[type="text"]:focus,
+.wr-panel input[type="date"]:focus { outline: none; border-color: var(--text-muted); }
+
+/* The receipt. Amber when the entry is late — that is the true record and is
+   stated plainly, never hidden and never dressed up as a success. */
+.wr-receipt {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--success);
+  border-radius: 4px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.wr-receipt-late { border-left-color: var(--warning); }
+.wr-receipt-head { margin: 0 0 6px; }
+.wr-receipt ul { margin: 0; padding-left: 18px; line-height: 1.7; font-size: 12px; color: var(--text-muted); }
+.wr-receipt .wr-bad { color: var(--warning); }
+.wr-receipt .wr-toggle { margin: 8px 0 0; }

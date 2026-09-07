@@ -72,9 +72,70 @@ test('the baseline counts what was overdue AT 27 July, not what is overdue now',
 test('overdue-now is a separate count from the baseline', () => {
   const rows = [row({ id: 4, due_date: '2026-08-14', status: 'open' })];
   const a = log.assess(rows, { today: '2026-08-17' });
-  assert.equal(a.baseline.count, 0);
   assert.equal(a.overdueCount, 1);
   assert.equal(a.overdue[0].workingDaysOverdue, 1, 'Fri 14th to Mon 17th');
+  // ⚠ And the baseline is NOT zero here. This log came into being after 27 July
+  // and holds nothing due before it, so it cannot say what was overdue that day.
+  assert.equal(a.baseline.known, false);
+  assert.equal(a.baseline.count, null, 'null, never 0 — see bearsOnBaseline');
+});
+
+// ── The bug of 7 Sep 2026: a fabricated zero ────────────────────────────────
+
+test('a log that postdates the baseline reports NOT RECORDED, never zero', () => {
+  // The live shape exactly: every row entered at the 12 Aug 1-2-1, earliest due
+  // date the 13th. The old count returned 0 and the report published it as a
+  // fact about 27 July — an outstanding PIP deliverable rendered as a met one.
+  const rows = [
+    row({ id: 1, due_date: '2026-08-13', status: 'done', resolved_date: '2026-08-27' }),
+    row({ id: 2, due_date: null, status: 'open' }),
+    row({ id: 3, due_date: '2026-08-17', status: 'open' }),
+  ];
+  const a = log.assess(rows, { today: '2026-09-07' });
+  assert.equal(a.baseline.known, false);
+  assert.equal(a.baseline.source, 'unrecorded');
+  assert.equal(a.baseline.count, null);
+  assert.match(a.baseline.reason, /2026-07-27/);
+  // The figure that CAN be evidenced is still reported, so the section is not
+  // simply blank.
+  assert.equal(a.overdueCount, 1);
+});
+
+test('a backdated entry is legitimate evidence — a baseline written up after the fact still counts', () => {
+  // Logged on 12 Aug, due 1 July: somebody sat down and recorded what was
+  // already outstanding. That is exactly how the baseline was meant to be
+  // established, and refusing it would make the fix unusable.
+  const rows = [row({ id: 1, logged_at: '2026-08-12T09:00:00.000Z', due_date: '2026-07-01', status: 'open' })];
+  const a = log.assess(rows, { today: '2026-08-17' });
+  assert.equal(a.baseline.known, true);
+  assert.equal(a.baseline.source, 'measured');
+  assert.equal(a.baseline.count, 1);
+});
+
+test('a real measured zero is still reported as zero', () => {
+  // A row due before the baseline and closed before it: the log DID bear on
+  // 27 July, and nothing was overdue. "Not recorded" would be just as wrong
+  // here as "0" is in the case above.
+  const rows = [row({ id: 1, due_date: '2026-07-01', status: 'done', resolved_date: '2026-07-20' })];
+  const a = log.assess(rows, { today: '2026-08-17' });
+  assert.equal(a.baseline.known, true);
+  assert.equal(a.baseline.source, 'measured');
+  assert.equal(a.baseline.count, 0);
+});
+
+test('an agreed figure outranks the count, and clearing it returns to unrecorded', () => {
+  const rows = [row({ id: 4, due_date: '2026-08-14', status: 'open' })];
+  const agreed = log.assess(rows, { today: '2026-08-17', agreedBaseline: 7 });
+  assert.equal(agreed.baseline.known, true);
+  assert.equal(agreed.baseline.source, 'agreed');
+  assert.equal(agreed.baseline.count, 7, 'what Chris and Nick settled beats a reconstruction of it');
+  // ⚠ An agreed ZERO is a claim somebody made and must survive; only null
+  // returns to unrecorded.
+  const zero = log.assess(rows, { today: '2026-08-17', agreedBaseline: 0 });
+  assert.equal(zero.baseline.source, 'agreed');
+  assert.equal(zero.baseline.count, 0);
+  const cleared = log.assess(rows, { today: '2026-08-17', agreedBaseline: null });
+  assert.equal(cleared.baseline.known, false);
 });
 
 test('the five-working-day standard is measured in working days', () => {
@@ -150,7 +211,10 @@ test('assess needs no database, no vault and no network', () => {
   assert.doesNotThrow(() => log.assess([], { today: '2026-08-17' }));
   const a = log.assess([], { today: '2026-08-17' });
   assert.deepEqual(a.totals, { rows: 0, open: 0, closed: 0 });
-  assert.equal(a.baseline.count, 0);
+  // An empty log knows nothing about 27 July. It is the purest form of the
+  // fabricated zero, and it must not produce one.
+  assert.equal(a.baseline.known, false);
+  assert.equal(a.baseline.count, null);
 });
 
 // ── Mirroring into the task store ────────────────────────────────────────────

@@ -44,6 +44,7 @@ const EscalationPanel = lazy(() => import('./components/EscalationPanel'));
 const ActionsPanel = lazy(() => import('./components/ActionsPanel'));
 const DecisionsPanel = lazy(() => import('./components/DecisionsPanel'));
 const WeeklyRiskPanel = lazy(() => import('./components/WeeklyRiskPanel'));
+const ManagementLogPanel = lazy(() => import('./components/ManagementLogPanel'));
 const ImportsPanel = lazy(() => import('./components/ImportsPanel'));
 const RecentPanel = lazy(() => import('./components/RecentPanel'));
 const VaultBrowser = lazy(() => import('./components/VaultBrowser'));
@@ -319,7 +320,8 @@ function AuthenticatedApp() {
       case 'escalations': return <EscalationPanel />;
       case 'actions': return <ActionsPanel onNavigate={handleNavigate} />;
       case 'decisions': return <DecisionsPanel />;
-      case 'weekly-risk': return <WeeklyRiskPanel />;
+      case 'weekly-risk': return <WeeklyRiskPanel onNavigate={handleNavigate} />;
+      case 'management-log': return <ManagementLogPanel onNavigate={handleNavigate} />;
       case 'journal': return <JournalPanel />;
       case 'standups': return <StandupsPanel />;
       case 'insights': return <InsightsPanel onNavigate={handleNavigate} />;

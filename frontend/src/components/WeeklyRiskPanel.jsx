@@ -136,10 +136,20 @@ function DeliverableTracker({ data, onMarkSent, busy }) {
 
       {log && (
         <ul className="wr-deliv-log">
-          <li>
-            <strong>{log.baselineStillOpen}</strong> of {log.baselineCount} baseline items still open
-            <em className="wr-deliv-note"> — target zero by {fmtUk(log.baselineTargetDate)}</em>
-          </li>
+          {/* ⚠ "not recorded" and "zero" are opposite facts here: one is an
+              outstanding PIP deliverable, the other is it already met. */}
+          {log.baselineKnown === false ? (
+            <li className="wr-deliv-warn">
+              Competency 4 baseline <strong>not recorded</strong> — agree the figure with Chris.
+              {' '}{log.baselineStillOpen} overdue item(s) open on the log as it stands.
+              <em className="wr-deliv-note"> — target zero by {fmtUk(log.baselineTargetDate)}</em>
+            </li>
+          ) : (
+            <li>
+              <strong>{log.baselineStillOpen}</strong> of {log.baselineCount} baseline items still open
+              <em className="wr-deliv-note"> — target zero by {fmtUk(log.baselineTargetDate)}</em>
+            </li>
+          )}
           <li><strong>{log.lateLogged}</strong> logged later than two working days</li>
           <li><strong>{log.missingOwner + log.missingDue}</strong> open items missing an owner or a due date</li>
           {log.hrUnknown > 0 && (
@@ -171,7 +181,7 @@ function Delta({ value }) {
   );
 }
 
-export default function WeeklyRiskPanel() {
+export default function WeeklyRiskPanel({ onNavigate }) {
   const [report, setReport] = useState(null);
   const [log, setLog] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -228,6 +238,7 @@ export default function WeeklyRiskPanel() {
         escalateConfirmed: r.manual?.escalateToChris !== null,
         dataQuality: (r.manual?.dataQuality ?? []).join('\n'),
         dataQualityConfirmed: r.manual?.dataQuality !== null,
+        showPingPong: r.manual?.showPingPong === true,
       });
     } catch (e) {
       setError(e.message);
@@ -277,6 +288,7 @@ export default function WeeklyRiskPanel() {
       dataQuality: draft.dataQualityConfirmed
         ? draft.dataQuality.split('\n').map(s => s.trim()).filter(Boolean)
         : null,
+      showPingPong: draft.showPingPong === true,
     };
     const out = await post('/api/weekly-risk/manual', patch, 'save');
     if (out) {
@@ -292,50 +304,6 @@ export default function WeeklyRiskPanel() {
       confirmOn('publish', 'Published');
       setNotice({ tone: 'ok', text: `Published to the vault: ${out.path}` });
       load();
-    }
-  }
-
-  /**
-   * Drop a log row that was never Nick's management action.
-   *
-   * ⚠ Deliberately NOT "answer No". No writes a confirmed People HR gap, which
-   * reaches Chris as a finding — using it to tidy an item off the list would
-   * invent a compliance failure. This says the row does not belong in the log
-   * at all, which is a different claim and the true one.
-   *
-   * Destructive and irreversible, so it names the item in the confirm rather
-   * than asking "are you sure?" about a row the mouse happens to be near.
-   */
-  async function removeLogRow(id, label) {
-    if (!window.confirm(`Remove this from the management log?\n\n${label}\n\nThis deletes the row. It cannot be undone.`)) return;
-    setBusy(`hr${id}`);
-    try {
-      const res = await fetch(apiUrl(`/api/weekly-risk/log/${id}`), { method: 'DELETE' });
-      if (!res.ok) throw new Error('Could not remove it');
-      setNotice({ tone: 'ok', text: 'Removed from the management log.' });
-      load();
-    } catch (e) {
-      setNotice({ tone: 'bad', text: e.message });
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function setHr(id, inPeopleHr) {
-    setBusy(`hr${id}`);
-    try {
-      const res = await fetch(apiUrl(`/api/weekly-risk/log/${id}`), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hrLogged: inPeopleHr }),
-      });
-      if (!res.ok) throw new Error('Could not save');
-      setNotice({ tone: 'ok', text: `Recorded: ${inPeopleHr ? 'in People HR' : 'NOT in People HR — this will go in the report'}.` });
-      load();
-    } catch (e) {
-      setNotice({ tone: 'bad', text: e.message });
-    } finally {
-      setBusy(null);
     }
   }
 
@@ -584,6 +552,23 @@ export default function WeeklyRiskPanel() {
             value={draft.dataQuality}
             onChange={e => setDraft({ ...draft, dataQuality: e.target.value })}
           />
+        </div>
+
+        {/* A display choice, not an answer — it never blocks publication, and
+            it hides the SECTION only: a ping-pong escalation still reaches the
+            list above, because a formatting preference must not suppress one. */}
+        <div className="wr-field">
+          <label className="wr-check">
+            <input
+              type="checkbox" checked={draft.showPingPong}
+              onChange={e => setDraft({ ...draft, showPingPong: e.target.checked })}
+            />
+            Include the ping-pong table in the report
+          </label>
+          <p className="wr-hint">
+            Off by default. A long table of ticket keys is worth Chris&rsquo;s page only when you mean to
+            talk about it. Anything meeting the escalation bar still appears under &ldquo;To escalate&rdquo;.
+          </p>
         </div>
 
         <div className="wr-actions">
@@ -864,19 +849,40 @@ export default function WeeklyRiskPanel() {
           )}
       </section>
 
+      {/* ⚠ READ-ONLY here, and that is the point. Entering, editing and closing
+          live in their own view (Management Log) — Nick's call, 7 Sep 2026: the
+          log is a running record with its own life, not a section of one week's
+          report. What stays is the compliance picture, because this is the
+          screen he reads before pressing send and a figure he has to go
+          elsewhere to check is one he sends unchecked. Two mutating surfaces
+          would be two forms free to drift; there is one, and this links to it. */}
       <section className="wr-section">
         <h3>
           Management log
+          {onNavigate && (
+            <button type="button" className="wr-toggle" onClick={() => onNavigate('management-log')}>
+              open the log
+            </button>
+          )}
           <button type="button" className="wr-toggle" onClick={() => setShowLog(s => !s)}>
             {showLog ? 'hide' : `show all ${log?.totals?.rows ?? 0}`}
           </button>
         </h3>
         {log && (
           <>
-            <p className="wr-hint">
-              Competency 4 baseline at {fmtUk(log.baseline.date)}: <strong>{log.baseline.count}</strong>
-              {' '}({log.baseline.stillOpen} still open) · target 0 by {fmtUk(log.baseline.targetDate)}
-            </p>
+            {log.baseline.known === false ? (
+              <p className="wr-warn-line">
+                Competency 4 baseline at {fmtUk(log.baseline.date)}: <strong>not recorded</strong> —
+                {' '}{log.baseline.reason} This is <strong>not</strong> zero. {log.baseline.stillOpen} overdue
+                item(s) are open on the log as it stands · target 0 by {fmtUk(log.baseline.targetDate)}
+              </p>
+            ) : (
+              <p className="wr-hint">
+                Competency 4 baseline at {fmtUk(log.baseline.date)}: <strong>{log.baseline.count}</strong>
+                {log.baseline.source === 'agreed' ? ' (agreed with Chris)' : ' (counted from the log)'}
+                {' '}({log.baseline.stillOpen} still open) · target 0 by {fmtUk(log.baseline.targetDate)}
+              </p>
+            )}
             {log.missingDue.length > 0 && (
               <p className="wr-warn-line">
                 {log.missingDue.length} items have no due date — competency 3 needs an owner and a date on every one.
@@ -887,43 +893,20 @@ export default function WeeklyRiskPanel() {
                 {log.hrGap.length} conversation{log.hrGap.length === 1 ? '' : 's'}/concern{log.hrGap.length === 1 ? '' : 's'} confirmed <strong>not</strong> in People HR — this goes in the report.
               </p>
             )}
-            {/* Unknown is a question, never a claim. It is asked here and does
-                not appear in anything Chris receives. */}
+            {/* Unknown is a question, never a claim — and it is ANSWERED in
+                the log rather than here, so there is one mutating surface and
+                not two. The COUNT stays, because it changes what this report
+                says and is therefore a pre-send check. */}
             {log.hrUnknown?.length > 0 && (
-              <div className="wr-hr-ask">
-                <p className="wr-hint" style={{ marginBottom: 8 }}>
-                  Is this in People HR? NEURO has never been told, so it says nothing in the report either way.
-                </p>
-                {log.hrUnknown.map(h => (
-                  <div key={h.id} className="wr-hr-row">
-                    <span>{h.person ? `${h.person} — ` : ''}{h.summary}</span>
-                    <span className="wr-hr-buttons">
-                      <button type="button" onClick={() => setHr(h.id, true)} disabled={busy === `hr${h.id}`}>Yes</button>
-                      <button type="button" onClick={() => setHr(h.id, false)} disabled={busy === `hr${h.id}`}>No</button>
-                      {/*
-                        ⚠ The third answer, and it needed its own button rather
-                        than being folded into "No". "No" writes hr_logged = 0,
-                        which is a CONFIRMED People HR gap and goes to Chris as a
-                        finding. Using it to clear an item that is nothing to do
-                        with Nick would manufacture a compliance failure against
-                        him — the opposite of what he meant by pressing it.
-
-                        "Not mine" removes the log row entirely, because the
-                        claim is that it was never his management action. It is
-                        destructive and has no undo, hence the confirm.
-                      */}
-                      <button
-                        type="button"
-                        className="wr-hr-drop"
-                        disabled={busy === `hr${h.id}`}
-                        onClick={() => removeLogRow(h.id, `${h.person ? `${h.person} — ` : ''}${h.summary}`)}
-                      >
-                        Not mine
-                      </button>
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <p className="wr-hint">
+                {log.hrUnknown.length} conversation{log.hrUnknown.length === 1 ? '' : 's'}/concern{log.hrUnknown.length === 1 ? '' : 's'}
+                {' '}not yet answered for People HR — NEURO says nothing either way in the report until you answer.
+                {onNavigate && (
+                  <button type="button" className="wr-use" onClick={() => onNavigate('management-log')}>
+                    answer in the log
+                  </button>
+                )}
+              </p>
             )}
             <table className="wr-table">
               <thead>

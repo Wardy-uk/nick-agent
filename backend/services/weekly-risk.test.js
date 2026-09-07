@@ -262,6 +262,48 @@ test('a handback rise past the threshold escalates; a flat one only warns', () =
   assert.equal(flat.severity, 'warn', '5% is the operating model, not this fortnight');
 });
 
+test('ping-pong is off by default, and ticking it in shows the table', () => {
+  const pp = { ok: true, error: null, data: { threshold: 3, ticketsAffected: 12, worst: [{ ticket_key: 'NT-16112', moves: 16, returns: 13 }] } };
+
+  const off = weeklyRisk.render(weeklyRisk.assess(baseSnapshot({ flow: flowPayload({ pingPong: pp }) })));
+  assert.doesNotMatch(off, /Ping-pong/, 'off by default — a table nobody asked for is one nobody reads');
+  assert.doesNotMatch(off, /Queue moves/, 'and the table itself is gone, not merely retitled');
+
+  const manual = { ...weeklyRisk.emptyManual(), showPingPong: true };
+  const on = weeklyRisk.render(weeklyRisk.assess(baseSnapshot({ flow: flowPayload({ pingPong: pp }), manual })));
+  assert.match(on, /Ping-pong/);
+  assert.match(on, /Queue moves/);
+  assert.match(on, /NT-16112/);
+});
+
+test('hiding the ping-pong table never hides the escalation it raises', () => {
+  // ⚠ It is a DISPLAY choice. A formatting preference that could suppress an
+  // item from "To escalate to Chris" would be the report deciding what Chris
+  // gets to see, which is exactly what this section exists to prevent.
+  const a = weeklyRisk.assess(baseSnapshot({
+    flow: flowPayload({
+      pingPong: { ok: true, error: null, data: { threshold: 3, ticketsAffected: 12, worst: [{ ticket_key: 'NT-16112', moves: 16, returns: 13 }] } },
+    }),
+  }));
+  assert.equal(a.manual.showPingPong, false, 'the fixture has it hidden');
+  const f = a.findings.find(x => x.kind === 'ping-pong');
+  assert.equal(f.severity, 'escalate');
+  assert.match(weeklyRisk.render(a), /NT-16112/, 'named in the escalation list even with the table off');
+});
+
+test('the escalations lead — straight after the headline, before the numbered sections', () => {
+  const md = weeklyRisk.render(weeklyRisk.assess(baseSnapshot()));
+  const headline = md.indexOf('## Headline');
+  const escalate = md.indexOf('## To escalate to Chris');
+  const trend = md.indexOf('## 1. Week-on-week trend');
+  assert.ok(headline >= 0 && escalate >= 0 && trend >= 0, 'all three sections present');
+  assert.ok(headline < escalate, 'the headline still opens the report');
+  assert.ok(escalate < trend, 'escalations come before the numbered sections, not after them');
+  // The two-working-day rule is stated once, in the preamble, not repeated in
+  // the heading — Nick's call, 7 Sep 2026.
+  assert.doesNotMatch(md, /To escalate to Chris \(within 2 working days\)/);
+});
+
 test('a ticket past the nameable move count escalates', () => {
   const a = weeklyRisk.assess(baseSnapshot({
     flow: flowPayload({

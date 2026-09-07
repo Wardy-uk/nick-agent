@@ -318,10 +318,93 @@ function wasOverdueAt(row, asOf) {
 }
 
 /**
+ * Does this row bear on the baseline date at all?
+ *
+ * ⚠ The competency-4 baseline is the one number in this file that a count
+ * cannot produce honestly, and it took until 7 Sep 2026 to notice. The PIP says
+ * *"Baseline of [ ] overdue management actions recorded as at 27 July 2026"* —
+ * a literal blank, never filled in, and the reference note still carries
+ * "Overdue-actions baseline recorded — Not done — agree the number with Chris".
+ * The log itself was stood up on 12 Aug, sixteen days AFTER the baseline date,
+ * and its earliest due date is 13 Aug. So `rows.filter(wasOverdueAt)` returned
+ * **0** — arithmetically correct over the rows present, and a statement about
+ * 27 July that nothing measured.
+ *
+ * That is the wrong direction in a document Nick signs and Chris assesses: it
+ * reports an unrecorded PIP deliverable as a met one, and the moment the
+ * fabrication is spotted every other number in the report is in question. The
+ * rule this file already lives by — an absence is never a zero — applies here
+ * hardest.
+ *
+ * A row bears on the date two ways, and BOTH are needed. It was already on the
+ * log then (`logged_at`/`entry_date` on or before it) — or it carries a due
+ * date on or before it, which is how a baseline legitimately gets established
+ * retrospectively: sitting down after the fact and writing up what was already
+ * outstanding. Neither alone is enough; a log made entirely of items due after
+ * the baseline date says nothing about that date whichever way you read it.
+ */
+function bearsOnBaseline(row, asOf) {
+  if (row.due_date && row.due_date <= asOf) return true;
+  const logged = row.logged_at ? String(row.logged_at).slice(0, 10) : null;
+  if (logged && logged <= asOf) return true;
+  return Boolean(row.entry_date && row.entry_date <= asOf);
+}
+
+/**
+ * The competency-4 baseline, which is THREE answers and not one.
+ *
+ * `agreed` — a number Nick and Chris settled between them. It outranks the
+ * count, because it is the thing the PIP actually asks for; the measurement is
+ * a reconstruction of it at best.
+ * `measured` — the log held rows covering the baseline date, so counting them
+ * is a real answer (including a real zero).
+ * `unrecorded` — nothing in the log existed on that date. `count` is **null**,
+ * never 0, and the reason is carried so the report can say which.
+ */
+function assessBaseline(rows, baselineDate, nonWorking, agreed = null) {
+  const covering = rows.filter(r => bearsOnBaseline(r, baselineDate));
+  const baselineRows = rows.filter(r => wasOverdueAt(r, baselineDate));
+  const items = baselineRows.map(r => ({
+    id: r.id,
+    summary: r.summary,
+    dueDate: r.due_date,
+    workingDaysOverdueAtBaseline: workingDaysBetween(r.due_date, baselineDate, nonWorking),
+    status: isClosed(r) ? 'closed' : r.status,
+    resolvedDate: r.resolved_date || null,
+  }));
+
+  const base = {
+    date: baselineDate,
+    target: 0,
+    targetDate: REVIEW_DATE,
+    items,
+    // The measurement that actually matters between now and 11 Sep. It counts
+    // the rows the log CAN see, whatever the baseline source, so it stays a
+    // real figure even while the baseline itself is unrecorded.
+    stillOpen: baselineRows.filter(r => !isClosed(r)).length,
+    rowsCoveringDate: covering.length,
+  };
+
+  if (Number.isFinite(agreed)) {
+    return { ...base, known: true, source: 'agreed', count: agreed, reason: null };
+  }
+  if (!covering.length) {
+    return {
+      ...base,
+      known: false,
+      source: 'unrecorded',
+      count: null,
+      reason: `Nothing on the management log bears on ${baselineDate} — every entry was made after it and every due date falls after it, so the log cannot say what was overdue that day. The PIP leaves the figure blank and it has not been agreed with Chris.`,
+    };
+  }
+  return { ...base, known: true, source: 'measured', count: baselineRows.length, reason: null };
+}
+
+/**
  * Turn rows into the compliance picture. PURE — no DB, no clock beyond what is
  * passed in. `nonWorking` is an optional Set of YYYY-MM-DD non-working days.
  */
-function assess(rows = [], { today = todayLocal(), baselineDate = BASELINE_DATE, nonWorking } = {}) {
+function assess(rows = [], { today = todayLocal(), baselineDate = BASELINE_DATE, nonWorking, agreedBaseline = null } = {}) {
   const overdue = [];
   const lateLogged = [];
   const missingOwner = [];
@@ -375,28 +458,11 @@ function assess(rows = [], { today = todayLocal(), baselineDate = BASELINE_DATE,
   overdue.sort((a, b) => (b.workingDaysOverdue || 0) - (a.workingDaysOverdue || 0));
 
   const breaches = overdue.filter(o => (o.workingDaysOverdue || 0) > OVERDUE_TOLERANCE_WORKING_DAYS);
-  const baselineRows = rows.filter(r => wasOverdueAt(r, baselineDate));
-
   return {
     today,
-    // Derived, never stored. Recomputable against any date, and always agrees
-    // with the rows underneath it.
-    baseline: {
-      date: baselineDate,
-      count: baselineRows.length,
-      target: 0,
-      targetDate: REVIEW_DATE,
-      items: baselineRows.map(r => ({
-        id: r.id,
-        summary: r.summary,
-        dueDate: r.due_date,
-        workingDaysOverdueAtBaseline: workingDaysBetween(r.due_date, baselineDate, nonWorking),
-        status: isClosed(r) ? 'closed' : r.status,
-        resolvedDate: r.resolved_date || null,
-      })),
-      // The measurement that actually matters between now and 11 Sep.
-      stillOpen: baselineRows.filter(r => !isClosed(r)).length,
-    },
+    // Derived, never stored — except the agreed figure, which is a decision
+    // rather than a measurement and has nowhere else to live.
+    baseline: assessBaseline(rows, baselineDate, nonWorking, agreedBaseline),
     overdue,
     overdueCount: overdue.length,
     // The post-review standard, reported now so the trend is visible before it
@@ -417,6 +483,42 @@ function assess(rows = [], { today = todayLocal(), baselineDate = BASELINE_DATE,
   };
 }
 
+/** Where the agreed figure lives. KV, not a column — one number, not a row. */
+const AGREED_BASELINE_KEY = 'management_log_agreed_baseline';
+
+/**
+ * The baseline Nick and Chris agreed, or null.
+ *
+ * ⚠ `null` and `0` are different answers and must stay so: nil overdue on
+ * 27 July is a claim somebody made, and no figure is the deliverable still
+ * being outstanding. Anything unusable reads as unrecorded rather than as zero.
+ */
+function getAgreedBaseline() {
+  const raw = db.getState(AGREED_BASELINE_KEY);
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    if (!Number.isFinite(v?.count) || v.count < 0) return null;
+    return { count: Math.round(v.count), agreedOn: v.agreedOn || null, note: v.note || '' };
+  } catch { return null; }
+}
+
+/** Record it, or pass null to clear it back to unrecorded. */
+function setAgreedBaseline(entry) {
+  if (entry === null) { db.setState(AGREED_BASELINE_KEY, ''); return null; }
+  const count = Number(entry?.count);
+  if (!Number.isFinite(count) || count < 0) {
+    throw new Error('A baseline needs a whole number of overdue actions — omitting it is not the same as zero.');
+  }
+  const next = {
+    count: Math.round(count),
+    agreedOn: entry.agreedOn || todayLocal(),
+    note: entry.note || '',
+  };
+  db.setState(AGREED_BASELINE_KEY, JSON.stringify(next));
+  return next;
+}
+
 /** Read + judge in one call, with the real bank-holiday set applied. */
 function status(opts = {}) {
   // Bring the mirror into agreement before judging, so a task ticked off on the
@@ -425,12 +527,19 @@ function status(opts = {}) {
   const rows = list({ limit: 2000 });
   let nonWorking;
   try { nonWorking = require('./working-days').holidaySet(); } catch { nonWorking = undefined; }
-  return { ...assess(rows, { ...opts, nonWorking }), rows };
+  const agreed = getAgreedBaseline();
+  const out = assess(rows, { ...opts, nonWorking, agreedBaseline: agreed ? agreed.count : null });
+  if (agreed) {
+    out.baseline.agreedOn = agreed.agreedOn;
+    out.baseline.note = agreed.note;
+  }
+  return { ...out, rows };
 }
 
 module.exports = {
   create, update, remove, list, get,
-  assess, status, workingDaysBetween,
+  assess, status, workingDaysBetween, assessBaseline,
+  getAgreedBaseline, setAgreedBaseline,
   reconcileTasks, ensureTask, ownedByNick,
   BASELINE_DATE, REVIEW_DATE, LOG_WITHIN_WORKING_DAYS, OVERDUE_TOLERANCE_WORKING_DAYS,
   TYPES, STATUSES,

@@ -16,6 +16,7 @@ const router = express.Router();
 const weeklyRisk = require('../services/weekly-risk');
 const managementLog = require('../services/management-log');
 const pipDeliverables = require('../services/pip-deliverables');
+const logSuggest = require('../services/management-log-suggest');
 const db = require('../db/database');
 
 function fail(res, err, code = 500) {
@@ -64,6 +65,41 @@ router.post('/manual', (req, res) => {
     const manual = weeklyRisk.setManual(week, patch);
     res.json({ week, manual, blockers: weeklyRisk.manualBlockers(manual) });
   } catch (err) { fail(res, err); }
+});
+
+/**
+ * GET /api/weekly-risk/baseline — the competency-4 baseline and where it came
+ * from. Its own route because it is the one figure in this report that is a
+ * DECISION rather than a measurement (the PIP leaves it literally blank), and
+ * because until it is recorded the report must say so rather than count.
+ */
+router.get('/baseline', (req, res) => {
+  try {
+    res.json({
+      baseline: managementLog.status().baseline,
+      agreed: managementLog.getAgreedBaseline(),
+    });
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * POST /api/weekly-risk/baseline — record the figure agreed with Chris.
+ *
+ * `{ count: null }` clears it back to unrecorded. ⚠ Omitting `count` is a 400
+ * and is deliberately NOT the same as sending 0: nil overdue on 27 July is a
+ * claim somebody made, and no figure is the PIP deliverable still outstanding.
+ */
+router.post('/baseline', (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!('count' in body)) {
+      return res.status(400).json({ error: 'A baseline needs a count. Send `count: null` to clear it — omitting it is not the same as zero.' });
+    }
+    const agreed = body.count === null
+      ? managementLog.setAgreedBaseline(null)
+      : managementLog.setAgreedBaseline({ count: body.count, agreedOn: body.agreedOn, note: body.note });
+    res.json({ ok: true, agreed, baseline: managementLog.status().baseline });
+  } catch (err) { fail(res, err, 400); }
 });
 
 /**
@@ -291,6 +327,87 @@ router.delete('/log/:id', (req, res) => {
     if (!managementLog.remove(Number(req.params.id))) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true });
   } catch (err) { fail(res, err); }
+});
+
+/**
+ * Management conversations PLAUD recorded and the log has never been told about.
+ *
+ * ⚠ Its own path (`/log-suggestions`), deliberately NOT `/log/suggestions`.
+ * There is no `GET /log/:id` today, so both would work — but this router
+ * already carries `/log/:id` for PATCH and DELETE, and this repo has shipped a
+ * literal path swallowed by a sibling parameterised one more than once. A
+ * sibling path cannot be swallowed by a parameter that is not there.
+ */
+router.get('/log-suggestions', (req, res) => {
+  try {
+    const sinceDays = req.query.sinceDays ? Number(req.query.sinceDays) : undefined;
+    res.json(logSuggest.suggest({ sinceDays: Number.isFinite(sinceDays) ? sinceDays : undefined }));
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * POST /api/weekly-risk/log-suggestions/accept — turn one into a real entry.
+ *
+ * ⚠ The route CREATES; the suggestion service never does. Everything written
+ * comes from the body, so what Nick edited on the card is what lands, and a
+ * suggestion he never looked at cannot become a compliance record by itself.
+ *
+ * ⚠ `loggedAt` is taken from the PLAUD note's own `created_at`, not from the
+ * client and not from the clock. A note written by a device in the room at the
+ * time IS the contemporaneous record — the same argument
+ * `scripts/seed-management-log.js` makes — and `source` carries the recording
+ * id so the claim is auditable rather than asserted. With no usable stamp it is
+ * omitted, `create()` falls back to now, and the entry is correctly reported as
+ * logged late; guessing would manufacture competency-3 compliance out of
+ * nothing.
+ */
+router.post('/log-suggestions/accept', (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.id) return res.status(400).json({ error: 'a suggestion id is required' });
+    if (!String(body.summary || '').trim()) return res.status(400).json({ error: 'a summary is required' });
+
+    // Re-read rather than trusting the client for the provenance fields. The
+    // card may have been open a while, and the stamp is the one thing here that
+    // must not be settable from outside.
+    const found = logSuggest.suggest().suggestions.find(s => s.id === body.id);
+    if (!found) {
+      return res.status(409).json({ error: 'That suggestion is no longer offered — it may already be logged, or dismissed.' });
+    }
+
+    const row = managementLog.create({
+      type: body.type || found.type,
+      summary: String(body.summary).trim(),
+      person: body.person ?? found.person,
+      owner: body.owner || 'Nick',
+      entryDate: body.entryDate || found.entryDate,
+      dueDate: body.dueDate || null,
+      action: body.action || null,
+      notes: body.notes || null,
+      source: found.id,
+      loggedAt: found.recordedAt || undefined,
+    });
+    // It is accepted, so it must never be offered again even if the dedupe
+    // against the log ever misses it.
+    logSuggest.dismiss(found.id);
+    res.status(201).json({ ok: true, row, contemporaneous: found.contemporaneous });
+  } catch (err) { fail(res, err, 400); }
+});
+
+/** POST /log-suggestions/dismiss — not a management conversation. Sticks. */
+router.post('/log-suggestions/dismiss', (req, res) => {
+  try {
+    if (!req.body?.id) return res.status(400).json({ error: 'a suggestion id is required' });
+    res.json({ ok: true, dismissed: logSuggest.dismiss(req.body.id) });
+  } catch (err) { fail(res, err, 400); }
+});
+
+/** POST /log-suggestions/restore — every other decision here has a way back. */
+router.post('/log-suggestions/restore', (req, res) => {
+  try {
+    if (!req.body?.id) return res.status(400).json({ error: 'a suggestion id is required' });
+    res.json({ ok: true, dismissed: logSuggest.undismiss(req.body.id) });
+  } catch (err) { fail(res, err, 400); }
 });
 
 module.exports = router;

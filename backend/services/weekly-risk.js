@@ -110,6 +110,13 @@ function emptyManual() {
     actions: null,
     dataQuality: null,
     positives: [],
+    // A DISPLAY choice, not an answer, so it never blocks publication and its
+    // default is off. Ping-pong is a long section of ticket keys that is only
+    // worth Chris's page when Nick means to talk about it; an always-on table
+    // is one that stops being read. ⚠ It hides the SECTION only — the finding
+    // it raises still reaches the escalation list, because an escalation must
+    // never be suppressed by a formatting preference.
+    showPingPong: false,
   };
 }
 
@@ -136,6 +143,9 @@ function carryForward(week) {
   try {
     const p = JSON.parse(prev);
     if (p.overtime) base.overtime = { ...p.overtime, note: p.overtime.note || '' };
+    // Carried like the overtime log: a preference re-typed weekly is one that
+    // silently reverts to the default the first week it is forgotten.
+    if (typeof p.showPingPong === 'boolean') base.showPingPong = p.showPingPong;
     if (Array.isArray(p.actions)) {
       const open = p.actions.filter(a => a && !a.done);
       if (open.length) base.actions = open.map(a => ({ ...a, carriedFrom: previousWeek(week) }));
@@ -903,7 +913,7 @@ function complianceTable(trend) {
  * specific one that makes a compliance report dangerous: a section that quietly
  * renders as "nothing to report" when it means "nothing was measured".
  */
-function flowSection(flow) {
+function flowSection(flow, { showPingPong = false } = {}) {
   if (!flow) return '_Flow signals unavailable — NOVA did not answer. These figures are absent, not zero._';
 
   // A stale NOVA deploy returns a response that LOOKS fine while the fields
@@ -964,7 +974,7 @@ function flowSection(flow) {
       + (context ? `\n${context}\n` : '');
   });
 
-  say('Ping-pong', flow.pingPong, d => {
+  if (showPingPong) say('Ping-pong', flow.pingPong, d => {
     const worst = (d.worst || []).slice(0, 5)
       .map(t => `| ${t.ticket_key} | ${t.moves} | ${t.returns} |`).join('\n');
     return `**Ping-pong:** **${d.ticketsAffected}** tickets crossed queues ${d.threshold}+ times.\n\n`
@@ -1067,6 +1077,24 @@ function render(a) {
   }
   lines.push('');
 
+  // The escalations LEAD, immediately after the headline. Nick's call, 7 Sep
+  // 2026 — this is the one section the PIP asks him to act on inside two
+  // working days, and a section reached after six numbered ones is read last.
+  lines.push('## To escalate to Chris');
+  lines.push('');
+  if (manual.escalateToChris === null) {
+    lines.push('> ⚠️ **NOT CONFIRMED.** NEURO proposes the following; an empty list must be a decision, not a silence.');
+    lines.push('');
+    lines.push(escalate.length
+      ? escalate.map((f, i) => `${i + 1}. ${f.title} — ${f.detail}`).join('\n')
+      : '_NEURO found nothing meeting the escalation bar this week._');
+  } else if (manual.escalateToChris.length) {
+    lines.push(manual.escalateToChris.map((x, i) => `${i + 1}. ${x}`).join('\n'));
+  } else {
+    lines.push('**Nothing to escalate this week** — reviewed and confirmed.');
+  }
+  lines.push('');
+
   lines.push('## 1. Week-on-week trend');
   lines.push('');
   lines.push('_Added at Chris\'s request, 12 Aug 2026 — a single week cannot distinguish "bad" from "getting worse"._');
@@ -1094,7 +1122,7 @@ function render(a) {
   lines.push('');
   lines.push(`_How tickets move, over the last ${FLOW_WINDOW_DAYS} days. Added w/c 17 Aug 2026 in response to the Support Review — these are the measures the review was written from._`);
   lines.push('');
-  lines.push(flowSection(a.flow));
+  lines.push(flowSection(a.flow, { showPingPong: manual.showPingPong === true }));
   lines.push('');
 
   lines.push('## 4. Overtime');
@@ -1217,7 +1245,21 @@ function render(a) {
     const m = a.management;
     lines.push(`Open items **${m.totals.open}** · overdue **${m.overdueCount}** · past the five-working-day standard **${m.breachesFiveDay.length}**.`);
     lines.push('');
-    lines.push(`**Competency 4 baseline (as at ${formatUk(m.baseline.date)}): ${m.baseline.count}** — of which **${m.baseline.stillOpen}** still open. Target 0 by ${formatUk(m.baseline.targetDate)}.`);
+    // ⚠ THREE renderings, and conflating them is how an unrecorded PIP
+    // deliverable came to read as a met one for six weeks. See
+    // management-log.assessBaseline — the log begins 12 Aug, the baseline date
+    // is 27 Jul, and counting rows that did not exist yet produced a confident
+    // "0" that nothing had measured.
+    const b = m.baseline;
+    if (!b.known) {
+      lines.push(`> ⚠️ **Competency 4 baseline (as at ${formatUk(b.date)}): NOT RECORDED.** ${b.reason} It is **not zero** — nothing measured it. Agreeing the figure with Chris is itself an outstanding PIP action. Target 0 by ${formatUk(b.targetDate)}.`);
+      lines.push('');
+      lines.push(`Separately, **${b.stillOpen}** management action${b.stillOpen === 1 ? ' is' : 's are'} overdue and open on the log as it stands, which is the figure that can be evidenced.`);
+    } else if (b.source === 'agreed') {
+      lines.push(`**Competency 4 baseline (as at ${formatUk(b.date)}): ${b.count}** — agreed with Chris${b.agreedOn ? ` on ${formatUk(b.agreedOn)}` : ''}. **${b.stillOpen}** of the log's own items still open. Target 0 by ${formatUk(b.targetDate)}.${b.note ? ` ${b.note}` : ''}`);
+    } else {
+      lines.push(`**Competency 4 baseline (as at ${formatUk(b.date)}): ${b.count}** — counted from the ${b.rowsCoveringDate} log entr${b.rowsCoveringDate === 1 ? 'y' : 'ies'} that existed on that date, of which **${b.stillOpen}** still open. Target 0 by ${formatUk(b.targetDate)}.`);
+    }
     if (m.overdue.length) {
       lines.push('');
       lines.push('| Item | Owner | Due | Working days over |\n|---|---|---|---|');
@@ -1234,21 +1276,6 @@ function render(a) {
     lines.push(bullet(a.positives.slice(0, 8), p => `- **${p.kpi}** ${p.value}${p.target !== null ? ` (target ${p.target})` : ''}`));
     lines.push('');
   }
-
-  lines.push(`## To escalate to Chris (within 2 working days)`);
-  lines.push('');
-  if (manual.escalateToChris === null) {
-    lines.push('> ⚠️ **NOT CONFIRMED.** NEURO proposes the following; an empty list must be a decision, not a silence.');
-    lines.push('');
-    lines.push(escalate.length
-      ? escalate.map((f, i) => `${i + 1}. ${f.title} — ${f.detail}`).join('\n')
-      : '_NEURO found nothing meeting the escalation bar this week._');
-  } else if (manual.escalateToChris.length) {
-    lines.push(manual.escalateToChris.map((x, i) => `${i + 1}. ${x}`).join('\n'));
-  } else {
-    lines.push('**Nothing to escalate this week** — reviewed and confirmed.');
-  }
-  lines.push('');
 
   lines.push('## Actions this week');
   lines.push('');

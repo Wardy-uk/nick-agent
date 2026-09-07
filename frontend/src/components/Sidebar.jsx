@@ -65,6 +65,12 @@ const SECONDARY_ITEMS = [
   // gets a menu entry rather than being reachable only from the 07:30 push —
   // which is the failure this list already documents twice above.
   { id: 'weekly-risk', label: 'Weekly Risk', icon: '▲' },
+  // ⚠ Its own entry, not a section of the weekly report (Nick, 7 Sep 2026). It
+  // is a RUNNING RECORD — conversations get logged the day they happen, not on
+  // the Monday the report is built — and before this there was no way to add to
+  // it at all: the route existed and no screen called it, the same hole this
+  // list already documents for 'todos' and 'decisions'.
+  { id: 'management-log', label: 'Management Log', icon: '▤' },
   { id: 'imports',    label: 'Imports',   icon: '>' },
   { id: 'recent',     label: 'Recent',    icon: '>' },
   { id: 'insights',   label: 'Insights',  icon: '◈' },
