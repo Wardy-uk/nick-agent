@@ -25,7 +25,7 @@ process.env.NEURO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'neu
 const {
   isOutcomeWritten, renderStub, outcomeNotePath, slugify, findSlot, resolveWindow,
   renderChecklist, parseChecklist, syncChecklistInNote, LIST_OPEN, LIST_CLOSE,
-  MIN_OUTCOME_CHARS, DAY_START_MIN, DAY_END_MIN, SEARCH_DAYS, latestEndFor,
+  MIN_OUTCOME_CHARS, DAY_START_MIN, DAY_END_MIN, SEARCH_DAYS, latestEndFor, blockSubject,
 } = require('./task-blocks');
 
 const TASK = { id: 58, text: 'Build succession plan — cover for HoTS and emerging team leads' };
@@ -455,4 +455,36 @@ test("another day is not this block's wall", () => {
     extEv('11:00', '11:30', { date: '2026-09-11', start: '2026-09-11T11:00:00' }),
   ]);
   assert.equal(r.latestEndMin, DAY_END_MIN);
+});
+
+// ── The calendar subject ─────────────────────────────────────────────────────
+//
+// Three things in this estate were called "focus" and none showed the others:
+// Nick's own recurring `Focus time` blocks, NEURO's task blocks, and the in-app
+// focus session. He blocked time for weekly-risk prep, went looking for the
+// session, found a "Focus" event and concluded NEURO had lost it. Nothing had.
+
+test('a block is a Task block, never a Focus anything', () => {
+  const one = blockSubject([{ text: 'Write the weekly risk summary' }]);
+  const many = blockSubject([{ text: 'a' }, { text: 'b' }, { text: 'c' }]);
+
+  assert.equal(one, 'Task block: Write the weekly risk summary');
+  assert.equal(many, 'Task block: 3 tasks');
+
+  // The word is given up entirely: this subject lands in a shared work calendar
+  // beside Nick's own "Focus time" blocks, and colleagues read it.
+  for (const s of [one, many]) {
+    assert.ok(!/focus/i.test(s), `must not say "focus": ${s}`);
+  }
+});
+
+test('the subject is bounded, because Graph truncates and a task can be a paragraph', () => {
+  const long = blockSubject([{ text: 'x'.repeat(500) }]);
+  assert.ok(long.length <= 200);
+});
+
+test('an empty or malformed list still produces a usable subject', () => {
+  assert.equal(blockSubject([]), 'Task block: 0 tasks');
+  assert.equal(blockSubject([{}]), 'Task block: a task');
+  assert.equal(blockSubject(null), 'Task block: 0 tasks');
 });

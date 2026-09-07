@@ -248,6 +248,41 @@ function syncChecklistInNote(raw, tasks) {
 }
 
 /** Filesystem-safe, readable, and short enough not to hit Windows path limits. */
+/**
+ * The calendar subject for a task block. PURE, and the ONE place it is built.
+ *
+ * ⚠ "Task block", NOT "Focus". Three separate things in this estate were called
+ * focus and none of them showed the others:
+ *
+ *   - `Focus time`   — Nick's OWN recurring calendar blocks. NEURO never
+ *                      creates these and must never look like it does.
+ *   - `Focus: <task>` — what this function used to write.
+ *   - a focus SESSION — `focus-session`, in-app only, no calendar presence.
+ *
+ * That cost a real half hour: he blocked time for weekly-risk prep, went
+ * looking for the session, found a "Focus" event in the diary and reasonably
+ * concluded NEURO had lost it. Nothing had been lost; two features shared a
+ * word. This one gives up the word, because it is the one that shows up in a
+ * shared work calendar where colleagues read it — and "Task block" says what it
+ * actually is.
+ *
+ * ⚠ Built here rather than at the four call sites that used to each construct
+ * it — create, removeTask, addTask and the slot-search placeholder — because
+ * four copies of a subject is four chances for a rewrite to rename an event out
+ * from under the block that owns it.
+ *
+ * ⚠ The vault note titles keep the word "Focus block" deliberately. `note_path`
+ * is STORED on the block row and the write-up sweep looks the file up by it, so
+ * renaming those would orphan every outcome note already on disk.
+ */
+function blockSubject(tasks = []) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  const subject = list.length === 1
+    ? `Task block: ${list[0]?.text || 'a task'}`
+    : `Task block: ${list.length} tasks`;
+  return subject.slice(0, 200);
+}
+
 function slugify(text) {
   return String(text || 'task')
     .replace(/\[\[([^|\]]*\|)?([^\]]*)\]\]/g, '$2')
@@ -635,7 +670,7 @@ function readCalendar(now = new Date()) {
         date: block.date_key,
         start: `${block.date_key}T${block.start_time}:00`,
         end: `${block.date_key}T${block.end_time}:00`,
-        subject: 'NEURO focus block',
+        subject: 'NEURO task block',
         isAllDay: false,
         showAs: 'busy',
       });
@@ -739,9 +774,7 @@ async function schedule(taskIds, {
 
   const microsoft = require('./microsoft');
   const result = await microsoft.createCalendarEvent({
-    subject: (tasks.length === 1
-      ? `Focus: ${tasks[0].text}`
-      : `Focus: ${tasks.length} tasks`).slice(0, 200),
+    subject: blockSubject(tasks),
     start: `${slot.date}T${slot.startTime}:00`,
     end: `${slot.date}T${slot.endTime}:00`,
     // No attendees, by design. This is Nick's own time — nothing leaves the
@@ -1446,7 +1479,7 @@ async function addTask(blockId, taskId, { extend = true, saveDue = true, now = n
     try {
       const microsoft = require('./microsoft');
       eventUpdate = await microsoft.updateCalendarEvent(block.event_id, {
-        subject: `Focus: ${remaining.length} tasks`.slice(0, 200),
+        subject: blockSubject(remaining),
         start: `${block.date_key}T${block.start_time}:00`,
         end: `${block.date_key}T${extension.endTime}:00`,
         body: [
@@ -1518,9 +1551,7 @@ async function removeTask(blockId, taskId) {
     try {
       const microsoft = require('./microsoft');
       eventUpdate = await microsoft.updateCalendarEvent(block.event_id, {
-        subject: (remaining.length === 1
-          ? `Focus: ${remaining[0].text}`
-          : `Focus: ${remaining.length} tasks`).slice(0, 200),
+        subject: blockSubject(remaining),
         body: [
           ...remaining.map(i => `• ${i.text}  (NEURO #${i.task_id})`),
           '',
@@ -1910,6 +1941,7 @@ module.exports = {
   syncChecklistInNote,
   resolveWindow,
   slugify,
+  blockSubject,
   findSlot,
   plan,
   schedule,
