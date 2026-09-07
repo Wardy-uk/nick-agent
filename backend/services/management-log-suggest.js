@@ -89,6 +89,40 @@ const TITLE_121 = /\b(1[-\s]?[-:]?\s?1|1-2-1|one[-\s]to[-\s]one|one[-\s]on[-\s]o
 /** The note types that are evidence something HAPPENED. */
 const REAL_NOTE_TYPES = new Set(['meeting', 'transcript']);
 
+/**
+ * Given names that are also ordinary English words.
+ *
+ * ⚠ Caught on the first live run, 7 Sep 2026, and it is the worst false
+ * positive this feature can produce: a note titled *"Medical Consultation:
+ * Chronic Headaches and Neurological Symptoms"* — Nick's own, private — was
+ * offered as a management conversation about Hope Goodall, because a consultant
+ * said *"Let's hope we can manage to get him away."*
+ *
+ * ⚠ The obvious fix is to stop reading first names out of the body at all. It
+ * was tried and MEASURED, and it is too expensive: 35 suggestions fall to 14,
+ * and among the 24 lost is *"Accommodation vs. Uniform Policy: Targeted WFH and
+ * Neurodivergent Support to Mitigate Attrition"* — the clearest management
+ * conversation in the vault and the note MAX_PEOPLE exists to keep. PLAUD's
+ * `people:` links are frequently incomplete, so the body genuinely carries the
+ * attribution for a lot of real conversations.
+ *
+ * So the cut is narrower: a name on this list cannot be matched from BODY PROSE
+ * by its first name alone. It still matches by FULL name anywhere, and by first
+ * name in the title or the `people:` links — both of which are deliberate
+ * attributions rather than prose. A report called Grace or Mark is therefore
+ * still found every time PLAUD names her or him, which it does on almost every
+ * note.
+ *
+ * ⚠ The list is not, and cannot be, exhaustive. It is a reduction in a known
+ * failure mode, not a guarantee — which is exactly why the safety net is that
+ * nothing here writes, and every card has to be read and accepted.
+ */
+const NAMES_THAT_ARE_WORDS = new Set([
+  'hope', 'grace', 'will', 'mark', 'faith', 'joy', 'rose', 'summer', 'dawn',
+  'april', 'may', 'june', 'august', 'sky', 'art', 'bill', 'rich', 'frank',
+  'drew', 'chase', 'page', 'daisy', 'ruby', 'jade', 'pearl', 'sunny', 'destiny',
+]);
+
 function vaultPath() {
   return process.env.OBSIDIAN_VAULT_PATH || '';
 }
@@ -150,18 +184,32 @@ function isOneToOne(note) {
 /**
  * Which of Nick's direct reports this note is about.
  *
- * Full names always; a first name ONLY when it points at exactly one person on
- * the roster. That is `entities.getRoster()`'s rule, and it exists because
- * matching bare first names once attributed one Lucy's commitments to four
- * Lucys. Frontmatter `people:` links and the body are both read — PLAUD
- * generates the links and they are frequently incomplete.
+ * Three tiers, in descending order of how much a match is worth trusting.
+ *
+ * A **FULL name** matches anywhere, body included — "Hope Goodall" in a
+ * transcript is unambiguous.
+ *
+ * A **unique first name** matches in the TITLE or the `people:` links, which
+ * are deliberate attributions: something named that person as a participant.
+ *
+ * A unique first name matches in the **BODY** too — PLAUD's links are often
+ * incomplete and the body carries the real attribution for many conversations —
+ * ⚠ **unless it is also an ordinary English word**, which is the Hope Goodall
+ * case. See NAMES_THAT_ARE_WORDS.
+ *
+ * Uniqueness is required throughout — `entities.getRoster()`'s rule, from
+ * matching bare first names once attributing one Lucy's commitments to four.
  */
 function reportsNamed(note, roster) {
-  const hay = `${note.frontmatter.title || ''}\n${(note.frontmatter.people || []).join('\n')}\n${note.body}`;
+  const attributed = `${note.frontmatter.title || ''}\n${(note.frontmatter.people || []).join('\n')}`;
+  const anywhere = `${attributed}\n${note.body}`;
   const found = [];
   for (const person of roster) {
-    if (namesWord(hay, person.name)) { found.push(person.name); continue; }
-    if (person.uniqueFirstName && namesWord(hay, person.uniqueFirstName)) found.push(person.name);
+    if (namesWord(anywhere, person.name)) { found.push(person.name); continue; }
+    const first = person.uniqueFirstName;
+    if (!first) continue;
+    const haystack = NAMES_THAT_ARE_WORDS.has(first.toLowerCase()) ? attributed : anywhere;
+    if (namesWord(haystack, first)) found.push(person.name);
   }
   return [...new Set(found)];
 }

@@ -114,6 +114,53 @@ test('a first name is not matched inside a longer word', () => {
   assert.equal(a.suggestions.length, 0, '"Willi" must not match "Williamson", and no report is named');
 });
 
+// ── The Hope Goodall case, 7 Sep 2026 ───────────────────────────────────────
+
+test('a name that is an ordinary English word is not read out of body prose', () => {
+  // ⚠ THE LIVE BUG, verbatim. A private medical consultation was offered as a
+  // management conversation about Hope Goodall because a consultant said
+  // "Let's hope we can manage to get him away." Nothing attributed her to it.
+  const a = run([note({
+    frontmatter: {
+      title: 'Medical Consultation: Chronic Headaches and Neurological Symptoms',
+      people: [],
+    },
+    body: "[Consultant] Let's hope we can then manage to get him away.",
+  })]);
+  assert.equal(a.suggestions.length, 0, 'prose is not an attribution');
+  assert.equal(a.skipped.noReport, 1);
+});
+
+test('but the same name in the TITLE or the people links still counts', () => {
+  // Otherwise the fix silently loses every real conversation with her.
+  const byLink = run([note({ frontmatter: { title: 'Coaching session', people: ['[[People/Hope Goodall|Hope]]'] } })]);
+  assert.equal(byLink.suggestions.length, 1);
+
+  const byTitle = run([note({ frontmatter: { title: 'Catch-up with Hope about call handling', people: [] } })]);
+  assert.equal(byTitle.suggestions.length, 1);
+});
+
+test('and the FULL name still matches anywhere, body included', () => {
+  const a = run([note({
+    frontmatter: { title: 'Service review', people: [] },
+    body: 'Hope Goodall raised the escalation process again.',
+  })]);
+  assert.equal(a.suggestions.length, 1);
+  assert.equal(a.suggestions[0].person, 'Hope Goodall');
+});
+
+test('an ordinary first name IS still read out of the body', () => {
+  // ⚠ The other half of the measurement. Dropping body first names entirely was
+  // tried and costs 24 of 38 suggestions, including the 29 Jul
+  // WFH/neurodivergence conversation. Only word-names are restricted.
+  const a = run([note({
+    frontmatter: { title: 'Service review', people: [] },
+    body: 'Stephen walked through the failed jobs process.',
+  })]);
+  assert.equal(a.suggestions.length, 1);
+  assert.equal(a.suggestions[0].person, 'Stephen Mitchell');
+});
+
 // ── The measured boundary: 3 people in, 4 out ───────────────────────────────
 
 test('three named reports is still a management conversation', () => {
