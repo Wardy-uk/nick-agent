@@ -120,3 +120,70 @@ test('everything below an Archive folder counts, including a nested Archive', ()
   assert.strictEqual(r.broken.length, 0);
   assert.strictEqual(r.archivedTargets.length, 1);
 });
+
+// An escaped alias pipe is not part of the link target (7 Sep 2026).
+//
+// Inside a markdown TABLE the alias pipe has to be escaped, so
+// `one-to-one-tracker` correctly writes `[[People/Abdi Mohamed\\|Abdi Mohamed]]`.
+// `extractLinks` split on `|` and kept the escape, so the target read as
+// `People/Abdi Mohamed\\` and every row of the generated 1-2-1 Tracker was
+// reported broken. Measured on the live vault: 19 of 80 — a quarter of the
+// headline count was an artefact of links that resolve perfectly well.
+test('an escaped alias pipe in a table is not a broken link', () => {
+  const root = mkVault({
+    'Areas/Tracker.md': '| [[People/Abdi Mohamed\\|Abdi Mohamed]] | fortnightly |',
+    'People/Abdi Mohamed.md': '# person',
+  });
+  const r = hygiene.lint(root, { write: false });
+
+  assert.strictEqual(r.broken.length, 0, 'the link resolves in Obsidian and must resolve here');
+  // ⚠ Positive control: the person must be seen as LINKED, or this could pass
+  // merely by the target being dropped rather than parsed.
+  assert.ok(!r.orphans.includes('People/Abdi Mohamed.md'), 'the inbound link must still count');
+});
+
+test('an unescaped alias pipe still works, and a real break is still reported', () => {
+  const root = mkVault({
+    'Note.md': '[[People/Zoe Rees|Zoe]] and [[Nobody At All]]',
+    'People/Zoe Rees.md': '# person',
+  });
+  const r = hygiene.lint(root, { write: false });
+
+  assert.strictEqual(r.broken.length, 1, 'the fix must not swallow genuine breaks');
+  assert.strictEqual(r.broken[0].target, 'Nobody At All');
+});
+
+// Contextual linking: which folders, and the two it must never enter (7 Sep 2026).
+
+test('the forbidden roots are REFUSED by name, never quietly skipped', () => {
+  const root = mkVault({ 'Tasks/Outcomes/2026/09/x.md': '# x', 'Notion/Hiking/Routes.md': '# r' });
+
+  // ⚠ Both append REAL PROSE, and that is what makes them dangerous:
+  // `Tasks/Outcomes` reads appended text as a write-up and would release every
+  // held task; a `Notion/` mirror hashes its body and would push the block back
+  // into Notion. A silent skip would look like a folder with nothing to link.
+  assert.throws(() => hygiene.contextualLinkPlan(root, { roots: ['Tasks'], write: false }), /Tasks/);
+  assert.throws(() => hygiene.contextualLinkApply(root, { roots: ['Notion'] }), /Notion/);
+  // A nested path must not slip past a head-only check.
+  assert.throws(() => hygiene.contextualLinkPlan(root, { roots: ['Tasks/Outcomes'], write: false }), /Tasks/);
+});
+
+test('the default roots exclude the forbidden ones', () => {
+  for (const forbidden of Object.keys(hygiene.CTX_FORBIDDEN_ROOTS)) {
+    assert.ok(!hygiene.DEFAULT_CTX_ROOTS.includes(forbidden),
+      forbidden + ' must never be a default root');
+  }
+  // Positive control: the widened set must actually be wider than the original
+  // four, which measured ZERO proposals on the live vault.
+  assert.ok(hygiene.DEFAULT_CTX_ROOTS.length > 4);
+  assert.ok(hygiene.DEFAULT_CTX_ROOTS.includes('Ideas'));
+});
+
+test('a permitted root still plans normally', () => {
+  const root = mkVault({
+    'People/Naomi Wentworth.md': '# Naomi',
+    'Ideas/thought.md': 'Naomi Wentworth mentioned the SLA rework again.',
+  });
+  const p = hygiene.contextualLinkPlan(root, { roots: ['Ideas'], write: false });
+  assert.ok(p.total >= 1, 'a full-name prose mention must still be proposed');
+});

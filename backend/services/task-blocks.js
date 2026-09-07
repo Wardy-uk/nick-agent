@@ -76,7 +76,26 @@ const STUB_CLOSE = '<!-- /neuro:task-outcome-stub -->';
 const LIST_OPEN = '<!-- neuro:task-outcome-list -->';
 const LIST_CLOSE = '<!-- /neuro:task-outcome-list -->';
 
-const FENCES = [[STUB_OPEN, STUB_CLOSE], [LIST_OPEN, LIST_CLOSE]];
+// The hub link. Every outcome note NEURO writes was an ORPHAN — nothing linked
+// to it and it linked to nothing — so 15 of the vault's 58 orphans on 7 Sep 2026
+// were notes NEURO had generated itself. It knows exactly what they belong to.
+//
+// ⚠ It is the HUB, not the day: a block is usually scheduled for a date whose
+// daily note does not exist yet, so `[[2026-09-15]]` would trade an orphan for a
+// BROKEN link — and one of the live orphans is dated a week into the future.
+// `_Part of [[MOC - Tasks]]_` is the idiom `vault-hygiene.connectOrphans` already
+// uses for the same job, and the hub always exists.
+//
+// ⚠ FENCED, and that is load-bearing rather than tidy: unfenced it is 25
+// characters of prose against a MIN_OUTCOME_CHARS of 25, so it would clear the
+// bar on its own and RELEASE every block the instant it was created. That is
+// the empty-stub bug for the third time — pinned by the existing "a fresh stub
+// is not a write-up" test, which fails if this fence is ever forgotten.
+const HUB_OPEN = '<!-- neuro:task-outcome-hub -->';
+const HUB_CLOSE = '<!-- /neuro:task-outcome-hub -->';
+const OUTCOME_HUB = 'MOC - Tasks';
+
+const FENCES = [[STUB_OPEN, STUB_CLOSE], [LIST_OPEN, LIST_CLOSE], [HUB_OPEN, HUB_CLOSE]];
 
 /**
  * How much prose counts as a write-up.
@@ -361,6 +380,10 @@ function renderStub(tasks, block) {
     '',
     '## What is next',
     '',
+    '',
+    HUB_OPEN,
+    `_Part of [[${OUTCOME_HUB}]]_`,
+    HUB_CLOSE,
     '',
   ].join('\n');
 }
@@ -2034,6 +2057,9 @@ module.exports = {
   SEARCH_DAYS,
   LIST_OPEN,
   LIST_CLOSE,
+  HUB_OPEN,
+  HUB_CLOSE,
+  OUTCOME_HUB,
   isOutcomeWritten,
   outcomeNotePath,
   renderStub,

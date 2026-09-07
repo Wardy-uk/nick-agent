@@ -123,6 +123,12 @@ async function readNotionTree(rootPageId, folder, { depth = 0, out = [], seen = 
 // ── Applying a decision ─────────────────────────────────────────────────────
 
 async function pullPage(page, absolute, state, now) {
+  // A pulled page used to arrive linked to NOTHING — its parent lives in Notion
+  // and nothing wrote that into the vault, so 13 of the vault's 58 orphans on
+  // 7 Sep 2026 were Notion mirrors. The parent is a CONTAINER in `tree` mode and
+  // has no note of its own, so linking "up" would point at a file that does not
+  // exist; the hub is a real note, created once.
+  const hub = vault.ensureHubNote(vaultRoot());
   const tree = await notion.getBlockTree(page.id);
   const { markdown, keep } = blocks.blocksToMarkdown(tree);
 
@@ -134,6 +140,13 @@ async function pullPage(page, absolute, state, now) {
       notion_page_id: page.id,
       notion_last_edited: page.lastEdited,
       notion_synced: now.toISOString(),
+      // ⚠ FRONTMATTER, never the body. Change detection hashes the body, so a
+      // link appended there would read as a vault edit on the next pass and push
+      // straight back into Notion — a two-system loop nobody typed into.
+      // Quoted so YAML reads it as text rather than a flow sequence, and stamped
+      // only when the hub exists: a link to a note we failed to create is a
+      // broken link, which is the thing this is here to avoid.
+      ...(hub.relPath ? { notion_hub: '"[[' + vault.NOTION_HUB + ']]"' } : {}),
     },
   );
   vault.writeNote(absolute, content);

@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const os = require('os');
+const path = require('path');
 const vault = require('./vault');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -164,4 +166,74 @@ test('_about.md is not published — it describes the folder, not the subject', 
     fs2.writeFileSync(path2.join(root2, 'MOCs', 'MOC - NOVA.md'), 'real content');
     assert.deepEqual(vault.listNotes(root2, 'MOCs'), ['MOCs/MOC - NOVA.md']);
   } finally { fs2.rmSync(root2, { recursive: true, force: true }); }
+});
+
+// A pulled page is not an orphan (7 Sep 2026).
+//
+// A page mirrored from Notion arrived linked to nothing: its parent lives in
+// Notion and nothing wrote that into the vault, so 13 of the vault's 58 orphans
+// were Notion mirrors.
+
+test('the hub is created once and never rewritten', () => {
+  const fs = require('fs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-hub-'));
+
+  const first = vault.ensureHubNote(root);
+  assert.equal(first.created, true);
+  assert.equal(first.relPath, vault.NOTION_HUB_PATH);
+
+  // ⚠ It is a map of content Nick may edit. Rewriting it on every sync would
+  // make it the sync's file rather than his.
+  const edited = '# Mine now';
+  fs.writeFileSync(path.join(root, vault.NOTION_HUB_PATH), edited, 'utf8');
+  const second = vault.ensureHubNote(root);
+  assert.equal(second.created, false);
+  assert.equal(fs.readFileSync(path.join(root, vault.NOTION_HUB_PATH), 'utf8'), edited);
+});
+
+test('the hub link is frontmatter, so it never enters the body hash', () => {
+  // ⚠ The load-bearing rule. Change detection hashes the BODY; a link appended
+  // there would read as a vault edit on the next pass and push straight back to
+  // Notion — a two-system loop nobody typed into.
+  const body = 'Just the page content.';
+  const content = vault.serialiseNote({ frontmatterLines: [], body }, {
+    notion_page_id: 'abc',
+    notion_hub: '"[[' + vault.NOTION_HUB + ']]"',
+  });
+
+  const parsed = vault.parseNote(content);
+  assert.equal(parsed.body.trim(), body, 'the body must be untouched by the hub stamp');
+  assert.equal(vault.contentHash(parsed.body), vault.contentHash(body));
+  assert.ok(content.includes('[[' + vault.NOTION_HUB + ']]'), 'and the link must actually be there');
+});
+
+test('notion_hub is one of OUR keys, so a re-pull replaces it rather than stacking', () => {
+  assert.ok(vault.OWNED_KEYS.includes('notion_hub'));
+  const once = vault.serialiseNote({ frontmatterLines: [], body: 'x' }, { notion_hub: '"[[H]]"' });
+  const twice = vault.serialiseNote(vault.parseNote(once), { notion_hub: '"[[H]]"' });
+  assert.equal(twice.split('notion_hub:').length - 1, 1, 'a second sync must not add a second stamp');
+});
+
+test('the PULL WRITER actually stamps the hub', () => {
+  // ⚠ Written because the first cut of this feature shipped the hub defined,
+  // exported and tested here — and nothing in `index.js` calling it. A helper
+  // with no caller is the reader-with-no-writer shape, and every test above
+  // passes happily while not one real note gets linked.
+  //
+  // A source scan rather than a mocked pull: `pullPage` needs the Notion API,
+  // and the thing worth pinning is only that the writer reaches for the hub.
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+
+  const pull = src.slice(src.indexOf('async function pullPage('));
+  assert.ok(pull.length > 0, 'positive control: pullPage must still exist under this name');
+
+  const body = pull.slice(0, pull.indexOf('\nasync function ', 1));
+  assert.match(body, /ensureHubNote\(/, 'the pull must ensure the hub exists');
+  assert.match(body, /notion_hub:/, 'and must stamp the link onto the note');
+  // ⚠ Frontmatter only. If the stamp ever moves into the body it starts a
+  // push-back loop with Notion, so the marker must sit in the updates object.
+  assert.ok(body.indexOf('notion_hub:') < body.indexOf('vault.writeNote('),
+    'the stamp belongs in the serialise updates, not appended after the write');
 });

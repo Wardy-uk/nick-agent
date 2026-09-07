@@ -24,6 +24,7 @@ process.env.NEURO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'neu
 
 const {
   isOutcomeWritten, renderStub, outcomeNotePath, slugify, findSlot, resolveWindow,
+  HUB_OPEN, HUB_CLOSE, OUTCOME_HUB,
   renderChecklist, parseChecklist, syncChecklistInNote, LIST_OPEN, LIST_CLOSE,
   MIN_OUTCOME_CHARS, DAY_START_MIN, DAY_END_MIN, SEARCH_DAYS, latestEndFor, blockSubject, liveBlock,
 } = require('./task-blocks');
@@ -581,4 +582,34 @@ test('nothing to read yields null rather than throwing', () => {
   assert.equal(liveBlock([], AT(15, 30)), null);
   assert.equal(liveBlock(null, AT(15, 30)), null);
   assert.equal(liveBlock([blockRow({ startTime: 'nonsense' })], AT(15, 30)), null);
+});
+
+// An outcome note is not an orphan (7 Sep 2026).
+//
+// Every note NEURO wrote here linked to nothing and was linked to by nothing:
+// 15 of the vault's 58 orphans were its own output. These pin the hub link and,
+// more importantly, the two things that make adding one safe.
+
+test('a fresh stub carries a hub link, so it is never born an orphan', () => {
+  const raw = renderStub(TASK, BLOCK);
+  assert.ok(raw.includes('[[' + OUTCOME_HUB + ']]'), 'the note must link somewhere');
+  assert.ok(raw.includes(HUB_OPEN) && raw.includes(HUB_CLOSE), 'and it must be fenced');
+});
+
+test('the hub link does NOT count as a write-up', () => {
+  // ⚠ The whole reason it is fenced. Unfenced it is 25 characters of prose
+  // against a MIN_OUTCOME_CHARS of 25 — it would clear the bar on its own and
+  // release every block the moment it was created, which is the empty-stub bug
+  // for the third time.
+  const verdict = isOutcomeWritten(renderStub(TASK, BLOCK));
+  assert.equal(verdict.written, false);
+  assert.equal(verdict.chars, 0, 'the hub must be stripped entirely, not merely fall under the bar');
+});
+
+test('the hub is a hub, never the day — a future block must not invent a broken link', () => {
+  // Blocks are scheduled ahead, so the daily note for the date usually does not
+  // exist yet. Linking `[[2026-09-15]]` would trade an orphan for a BROKEN link,
+  // and one of the live orphans was dated a week into the future.
+  const raw = renderStub(TASK, { ...BLOCK, date_key: '2026-09-15' });
+  assert.ok(!raw.includes('[[2026-09-15]]'), 'must not link a daily note that may not exist');
 });

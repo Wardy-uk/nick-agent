@@ -16,7 +16,22 @@ const path = require('path');
 const crypto = require('crypto');
 
 // Keys this sync owns. Everything else in the frontmatter is passed through.
-const OWNED_KEYS = ['notion_page_id', 'notion_last_edited', 'notion_synced', 'source'];
+const OWNED_KEYS = ['notion_page_id', 'notion_last_edited', 'notion_synced', 'notion_hub', 'source'];
+
+// The hub every pulled page is filed under.
+//
+// A page pulled from Notion arrived linked to NOTHING: its parent relationship
+// lives in Notion and nothing wrote it into the vault, so 13 of the vault's 58
+// orphans on 7 Sep 2026 were Notion mirrors. Its real parent is a CONTAINER in
+// `tree` mode and has no note of its own, so linking "up" would point at a file
+// that does not exist — trading an orphan for a broken link.
+//
+// ⚠ It is stamped in FRONTMATTER, never appended to the body, and that is the
+// load-bearing part: change detection hashes the BODY, so a link written into it
+// would read as a vault edit on the next pass and push straight back to Notion —
+// a two-system loop nobody typed into. Frontmatter is outside the hash entirely.
+const NOTION_HUB = 'MOC - Notion';
+const NOTION_HUB_PATH = 'MOCs/MOC - Notion.md';
 
 /** Windows-illegal characters, plus the ones Obsidian treats as link syntax. */
 function safeFileName(title) {
@@ -86,6 +101,39 @@ function serialiseNote({ frontmatterLines = [], body = '' }, updates = {}) {
   return `---\n${frontmatter.join('\n')}\n---\n\n${String(body).trim()}\n`;
 }
 
+/**
+ * Create the hub if it is missing, so the link we stamp always resolves.
+ *
+ * ⚠ Create-only. It is a map of content Nick may edit freely — rewriting it on
+ * every sync would make it the sync's file rather than his, and this module
+ * NEVER deletes or overwrites vault content anywhere else either.
+ */
+function ensureHubNote(root) {
+  const absolute = path.join(root, NOTION_HUB_PATH);
+  if (fs.existsSync(absolute)) return { created: false, relPath: NOTION_HUB_PATH };
+  try {
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, [
+      '---',
+      'type: moc',
+      'source: notion-sync',
+      '---',
+      '',
+      '# MOC - Notion',
+      '',
+      'Pages mirrored into the vault from Notion. Each one carries a notion_hub',
+      'property pointing here, so nothing pulled arrives unconnected.',
+      '',
+      'Notion owns their content; edit them there unless the mapping is two-way.',
+      '',
+    ].join('\n'), 'utf8');
+    return { created: true, relPath: NOTION_HUB_PATH };
+  } catch (error) {
+    // A hub we could not create is a link we must not stamp — reported, not thrown.
+    return { created: false, relPath: null, reason: error.message };
+  }
+}
+
 function readNote(absolute) {
   if (!fs.existsSync(absolute)) return null;
   const parsed = parseNote(fs.readFileSync(absolute, 'utf8'));
@@ -143,6 +191,9 @@ function conflictPath(notePath, now) {
 }
 
 module.exports = {
+  NOTION_HUB,
+  NOTION_HUB_PATH,
+  ensureHubNote,
   OWNED_KEYS,
   safeFileName,
   contentHash,

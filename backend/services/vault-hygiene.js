@@ -24,6 +24,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -40,7 +41,48 @@ const BACKUP_REL = ['Scripts', '.lint-backups'];
 const STALE_DAYS = 120;
 
 // Roots scanned for contextual linking (prose-heavy areas). Configurable.
-const DEFAULT_CTX_ROOTS = ['Meetings', 'Reflections', 'Calls', 'Decision Log'];
+//
+// Widened 7 Sep 2026, on measurement: the original four proposed **ZERO** links
+// on the live vault, because the import pipeline already links meeting notes as
+// it writes them. So the "Preview contextual links" button had become a control
+// that ran, succeeded, and did nothing — while 52 orphans sat in the folders it
+// was not looking at. Widened it proposes 320 links across 76 notes.
+const DEFAULT_CTX_ROOTS = [
+  'Meetings', 'Reflections', 'Calls', 'Decision Log',
+  'Areas', 'Ideas', 'Projects', 'Me', 'Documents', 'Catalogues',
+];
+
+/**
+ * Roots this must NEVER write into, whoever asks.
+ *
+ * ⚠ Not tidiness — each one breaks something silently, and the linker appends
+ * REAL PROSE (a "## Mentioned" block), which is exactly what makes both bite:
+ *
+ *  - `Tasks/` holds `Tasks/Outcomes/`, where an unfenced block of text is what
+ *    `task-blocks.isOutcomeWritten` reads as a WRITE-UP. Linking there would
+ *    release every held task in the vault and mark the work done — the
+ *    empty-stub bug, arrived at from the outside.
+ *  - `Notion/` holds pull-only mirrors whose change detection hashes the BODY.
+ *    An appended block reads as a vault edit on the next sync and pushes back
+ *    into Notion, or raises a conflict on a note nobody typed in.
+ *
+ * A caller naming one is REFUSED and told which, rather than silently skipped:
+ * a linker that quietly ignores a folder you asked for looks like a linter that
+ * found nothing there.
+ */
+const CTX_FORBIDDEN_ROOTS = {
+  Tasks: 'outcome notes read appended prose as a write-up and would release held tasks',
+  Notion: 'pull-only mirrors would push the appended block back into Notion',
+};
+
+function assertCtxRoots(roots) {
+  for (const r of roots || []) {
+    const head = String(r).split('/')[0];
+    if (CTX_FORBIDDEN_ROOTS[head]) {
+      throw new Error(`contextual linking refuses "${r}": ${CTX_FORBIDDEN_ROOTS[head]}`);
+    }
+  }
+}
 
 // Project/MOC keyword → link. Proven defaults; override via lint-config.json.
 const DEFAULT_PROJECT_LINKS = [
@@ -84,6 +126,21 @@ function loadConfig(root) {
 }
 
 // Recursively collect .md files, skipping EXCLUDE_DIRS and _about.md index notes.
+// A machine's copy of a note is not a note.
+//
+// EXCLUDE_DIRS is DIRECTORIES only, so six `Microsoft Tasks.sync-conflict-….md`
+// files counted as orphans on 7 Sep 2026 — a tenth of the whole orphan list was
+// Syncthing losing a race with NEURO, which regenerates `Microsoft Tasks.md`
+// every half hour while Syncthing replicates it.
+//
+// ⚠ Deliberately NARROWER than `vault-exclusions.GENERATED_FILE_PATTERNS`, which
+// this does NOT adopt wholesale: that list drops real notes such as the task
+// export and the 1-2-1 tracker, and dropping a note from the WALK also drops it
+// from the resolve index — every inbound link to it would turn from resolved to
+// broken. Both patterns here name a duplicate whose original is still present,
+// so nothing can lose a link target by being skipped.
+const MACHINE_COPY = [/\.sync-conflict-/i, /\.backup-/i];
+
 function walk(dir, acc = []) {
   if (!fs.existsSync(dir)) return acc;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -91,7 +148,8 @@ function walk(dir, acc = []) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       walk(full, acc);
-    } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md') && entry.name !== '_about.md') {
+    } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md') && entry.name !== '_about.md'
+               && !MACHINE_COPY.some((re) => re.test(entry.name))) {
       acc.push(full);
     }
   }
@@ -182,7 +240,15 @@ function extractLinks(text) {
   const re = /(?<!!)\[\[([^\]]+?)\]\]/g;
   let m;
   while ((m = re.exec(text)) !== null) {
+    // ⚠ Inside a markdown TABLE the alias pipe must be escaped, so the tracker
+    // writes `[[People/Abdi Mohamed\|Abdi Mohamed]]` — correct Obsidian, and a
+    // naive split on `|` keeps the escape and reports `People/Abdi Mohamed\` as a
+    // broken link. Measured 7 Sep 2026: 19 of the 80 reported breaks were this
+    // one generated file, i.e. a quarter of the headline number was a parsing
+    // artefact of a link that resolves perfectly well. Same species as #81 —
+    // noise that buries the real breaks under it.
     let target = m[1].split('|')[0].split('#')[0].trim();
+    if (target.endsWith(String.fromCharCode(92))) target = target.slice(0, -1).trim();
     if (!target) continue; // pure heading/block ref
     if (target.includes('/')) target = target.split('/').pop();
     links.push(target.replace(/\.md$/i, ''));
@@ -421,6 +487,7 @@ function writeLintReport(root, { scanned, broken, archivedTargets = [], orphans,
  * @returns {{ scanned, notesTouched, total, byRoot, perNote, reportPath }}
  */
 function contextualLinkPlan(root, { roots = DEFAULT_CTX_ROOTS, write = true } = {}) {
+  assertCtxRoots(roots);
   const config = loadConfig(root);
   const { people, nameCount } = buildPeopleIndex(root);
   const projects = projectMatchers(config);
@@ -480,6 +547,7 @@ function writeCtxPlanReport(root, { scanned, total, byRoot, perNote }) {
  * @returns {{ notesDone, totalLinks, backupDir, changelogPath, applied }}
  */
 function contextualLinkApply(root, { roots = DEFAULT_CTX_ROOTS, only = null } = {}) {
+  assertCtxRoots(roots);
   const config = loadConfig(root);
   const { people, nameCount } = buildPeopleIndex(root);
   const projects = projectMatchers(config);
@@ -550,6 +618,19 @@ function dice(a, b) {
 
 const TIER_RANK = { skip: 0, conservative: 1, moderate: 2, aggressive: 3 };
 
+/**
+ * A stable, transport-safe handle for ONE proposed link repair.
+ *
+ * ⚠ It is derived from the vault, not from the plan's ORDER — an index would
+ * silently name a different repair the moment a note changed between preview
+ * and apply, which is the one failure a per-item pick list must not have.
+ * Being content-derived, a stale pick simply matches nothing; that is reported
+ * as `onlyUnmatched` rather than passing quietly as a clean, smaller run.
+ */
+function fixKey(fromRel, oldTarget) {
+  return crypto.createHash('sha1').update(fromRel + String.fromCharCode(10) + oldTarget).digest('hex').slice(0, 12);
+}
+
 // Build the link-resolution model: active notes + a separate Archive index so we
 // can tell "target only exists in Archive" apart from "missing everywhere".
 function buildFixModel(root) {
@@ -612,7 +693,7 @@ function fixPlan(root, { write = true } = {}) {
 
       const exact = normBaseToPaths.get(nt);
       if (exact && exact.length === 1) {
-        linkFixes.push({ from: rel(root, f), oldTarget: t, newBase: path.basename(exact[0], '.md'), sim: 1, tier: 'conservative' });
+        linkFixes.push({ key: fixKey(rel(root, f), t), from: rel(root, f), oldTarget: t, newBase: path.basename(exact[0], '.md'), sim: 1, tier: 'conservative' });
         continue;
       }
       let best = null, bestSim = 0, ties = 0;
@@ -625,7 +706,7 @@ function fixPlan(root, { write = true } = {}) {
         const cand = normBaseToPaths.get(best);
         if (cand && cand.length === 1) {
           const tier = bestSim >= cfg.fuzzyModerate ? 'moderate' : 'aggressive';
-          linkFixes.push({ from: rel(root, f), oldTarget: t, newBase: path.basename(cand[0], '.md'), sim: +bestSim.toFixed(3), tier });
+          linkFixes.push({ key: fixKey(rel(root, f), t), from: rel(root, f), oldTarget: t, newBase: path.basename(cand[0], '.md'), sim: +bestSim.toFixed(3), tier });
           continue;
         }
       }
@@ -662,6 +743,7 @@ function fixPlan(root, { write = true } = {}) {
   let reportPath = null;
   if (write) {
     ensureDir(path.join(root, ...REPORT_REL));
+    ensureDir(path.join(root, 'Scripts'));
     fs.writeFileSync(path.join(root, 'Scripts', '.lint-plan.json'), JSON.stringify(plan, null, 2), 'utf8');
     reportPath = writeFixPlanReport(root, plan);
   }
@@ -727,10 +809,30 @@ function fixApply(root, flags = {}) {
   const result = { repointed: 0, restored: 0, stubs: 0, expectedSuppressed: false };
   const touched = [];
 
-  // Action 1 — link repoints (cumulative by tier)
+  // Action 1 — link repoints: the union of a TIER and an explicit PICK LIST.
+  //
+  // The tier alone is the wrong shape for the real work. `conservative` is
+  // exact-match-only and on the live vault proposes nothing at all, while
+  // `aggressive` offers genuine mislinks (`NOVA_REVIEW_2026-04-27` scores 0.706
+  // against `W24-2026-review`), so it must never be applied wholesale. What is
+  // wanted is "the safe tier, plus these three guesses I have read" — hence
+  // `only`, a list of `fixKey`s.
+  //
+  // ⚠ A pick is ADDITIVE and never subtractive: it widens the tier's set and
+  // cannot narrow it, so nobody can pass a pick list believing it EXCLUDES the
+  // repairs the tier already covers.
+  // ⚠ A key matching nothing is REPORTED, never swallowed — a plan gone stale
+  // under the caller must not read as a clean run that simply did less.
   const lvl = TIER_RANK[flags.links || 'skip'] || 0;
-  if (lvl >= 1) {
-    const chosen = p.linkFixes.filter((x) => TIER_RANK[x.tier] <= lvl);
+  const only = Array.isArray(flags.only) ? flags.only.filter((k) => typeof k === 'string' && k) : null;
+  const onlySet = new Set(only || []);
+  const picked = new Set();
+  const chosen = p.linkFixes.filter((x) => {
+    if (onlySet.has(x.key)) { picked.add(x.key); return true; }
+    return lvl >= 1 && TIER_RANK[x.tier] <= lvl;
+  });
+  result.onlyUnmatched = only ? only.filter((k) => !picked.has(k)) : [];
+  if (chosen.length) {
     const byFile = new Map();
     for (const x of chosen) {
       const abs = path.join(root, x.from);
@@ -738,13 +840,14 @@ function fixApply(root, flags = {}) {
       byFile.get(abs).push(x);
     }
     for (const [abs, edits] of byFile) { result.repointed += repointInFile(root, abs, edits, backupDir); touched.push(rel(root, abs)); }
-    log.push(`## Repointed links (${flags.links}): ${result.repointed} across ${byFile.size} files`);
+    log.push(`## Repointed links (tier ${flags.links || 'skip'}${only ? ` + ${picked.size} picked` : ''}): ${result.repointed} across ${byFile.size} files`);
     for (const x of chosen) log.push(`- \`${x.from}\`: \`[[${x.oldTarget}]]\` → \`[[${x.newBase}]]\` (sim ${x.sim})`);
     log.push('');
   }
 
   // Action 3 — persist expected-orphan suppression (config already lists them; rewrite to canonicalise)
   if ((TIER_RANK[flags.expected || 'skip'] || 0) >= 2) {
+    ensureDir(path.join(root, 'Scripts'));
     const cfgPath = path.join(root, 'Scripts', 'lint-config.json');
     const cfg = loadConfig(root);
     cfg.expectedOrphanDirs = p.cfg.expectedOrphanDirs;
@@ -1433,5 +1536,7 @@ module.exports = {
   dedupSummaries,
   nightlySweep,
   // exported for tests / reuse
+  DEFAULT_CTX_ROOTS,
+  CTX_FORBIDDEN_ROOTS,
   _internal: { walk, collectArchiveDirs, buildArchiveIndex, parseAliases, extractLinks, linkedSet, cleanProse, buildPeopleIndex, proposeContextualLinks, similarity, norm, dice, EXCLUDE_DIRS },
 };
