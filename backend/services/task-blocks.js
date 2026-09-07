@@ -1923,7 +1923,108 @@ function listOutstanding({ now = new Date(), includeUpcoming = true } = {}) {
   return { rows, error: null };
 }
 
+/**
+ * How early a block is worth mentioning. Enough to begin on time, not so early
+ * that it sits on the page as a second to-do list.
+ */
+const BLOCK_LEAD_MINUTES = 5;
+
+/**
+ * The block whose window is happening NOW, and what could be started in it.
+ * PURE — takes rows from `listOutstanding`, a clock, and the running session.
+ *
+ * ── Why this exists ─────────────────────────────────────────────────────────
+ *
+ * A task block puts time in the diary and a focus session tracks the doing, and
+ * NOTHING connected them. So Nick blocked an hour for weekly-risk prep, arrived
+ * at it, and NEURO had no idea the two were related — he went looking for a
+ * session that had never been started and reasonably concluded one was lost.
+ * The block knew which tasks and when; the session knew how to be started; no
+ * code joined them up.
+ *
+ * ── The rules ───────────────────────────────────────────────────────────────
+ *
+ * 1. IT PROPOSES, NEVER STARTS. Auto-starting a session would assert that Nick
+ *    is working on something because a calendar said he would be — inventing
+ *    the one number the whole feature rests on. `task-blocks` is a detector and
+ *    stays one.
+ *
+ * 2. ONE THING AT A TIME. A block holds up to twelve tasks; a session is one
+ *    thing. So the block is not "startable" — each of its tasks is, and the
+ *    card offers them individually. Folding a four-task block into one session
+ *    would make `text` a lie and the close-out meaningless.
+ *
+ * 3. ONLY A `scheduled` BLOCK. `awaiting-writeup` means it has been worked and
+ *    owes a note; `released`, `complete` and `dropped` are over. Offering to
+ *    start work in a window that has already been accounted for would reopen a
+ *    thing Nick has closed.
+ *
+ * 4. A TICKED TASK IS NOT OFFERED. `awaiting` means he has already finished it
+ *    and it is waiting on the write-up, so proposing a session on it would ask
+ *    him to do it twice.
+ *
+ * 5. A SESSION ALREADY RUNNING ON ONE OF THEM IS REPORTED, NOT RE-OFFERED —
+ *    the same rule the attention card now follows, and for the same reason:
+ *    starting it again force-switches, which is how a session gets replaced.
+ *
+ * 6. A PAST WINDOW IS NOT THIS. Once `passed`, the block owes a write-up and
+ *    belongs to the sweep's prompt. Two cards asking different things about one
+ *    block is how both get ignored.
+ */
+function liveBlock(rows = [], now = new Date(), { leadMinutes = BLOCK_LEAD_MINUTES, sessionTaskIds = [] } = {}) {
+  const shared = require('../../shared/working-days.cjs');
+  const today = shared.toDateStr(now);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const running = new Set((sessionTaskIds || []).filter(Number.isInteger));
+
+  const candidates = (rows || []).filter((r) => {
+    if (!r || r.status !== 'scheduled' || r.passed) return false;   // rules 3 and 6
+    if (r.dateKey !== today) return false;
+    const startMin = toMin(r.startTime);
+    const endMin = toMin(r.endTime);
+    if (startMin == null || endMin == null) return false;
+    return nowMin >= startMin - leadMinutes && nowMin < endMin;
+  });
+
+  if (!candidates.length) return null;
+
+  // The one that started first, so an overlap does not silently pick the later.
+  candidates.sort((a, b) => (toMin(a.startTime) ?? 0) - (toMin(b.startTime) ?? 0));
+  const block = candidates[0];
+  const startMin = toMin(block.startTime);
+
+  const tasks = (block.tasks || [])
+    .filter((t) => !t.awaiting)                                     // rule 4
+    .map((t) => ({
+      taskId: t.taskId,
+      text: t.text,
+      allottedMinutes: t.allottedMinutes ?? null,
+      running: running.has(t.taskId),                               // rule 5
+    }));
+
+  return {
+    blockId: block.blockId,
+    startTime: block.startTime,
+    endTime: block.endTime,
+    minutes: block.minutes,
+    // #87's rule carried through: a window NEURO assumed must say it assumed it.
+    minutesAssumed: Boolean(block.minutesAssumed),
+    // Negative once it is under way, so a client can say "starts in 3" or
+    // "12 minutes in" without recomputing the clock.
+    startsInMinutes: startMin - nowMin,
+    running: nowMin >= startMin,
+    tasks,
+    // Reported rather than left to be inferred from an empty list: "everything
+    // in this block is already ticked" and "this block has nothing in it" are
+    // different facts, and only the first is good news.
+    allTicked: tasks.length === 0 && (block.tasks || []).length > 0,
+    anyRunning: tasks.some((t) => t.running),
+  };
+}
+
 module.exports = {
+  BLOCK_LEAD_MINUTES,
+  liveBlock,
   MIN_OUTCOME_CHARS,
   OUTCOMES_DIR,
   STUB_OPEN,

@@ -25,7 +25,7 @@ process.env.NEURO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'neu
 const {
   isOutcomeWritten, renderStub, outcomeNotePath, slugify, findSlot, resolveWindow,
   renderChecklist, parseChecklist, syncChecklistInNote, LIST_OPEN, LIST_CLOSE,
-  MIN_OUTCOME_CHARS, DAY_START_MIN, DAY_END_MIN, SEARCH_DAYS, latestEndFor, blockSubject,
+  MIN_OUTCOME_CHARS, DAY_START_MIN, DAY_END_MIN, SEARCH_DAYS, latestEndFor, blockSubject, liveBlock,
 } = require('./task-blocks');
 
 const TASK = { id: 58, text: 'Build succession plan — cover for HoTS and emerging team leads' };
@@ -487,4 +487,98 @@ test('an empty or malformed list still produces a usable subject', () => {
   assert.equal(blockSubject([]), 'Task block: 0 tasks');
   assert.equal(blockSubject([{}]), 'Task block: a task');
   assert.equal(blockSubject(null), 'Task block: 0 tasks');
+});
+
+// ── The live block ───────────────────────────────────────────────────────────
+//
+// A task block put time in the diary and a focus session tracked the doing, and
+// nothing connected them: Nick blocked an hour for weekly-risk prep, arrived at
+// it, and NEURO had no idea the two were related.
+
+const AT = (h, m = 0) => new Date(2026, 8, 7, h, m); // 7 Sep 2026, local
+const TODAY = '2026-09-07';
+
+const blockRow = (over = {}) => ({
+  blockId: 1,
+  status: 'scheduled',
+  passed: false,
+  dateKey: TODAY,
+  startTime: '15:00',
+  endTime: '16:00',
+  minutes: 60,
+  minutesAssumed: false,
+  tasks: [{ taskId: 10, text: 'Write the summary', awaiting: false, allottedMinutes: null }],
+  ...over,
+});
+
+test('a block whose window is running is offered', () => {
+  const live = liveBlock([blockRow()], AT(15, 12));
+  assert.ok(live);
+  assert.equal(live.running, true);
+  assert.equal(live.startsInMinutes, -12);
+  assert.equal(live.tasks.length, 1);
+});
+
+test('it is offered a few minutes early, so the block can start on time', () => {
+  assert.ok(liveBlock([blockRow()], AT(14, 57)), 'inside the lead');
+  assert.equal(liveBlock([blockRow()], AT(14, 30)), null, 'half an hour out is not now');
+});
+
+test('a finished window is not this — it owes a write-up instead', () => {
+  assert.equal(liveBlock([blockRow()], AT(16, 1)), null);
+  assert.equal(liveBlock([blockRow({ passed: true })], AT(15, 30)), null);
+});
+
+test('only a scheduled block is offered', () => {
+  for (const status of ['awaiting-writeup', 'released', 'complete', 'dropped']) {
+    assert.equal(liveBlock([blockRow({ status })], AT(15, 30)), null, status);
+  }
+});
+
+test('a ticked task is not offered again', () => {
+  const live = liveBlock([blockRow({
+    tasks: [
+      { taskId: 10, text: 'done already', awaiting: true },
+      { taskId: 11, text: 'still to do', awaiting: false },
+    ],
+  })], AT(15, 30));
+  assert.deepEqual(live.tasks.map(t => t.taskId), [11]);
+});
+
+test('a block whose tasks are all ticked says so rather than looking empty', () => {
+  const live = liveBlock([blockRow({
+    tasks: [{ taskId: 10, text: 'done', awaiting: true }],
+  })], AT(15, 30));
+  assert.equal(live.tasks.length, 0);
+  assert.equal(live.allTicked, true, 'all ticked and nothing in the block are different facts');
+});
+
+test('a task with a session already running is marked, not re-offered as fresh', () => {
+  const live = liveBlock([blockRow({
+    tasks: [
+      { taskId: 10, text: 'being worked on', awaiting: false },
+      { taskId: 11, text: 'not started', awaiting: false },
+    ],
+  })], AT(15, 30), { sessionTaskIds: [10] });
+  assert.equal(live.tasks.find(t => t.taskId === 10).running, true);
+  assert.equal(live.tasks.find(t => t.taskId === 11).running, false);
+  assert.equal(live.anyRunning, true);
+});
+
+test('overlapping blocks pick the one that started first', () => {
+  const live = liveBlock([
+    blockRow({ blockId: 2, startTime: '15:30', endTime: '16:30' }),
+    blockRow({ blockId: 1, startTime: '15:00', endTime: '16:00' }),
+  ], AT(15, 40));
+  assert.equal(live.blockId, 1);
+});
+
+test('a block on another day is never live', () => {
+  assert.equal(liveBlock([blockRow({ dateKey: '2026-09-08' })], AT(15, 30)), null);
+});
+
+test('nothing to read yields null rather than throwing', () => {
+  assert.equal(liveBlock([], AT(15, 30)), null);
+  assert.equal(liveBlock(null, AT(15, 30)), null);
+  assert.equal(liveBlock([blockRow({ startTime: 'nonsense' })], AT(15, 30)), null);
 });

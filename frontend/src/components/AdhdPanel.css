@@ -503,3 +503,54 @@
   cursor: pointer;
 }
 .adhd__closeout-x:hover { color: var(--text-primary); }
+
+/* ── The block happening now ────────────────────────────────────────────────
+   The diary said this hour was for these tasks. It proposes and never starts:
+   nothing here is a claim that Nick is working, only that the window is open. */
+.adhd__block {
+  background: var(--bg-card, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 0.8rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.adhd__block-head {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.adhd__block-window {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.adhd__block-tasks {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+}
+.adhd__block-tasks li {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.25rem 0;
+  font-size: 0.85rem;
+}
+.adhd__block-text { flex: 1; min-width: 0; }
+
+.adhd__block-start { flex: none; }
+
+.adhd__block-running {
+  flex: none;
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.adhd__block-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}

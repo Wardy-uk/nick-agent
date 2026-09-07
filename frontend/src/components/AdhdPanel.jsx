@@ -280,7 +280,7 @@ export default function AdhdPanel({ onNavigate }) {
   if (error) return <div className="adhd"><div className="adhd__card adhd__card--err">{error}</div></div>;
   if (!data) return null;
 
-  const { shape, momentum, winsToday, avoidance, quickWins, session, recovery, signals } = data;
+  const { shape, momentum, winsToday, avoidance, quickWins, session, recovery, signals, blockNow } = data;
 
   return (
     <div className="adhd">
@@ -350,6 +350,61 @@ export default function AdhdPanel({ onNavigate }) {
                 the difference between a prompt and a nag. */}
             <button className="adhd__later" type="button" onClick={() => sessionPost('abandon')}>Let it go</button>
           </div>
+          )}
+        </section>
+      )}
+
+      {/*
+        ── The block that is happening now ──
+        A task block put time in the diary and a focus session tracked the doing,
+        and nothing joined them: arriving at a blocked hour, NEURO had no idea
+        the two were related, so a session that was never started read as one
+        that had been lost.
+
+        ⚠ It PROPOSES. Nothing here auto-starts — a session begun because a
+        calendar said so would assert Nick is working when nobody checked, which
+        invents the one number this whole area rests on.
+
+        Above the session container because it is the thing to act on when the
+        window opens; once something IS running, the container below is what
+        matters and this shrinks to the line that says so.
+      */}
+      {blockNow && (
+        <section className="adhd__block">
+          <div className="adhd__block-head">
+            {blockNow.running
+              ? `Your ${blockNow.startTime} block is running`
+              : `Your ${blockNow.startTime} block starts in ${blockNow.startsInMinutes} min`}
+            <span className="adhd__block-window">
+              {' '}· until {blockNow.endTime}
+              {/* #87's rule: a window NEURO assumed must say so, every read. */}
+              {blockNow.minutesAssumed ? ' (assumed length)' : ''}
+            </span>
+          </div>
+
+          {blockNow.allTicked ? (
+            // "Everything here is ticked" and "this block is empty" are
+            // different facts, and only the first is good news.
+            <p className="adhd__block-note">Everything in it is ticked — it just needs the write-up.</p>
+          ) : (
+            <ul className="adhd__block-tasks">
+              {blockNow.tasks.map((t) => (
+                <li key={t.taskId}>
+                  <span className="adhd__block-text">{t.text}</span>
+                  {t.running ? (
+                    // Already running: starting it again force-switches, which
+                    // is how a session gets replaced.
+                    <span className="adhd__block-running">running now</span>
+                  ) : (
+                    <button
+                      className="adhd__do adhd__block-start"
+                      type="button"
+                      onClick={() => sessionPost('start', { taskId: t.taskId, text: t.text })}
+                    >Start</button>
+                  )}
+                </li>
+              ))}
+            </ul>
           )}
         </section>
       )}

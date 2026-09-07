@@ -410,6 +410,28 @@ async function build() {
     console.warn('[ADHD] Session signals unavailable:', e.message);
   }
 
+  // The task block whose window is happening RIGHT NOW, and what could be
+  // started in it. A block put time in the diary and a session tracked the
+  // doing, and nothing joined them — so arriving at a blocked hour, NEURO had
+  // no idea the two were related, and a session that was never started read as
+  // one that had been lost.
+  //
+  // ⚠ It PROPOSES. Auto-starting would assert Nick is working on something
+  // because a calendar said he would be, inventing the one number this whole
+  // area rests on. Never allowed to fail the build.
+  let blockNow = null;
+  try {
+    const taskBlocks = require('./task-blocks');
+    const { rows } = taskBlocks.listOutstanding({ now });
+    blockNow = taskBlocks.liveBlock(rows, now, {
+      // So a task already being worked on is marked rather than offered again:
+      // starting it a second time force-switches its own session.
+      sessionTaskIds: session.session?.taskId != null ? [session.session.taskId] : [],
+    });
+  } catch (e) {
+    console.warn('[ADHD] Live block unavailable:', e.message);
+  }
+
   const payload = {
     generatedAt: now.toISOString(),
     dateKey,
@@ -421,6 +443,9 @@ async function build() {
     // initiation, so the half of the loop that is actually hard had no number
     // anywhere until this landed.
     signals,
+    // The block happening now, and what can be started in it. Null when no
+    // window is open, which is most of the day.
+    blockNow,
     momentum: _momentum(dateKey),
     winsToday: _winsToday(dateKey),
     avoidance: _avoidance(dateKey),
