@@ -182,6 +182,78 @@ const SUGGESTION_RULES = [
 ];
 
 
+// ── A suggestion that DID something must not be offered again (7 Sep 2026) ──
+//
+// The dedupe below has only ever read PENDING actions, on the stated grounds
+// that "navigation actions are repeatable — the user should always have a
+// 'Do it' option available". That is true of a shortcut and false of an
+// actuator, and `draft_reply` is an actuator: approving it spends a model call,
+// writes the words, and queues a `reply_email` for the second gate.
+//
+// So the moment Nick approved one it left the pending set, the email was still
+// urgent, and the very next `/api/focus` call — every Focus load, every agent
+// loop, every briefing — generated the identical card again. Measured on the
+// live DB: ONE email (Simon Greenhalgh, "Udemny") accounts for 1,168
+// superseded, 6 executed and 2 rejected `draft_reply` rows since 14 August. Six
+// separate approvals, six paid drafts, and two `reply_email` actions still
+// sitting pending for the same message. The card reappearing was the visible
+// half of a loop that was also quietly duplicating an outbound send path.
+//
+// ⚠ WHAT IS REPEATABLE IS `action-presenter`'s CALL, never a list of type names
+// here — the same rule that already keeps `navigationExpiry`, the Actions
+// queue, `bulk-reject` and `state-of-play` agreeing on what "leaves the
+// building" means. NAVIGATE stays repeatable; everything else is offered once
+// per decision.
+const REPEATABLE_KIND = actionPresenter.NAVIGATE;
+
+// ⚠ `focus_item_id` DOES NOT IDENTIFY THE THING. Every urgent email arrives as
+// the literal focus item `email-urgent`, so `draft_reply:email-urgent` is the
+// key for ANY urgent email — dedupe against history on that alone would mean
+// one drafted reply silently suppressing the offer for every future email. So a
+// type that is offered once names the payload field that identifies its
+// subject.
+const IDENTITY_FIELD = {
+  draft_reply: 'emailId',
+};
+
+/**
+ * PURE. The identity two rows must share to be "the same suggestion".
+ *
+ * Returns null when the type is offered-once but nothing in the payload
+ * identifies WHICH thing it is about. ⚠ Null means DO NOT SUPPRESS: falling
+ * back to the focus item id would hide real work on a coarse key, and between
+ * a duplicate card and a silently withheld one, the duplicate is the failure
+ * that can be seen.
+ */
+function suggestionIdentity(type, payload, focusItemId) {
+  const field = IDENTITY_FIELD[type];
+  if (!field) return null;
+  const value = payload?.[field];
+  return value ? `${type}:${value}` : null;
+}
+
+/**
+ * The identities of everything of ONE type that Nick has already decided on.
+ */
+function decidedIdentities(type) {
+  const keys = new Set();
+  let rows;
+  try {
+    rows = db.getDecidedSaraActionsByType(type);
+  } catch (e) {
+    // Not knowing must never cost the suggestion — a failed read falls back to
+    // the old pending-only behaviour, which is a duplicate card rather than a
+    // missing one.
+    console.warn(`[SARA] Could not read decided ${type} actions:`, e.message);
+    return keys;
+  }
+  for (const row of rows) {
+    const key = suggestionIdentity(type, row.payload, row.focus_item_id);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
 /**
  * Generate suggestions from Focus shortlist items.
  * Returns 1 primary + optional 1 secondary (max 2).
@@ -210,6 +282,9 @@ function generateSuggestions(focusItems) {
   const pendingKeys = new Set(
     pendingActions.map(a => `${a.type}:${a.focus_item_id}`)
   );
+  // Read lazily and once per type: on the overwhelmingly common pass every
+  // suggestion is navigation, and this query is never made at all.
+  const decided = new Map();
 
   for (const item of focusItems) {
     for (const rule of SUGGESTION_RULES) {
@@ -220,6 +295,16 @@ function generateSuggestions(focusItems) {
 
       const dedupeKey = `${suggestion.type}:${item.id}`;
       if (pendingKeys.has(dedupeKey)) continue;
+
+      // An actuator is offered once per decision. A shortcut stays repeatable.
+      if (actionPresenter.describe({ type: suggestion.type, payload: suggestion.payload })
+        .kind !== REPEATABLE_KIND) {
+        const identity = suggestionIdentity(suggestion.type, suggestion.payload, item.id);
+        if (identity) {
+          if (!decided.has(suggestion.type)) decided.set(suggestion.type, decidedIdentities(suggestion.type));
+          if (decided.get(suggestion.type).has(identity)) continue;
+        }
+      }
 
       suggestions.push({
         ...suggestion,
@@ -877,4 +962,7 @@ module.exports = {
   queueAction,
   navigationExpiry,
   expireStaleNavigation,
+  // Pure, so the "offered once" rule pins without a database.
+  suggestionIdentity,
+  IDENTITY_FIELD,
 };

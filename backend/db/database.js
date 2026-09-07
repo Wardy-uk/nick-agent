@@ -2119,6 +2119,30 @@ function getSaraActionsBySource(sourcePath, type = null) {
   return rows;
 }
 
+/**
+ * Rows of a type that Nick has actually DECIDED on.
+ *
+ * The status filter is in SQL, not applied to a page of rows in JS, and that is
+ * the whole point: one `draft_reply` had 1,168 `superseded` rows in front of
+ * its handful of decisions, so any recency window big enough to be cheap was
+ * also small enough to miss every one of them. That is the cliff
+ * `getSaraActionsBySource` was written for, one type along.
+ *
+ * `superseded`, `expired` and `pending` are deliberately NOT decisions — Nick
+ * chose nothing. `failed` is not one either: he approved it and it did not
+ * happen, so offering it again is correct.
+ */
+function getDecidedSaraActionsByType(type, limit = 2000) {
+  const rows = all(
+    `SELECT * FROM sara_actions
+       WHERE type = ? AND status IN ('executed', 'rejected')
+       ORDER BY created_at DESC LIMIT ?`,
+    [type, limit]
+  );
+  for (const row of rows) row.payload = JSON.parse(row.payload || '{}');
+  return rows;
+}
+
 function getSaraActionsByType(type, limit = 5000) {
   const rows = all(
     'SELECT * FROM sara_actions WHERE type = ? ORDER BY created_at DESC LIMIT ?',
@@ -2312,6 +2336,7 @@ module.exports = {
   updateSaraActionStatus,
   updateSaraActionPayload,
   getRecentSaraActions,
+  getDecidedSaraActionsByType,
   getSaraActionsBySource,
   getSaraActionsByType,
   countSaraActionsSince,
