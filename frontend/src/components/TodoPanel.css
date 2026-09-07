@@ -1465,3 +1465,26 @@
   color: var(--danger, #ef4444);
   cursor: pointer;
 }
+
+/* Stacked filters — what is narrowing the list, in words.
+   Only shown from two filters up: with one the chips say it well enough, and
+   with several an unexpectedly short list reads as missing data rather than as
+   a filter nobody noticed. */
+.todo-filter-summary {
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.todo-filter-clear {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.72rem;
+  color: inherit;
+  cursor: pointer;
+}
+.todo-filter-clear:hover { color: var(--text-primary); }

@@ -42,6 +42,76 @@ function isMineOverdue(todo) {
   return isOverdue(todo.due_date) && todo.msLocalState !== 'mine-done';
 }
 
+/**
+ * Which dimension each filter chip belongs to.
+ *
+ * One selection per dimension, ANDed across dimensions. The grouping is not
+ * cosmetic — within a dimension the options are mutually exclusive by
+ * construction (nothing is both overdue and undated, nothing is both a
+ * commitment and continual improvement), so letting them stack would offer
+ * combinations that are always empty.
+ */
+const FILTER_GROUPS = {
+  mustdo: 'lane',
+  overdue: 'date',
+  today: 'date',
+  nodue: 'date',
+  high: 'priority',
+  commitment: 'origin',
+  improvement: 'origin',
+  unclassified: 'origin',
+  plan: 'source',
+  vault: 'source',
+  ms: 'source',
+};
+
+/**
+ * One predicate per chip, so the chain composes instead of branching.
+ *
+ * Each is lifted VERBATIM from the if/else chain it replaced — the stacking
+ * change must not quietly redefine what any single filter means.
+ */
+const FILTER_PREDICATES = {
+  mustdo: t => Boolean(t.mustdo),
+  overdue: isMineOverdue,
+  today: t => {
+    if (!t.due_date) return false;
+    const d = new Date(t.due_date);
+    const today = new Date(new Date().toDateString());
+    return d.getTime() === today.getTime() || d < today;
+  },
+  // ⚠ Positively "has no date", never "is not overdue". An undated task is
+  // invisible to every date-driven surface NEURO has — the Must Move lane,
+  // time-fit, the day planner — so no other filter can find it. It is also PIP
+  // competency 3, which counts open items missing a date.
+  nodue: t => !t.due_date,
+  high: t => t.priority === 'high',
+  commitment: t => t.origin === 'commitment',
+  improvement: t => t.origin === 'improvement',
+  // Positively unset, and NOT "everything that is not a commitment" — which
+  // would sweep in the improvement pile the moment someone edits this line.
+  //
+  // ⚠ `task_id` is load-bearing: only rows NEURO OWNS can carry an origin. A
+  // Microsoft mirror or a vault checkbox has no origin column and no Origin
+  // control on its expanded row, so including them would build a list whose
+  // whole purpose is "what do I still have to decide" out of rows that cannot
+  // be decided — and give a count that disagrees with the weekly risk report
+  // for a reason nothing on screen explains.
+  unclassified: t => Boolean(t.task_id) && !t.origin,
+  plan: t => getTopGroup(t.source) === 'plan',
+  vault: t => getTopGroup(t.source) === 'vault',
+  ms: t => getTopGroup(t.source) === 'ms',
+};
+
+/** The sub-category a row falls under, within a selected source group. */
+function subCategoryOf(todo, sourceFilter) {
+  return getSubCategory(todo.source) || (
+    sourceFilter === 'vault'
+      ? (todo.source?.startsWith('Master') ? 'Master Todo' : todo.source?.startsWith('Daily') ? 'Daily Note' : 'Other')
+      : (todo.source?.startsWith('MS Planner') ? 'Planner' : todo.source?.startsWith('MS ToDo') ? 'ToDo' : 'Other')
+  );
+}
+
 function formatDue(dueDate) {
   if (!dueDate) return null;
   const d = new Date(dueDate);
@@ -1537,8 +1607,23 @@ export default function TodoPanel({ focusContext, onClearContext }) {
 
   // Full mode state (original)
   const [showDone, setShowDone] = useState(false);
-  const [filter, setFilter] = useState('all');
+  // ── Stacked filters ────────────────────────────────────────────────────────
+  //
+  // One selection per DIMENSION, ANDed across dimensions, so "Commitments with
+  // no due date" is expressible — which it was not when `filter` was a single
+  // string and every chip replaced the last.
+  //
+  // ⚠ Grouped rather than free toggles, because within a dimension the options
+  // are mutually exclusive by construction: a task cannot be both overdue and
+  // undated, and cannot be a commitment and continual improvement at once.
+  // Letting them stack would offer combinations that are always empty, which
+  // teaches that the filters are broken.
+  //
+  // Pressing the selected chip again clears it, so every state is reachable
+  // without hunting for "All".
+  const [filters, setFilters] = useState({});
   const [subFilters, setSubFilters] = useState([]);
+  const sourceFilter = filters.source || null;
   const [toggling, setToggling] = useState({});
   const [msPushWarning, setMsPushWarning] = useState(null);
   // Not a warning: the push LANDED. The task is open again because it recurs,
@@ -2119,109 +2204,39 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   const mustDoTodos = activeTodos.filter(t => t.mustdo);
 
   const subCategoryOptions = useMemo(() => {
-    if (!['plan', 'vault', 'ms'].includes(filter)) return [];
+    if (!sourceFilter) return [];
     const counts = {};
     for (const t of activeTodos) {
-      if (getTopGroup(t.source) !== filter) continue;
+      if (getTopGroup(t.source) !== sourceFilter) continue;
       const sub = getSubCategory(t.source) || (
-        filter === 'vault'
+        sourceFilter === 'vault'
           ? (t.source?.startsWith('Master') ? 'Master Todo' : t.source?.startsWith('Daily') ? 'Daily Note' : 'Other')
           : (t.source?.startsWith('MS Planner') ? 'Planner' : t.source?.startsWith('MS ToDo') ? 'ToDo' : 'Other')
       );
       counts[sub] = (counts[sub] || 0) + 1;
     }
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [filter, activeTodos]);
-
-  const topCounts = useMemo(() => {
-    const c = { plan: 0, vault: 0, ms: 0 };
-    for (const t of activeTodos) {
-      const g = getTopGroup(t.source);
-      if (c[g] !== undefined) c[g]++;
-    }
-    return c;
-  }, [activeTodos]);
-
-  // Commitment / continual improvement / not yet classified — the same split the
-  // weekly risk report to Chris counts, so the screen he classifies on and the
-  // document he signs cannot disagree about the size of each pile.
-  //
-  // ⚠ UNCLASSIFIED counts only rows NEURO OWNS (`task_id`). A Microsoft mirror
-  // line or a vault checkbox has no origin column and no Origin control on its
-  // expanded row, so gathering them here would build a filter whose whole
-  // purpose is "what do I still have to decide" out of rows that cannot be
-  // decided — a dead end, and a count that disagrees with the report for a
-  // reason nothing on screen explains.
-  const originCounts = useMemo(() => {
-    const c = { commitment: 0, improvement: 0, unclassified: 0 };
-    for (const t of activeTodos) {
-      if (!t.task_id) continue;
-      if (t.origin === 'commitment') c.commitment++;
-      else if (t.origin === 'improvement') c.improvement++;
-      else c.unclassified++;
-    }
-    return c;
-  }, [activeTodos]);
-
-  // ⚠ Counted over EVERY active task, Microsoft mirrors included — unlike the
-  // origin counts above, which skip rows with no task_id because origin is a
-  // NEURO field those rows cannot carry. A due date is not: a Planner card has
-  // one or it does not, and an undated one is just as invisible to the planner.
-  const noDueCount = useMemo(
-    () => activeTodos.filter(t => !t.due_date).length,
-    [activeTodos],
-  );
+  }, [sourceFilter, activeTodos]);
 
   // ⚠ The pin outranks every filter. A card said "open THIS", and dropping it
   // into a filtered list is the same dead end as not linking at all — the row
   // may not be in the filter that happens to be selected.
   const pinnedTodo = pin ? findPinned(activeTodos, pin) : null;
 
+  const activeFilterKeys = Object.values(filters).filter(Boolean);
+
   let filtered = activeTodos;
   if (pin) {
     // A miss renders as a stated miss below, never as an empty list: "it isn't
     // here" and "it's finished or I couldn't read it" are different facts.
     filtered = pinnedTodo ? [pinnedTodo] : [];
-  } else if (filter === 'mustdo') {
-    filtered = mustDoTodos;
-  } else if (filter === 'overdue') {
-    filtered = activeTodos.filter(isMineOverdue);
-  } else if (filter === 'today') {
-    filtered = activeTodos.filter(t => {
-      if (!t.due_date) return false;
-      const d = new Date(t.due_date);
-      const today = new Date(new Date().toDateString());
-      return d.getTime() === today.getTime() || d < today;
-    });
-  } else if (filter === 'high') {
-    filtered = activeTodos.filter(t => t.priority === 'high');
-  } else if (filter === 'nodue') {
-    // ⚠ Positively "has no date", never "is not overdue". An undated task is
-    // invisible to every date-driven surface NEURO has — the Must Move lane,
-    // time-fit, the day planner — so it cannot be found by any of the filters
-    // beside this one, which is exactly why it needed its own.
-    //
-    // It is also PIP competency 3: every open management item needs an owner
-    // and a date, and the weekly report counts the ones missing a date. This is
-    // the screen where that number gets worked down.
-    filtered = activeTodos.filter(t => !t.due_date);
-  } else if (filter === 'commitment' || filter === 'improvement') {
-    filtered = activeTodos.filter(t => t.origin === filter);
-  } else if (filter === 'unclassified') {
-    // Positively: unset, and NOT "everything that is not a commitment" — which
-    // would sweep in the improvement pile the moment someone edits this line.
-    filtered = activeTodos.filter(t => t.task_id && !t.origin);
-  } else if (['plan', 'vault', 'ms'].includes(filter)) {
-    filtered = activeTodos.filter(t => getTopGroup(t.source) === filter);
-    if (subFilters.length > 0) {
-      filtered = filtered.filter(t => {
-        const sub = getSubCategory(t.source) || (
-          filter === 'vault'
-            ? (t.source?.startsWith('Master') ? 'Master Todo' : t.source?.startsWith('Daily') ? 'Daily Note' : 'Other')
-            : (t.source?.startsWith('MS Planner') ? 'Planner' : t.source?.startsWith('MS ToDo') ? 'ToDo' : 'Other')
-        );
-        return subFilters.includes(sub);
-      });
+  } else {
+    for (const key of activeFilterKeys) {
+      const predicate = FILTER_PREDICATES[key];
+      if (predicate) filtered = filtered.filter(predicate);
+    }
+    if (sourceFilter && subFilters.length > 0) {
+      filtered = filtered.filter(t => subFilters.includes(subCategoryOf(t, sourceFilter)));
     }
   }
 
@@ -2232,8 +2247,47 @@ export default function TodoPanel({ focusContext, onClearContext }) {
   };
 
   const setTopFilter = (key) => {
-    setFilter(key);
-    setSubFilters([]);
+    if (key === 'all') {
+      setFilters({});
+      setSubFilters([]);
+      return;
+    }
+    const group = FILTER_GROUPS[key];
+    if (!group) return;
+    setFilters(prev => {
+      const next = { ...prev };
+      // Pressing the selected chip again clears its dimension, so every state
+      // is reachable without going via "All".
+      if (next[group] === key) delete next[group];
+      else next[group] = key;
+      return next;
+    });
+    // Sub-filters belong to whichever source is selected; they cannot survive
+    // it changing or being cleared.
+    if (group === 'source') setSubFilters([]);
+  };
+
+  /**
+   * What a chip would give you, given everything ELSE that is selected.
+   *
+   * ⚠ Counted against the other dimensions, never against the whole list. With
+   * stacking, a static "Commitments (31)" beside an active "No due date" would
+   * promise 31 and deliver the intersection — a count that does not respond to
+   * the selection tells you nothing about what pressing it does.
+   *
+   * Its OWN dimension is excluded, or every chip in the selected group would
+   * read 0 except the selected one.
+   */
+  const countFor = (key) => {
+    const group = FILTER_GROUPS[key];
+    let rows = activeTodos;
+    for (const [g, k] of Object.entries(filters)) {
+      if (g === group || !k) continue;
+      const p = FILTER_PREDICATES[k];
+      if (p) rows = rows.filter(p);
+    }
+    const own = FILTER_PREDICATES[key];
+    return own ? rows.filter(own).length : rows.length;
   };
 
   if (showMoscow) {
@@ -2348,33 +2402,52 @@ export default function TodoPanel({ focusContext, onClearContext }) {
 
       <div className="todo-filters">
         {[
+          // ⚠ Every count is `countFor`, which measures the chip against the
+          // OTHER dimensions currently selected. A static count beside an active
+          // filter promises a number it will not deliver.
           { key: 'all', label: 'All' },
-          ...(mustDoTodos.length > 0 ? [{ key: 'mustdo', label: `Must Do (${mustDoTodos.length})` }] : []),
-          { key: 'overdue', label: `Overdue (${overdueTodos.length})` },
-          { key: 'today', label: 'Due today' },
-          // Counted, because the whole point is to watch it go down — and an
-          // uncounted filter chip gives no reason to press it.
-          { key: 'nodue', label: `No due date (${noDueCount})` },
-          { key: 'high', label: 'High priority' },
+          ...(mustDoTodos.length > 0 ? [{ key: 'mustdo', label: `Must Do (${countFor('mustdo')})` }] : []),
+          { key: 'overdue', label: `Overdue (${countFor('overdue')})` },
+          { key: 'today', label: `Due today (${countFor('today')})` },
+          { key: 'nodue', label: `No due date (${countFor('nodue')})` },
+          { key: 'high', label: `High priority (${countFor('high')})` },
           // Nick's own split. Full labels rather than the badge's short forms:
           // a filter is a labelled control with room, and these have to read the
           // same as the headings in the report they feed.
-          { key: 'commitment', label: `${LABELS.commitment}s (${originCounts.commitment})` },
-          { key: 'improvement', label: `${LABELS.improvement} (${originCounts.improvement})` },
-          { key: 'unclassified', label: `${UNCLASSIFIED_LABEL} (${originCounts.unclassified})` },
-          { key: 'plan', label: `90-Day Plan (${topCounts.plan})` },
-          { key: 'vault', label: `Vault Todos (${topCounts.vault})` },
-          { key: 'ms', label: `MS Tasks (${topCounts.ms})` },
+          { key: 'commitment', label: `${LABELS.commitment}s (${countFor('commitment')})` },
+          { key: 'improvement', label: `${LABELS.improvement} (${countFor('improvement')})` },
+          { key: 'unclassified', label: `${UNCLASSIFIED_LABEL} (${countFor('unclassified')})` },
+          { key: 'plan', label: `90-Day Plan (${countFor('plan')})` },
+          { key: 'vault', label: `Vault Todos (${countFor('vault')})` },
+          { key: 'ms', label: `MS Tasks (${countFor('ms')})` },
         ].map(f => (
           <button
             key={f.key}
-            className={`todo-filter-btn ${filter === f.key ? 'active' : ''}${f.key === 'mustdo' ? ' mustdo-filter' : ''}${['commitment', 'improvement', 'unclassified'].includes(f.key) ? ` origin-filter ${f.key}` : ''}`}
+            className={`todo-filter-btn ${
+              f.key === 'all'
+                ? (activeFilterKeys.length === 0 ? 'active' : '')
+                : (filters[FILTER_GROUPS[f.key]] === f.key ? 'active' : '')
+            }${f.key === 'mustdo' ? ' mustdo-filter' : ''}${['commitment', 'improvement', 'unclassified'].includes(f.key) ? ` origin-filter ${f.key}` : ''}`}
             onClick={() => setTopFilter(f.key)}
+            title={f.key === 'all' ? 'Clear all filters' : 'Filters stack — one per group. Press again to clear.'}
           >
             {f.label}
           </button>
         ))}
       </div>
+
+      {/*
+        What is currently narrowing the list, in words. With one filter the
+        chips said it well enough; with several the row of highlights is easy to
+        misread, and an unexpectedly short list reads as missing data rather
+        than as a filter nobody noticed.
+      */}
+      {activeFilterKeys.length > 1 && (
+        <p className="todo-filter-summary">
+          Showing {filtered.length} — {activeFilterKeys.length} filters stacked.
+          <button type="button" className="todo-filter-clear" onClick={() => setTopFilter('all')}>Clear</button>
+        </p>
+      )}
 
       {subCategoryOptions.length > 0 && (
         <div className="todo-sub-filters">
@@ -2427,7 +2500,7 @@ export default function TodoPanel({ focusContext, onClearContext }) {
         <div className="todo-list">
           {filtered.length === 0 && (
             <div className="todo-empty">
-              {filter === 'all' ? 'No open todos. Rare.' : 'No matching todos.'}
+              {activeFilterKeys.length === 0 ? 'No open todos. Rare.' : 'No matching todos.'}
             </div>
           )}
           {filtered.map(todo => (
