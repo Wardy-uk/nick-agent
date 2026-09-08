@@ -191,25 +191,6 @@ async function init() {
       db.exec('ALTER TABLE tasks ADD COLUMN origin_proposed INTEGER NOT NULL DEFAULT 0');
       console.log('[DB] tasks.origin_proposed added');
     }
-    // Migration: tasks.origin_detail — what the writer knew about where this
-    // came from, in a form that survives the thing it came from. JSON, written
-    // ONCE at creation and never re-derived.
-    //
-    // ⚠ It exists because `origin_path` is not always readable by a human.
-    // `email:AAMkAGI1MjNl…` is a Graph id: it identifies the email to Microsoft
-    // and to nobody else, so a card built on it can only say "an email" — which
-    // is how #251 came to sit at the top of the list as a MUST due today that
-    // Nick could not identify at all. The sender and subject WERE known at
-    // promotion time (the suggestion payload carries them) and were dropped on
-    // the way into the store.
-    //
-    // NULL is the normal case and is a real answer: most rows carry a vault path
-    // that reads perfectly well on its own. It is never a substitute for
-    // origin_path and nothing routes off it — display only.
-    if (taskColumns.length && !taskColumns.includes('origin_detail')) {
-      db.exec('ALTER TABLE tasks ADD COLUMN origin_detail TEXT');
-      console.log('[DB] tasks.origin_detail added');
-    }
   } catch (e) {
     console.error('[DB] tasks migration check failed:', e.message);
   }
@@ -1831,7 +1812,7 @@ function deleteTaskMoscow(filePath, lineNumber, text) {
 // estimateMinutes once vanished from POST /api/tasks. Add to all three.
 const TASK_FIELDS = [
   'text', 'status', 'moscow', 'moscow_proposed', 'priority', 'due_date', 'source',
-  'origin_path', 'origin_line', 'origin_detail', 'context', 'domain', 'origin', 'origin_proposed',
+  'origin_path', 'origin_line', 'context', 'domain', 'origin', 'origin_proposed',
   'notes', 'ms_id', 'ms_source', 'ms_plan',
   'estimate_minutes', 'assignee', 'household', 'criticality',
 ];
@@ -1839,20 +1820,15 @@ const TASK_FIELDS = [
 function createTaskRow(task) {
   const info = run(
     `INSERT INTO tasks (text, status, moscow, moscow_proposed, priority, due_date, source,
-                        origin_path, origin_line, origin_detail, context, domain, origin,
-                        origin_proposed, notes, ms_id, estimate_minutes,
+                        origin_path, origin_line, context, domain, origin, origin_proposed,
+                        notes, ms_id, estimate_minutes,
                         assignee, household, criticality, dedupe_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       task.text, task.status || 'open', task.moscow || null,
       task.moscow_proposed ? 1 : 0, task.priority || null,
       task.due_date || null, task.source || 'manual', task.origin_path || null,
-      task.origin_line == null ? null : task.origin_line,
-      // What the writer knew about the source, in words — JSON, display only.
-      // NULL is the normal case: most rows have a vault path that reads fine on
-      // its own. See the origin_detail migration for why the email ones do not.
-      task.origin_detail || null,
-      task.context || null,
+      task.origin_line == null ? null : task.origin_line, task.context || null,
       // Never a bare `|| 'work'` here — task-store resolves the domain through
       // shared/task-domain.cjs before it arrives, so an unrecognised value is
       // already a decision rather than a typo reaching the column.
