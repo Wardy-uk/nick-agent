@@ -5,6 +5,7 @@ import { duePresets } from '../../../shared/due-dates.cjs';
 import { msPlanBadge, recurrenceLabel } from '../../../shared/ms-task.cjs';
 import { domainBadge } from '../../../shared/task-domain.cjs';
 import { originBadge, ORIGINS, SHORT_LABELS, DESCRIPTIONS, LABELS, UNCLASSIFIED_LABEL } from '../../../shared/task-origin.cjs';
+import { describeTaskProvenance } from '../../../shared/task-provenance.cjs';
 import TimeFitCard from './TimeFitCard';
 import { pinFromContext, findPinned } from '../taskPin';
 import TaskDedupe from './TaskDedupe';
@@ -1078,6 +1079,57 @@ function rowKey(todo) {
 }
 
 /**
+ * When this task arrived, and how.
+ *
+ * ── Why ──────────────────────────────────────────────────────────────────────
+ *
+ * Nick, looking at #251 - MUST, high priority, due today: "I've no idea what it
+ * is". Every fact needed to answer that was already on the row (`source`,
+ * `originPath`, `createdAt`) and no surface had ever rendered one of them. A
+ * task you cannot trace can only be worked blindly or deleted, and both are the
+ * wrong answer when the thing was a real commitment somebody is waiting on.
+ *
+ * WARNING: rendered only for rows NEURO OWNS. A Microsoft mirror has no NEURO
+ * created_at and its source is the board - which the plan badge above already
+ * says - so a line here would read "Added - date not recorded - Recorded as
+ * 'MS Planner'" on every one of them: a label every row shares, which sorts
+ * nothing and is the finding that made a MUST on every task useless.
+ *
+ * WARNING: the wording is NEVER built here. `shared/task-provenance.cjs` owns
+ * it, so this panel, the phone and the Actions queue cannot name one task's
+ * origin three different ways.
+ */
+function TaskProvenance({ todo, expanded }) {
+  if (!todo || !todo.task_id) return null;
+  const p = describeTaskProvenance(todo, { now: new Date() });
+
+  // The note or email it came out of. Absent is absent - never a placeholder,
+  // and never the raw `email:AAMk...` id, which names the message to Microsoft
+  // and to nobody else.
+  const from = p.from;
+
+  return (
+    <div
+      className={`todo-provenance${p.known ? '' : ' unknown'}`}
+      title={(from && (from.detail || from.ref)) || undefined}
+    >
+      <span className="todo-provenance-added">{p.added}</span>
+      <span className="todo-provenance-sep">&#183;</span>
+      <span className="todo-provenance-how">{p.how}</span>
+      {from && (
+        <>
+          <span className="todo-provenance-sep">&#183;</span>
+          <span className="todo-provenance-from">{from.label}</span>
+          {expanded && from.detail && (
+            <span className="todo-provenance-detail">{from.detail}</span>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
  * The handle for a task, on the card.
  *
  * Nick asked for the id on every task card, and the reason is that a task you
@@ -1225,6 +1277,9 @@ function TodoItem({ todo, toggling, onToggle, expanded, onExpand, onPatch, onRef
           {todo.planDay != null && <span className="todo-due">Day {todo.planDay}</span>}
           {todo._scoreReason && <span className="todo-score-reason">{todo._scoreReason}</span>}
         </div>
+        {/* When it arrived and how - the two things a card must be able to
+            answer about itself. NEURO-owned rows only; see TaskProvenance. */}
+        <TaskProvenance todo={todo} expanded={isExpanded} />
         {/* The Microsoft half this row now stands for.
 
             A merged pair shows ONCE, which is the point — but it also means
@@ -1584,6 +1639,13 @@ function MustMoveLane({ items, held, gaps, toggling, onToggle, onSetWip, onDefer
                 )}
                 {item.due_date && <span className="todo-due">{formatDue(item.due_date)}</span>}
               </div>
+              {/* Where this came from, on the lane too. The lane is the first
+                  thing read in the morning, so it is the first place a task
+                  nobody recognises gets looked at — answering it only in the
+                  list below means scrolling down and finding the same task
+                  again, which is the friction TaskEditPanel was hoisted to
+                  remove. */}
+              <TaskProvenance todo={item} expanded={isExpanded} />
               {/* ⚠ Inside `main`, and its clicks stopped there. `main` is what
                   toggles the card open, so a click on any control inside it
                   would close the card underneath the button being pressed —

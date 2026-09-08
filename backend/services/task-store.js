@@ -163,6 +163,10 @@ function toTodoShape(row, jiraKeys) {
     jiraKey: keys[row.id] || null,
     originPath: row.origin_path || null,
     originLine: row.origin_line == null ? null : row.origin_line,
+    // Recorded at creation, so a card can say WHOSE email this came out of
+    // rather than showing a Graph id or nothing at all. Null for the majority of
+    // rows, whose vault path already reads as a sentence.
+    originDetail: row.origin_detail || null,
     createdAt: (row.created_at || '').split(' ')[0] || null,
     updatedAt: row.updated_at || null,
     meta: {
@@ -294,6 +298,28 @@ function findSimilar(text, { excludeId = null, minScore = null } = {}) {
   }
 }
 
+/**
+ * Normalise the recorded provenance detail on the way in.
+ *
+ * Accepts an object (the usual case — `{ email: { from, subject, received } }`)
+ * or a string that is already JSON. Anything empty becomes NULL, because "{}"
+ * stored in the column reads to `describeTaskProvenance` as detail that WAS
+ * recorded and then renders nothing — a gap disguised as an answer.
+ */
+function encodeOriginDetail(value) {
+  if (!value) return null;
+  if (typeof value === 'string') return value.trim() || null;
+  try {
+    const json = JSON.stringify(value);
+    return json && json !== '{}' && json !== 'null' ? json : null;
+  } catch (e) {
+    // Not storable is not a reason to lose the task. The row simply carries no
+    // detail, which is the same state as every row written before this existed.
+    console.warn('[Tasks] origin_detail could not be encoded:', e.message);
+    return null;
+  }
+}
+
 function createTask(input = {}) {
   const text = String(input.text || '').trim();
   if (!text) throw new Error('text is required');
@@ -367,6 +393,10 @@ function createTask(input = {}) {
       patch.origin_path = input.origin_path;
       patch.origin_line = input.origin_line == null ? null : input.origin_line;
     }
+    // Same rule one field along: a second sighting can name the email a task
+    // came out of if nothing had, and never rewrites detail already recorded.
+    const detail = encodeOriginDetail(input.origin_detail || input.originDetail);
+    if (detail && !existing.origin_detail) patch.origin_detail = detail;
     if (Object.keys(patch).length) { db.updateTaskRow(existing.id, patch); revision++; }
     return { id: existing.id, created: false, task: db.getTaskRow(existing.id) };
   }
@@ -413,6 +443,11 @@ function createTask(input = {}) {
     })(),
     origin_path: input.origin_path || null,
     origin_line: input.origin_line == null ? null : input.origin_line,
+    // What the writer knew about the source, in words. Accepted as an object and
+    // stored as JSON so a caller never has to think about the encoding; an empty
+    // object is stored as NULL rather than as "{}", which would read downstream
+    // as "detail was recorded" and render nothing.
+    origin_detail: encodeOriginDetail(input.origin_detail || input.originDetail),
     context,
     domain,
     origin,

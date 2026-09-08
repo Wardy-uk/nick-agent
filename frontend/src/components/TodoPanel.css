@@ -1368,6 +1368,50 @@
 .todo-filter-btn.origin-filter.improvement { border-left-color: rgba(99, 102, 241, 0.75); }
 .todo-filter-btn.origin-filter.unclassified { border-left-color: var(--border, #334155); }
 
+/* Where a task came from, and when.
+
+   Quiet and one line: it is provenance, not content. It sits under the meta row
+   because it answers a question you only ask about SOME tasks - but when you do
+   ask it, nothing else on the card can answer it at all.
+
+   `.unknown` is the honest state, not an error: the source was missing, the
+   value is one nothing here recognises, or the writer never named itself. It is
+   dimmed rather than coloured, because "NEURO cannot say" is a gap, not an
+   alarm - amber here would put a warning on every legacy row. */
+.todo-provenance {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.todo-provenance.unknown {
+  opacity: 0.72;
+  font-style: italic;
+}
+
+.todo-provenance-sep {
+  opacity: 0.45;
+}
+
+/* The note or email itself. Slightly stronger than the sentence around it -
+   it is the bit you go and look for. */
+.todo-provenance-from {
+  color: var(--text-secondary, var(--text-muted));
+}
+
+/* Only shown expanded: the full path, or the email subject. Long enough to
+   wrap, so it gets the whole line rather than fighting for the end of one. */
+.todo-provenance-detail {
+  flex-basis: 100%;
+  opacity: 0.8;
+  word-break: break-word;
+}
+
 /* The Microsoft half a merged row stands for.
    
    Quiet and indented under the meta line: it is provenance, not a second task,

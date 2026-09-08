@@ -37,67 +37,19 @@
  *    but it is never the label.
  */
 
-const path = require('path');
+// ⚠ ONE vocabulary. `describeNote` and `describeEmail` moved to
+// `shared/task-provenance.cjs` when task cards started describing their own
+// origin: a suggestion and the task it becomes are the same fact at two moments,
+// and two copies of these words is exactly how the review queue and the task
+// card come to name different senders for one commitment. This module keeps its
+// own API — what a *candidate payload* looks like is its business — and borrows
+// the phrasing rather than restating it.
+const { describeNote, describeEmail } = require('../../shared/task-provenance.cjs');
 
 /** Trim to something, or null. Never the empty string, which renders as a gap. */
 function str(v) {
   const s = typeof v === 'string' ? v.trim() : v == null ? '' : String(v).trim();
   return s || null;
-}
-
-/**
- * A vault path as a person would name it: the note, and the folder it is in.
- *
- * The full path is kept as `detail` — it is what you need to go and open the
- * thing — but the LABEL is the note name, because `Meetings/2026/08/2026-08-25
- * – Hope 1-2-1.md` on a card is mostly year and month.
- */
-function describeNote(sourcePath, sourceLine) {
-  const rel = String(sourcePath);
-  const name = path.basename(rel, '.md');
-  const folder = path.dirname(rel).split(/[\/]/).filter((s) => s && s !== '.')[0] || null;
-  return {
-    kind: 'note',
-    label: name,
-    // "from your meeting notes" is already said once at the top of the queue;
-    // what the row adds is WHICH note, and roughly what kind of thing it is.
-    context: folder ? `${folder} note` : 'Vault note',
-    detail: sourceLine ? `${rel}:${sourceLine}` : rel,
-    ref: rel,
-  };
-}
-
-/**
- * An email as a person would name it: who sent it, and what it was called.
- *
- * ⚠ Subject and sender are read from `payload.email`, never sliced out of the
- * `sourcePath` — that field holds the Graph id and holds nothing else.
- */
-function describeEmail(email, sourcePath) {
-  const from = str(email?.from) || str(email?.fromEmail);
-  const subject = str(email?.subject);
-
-  if (!from && !subject) {
-    // Recorded honestly rather than falling back to the id. "Sender not
-    // recorded" tells Nick the row cannot be checked from here; the id tells
-    // him nothing at all and looks like a bug.
-    return {
-      kind: 'email',
-      label: 'An email — sender not recorded',
-      context: 'Email',
-      detail: null,
-      ref: str(sourcePath),
-    };
-  }
-
-  return {
-    kind: 'email',
-    label: from ? `Email from ${from}` : 'Email',
-    context: 'Email',
-    // The subject is the thing he searches Outlook for, so it is the detail.
-    detail: subject ? `${String.fromCharCode(8220)}${subject}${String.fromCharCode(8221)}` : null,
-    ref: str(sourcePath),
-  };
 }
 
 /**
