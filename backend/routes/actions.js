@@ -15,6 +15,7 @@ const suggestionEngine = require('../services/suggestion-engine');
 const workingMemory = require('../services/working-memory');
 const actionCandidates = require('../services/action-candidates');
 const actionPresenter = require('../services/action-presenter');
+const actionSnooze = require('../services/action-snooze');
 
 // getPendingSaraActions defaults to 10 and orders by confidence DESC. On an
 // approval list that is a silent cliff, not a page — and it was actively
@@ -125,7 +126,13 @@ router.get('/', (req, res) => {
 
     const decorate = (a) => ({ ...a, presentation: actionPresenter.describe(a) });
 
-    const all = db.getPendingSaraActions(READ_ALL).map(decorate);
+    // ⚠ The pending POOL still holds the sleeping ones — the dedupe, the fold
+    // and the "is one already queued" checks all read it to decide whether to
+    // create another, and hiding a snoozed card from THEM regenerates it. Sleep
+    // is applied here, at the surface that asks "what needs me now".
+    const pool = db.getPendingSaraActions(READ_ALL).map(decorate);
+    const { awake, asleep } = actionSnooze.partitionSnoozed(pool);
+    const all = awake;
     all.sort((a, b) => {
       const ka = rank(a);
       const kb = rank(b);
@@ -164,6 +171,12 @@ router.get('/', (req, res) => {
     res.json({
       pending: page,
       pendingTotal: all.length,
+      // Asleep, not gone. A shorter queue is indistinguishable from a queue
+      // with less in it, so the count and the cards travel — the Must Move
+      // lane's rule about reporting what it held back.
+      snoozed: asleep,
+      snoozedTotal: asleep.length,
+      snoozePresets: actionSnooze.PRESETS,
       pendingByType,
       pendingByKind,
       // Everything needed to know whether there is more, and how much — the
@@ -307,6 +320,52 @@ router.post('/', (req, res) => {
 });
 
 // POST /api/actions/:id/approve — approve and execute
+// POST /api/actions/:id/snooze  { minutes }  — "not now".
+//
+// ⚠ Deliberately NOT a status change and NOT recorded as a decision. Rejection
+// teaches the suggestion engine never to offer this again; saying "later" must
+// not become evidence that Nick did not want it.
+router.post('/:id/snooze', (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const action = db.getSaraAction(id);
+    if (!action) return res.status(404).json({ ok: false, reason: 'no such action' });
+    if (action.status !== 'pending') {
+      // Already approved, rejected or expired: waking it later would put a
+      // decided card back in front of him.
+      return res.status(400).json({ ok: false, reason: `this one is already ${action.status}` });
+    }
+
+    // Measured against the SAME rule that does the sweeping, so a snooze can
+    // never outlive the action it is on.
+    const expiresAt = suggestionEngine.expiryMomentFor(action);
+    const plan = actionSnooze.resolveSnooze(req.body?.minutes ?? req.query.minutes, { expiresAt });
+    if (!plan.ok) return res.status(400).json(plan);
+
+    if (!db.snoozeSaraAction(id, plan.until)) {
+      return res.status(400).json({ ok: false, reason: 'it was not pending by the time we wrote' });
+    }
+    res.json({ ok: true, id, until: plan.until, minutes: plan.minutes });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// DELETE /api/actions/:id/snooze — wake it now. Every other decision in NEURO
+// has a way back and this is no different.
+router.delete('/:id/snooze', (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const action = db.getSaraAction(id);
+    if (!action) return res.status(404).json({ ok: false, reason: 'no such action' });
+    if (!action.snoozed_until) return res.status(400).json({ ok: false, reason: 'it is not snoozed' });
+    db.snoozeSaraAction(id, null);
+    res.json({ ok: true, id });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 router.post('/:id/approve', async (req, res) => {
   try {
     const { status, body } = await approveAction(req.params.id);

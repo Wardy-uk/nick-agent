@@ -409,6 +409,34 @@ function navigationExpiry(action, now = new Date()) {
 }
 
 /**
+ * WHEN this action dies of its own accord, or null if nothing retires it. PURE.
+ *
+ * The twin of `navigationExpiry`, which answers "is it spent yet". Snoozing
+ * needs the moment rather than the verdict, and the two are deliberately in one
+ * file: a snooze that outlives its action is a card swept to `expired` while it
+ * sleeps and never seen again, so the sleep must be measured against the same
+ * rule that does the sweeping.
+ *
+ * Only navigation actions expire. Everything else stands until Nick decides.
+ */
+function expiryMomentFor(action, now = new Date()) {
+  if (!action) return null;
+  if (actionPresenter.describe(action).kind !== actionPresenter.NAVIGATE) return null;
+
+  const start = parseSqlTimestamp(action.payload?.start) || null;
+
+  // End of the LOCAL day it was raised — "a shortcut to now, raised on an
+  // earlier day" is what the sweep retires, so midnight is the deadline.
+  const created = parseSqlTimestamp(action.created_at) || now;
+  const midnight = new Date(created.getFullYear(), created.getMonth(), created.getDate() + 1, 0, 0, 0, 0);
+
+  // Whichever comes first: a prep card for an 09:45 meeting is spent at 09:45,
+  // not at midnight.
+  if (start && start.getTime() < midnight.getTime()) return start;
+  return midnight;
+}
+
+/**
  * Retire every pending navigation action whose moment has passed.
  *
  * `expired` rather than `rejected`: Nick did not decide anything about these, and
@@ -871,6 +899,20 @@ ${String(message?.body || message?.preview || '').slice(0, 4000)}`;
         source: payload.source || 'meeting-promotion',
         origin_path: payload.sourcePath || null,
         origin_line: payload.sourceLine == null ? null : payload.sourceLine,
+        // ⚠ Carried across, because the ONLY human-readable thing about an
+        // email-sourced task is here and it was being dropped. `sourcePath` for
+        // one of these is `email:<Graph id>` — which names the message to
+        // Microsoft and to nobody else — so a task promoted from an email
+        // arrived in the store with no way to say whose email it was. That is
+        // #251: a MUST, high priority, due today, and unidentifiable. The
+        // sender, subject and received date have been on this payload since the
+        // extractor shipped; nothing was missing but the copy.
+        //
+        // Stored rather than looked up later on purpose: this action is
+        // prunable, and the Graph id resolves to nothing without Microsoft.
+        // Note-sourced candidates pass nothing — their path already reads as a
+        // sentence, and an empty object stores as NULL.
+        origin_detail: payload.email ? { email: payload.email } : null,
       });
       return {
         ok: true,
@@ -961,6 +1003,7 @@ module.exports = {
   logActionExecution,
   queueAction,
   navigationExpiry,
+  expiryMomentFor,
   expireStaleNavigation,
   // Pure, so the "offered once" rule pins without a database.
   suggestionIdentity,

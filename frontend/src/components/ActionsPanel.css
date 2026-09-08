@@ -438,3 +438,58 @@
 
   .ap-hist-when { margin-left: 0; }
 }
+
+/* ── "Not now" ─────────────────────────────────────────────────────────────
+   The menu sits inline beside Approve/Reject. Deliberately the same ghost
+   weight as Reject: snoozing is not a lesser Reject, it is a different act. */
+.ap-snooze { position: relative; display: inline-block; }
+.ap-snooze-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 130px;
+  padding: 4px;
+  background: var(--bg-elevated, #161a22);
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.ap-snooze-opt {
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.ap-snooze-opt:hover { color: var(--text-primary); background: var(--bg-hover, #1e2430); }
+
+/* Asleep, not gone — no coloured band, so it cannot read as something waiting. */
+.ap-group--snoozed { margin-top: 18px; }
+.ap-snoozed-toggle {
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.ap-snoozed-toggle:hover { color: var(--text-secondary); }
+.ap-snoozed-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0 6px 10px;
+  margin-top: 6px;
+  border-left: 2px solid var(--border, #2a2f3a);
+  opacity: 0.75;
+}
+.ap-snoozed-label { flex: 1; font-size: 12px; color: var(--text-secondary); }
+.ap-snoozed-when { font-size: 11px; color: var(--text-muted); white-space: nowrap; }

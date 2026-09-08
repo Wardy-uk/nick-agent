@@ -94,7 +94,7 @@ function Outcome({ result, onDismiss, onNavigate }) {
   );
 }
 
-function ActionCard({ action, busy, onResolve }) {
+function ActionCard({ action, busy, onResolve, onSnooze, presets }) {
   const p = action.presentation || {};
   const blocked = p.canApprove === false;
   const outbound = p.kind === 'outbound';
@@ -150,11 +150,58 @@ function ActionCard({ action, busy, onResolve }) {
         <button className="ap-btn ap-btn-ghost" disabled={busy} onClick={() => onResolve('reject')}>
           Reject
         </button>
+        {/* Between "do it" and "never" there was nothing, and "not this
+            morning" is the true answer most of the time. Deliberately its own
+            control rather than a third verb on Reject: rejecting is a verdict
+            that teaches the engine, and this teaches it nothing. */}
+        <SnoozeMenu presets={presets} busy={busy} onSnooze={onSnooze} />
         {blocked && p.link && (
           <span className="ap-blocker-link">{p.link.text}</span>
         )}
       </div>
     </div>
+  );
+}
+
+// "Not now." The durations come from the SERVER (`snoozePresets`), never a copy
+// here — a screen offering a duration the server refuses is a button that fails
+// on tap, and this repo has shipped a second copy of a vocabulary before.
+// When it comes back, in words. An ISO timestamp on a card is a timestamp
+// nobody reads, and "back later" with no when is indistinguishable from gone.
+function formatWake(iso) {
+  const at = new Date(iso);
+  if (!Number.isFinite(at.getTime())) return 'at an unknown time';
+  const mins = Math.round((at.getTime() - Date.now()) / 60000);
+  if (mins <= 0) return 'any moment';
+  if (mins < 90) return `in ${mins} min`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `in ${hours} hours`;
+  return at.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function SnoozeMenu({ presets, busy, onSnooze }) {
+  const [open, setOpen] = useState(false);
+  if (!presets || presets.length === 0) return null;
+  return (
+    <span className="ap-snooze">
+      <button className="ap-btn ap-btn-ghost" disabled={busy} onClick={() => setOpen(v => !v)}>
+        Snooze
+      </button>
+      {open && (
+        <span className="ap-snooze-menu">
+          {presets.map(opt => (
+            <button
+              key={opt.minutes}
+              className="ap-snooze-opt"
+              disabled={busy}
+              onClick={() => { setOpen(false); onSnooze(opt.minutes); }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -231,6 +278,7 @@ export default function ActionsPanel({ onNavigate }) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [outcomes, setOutcomes] = useState([]);   // newest first, survives the reload
   const [showHistory, setShowHistory] = useState(false);
+  const [showSnoozed, setShowSnoozed] = useState(false);
   const [expanded, setExpanded] = useState({});   // kind -> show everything sent
   const [filter, setFilter] = useState({});
 
@@ -274,6 +322,35 @@ export default function ActionsPanel({ onNavigate }) {
     } catch (e) {
       setOutcomes(o => [{ id: action.id, ok: false, label, text: e.message }, ...o]);
     }
+    setBusyId(null);
+    load(filter);
+  };
+
+  const snooze = async (action, minutes) => {
+    setBusyId(action.id);
+    const label = action.presentation?.label || action.type;
+    try {
+      const res = await fetch(apiUrl(`/api/actions/${action.id}/snooze`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minutes }),
+      });
+      const body = await res.json();
+      // A refusal has to SAY so. The server refuses a snooze that would outlive
+      // the card — a row that silently stayed put would read as a dead button.
+      if (!body.ok) setOutcomes(o => [{ id: action.id, ok: false, label, text: body.reason || 'Could not snooze' }, ...o]);
+    } catch (e) {
+      setOutcomes(o => [{ id: action.id, ok: false, label, text: e.message }, ...o]);
+    }
+    setBusyId(null);
+    load(filter);
+  };
+
+  const wake = async (action) => {
+    setBusyId(action.id);
+    try {
+      await fetch(apiUrl(`/api/actions/${action.id}/snooze`), { method: 'DELETE' });
+    } catch { /* the reload below is the feedback */ }
     setBusyId(null);
     load(filter);
   };
@@ -417,6 +494,8 @@ export default function ActionsPanel({ onNavigate }) {
                 action={a}
                 busy={busyId === a.id}
                 onResolve={verb => resolve(a, verb)}
+                onSnooze={minutes => snooze(a, minutes)}
+                presets={data.snoozePresets}
               />
             ))}
             {(hidden > 0 || open) && (
@@ -432,6 +511,26 @@ export default function ActionsPanel({ onNavigate }) {
           </section>
         );
       })}
+
+      {/* Asleep, not gone. Hiding these with no way to see them would make the
+          button a silent delete, and every one of them is still a decision Nick
+          owes — the same rule as the Must Move lane reporting what it held. */}
+      {(data.snoozedTotal || 0) > 0 && (
+        <section className="ap-group ap-group--snoozed">
+          <button className="ap-snoozed-toggle" onClick={() => setShowSnoozed(v => !v)}>
+            {showSnoozed ? '▾' : '▸'} {data.snoozedTotal} snoozed — still waiting on you, back later
+          </button>
+          {showSnoozed && (data.snoozed || []).map(a => (
+            <div className="ap-snoozed-row" key={a.id}>
+              <span className="ap-snoozed-label">{a.presentation?.title || a.presentation?.label || a.type}</span>
+              <span className="ap-snoozed-when">back {formatWake(a.snoozed_until)}</span>
+              <button className="ap-btn ap-btn-ghost" disabled={busyId === a.id} onClick={() => wake(a)}>
+                Bring it back
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
 
       {/* The actual fix for #108. "Show more" above only ever revealed rows the
           server had already sent; this asks for the next page, so the tail is

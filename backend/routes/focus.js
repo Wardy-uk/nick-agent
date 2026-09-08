@@ -161,7 +161,11 @@ router.get('/', async (req, res) => {
         if (raw.length > 0) {
           suggestionEngine.persistSuggestions(raw);
         }
-        suggestions = db.getPendingSaraActions().slice(0, 2);
+        // Awake ones only - this is a "what needs me now" surface. Read wide
+        // rather than on the default limit of 10, or two sleeping cards at the
+        // top of the confidence order would leave the screen empty.
+        suggestions = require('../services/action-snooze')
+          .partitionSnoozed(db.getPendingSaraActions(200)).awake.slice(0, 2);
       } catch (e) {
         console.warn('[Focus] Suggestion generation failed:', e.message);
       }

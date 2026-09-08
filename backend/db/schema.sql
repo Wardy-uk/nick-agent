@@ -349,7 +349,10 @@ CREATE TABLE IF NOT EXISTS sara_actions (
   status TEXT DEFAULT 'pending',
   focus_item_id TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  resolved_at DATETIME
+  resolved_at DATETIME,
+  -- "Not now." The status stays pending while asleep, because the dedupe and
+  -- fold passes read the pending pool to decide whether to create another.
+  snoozed_until TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sara_actions_status ON sara_actions(status);
@@ -574,6 +577,17 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- traced to the note that produced it.
   origin_path TEXT,
   origin_line INTEGER,
+  -- What the writer knew about where this came from, in words, as JSON. Written
+  -- ONCE at creation, never re-derived, display only — nothing routes off it.
+  --
+  -- ⚠ It exists because origin_path is not always readable by a human: an
+  -- email-promoted task carries `email:AAMkAGI1MjNl…`, a Graph id that names the
+  -- message to Microsoft and to nobody else. Task #251 was a MUST, high
+  -- priority, due today, and unidentifiable — while the sender and subject were
+  -- sitting on the suggestion it was promoted from and were dropped on the way
+  -- in. NULL is the normal case and a real answer: a vault path reads fine on
+  -- its own. See shared/task-provenance.cjs for how it is rendered.
+  origin_detail TEXT,
   context TEXT,
   -- Which part of Nick's life this belongs to: 'work' or 'personal'.
   -- NOT the same axis as `context` above, which is derived by todo-intelligence
