@@ -70,6 +70,94 @@ function tally(list, key, count = 'c') {
   return out;
 }
 
+/**
+ * The date keys of the last `count` days ending on `today`, oldest first. PURE.
+ *
+ * The strip is a CALENDAR window, not "whatever rows exist". Rendering only the
+ * rows that happen to be in `daily_summary` is what made a missing day invisible
+ * rather than visibly missing — the same shape as reading an unread domain as a
+ * zero, in the one panel built to catch exactly that.
+ */
+function lastDays(today, count) {
+  const out = [];
+  const [y, m, d] = String(today).split('-').map(Number);
+  for (let i = count - 1; i >= 0; i -= 1) {
+    // Constructed as a LOCAL date and formatted with local getters — never
+    // toISOString(), which flips the day early every evening under BST.
+    const dt = new Date(y, m - 1, d - i);
+    out.push(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`);
+  }
+  return out;
+}
+
+/**
+ * One cell per day, from the rollup where it exists and from the log where it
+ * does not. PURE — the rule is the product, so it pins without a database.
+ *
+ * Three states per day, and keeping them apart is the whole point:
+ *   * done      — the ritual happened;
+ *   * not done  — we can see the day and nothing was logged;
+ *   * unknown   — the day is outside what `activity_log` covers at all, so
+ *                 nothing here may be read as a skipped ritual.
+ *
+ * ⚠ The denominator counts KNOWN days only. Counting an unknown day as a miss
+ * would make a fresh install, or a pruned log, read as a man who stopped doing
+ * his standups.
+ */
+function foldRituals({ dateKeys, rolled = [], live = [], logFrom = null }) {
+  const byKey = new Map();
+  for (const r of rolled) byKey.set(r.date_key, r);
+
+  const liveByKey = new Map();
+  for (const r of live) {
+    const entry = liveByKey.get(r.date_key) || { standup: 0, eod: 0, captures: 0 };
+    if (r.event_type === 'standup_done') entry.standup += r.c;
+    else if (r.event_type === 'eod_done') entry.eod += r.c;
+    else if (r.event_type === 'capture') entry.captures += r.c;
+    liveByKey.set(r.date_key, entry);
+  }
+
+  const days = dateKeys.map((date_key) => {
+    const row = byKey.get(date_key);
+    if (row) {
+      return {
+        date_key,
+        standup_done: row.standup_done ? 1 : 0,
+        eod_done: row.eod_done ? 1 : 0,
+        captures_count: row.captures_count || 0,
+        // Rolled up: this is the stored answer, not one derived on the fly.
+        rolled: true,
+        known: true,
+      };
+    }
+    const l = liveByKey.get(date_key);
+    const known = !logFrom || date_key >= logFrom;
+    return {
+      date_key,
+      // ⚠ null, never 0, when the day is outside the log — "I could not look"
+      // and "he did not do it" are opposite facts and only one is a judgement.
+      standup_done: known ? (l && l.standup ? 1 : 0) : null,
+      eod_done: known ? (l && l.eod ? 1 : 0) : null,
+      captures_count: known ? (l ? l.captures : 0) : null,
+      rolled: false,
+      known,
+    };
+  });
+
+  const knownDays = days.filter((d) => d.known);
+  return {
+    days,
+    standupDays: knownDays.filter((d) => d.standup_done).length,
+    eodDays: knownDays.filter((d) => d.eod_done).length,
+    window: knownDays.length,
+    // Days the strip is showing from the log because the 22:00 rollup has not
+    // reached them yet. Surfaced so the panel can say the figures are live
+    // rather than silently presenting two different provenances as one.
+    pendingRollup: days.filter((d) => d.known && !d.rolled).length,
+    unknownDays: days.length - knownDays.length,
+  };
+}
+
 function snapshot() {
   const today = todayLocal();
 
@@ -134,14 +222,30 @@ function snapshot() {
 
   // 21 days is three weeks of habit — long enough to show a pattern, short
   // enough to fit a row of cells without scrolling on a phone.
+  //
+  // ⚠ `daily_summary` alone CANNOT answer this, and reading it alone was a lie
+  // the panel told every day. `runNightlyRollup()` fires at 22:00 and builds the
+  // summary for YESTERDAY, so a day's row does not exist until 22:00 the day
+  // after it — the strip lagged by up to 46 hours and today's standup could
+  // never appear however early it was done. Found 7 Sep 2026: `activity_log`
+  // held `standup_done` at 07:54 that morning and the newest `daily_summary` row
+  // was 5 Sep, so Rituals showed a gap where a completed ritual was.
+  //
+  // The un-rolled days are therefore filled from `activity_log` — deliberately
+  // the SAME source `buildDailySummary()` reads, not a second derivation. This
+  // is the rollup's own answer computed early, never a second opinion about it.
   const ritualRows = rows(`SELECT date_key, standup_done, eod_done, captures_count
                            FROM daily_summary ORDER BY date_key DESC LIMIT 21`);
-  const rituals = {
-    days: ritualRows.slice().reverse(),
-    standupDays: ritualRows.filter(r => r.standup_done).length,
-    eodDays: ritualRows.filter(r => r.eod_done).length,
-    window: ritualRows.length,
-  };
+  const dateKeys = lastDays(today, 21);
+  const live = rows(
+    `SELECT date_key, event_type, COUNT(*) c FROM activity_log
+      WHERE date_key >= ? AND date_key <= ? GROUP BY date_key, event_type`,
+    [dateKeys[0], today]
+  );
+  // How far back the log itself reaches. A window day earlier than this is
+  // UNKNOWN, not a skipped ritual — absence of a log is not evidence of absence.
+  const logFrom = db.get('SELECT MIN(date_key) m FROM activity_log')?.m || null;
+  const rituals = foldRituals({ dateKeys, rolled: ritualRows, live, logFrom });
 
   const lastEmbed = db.get("SELECT MAX(embedded_at) m FROM vault_embeddings")?.m || null;
   const vault = {
@@ -294,4 +398,4 @@ function overall(issues) {
   return 'ok';
 }
 
-module.exports = { snapshot, assess, overall, TRACKED_JOBS, _internals: { daysSince, todayLocal } };
+module.exports = { snapshot, assess, overall, TRACKED_JOBS, foldRituals, _internals: { daysSince, todayLocal, lastDays } };

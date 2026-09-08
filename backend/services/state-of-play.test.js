@@ -19,7 +19,7 @@ const fs = require('fs');
 
 process.env.NEURO_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'neuro-sop-')), 'a.db');
 
-const { assess, overall, _internals } = require('./state-of-play');
+const { assess, overall, foldRituals, _internals } = require('./state-of-play');
 
 /** A snapshot with nothing wrong; each test spoils exactly one thing. */
 const clean = (over = {}) => ({
@@ -162,4 +162,103 @@ test('daysSince tolerates the space-separated timestamps SQLite writes', () => {
   assert.ok(got === 4 || got === 5, `expected ~5 days, got ${got}`);
   assert.equal(_internals.daysSince(null), null);
   assert.equal(_internals.daysSince('not a date'), null);
+});
+
+// ── Rituals: today's standup must be able to show today ─────────────────────
+//
+// `runNightlyRollup()` fires at 22:00 and builds the summary for YESTERDAY, so a
+// day's `daily_summary` row does not exist until 22:00 the day AFTER it. Reading
+// that table alone made the strip lag by up to 46 hours and made today's standup
+// unshowable however early it was done. Measured 7 Sep 2026: `activity_log` held
+// `standup_done` at 07:54 that morning and the newest summary row was 5 Sep, so
+// Rituals rendered a gap where a completed ritual was.
+
+const KEYS = ['2026-09-03', '2026-09-04', '2026-09-05', '2026-09-06', '2026-09-07'];
+
+test('the window is a run of CALENDAR days ending today, not the rows that happen to exist', () => {
+  assert.deepEqual(_internals.lastDays('2026-09-07', 5), KEYS);
+  // Across a month boundary, and built with local getters rather than
+  // toISOString() — the Pi may run in UTC.
+  assert.deepEqual(_internals.lastDays('2026-09-02', 3), ['2026-08-31', '2026-09-01', '2026-09-02']);
+});
+
+test("today's standup shows today, from the log, before any rollup has run", () => {
+  const r = foldRituals({
+    dateKeys: KEYS,
+    rolled: [{ date_key: '2026-09-04', standup_done: 1, eod_done: 0, captures_count: 0 }],
+    live: [{ date_key: '2026-09-07', event_type: 'standup_done', c: 2 }],
+    logFrom: '2026-09-01',
+  });
+  const today = r.days.find(d => d.date_key === '2026-09-07');
+  assert.equal(today.standup_done, 1);
+  assert.equal(today.rolled, false, 'and it is marked as live rather than rolled up');
+  assert.equal(r.standupDays, 2);
+});
+
+test('a rolled-up row WINS over the log for the same day', () => {
+  // The rollup is the stored answer and may carry things the raw log does not.
+  // The live read exists to fill the days it has not reached, never to argue
+  // with the days it has.
+  const r = foldRituals({
+    dateKeys: ['2026-09-04'],
+    rolled: [{ date_key: '2026-09-04', standup_done: 0, eod_done: 0, captures_count: 0 }],
+    live: [{ date_key: '2026-09-04', event_type: 'standup_done', c: 1 }],
+    logFrom: '2026-09-01',
+  });
+  assert.equal(r.days[0].standup_done, 0);
+  assert.equal(r.days[0].rolled, true);
+});
+
+test('⚠ a day before the log begins is UNKNOWN, never a missed standup', () => {
+  // Absence of a log is not evidence of absence. Counting it as a miss would make
+  // a fresh install read as a man who stopped doing his standups.
+  const r = foldRituals({ dateKeys: KEYS, rolled: [], live: [], logFrom: '2026-09-06' });
+  const early = r.days.find(d => d.date_key === '2026-09-03');
+  assert.equal(early.known, false);
+  assert.equal(early.standup_done, null, 'null, never 0 — 0 is a judgement');
+  assert.equal(r.unknownDays, 3);
+  assert.equal(r.window, 2, 'the denominator counts only the days we can see');
+});
+
+test('a day we CAN see with nothing logged is a real zero', () => {
+  const r = foldRituals({ dateKeys: ['2026-09-05'], rolled: [], live: [], logFrom: '2026-09-01' });
+  assert.equal(r.days[0].known, true);
+  assert.equal(r.days[0].standup_done, 0);
+  assert.equal(r.standupDays, 0);
+});
+
+test('how many days are being shown live is reported, so the panel can say so', () => {
+  const r = foldRituals({
+    dateKeys: KEYS,
+    rolled: [{ date_key: '2026-09-03', standup_done: 1, eod_done: 1, captures_count: 0 }],
+    live: [],
+    logFrom: '2026-09-01',
+  });
+  assert.equal(r.pendingRollup, 4);
+});
+
+test('EOD is folded from its own event, not inferred from the standup', () => {
+  const r = foldRituals({
+    dateKeys: ['2026-09-07'],
+    rolled: [],
+    live: [
+      { date_key: '2026-09-07', event_type: 'standup_done', c: 1 },
+      { date_key: '2026-09-07', event_type: 'eod_done', c: 1 },
+    ],
+    logFrom: '2026-09-01',
+  });
+  assert.equal(r.days[0].standup_done, 1);
+  assert.equal(r.days[0].eod_done, 1);
+  assert.equal(r.eodDays, 1);
+});
+
+test('an unrelated event does not count as a ritual', () => {
+  const r = foldRituals({
+    dateKeys: ['2026-09-07'],
+    rolled: [],
+    live: [{ date_key: '2026-09-07', event_type: 'chat_message', c: 40 }],
+    logFrom: '2026-09-01',
+  });
+  assert.equal(r.days[0].standup_done, 0);
+  assert.equal(r.days[0].eod_done, 0);
 });

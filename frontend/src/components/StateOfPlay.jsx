@@ -87,6 +87,32 @@ function Card({ title, action, children, wide }) {
   );
 }
 
+/**
+ * One habit, one cell per day of the window.
+ *
+ * ⚠ `known === false` renders its OWN class rather than an empty cell: a day
+ * outside what the activity log covers is not a day the ritual was skipped, and
+ * making them look alike is the failure this panel exists to catch.
+ */
+function RitualRow({ label, days, field, n, of }) {
+  return (
+    <div className="sop-ritual-row">
+      <span className="sop-ritual-label">{label}</span>
+      <div className="sop-cells">
+        {days.map(d => {
+          const cls = d.known === false ? 'sop-cell unknown' : (d[field] ? 'sop-cell on' : 'sop-cell');
+          const state = d.known === false ? 'no record' : (d[field] ? 'done' : 'not logged');
+          // Live days are marked in the tooltip, not by a different colour —
+          // the provenance is worth being able to check, and worth not shouting.
+          const how = d.known === false ? '' : (d.rolled ? '' : ' (live)');
+          return <i key={d.date_key} className={cls} title={`${d.date_key} — ${state}${how}`} />;
+        })}
+      </div>
+      <span className="sop-ritual-n">{n}/{of}</span>
+    </div>
+  );
+}
+
 export default function StateOfPlay({ onNavigate }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -221,26 +247,22 @@ export default function StateOfPlay({ onNavigate }) {
             above; they never came from the queue cache. */}
 
         {/* ── Rituals ────────────────────────────────────────────────────── */}
+        {/*
+          Three cell states, never two. `on` is done, the bare cell is a day we
+          could see and nothing happened, and `unknown` is a day outside what
+          activity_log covers — which must not look like a skipped standup. The
+          strip used to render only the rows that existed in `daily_summary`, so
+          a day the 22:00 rollup had not reached was simply absent and today's
+          standup could never show at all.
+        */}
         <Card title="Rituals" action={<button className="sop-link" onClick={() => go('standup')}>Standup →</button>}>
-          <div className="sop-ritual-row">
-            <span className="sop-ritual-label">Standup</span>
-            <div className="sop-cells">
-              {rituals.days.map(d => (
-                <i key={d.date_key} className={d.standup_done ? 'sop-cell on' : 'sop-cell'} title={d.date_key} />
-              ))}
-            </div>
-            <span className="sop-ritual-n">{rituals.standupDays}/{rituals.window}</span>
-          </div>
-          <div className="sop-ritual-row">
-            <span className="sop-ritual-label">EOD</span>
-            <div className="sop-cells">
-              {rituals.days.map(d => (
-                <i key={d.date_key} className={d.eod_done ? 'sop-cell on' : 'sop-cell'} title={d.date_key} />
-              ))}
-            </div>
-            <span className="sop-ritual-n">{rituals.eodDays}/{rituals.window}</span>
-          </div>
-          <p className="sop-note">Last {rituals.window} logged days.</p>
+          <RitualRow label="Standup" days={rituals.days} field="standup_done" n={rituals.standupDays} of={rituals.window} />
+          <RitualRow label="EOD" days={rituals.days} field="eod_done" n={rituals.eodDays} of={rituals.window} />
+          <p className="sop-note">
+            Last {rituals.days.length} days to today.
+            {rituals.pendingRollup > 0 && ` ${rituals.pendingRollup} live — the 22:00 rollup hasn't reached ${rituals.pendingRollup === 1 ? 'it' : 'them'} yet.`}
+            {rituals.unknownDays > 0 && ` ${rituals.unknownDays} before the log begins — not counted.`}
+          </p>
         </Card>
 
         {/* ── Approvals ──────────────────────────────────────────────────── */}

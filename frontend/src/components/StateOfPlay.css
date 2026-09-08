@@ -233,6 +233,15 @@ button.sop-stat:hover { border-color: var(--accent-dim); }
   border: 1px solid transparent;
 }
 .sop-cell.on { background: var(--success); }
+/*
+  A day outside what activity_log covers. Deliberately NOT the same as an empty
+  cell — hollow rather than filled, so "no record" reads as an absence of
+  evidence rather than as a skipped ritual.
+*/
+.sop-cell.unknown {
+  background: transparent;
+  border: 1px dashed var(--border);
+}
 
 .sop-note { font-size: 11px; color: var(--text-muted); margin: 10px 0 0; }
 
