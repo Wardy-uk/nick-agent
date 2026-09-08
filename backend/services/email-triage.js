@@ -216,11 +216,13 @@ const INPUT_KEY = 'email_triage_input';
 // Not wrong the way `inbox_items` was wrong, but the same shape of mistake one
 // step later: a store nobody empties.
 //
-// A dismissed entry is kept for exactly two reasons, and neither needs the
+// A dismissed entry is kept for exactly three reasons, and none needs the
 // whole email:
 //   1. The merge in `runTriage` must not resurrect it while its id can still
 //      come back in the 24-hour fetch window. Seven days is a wide margin.
 //   2. The #70 feedback score reads urgency/category/dismissReason.
+//   3. The model's verdict must survive, or the mail is re-classified on every
+//      run for as long as it is still being fetched (see DISMISSED_FIELDS).
 // So dismissed entries are COMPACTED to those fields on write (668 KB → 192 KB
 // on today's data, and the id is most of what remains), then pruned by age —
 // with their contribution to the feedback score ROLLED UP first, so pruning
@@ -268,7 +270,24 @@ const MAX_FETCH = Number(process.env.EMAIL_TRIAGE_MAX_FETCH || 1500);
 // Anything older than the window is kept indefinitely: we did not look, so we
 // know nothing, and "I could not see it" is not "it is gone".
 const DEPARTURE_GRACE_MS = 15 * 60 * 1000;
-const DISMISSED_FIELDS = ['id', 'dismissed', 'dismissedAt', 'dismissReason', 'urgency', 'category'];
+// ⚠ THE MODEL ANSWER IS ONE OF THE FIELDS, and leaving it out cost ~600 cloud
+// calls a day in silence. `classifyEmails` decides what to send to the model
+// with `!prior.get(e.id)?.aiClassified` — so a dismissed entry that has lost
+// that flag is indistinguishable from mail the model has never seen, and is
+// re-classified on EVERY run for as long as it stays in the fetch window.
+// Measured on the live store (8 Sep 2026): **961 dismissed entries, ZERO
+// carrying `aiClassified`** — only the 33 undismissed ones had it — so a run
+// reported "25/623 already classified — reused, 598 sent to the model" three
+// times a day, blowing the daily budget before 09:00 and dropping the standup,
+// chat and focus enhancement to Ollama, which cannot do the job. A classified
+// email never needs classifying twice: the text does not change.
+//
+// `aiCategory` and `triagedAt` travel with it because reuse reads all three —
+// the flag alone would say "judged" while the verdict it stands for was gone,
+// and the stamp says when the mail was JUDGED, not when a pass last walked
+// past it. Three short fields against a re-classification: ~50 bytes an entry.
+const DISMISSED_FIELDS = ['id', 'dismissed', 'dismissedAt', 'dismissReason', 'urgency', 'category',
+  'aiClassified', 'aiCategory', 'triagedAt'];
 const FEEDBACK_ROLLUP_KEY = 'email_triage_feedback_rollup';
 
 function compact(entry) {
@@ -1165,5 +1184,6 @@ module.exports = {
     ageOutInformational, AGE_OUT_DAYS, AGED_OUT, AGE_OUT_CATEGORIES,
     clearInformational, SECTION_CLEARED, isInformational,
     applySenderMute, normaliseSender, readSenderRules, SENDER_MUTED, LOOKBACK_DAYS,
+    classifyEmails, DISMISSED_FIELDS,
   },
 };

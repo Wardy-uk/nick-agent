@@ -366,6 +366,42 @@ test('a dismissed entry is compacted — the body is dead weight once it is gone
   assert.equal(live.preview, 'Just to add to this —', 'an outstanding entry is untouched');
 });
 
+// The verdict is what makes the compaction affordable. Without these three
+// fields a dismissed email is indistinguishable from one the model has never
+// seen, and 961 of them were re-classified three times a day (8 Sep 2026).
+test('a compacted entry keeps the model verdict, so a classified email is never classified twice', () => {
+  db.setState('email_triage_feedback_rollup', '');
+  const judgedAt = daysAgo(2);
+  emailTriage._internals.storeTriage([
+    email({
+      dismissed: true, dismissedAt: daysAgo(1), dismissReason: 'done',
+      aiClassified: true, aiCategory: 'ACTION', triagedAt: judgedAt,
+    }),
+  ]);
+
+  const [dismissed] = JSON.parse(db.getState('email_triage'));
+  assert.equal(dismissed.aiClassified, true, 'the flag reuse reads must survive compaction');
+  assert.equal(dismissed.aiCategory, 'ACTION', 'a flag without its verdict says judged and means nothing');
+  assert.equal(dismissed.triagedAt, judgedAt, 'the stamp says when it was judged, not when a pass walked past');
+  assert.equal(dismissed.preview, undefined, 'and the body is still dead weight');
+});
+
+test('an already-classified dismissed email is not sent back to the model', async () => {
+  const calls = [];
+  const aiRouting = require('./ai-routing');
+  const realRunTask = aiRouting.runTask;
+  aiRouting.runTask = async (taskType, prompt) => { calls.push(prompt); return { text: '[]' }; };
+  try {
+    const prior = new Map([['seen', { id: 'seen', dismissed: true, aiClassified: true, aiCategory: 'FYI' }]]);
+    const out = await emailTriage._internals.classifyEmails([email({ id: 'seen' })], prior);
+    assert.equal(calls.length, 0, 'nothing was sent to the model');
+    assert.equal(out[0].aiClassified, true, 'and it is still recorded as classified');
+    assert.equal(out[0].aiCategory, 'FYI', 'reusing the stored verdict, not re-deriving one');
+  } finally {
+    aiRouting.runTask = realRunTask;
+  }
+});
+
 test('old dismissed entries are pruned, and their verdict survives them', () => {
   db.setState('email_triage_feedback_rollup', '');
   const retain = emailTriage._internals.DISMISSED_RETAIN_DAYS();
