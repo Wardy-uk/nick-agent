@@ -396,6 +396,8 @@ function gather(now = new Date()) {
 
   let tasks = [];
   let personalHeld = 0;
+  let blockedHeld = 0;
+  let blockedKnown = true;
   try {
     const taskStore = require('./task-store');
     const { rankTasks } = require('./task-scoring');
@@ -413,6 +415,34 @@ function gather(now = new Date()) {
     // the same reason `dropped` names every item in the attention feed.
     personalHeld = ranked.filter(isPersonal).length;
     tasks = ranked.map(toPlannerTask).filter(Boolean);
+
+    // ⚠ WORK ALREADY IN A WINDOW IS NOT WORK TO PLAN. Existing blocks were
+    // counted as walls in TIME below and never as claimed WORK — and because a
+    // block holds its task OPEN until the outcome note is written, a blocked
+    // task stays in `activeTodos()` and came back top-ranked on the very next
+    // run. Measured on the live Pi: four tasks each sat in two open blocks, and
+    // one of them (#151) was booked by THIS PLANNER TWICE IN ONE DAY — 11:05 by
+    // the morning run and 14:35 by the afternoon one. `task-blocks.plan` now
+    // refuses that outright, so without this the planner would simply fail its
+    // creates instead; holding the task back is what makes it plan the NEXT
+    // thing rather than nothing.
+    //
+    // ⚠ Held back is REPORTED, never a silent shortfall — a planner quietly
+    // planning less than it could is indistinguishable from one with nothing to
+    // do, which is `overflowed`'s rule and `personalHeld`'s beside it.
+    const blockedIds = taskBlocks.blockedTaskIds();
+    if (blockedIds == null) {
+      // Not knowing is not an all-clear. Rather than plan blind and let every
+      // create bounce off the refusal, say so and plan nothing from this pool.
+      blockedKnown = false;
+      blockedHeld = tasks.length;
+      tasks = [];
+      gaps.push('existing block membership unreadable — nothing planned, rather than booking work that may already be in the diary');
+    } else {
+      const before = tasks.length;
+      tasks = tasks.filter(t => !blockedIds.has(Number(t.id)));
+      blockedHeld = before - tasks.length;
+    }
   } catch (e) {
     gaps.push(`tasks unreadable: ${e.message}`);
   }
@@ -449,7 +479,7 @@ function gather(now = new Date()) {
     gaps.push(`existing blocks unreadable: ${e.message}`);
   }
 
-  return { dateKey, tasks, busy, calendarKnown, gaps, personalHeld, samples: durationSamples() };
+  return { dateKey, tasks, busy, calendarKnown, gaps, personalHeld, blockedHeld, blockedKnown, samples: durationSamples() };
 }
 
 /**
@@ -588,6 +618,15 @@ async function run(windowKey, { now = new Date(), apply = false, force = false }
     multiplier: mult,
     readiness,
     gaps: input.gaps,
+    // What was NOT considered, and why. `personalHeld` was counted "so the
+    // number is reportable" and then never reported; `blockedHeld` must be, or
+    // a planner that found nothing left to book is indistinguishable from one
+    // that had nothing to book.
+    held: {
+      personal: input.personalHeld,
+      blocked: input.blockedHeld,
+      blockedKnown: input.blockedKnown,
+    },
     applied: false,
     ...draft,
   };

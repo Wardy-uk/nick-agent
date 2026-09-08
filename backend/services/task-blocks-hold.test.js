@@ -1259,3 +1259,107 @@ test("the cap is the service's, so both ways into a block honour one number", as
   assert.equal(res.ok, false);
   assert.match(res.error, /at most/);
 });
+
+// ── One task, one window (8 Sep 2026) ────────────────────────────────────────
+//
+// `addTask` had always refused a task that was already in another open block,
+// and the CREATION path said nothing — so every other route in was free to
+// block the same task again. It never self-corrected because a block holds its
+// task OPEN, so a blocked task stays in `activeTodos()` and is re-offered on
+// every run. Measured on the live Pi: four tasks each in two open blocks, one
+// of them booked twice in one day by the planner's own morning and afternoon
+// runs.
+
+test('a task already in an open block cannot be blocked again', () => {
+  const { taskId, blockId, dateKey } = ahead('Review where the process broke down');
+
+  const res = withCalendar([], () => taskBlocks.plan([taskId], {
+    date: '2026-12-30', startTime: '14:00', now: at(dateKey),
+  }));
+
+  assert.equal(res.ok, false, 'the second window was allowed — this is the duplicate bug');
+  assert.equal(res.blockedElsewhere[0].blockId, blockId);
+  // Named, so the refusal can be acted on rather than merely obeyed: the answer
+  // is to move THAT block, and Nick has to be able to find it.
+  assert.match(res.error, /10:00/);
+  assert.match(res.error, /2026-12/);
+});
+
+test('schedule refuses it too, and creates nothing', async () => {
+  const { taskId, blockId, dateKey } = ahead('Chase the Tier 2 ageing figures');
+  const before = db.listTaskBlockRows({}).length;
+
+  const res = await withCalendar([], () => taskBlocks.schedule([taskId], {
+    date: '2026-12-31', startTime: '14:00', now: at(dateKey),
+  }));
+
+  assert.equal(res.ok, false);
+  assert.equal(db.listTaskBlockRows({}).length, before, 'a block row was written despite the refusal');
+  assert.equal(db.listTaskBlockRows({ taskId, openOnly: true }).length, 1);
+  assert.equal(db.listTaskBlockRows({ taskId, openOnly: true })[0].id, blockId);
+});
+
+test('the block being moved is not a clash with itself', () => {
+  // reschedule creates the new block BEFORE detaching from the old one, on
+  // purpose: a taken slot or a Graph refusal must leave the old block intact.
+  // At that moment the movers are legitimately still members of it.
+  const { taskId, blockId, dateKey } = ahead('Prep for the risk meeting');
+
+  const res = withCalendar([], () => taskBlocks.plan([taskId], {
+    date: '2026-12-29', startTime: '14:00', ignoreBlockId: blockId, now: at(dateKey),
+  }));
+
+  assert.equal(res.ok, true, res.error);
+});
+
+test('a block that has ENDED does not hold its task hostage', () => {
+  // dropped / released / complete are all finished. Refusing on one of those
+  // would make a task unblockable for ever after one abandoned window.
+  const { taskId, blockId, dateKey } = ahead('Scope the interim status messaging');
+  db.updateTaskBlockRow(blockId, { status: 'dropped' });
+
+  const res = withCalendar([], () => taskBlocks.plan([taskId], {
+    date: '2026-12-28', startTime: '14:00', now: at(dateKey),
+  }));
+
+  assert.equal(res.ok, true, res.error);
+});
+
+test('blockedTaskIds returns null on a read failure, never an empty set', () => {
+  // The caller is the day planner, which uses this to leave already-blocked
+  // work alone. An empty set reads as "nothing is blocked" and would put it
+  // straight back to booking the same task twice a day, silently.
+  const real = db.listTaskBlockRows;
+  db.listTaskBlockRows = () => { throw new Error('blocks unreadable'); };
+  try {
+    assert.equal(taskBlocks.blockedTaskIds(), null);
+  } finally {
+    db.listTaskBlockRows = real;
+  }
+});
+
+test('the day planner leaves already-blocked work alone, and says how much', () => {
+  const planner = require('./day-planner');
+  const { taskId, dateKey } = ahead('Fix auto-assignment of unassigned production tickets');
+
+  const input = withCalendar([], () => planner.gather(at(dateKey)));
+
+  assert.equal(input.tasks.some(t => t.id === taskId), false,
+    'the planner would book a second window for work already in the diary');
+  assert.ok(input.blockedHeld >= 1, 'a silent shortfall looks exactly like a quiet day');
+  assert.equal(input.blockedKnown, true);
+});
+
+test('an unreadable block list plans NOTHING rather than planning blind', () => {
+  const planner = require('./day-planner');
+  const real = db.listTaskBlockRows;
+  db.listTaskBlockRows = () => { throw new Error('blocks unreadable'); };
+  try {
+    const input = withCalendar([], () => planner.gather(new Date('2026-12-15T09:00:00')));
+    assert.deepEqual(input.tasks, []);
+    assert.equal(input.blockedKnown, false);
+    assert.ok(input.gaps.some(g => /block membership unreadable/.test(g)));
+  } finally {
+    db.listTaskBlockRows = real;
+  }
+});

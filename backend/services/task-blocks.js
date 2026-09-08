@@ -582,10 +582,40 @@ function resolveTasks(taskIds) {
  *
  * `minutes` is the window Nick asked for. `taskIds` may be one or many.
  */
-function plan(taskIds, { date = null, startTime = null, minutes = null, now = new Date() } = {}) {
+function plan(taskIds, {
+  date = null, startTime = null, minutes = null, ignoreBlockId = null, now = new Date(),
+} = {}) {
   const resolved = resolveTasks(taskIds);
   if (resolved.error) return { ok: false, error: resolved.error };
   const tasks = resolved.tasks;
+
+  // ⚠ ONE TASK, ONE WINDOW — stated at PLAN time, so the preview refuses rather
+  // than the confirm. `addTask` has always refused a task that is already in
+  // another open block, and `reschedule` moves membership rather than copying
+  // it, but the CREATION path said nothing at all — so every other route in
+  // (the day planner's timer, BlockTimeControl, the batch composer) was free to
+  // block the same task again, and the planner did it twice in one day.
+  //
+  // The reason it never self-corrected is the hold: a block keeps its task OPEN
+  // until an outcome note is written, so a blocked task stays in
+  // `activeTodos()` and is re-offered on every run, for ever. Two live blocks
+  // holding one task means two holds, two outcome notes, and a sweep with no
+  // way to say which sitting the evidence belongs to.
+  //
+  // `ignoreBlockId` is for `reschedule`, which deliberately creates the new
+  // block BEFORE detaching from the old one — at that moment the movers are
+  // legitimately still members of the block being moved.
+  const clashes = blockedElsewhere(tasks, ignoreBlockId);
+  if (clashes.length) {
+    const first = clashes[0];
+    return {
+      ok: false,
+      blockedElsewhere: clashes,
+      error: `Already blocked at ${first.startTime} on ${first.date}: `
+        + clashes.map(c => `#${c.taskId}`).join(', ')
+        + '. One task, one window — move that block instead, or take the task out of it first.',
+    };
+  }
 
   const window = resolveWindow(tasks, minutes);
   const estimated = tasks.reduce((sum, t) => sum + (t.estimate_minutes || 0), 0);
@@ -717,9 +747,11 @@ function readCalendar(now = new Date()) {
  */
 async function schedule(taskIds, {
   date = null, startTime = null, minutes = null, saveEstimates = true, saveDue = true,
-  now = new Date(),
+  ignoreBlockId = null, now = new Date(),
 } = {}) {
-  const draft = plan(taskIds, { date, startTime, minutes, now });
+  // The one-task-one-window refusal lives in `plan`, which every create goes
+  // through — a guard here as well would be a second copy free to drift.
+  const draft = plan(taskIds, { date, startTime, minutes, ignoreBlockId, now });
   if (!draft.ok) return draft;
 
   const resolved = resolveTasks(taskIds);
@@ -905,9 +937,10 @@ function markAwaiting(blockId, taskId = null) {
   try {
     db.updateTaskBlockRow(blockId, { status: 'awaiting-writeup' });
     if (taskId == null) { writeChecklistToNote(blockId); return; }
-    // Ticked is ticked, everywhere (Nick, 18 Aug). Work that did not finish gets
-    // blocked again, so the same task legitimately sits in two windows — and a
-    // box ticked in one while the other still shows it outstanding is the same
+    // Ticked is ticked, everywhere (Nick, 18 Aug). ⚠ A task in two open blocks is
+    // no longer reachable — `plan` refuses it (8 Sep) — but the rows that
+    // predate that refusal still exist, so this stays as the settler for them:
+    // a box ticked in one while the other still shows it outstanding is the
     // two-screens-disagreeing problem the checklist sync exists to end. What
     // stays per-block is the WRITE-UP: whichever block is written up first
     // closes it, and the rest settle by themselves.
@@ -921,6 +954,49 @@ function markAwaiting(blockId, taskId = null) {
 function openBlocksWithTask(taskId) {
   try { return db.listTaskBlockRows({ taskId, openOnly: true }); }
   catch { return []; }
+}
+
+/**
+ * Which of these tasks are already held by an open block that is not
+ * `ignoreBlockId`. Pure of side effects, and used by `plan` to refuse.
+ */
+function blockedElsewhere(tasks, ignoreBlockId = null) {
+  const clashes = [];
+  for (const task of tasks) {
+    const other = openBlocksWithTask(task.id)
+      .find(b => Number(b.id) !== Number(ignoreBlockId));
+    if (!other) continue;
+    clashes.push({
+      taskId: task.id,
+      text: task.text,
+      blockId: other.id,
+      date: other.date_key,
+      startTime: other.start_time,
+      status: other.status,
+    });
+  }
+  return clashes;
+}
+
+/**
+ * Every task id currently held by an open block.
+ *
+ * ⚠ A READ FAILURE RETURNS null, NEVER AN EMPTY SET. The caller is the day
+ * planner, which uses this to leave already-blocked work alone: an empty set
+ * reads as "nothing is blocked" and would put it straight back to booking the
+ * same task twice a day, silently, which is the bug this exists to end.
+ */
+function blockedTaskIds() {
+  try {
+    const ids = new Set();
+    for (const block of db.listTaskBlockRows({ openOnly: true })) {
+      for (const item of db.listTaskBlockItems(block.id)) ids.add(Number(item.task_id));
+    }
+    return ids;
+  } catch (e) {
+    console.warn('[TaskBlocks] Could not read blocked tasks:', e.message);
+    return null;
+  }
 }
 
 /**
@@ -1675,7 +1751,12 @@ async function reschedule(blockId, {
   }
 
   // ── New block first ───────────────────────────────────────────────────────
-  const created = await schedule(movers.map(i => i.task_id), { date, startTime, minutes, now });
+  const created = await schedule(movers.map(i => i.task_id), {
+    date, startTime, minutes, now,
+    // The movers are still members of THIS block until the detach below, which
+    // is the whole point of creating first — so this block is not a clash.
+    ignoreBlockId: blockId,
+  });
   if (!created.ok) {
     // Nothing has been touched. Say which block failed to move rather than
     // returning the raw scheduling error on its own.
@@ -2070,6 +2151,8 @@ module.exports = {
   slugify,
   blockSubject,
   findSlot,
+  blockedElsewhere,
+  blockedTaskIds,
   plan,
   schedule,
   checkHold,
