@@ -276,8 +276,11 @@ function foldDays(overviewRows = [], activityRows = []) {
  *     busiest host that day and SAYS which — an approximation, named as one.
  */
 function assessDay(rtDay, deskDays = []) {
+  // ⚠ BUSIEST BY ACTIVE TIME, not by present. "Which machine was he working at"
+  // is the question; a laptop left switched on and idle all day has the most
+  // present minutes and did none of the work.
   const busiest = [...deskDays].sort(
-    (a, b) => (Number(b.present_minutes) || 0) - (Number(a.present_minutes) || 0)
+    (a, b) => (Number(b.active_minutes) || 0) - (Number(a.active_minutes) || 0)
   )[0];
 
   if (!busiest) {
@@ -295,9 +298,23 @@ function assessDay(rtDay, deskDays = []) {
     };
   }
 
-  const measured = Number(busiest.present_minutes) || 0;
+  // ⚠ ACTIVE, NEVER PRESENT — the two are different questions and comparing
+  // across them is an accusation generator. `present = active + idle + locked`,
+  // so a machine switched on and untouched counts every idle minute against
+  // RescueTime, which by design logs nothing while nobody is working. Measured
+  // on the live store (8 Sep 2026): against present the last week read
+  // 0.80 / 0.04 / 0.45 / 0.82 / 0.82 / 0.59, against active it reads
+  // 0.92 / — / 0.83 / 1.07 / 0.93 / 0.81. The same feed, judged fairly.
+  // 6 Sep is the case that matters: present 2.2h, active ZERO — Nick was on
+  // another machine — and the old denominator turned "the agent has nothing to
+  // compare" into "RescueTime under-reported". The header of this file has said
+  // "measured ACTIVE time" since it was written; the code did not agree.
+  const measured = Number(busiest.active_minutes) || 0;
   if (measured <= 0) {
-    return { state: 'unknown', why: 'the agent measured no time at the machine', ratio: null, host: busiest.host };
+    // ⚠ Not a verdict. The agent saw the machine and saw no work done at it, so
+    // it cannot referee — refusal 1, and the only honest answer for a day spent
+    // working somewhere the agent is not installed.
+    return { state: 'unknown', why: 'the agent measured no activity at the machine', ratio: null, host: busiest.host };
   }
 
   const reported = rtDay ? Number(rtDay.total_minutes) || 0 : 0;

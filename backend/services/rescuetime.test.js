@@ -133,7 +133,11 @@ test('the day key comes from RescueTime and is never re-derived', () => {
 // ── The agreement check ──────────────────────────────────────────────────────
 
 const deskDay = (over = {}) => ({
-  day: '2026-09-01', host: 'LAPTOP', present_minutes: 617, sample_count: 299, complete: 1, ...over,
+  // The real 1 Sep row: present 617, active 521. Both, because the audit
+  // judges against ACTIVE, and a fixture carrying only present would let the
+  // denominator quietly go back to counting idle time against RescueTime.
+  day: '2026-09-01', host: 'LAPTOP', present_minutes: 617, active_minutes: 521,
+  sample_count: 299, complete: 1, ...over,
 });
 
 test('the 1 Sep failure is caught', () => {
@@ -142,7 +146,29 @@ test('the 1 Sep failure is caught', () => {
   assert.equal(v.state, 'under');
   assert.equal(v.host, 'LAPTOP');
   assert.match(v.why, /0\.2h|0\.1h/);
-  assert.match(v.why, /10\.3h/);
+  assert.match(v.why, /8\.7h/);
+});
+
+// A day spent working on a machine the agent is not installed on: the laptop
+// is switched on and untouched. Judged against present minutes that was an
+// accusation (6 Sep 2026, ratio 0.04). Judged against active time it is the
+// refusal it always should have been.
+test('a machine left on and idle cannot referee, and is never a verdict', () => {
+  const v = rt.assessDay({ total_minutes: 5.7 },
+    [deskDay({ day: '2026-09-06', present_minutes: 130, active_minutes: 0, sample_count: 69 })]);
+  assert.equal(v.state, 'unknown', 'no work done at the machine is not evidence against RescueTime');
+  assert.equal(v.ratio, null);
+  assert.match(v.why, /no activity/);
+});
+
+test('idle time is not counted against RescueTime', () => {
+  // Real 7 Sep: 421.5 reported, 459 active, 527 present. Against active that is
+  // 0.92; against present it was 0.80 - agreeing either way here, but this is
+  // the mechanism that produced the 0.45 and 0.04 days.
+  const v = rt.assessDay({ total_minutes: 421.5 },
+    [deskDay({ day: '2026-09-07', present_minutes: 527, active_minutes: 459, sample_count: 252 })]);
+  assert.equal(v.state, 'agree');
+  assert.ok(v.ratio > 0.9, 'judged against active time, got ' + v.ratio);
 });
 
 test('RescueTime logging NOTHING against a measured day is caught, not treated as absence', () => {
@@ -180,8 +206,8 @@ test('a day the agent did not properly cover cannot referee', () => {
 
 test('the comparison names which machine it used, because RescueTime cannot say', () => {
   const v = rt.assessDay({ total_minutes: 400 }, [
-    deskDay({ host: 'DESK', present_minutes: 120, sample_count: 90 }),
-    deskDay({ host: 'LAPTOP', present_minutes: 600, sample_count: 290 }),
+    deskDay({ host: 'DESK', present_minutes: 120, active_minutes: 90, sample_count: 90 }),
+    deskDay({ host: 'LAPTOP', present_minutes: 600, active_minutes: 500, sample_count: 290 }),
   ]);
   assert.equal(v.host, 'LAPTOP', 'the busiest machine that day');
 });
