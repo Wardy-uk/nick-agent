@@ -110,6 +110,38 @@
 .hp-finding-detail { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 .hp-finding-caveat { font-size: 11px; color: var(--text-muted); font-style: italic; margin-top: 2px; }
 
+/* "I've read it". Quiet by default and only legible on hover/focus: it is an
+   admin control sitting under a health warning, and it must not compete with
+   the warning for attention. Never destructive-red — nothing is deleted. */
+.hp-finding-ack {
+  margin-top: 6px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.hp-finding-ack:hover,
+.hp-finding-ack:focus-visible { color: var(--text-primary); border-color: var(--text-muted); }
+
+/* Read, not gone. Desaturated and no coloured band, so an acknowledged warning
+   cannot be mistaken for a live one. */
+.hp-finding--read { --band: var(--border, #2a2f3a); opacity: 0.7; }
+.hp-acked { margin-top: 10px; }
+.hp-acked-toggle {
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.hp-acked-toggle:hover { color: var(--text-secondary); }
+
 /* ── Trends ────────────────────────────────────────────────────────────────
    Small multiples. One measure per chart, one axis each. */
 .hp-grid {

@@ -207,3 +207,56 @@ test('a real monitor in the group makes the whole group a warning', () => {
   assert.equal(quiet.length, 1);
   assert.equal(quiet[0].level, 'warn', 'the monitor decides, not the majority');
 });
+
+// -- "I've read it" -------------------------------------------------------
+//
+// The rule is one rule: an acknowledgement is cleared the first time its
+// finding is absent. Everything below is that rule from a different angle.
+
+const finding = (id, over = {}) => ({ id, level: 'warn', title: id, detail: '', evidence: [], ...over });
+
+test('an acknowledged finding leaves the list Nick reads, and is still returned', () => {
+  const out = signals.partitionAcked(
+    [finding('quiet:dietary_water'), finding('rhr-elevated')],
+    { 'quiet:dietary_water': { at: '2026-09-08T09:00:00Z', title: 'x' } });
+  assert.deepEqual(out.findings.map(f => f.id), ['rhr-elevated']);
+  assert.deepEqual(out.acknowledged.map(f => f.id), ['quiet:dietary_water'],
+    'read is not gone - it must stay reachable');
+  assert.equal(out.acknowledged[0].acknowledgedAt, '2026-09-08T09:00:00Z');
+  assert.deepEqual(out.stale, []);
+});
+
+test('the acknowledgement dies with its finding - that IS "until it reoccurs"', () => {
+  // The metric started arriving again, so the finding is gone from the pass.
+  const out = signals.partitionAcked([finding('rhr-elevated')],
+    { 'quiet:dietary_water': { at: '2026-09-08T09:00:00Z' } });
+  assert.deepEqual(out.stale, ['quiet:dietary_water'],
+    'the ack is spent, so the next stoppage is a new thing to be told about');
+  assert.deepEqual(out.acknowledged, []);
+});
+
+test('a finding that is still true stays acknowledged, however long it lasts', () => {
+  // blood_glucose has been quiet for 354 days. Acking it must not wear off
+  // tomorrow, or the button is a snooze wearing the wrong label.
+  const acks = { 'quiet:blood_glucose': { at: '2026-09-08T09:00:00Z' } };
+  for (let day = 0; day < 30; day++) {
+    const out = signals.partitionAcked([finding('quiet:blood_glucose')], acks);
+    assert.equal(out.findings.length, 0, `day ${day}`);
+    assert.deepEqual(out.stale, []);
+  }
+});
+
+test('acknowledging one thing hides nothing else', () => {
+  const out = signals.partitionAcked(
+    [finding('quiet:2026-04-01'), finding('quiet:blood_glucose'), finding('sleep-debt')],
+    { 'quiet:2026-04-01': { at: 'x' } });
+  assert.deepEqual(out.findings.map(f => f.id), ['quiet:blood_glucose', 'sleep-debt']);
+});
+
+test('no acknowledgements changes nothing at all', () => {
+  const list = [finding('a'), finding('b')];
+  const out = signals.partitionAcked(list, {});
+  assert.deepEqual(out.findings.map(f => f.id), ['a', 'b']);
+  assert.deepEqual(out.acknowledged, []);
+  assert.deepEqual(out.stale, []);
+});

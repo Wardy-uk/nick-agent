@@ -176,6 +176,33 @@ router.get('/signals', (req, res) => {
   }
 });
 
+// POST /api/health/signals/:id/ack — "I've read it".
+// DELETE the same path is the way back.
+//
+// ⚠ The id is a finding id (`quiet:dietary_water`, `rhr-elevated`), so it can
+// contain a colon but never a slash — Express would read one as another path
+// segment. Both verbs are registered ABOVE nothing else on `/signals`, but the
+// literal `/signals` GET is declared first regardless: this router has shipped
+// a literal path swallowed by a sibling parameter before.
+router.post('/signals/:id/ack', (req, res) => {
+  try {
+    const out = require('../services/health-signals').acknowledge(req.params.id);
+    // A refusal is a refusal, not a 200 the panel would render as a change.
+    res.status(out.ok ? 200 : 400).json(out);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.delete('/signals/:id/ack', (req, res) => {
+  try {
+    const out = require('../services/health-signals').unacknowledge(req.params.id);
+    res.status(out.ok ? 200 : 400).json(out);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // POST /api/health/rollup — recompute the daily rollup now. Idempotent (every
 // row is an UPSERT keyed on the day), so this is safe to hit repeatedly; the
 // scheduler runs it hourly anyway.

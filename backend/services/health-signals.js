@@ -323,6 +323,102 @@ function formatGap(days) {
 }
 
 /** The I/O half. Every read is guarded — a failure is an unknown, never a zero. */
+// ── "I've read it" ──────────────────────────────────────────────────────────
+//
+// Every finding here is a TREND or a SILENCE, so it is true for as long as the
+// condition lasts — blood_glucose has been quiet for 354 days and will say so
+// every morning until it comes back. That is correct behaviour and it is also
+// how a panel stops being read: the four rows Nick has already understood bury
+// the fifth he has not.
+//
+// So a finding can be acknowledged, and the rule is ONE rule:
+//
+//   ⚠ AN ACKNOWLEDGEMENT IS CLEARED THE FIRST TIME ITS FINDING IS ABSENT.
+//
+// That is what "until it reoccurs" means, and it is the whole mechanism. A
+// quiet metric that starts arriving again drops out of the pass, its ack goes
+// with it, and the NEXT time it stops it is a new thing to be told about.
+// Resting heart rate acknowledged while it is up stays acknowledged for as long
+// as it stays up, clears when it comes back to normal, and speaks again on the
+// next episode. No occurrence signature to invent, no date in the key, and
+// nothing to keep in step with the finding ids.
+//
+// ⚠ IT IS AN ACKNOWLEDGEMENT, NOT A RESOLUTION. Acked findings are RETURNED,
+// on their own list, and `allClear` is deliberately computed on ALL of them —
+// a system that reports itself healthy because the warning was dismissed is
+// telling Nick what he just told it.
+const ACK_KEY = 'health_signals_ack';
+
+// ⚠ Unreadable is NOT empty (the `triage-shadow._load` rule). Returning {} here
+// and then writing it would erase every acknowledgement on one bad read, so
+// null is carried all the way to the pruning decision, which refuses to run.
+function readAcks() {
+  try {
+    const raw = db.getState(ACK_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+  } catch {
+    return null;
+  }
+}
+
+function writeAcks(acks) {
+  try { db.setState(ACK_KEY, JSON.stringify(acks)); return true; } catch { return false; }
+}
+
+/**
+ * Split a pass into what Nick still needs to see and what he has already read,
+ * and name the acks whose finding has gone. PURE — no DB, no clock.
+ */
+function partitionAcked(findings = [], acks = {}) {
+  const present = new Set(findings.map(f => f.id));
+  const active = [];
+  const acknowledged = [];
+  for (const f of findings) {
+    const ack = acks[f.id];
+    if (ack) acknowledged.push({ ...f, acknowledgedAt: ack.at || null });
+    else active.push(f);
+  }
+  // The ack has outlived its finding: the metric came back, or the trend ended.
+  const stale = Object.keys(acks).filter(id => !present.has(id));
+  return { findings: active, acknowledged, stale };
+}
+
+/**
+ * Record that Nick has read a finding.
+ *
+ * ⚠ REFUSES anything not in the CURRENT pass. You cannot acknowledge something
+ * you were not shown, and the failure it prevents is the expensive one: a stale
+ * screen acking a finding that has already cleared would pre-emptively silence
+ * the NEXT occurrence — the one thing "until it reoccurs" promises not to do.
+ */
+function acknowledge(id, { now = new Date() } = {}) {
+  if (!id || typeof id !== 'string') return { ok: false, reason: 'no finding id' };
+  const current = snapshot({ now });
+  const all = [...(current.findings || []), ...(current.acknowledged || [])];
+  const found = all.find(f => f.id === id);
+  if (!found) return { ok: false, reason: 'not in the current findings' };
+
+  const acks = readAcks();
+  if (!acks) return { ok: false, reason: 'the acknowledgement store could not be read' };
+  if (acks[id]) return { ok: true, already: true, id };
+
+  acks[id] = { at: now.toISOString(), title: found.title };
+  if (!writeAcks(acks)) return { ok: false, reason: 'could not record it' };
+  return { ok: true, id, title: found.title };
+}
+
+/** The way back. Every other decision in NEURO has one. */
+function unacknowledge(id) {
+  const acks = readAcks();
+  if (!acks) return { ok: false, reason: 'the acknowledgement store could not be read' };
+  if (!acks[id]) return { ok: false, reason: 'not acknowledged' };
+  delete acks[id];
+  if (!writeAcks(acks)) return { ok: false, reason: 'could not record it' };
+  return { ok: true, id };
+}
+
 function snapshot({ now = new Date(), days = 45 } = {}) {
   let rows = [];
   let metrics = [];
@@ -333,10 +429,30 @@ function snapshot({ now = new Date(), days = 45 } = {}) {
   catch (e) { gaps.push({ input: 'metric summary', why: e.message }); }
 
   const result = assess({ days: rows, metrics, now });
+
+  const stored = readAcks();
+  const acks = stored || {};
+  const split = partitionAcked(result.findings, acks);
+
+  // ⚠ Pruned ONLY on a sound pass. A finding missing because the read failed is
+  // not a finding that has cleared, and dropping the ack there would nag Nick
+  // about something he has already read the moment the disk hiccups. Written
+  // only when something actually changed, so a polled read writes nothing.
+  if (stored && split.stale.length && gaps.length === 0) {
+    const next = { ...acks };
+    for (const id of split.stale) delete next[id];
+    writeAcks(next);
+  }
+
   return {
     ...result,
+    findings: split.findings,
+    acknowledged: split.acknowledged,
     unknowns: [...gaps, ...result.unknowns],
+    // ⚠ ALL of them, acknowledged included. "Nothing stood out" must never be
+    // something Nick can bring about by pressing a button.
     allClear: result.allClear && gaps.length === 0,
+    ackStoreReadable: stored != null,
     daysRead: rows.length,
   };
 }
@@ -345,6 +461,10 @@ module.exports = {
   assess,
   sensorsQuiet,
   snapshot,
+  partitionAcked,
+  acknowledge,
+  unacknowledge,
+  ACK_KEY,
   RHR_ELEVATED_BPM,
   RHR_ELEVATED_DAYS,
   WRIST_TEMP_DELTA,

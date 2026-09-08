@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { apiUrl } from '../api';
+import { apiUrl, apiFetch } from '../api';
 import './HealthPanel.css';
 
 /**
@@ -199,6 +199,8 @@ export default function HealthPanel() {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [showAllMetrics, setShowAllMetrics] = useState(false);
+  const [showAcked, setShowAcked] = useState(false);
+  const [ackError, setAckError] = useState(null);
 
   const fetchAll = useCallback(async (days) => {
     setLoading(true);
@@ -222,6 +224,24 @@ export default function HealthPanel() {
 
   useEffect(() => { fetchAll(range); }, [fetchAll, range]);
 
+  // Acknowledging re-reads the signals block only — the charts have not moved,
+  // and a full refetch would blank the panel to say one row has gone.
+  const setAck = useCallback(async (id, on) => {
+    setAckError(null);
+    try {
+      const res = await apiFetch(`/api/health/signals/${encodeURIComponent(id)}/ack`,
+        { method: on ? 'POST' : 'DELETE' });
+      const out = await res.json();
+      // A refusal must SAY so. A row that silently stays put reads as a broken
+      // button, which is how a control stops being trusted.
+      if (!out.ok) { setAckError(out.reason || 'that did not go through'); return; }
+      const signals = await fetch(apiUrl('/api/health/signals')).then(r => r.json());
+      setData(d => (d ? { ...d, signals } : d));
+    } catch {
+      setAckError('could not reach the health API');
+    }
+  }, []);
+
   if (loading && !data) return <div className="hp"><div className="hp-quiet">Reading health data…</div></div>;
   if (failed) return <div className="hp"><div className="hp-quiet hp-quiet--err">Couldn’t reach the health API. This is not an all-clear — it means nothing could be read.</div></div>;
 
@@ -231,6 +251,7 @@ export default function HealthPanel() {
   const days = (history?.history || []).filter(d => d.complete);
   const nights = sleep?.nights || [];
   const findings = signals?.findings || [];
+  const acknowledged = signals?.acknowledged || [];
   const allMetrics = metrics?.metrics || [];
   const shownMetrics = showAllMetrics ? allMetrics : allMetrics.slice(0, 10);
 
@@ -303,7 +324,7 @@ export default function HealthPanel() {
       {/* ── What has changed ─────────────────────────────────────── */}
       <section className="hp-section">
         <h3 className="hp-h3">What’s changed</h3>
-        {findings.length === 0 && (signals?.unknowns || []).length === 0 && (
+        {findings.length === 0 && acknowledged.length === 0 && (signals?.unknowns || []).length === 0 && (
           <div className="hp-quiet">Nothing stood out across everything that could be read.</div>
         )}
         {findings.map(f => (
@@ -313,8 +334,37 @@ export default function HealthPanel() {
             {/* Never folded away. This is the one place a reading is most likely
                 to be over-read into a diagnosis nobody made. */}
             {f.caveat && <div className="hp-finding-caveat">{f.caveat}</div>}
+            {/* Says what it will do. "Dismiss" reads as "never again", and this
+                is the opposite: it comes back if it happens again. */}
+            <button
+              type="button"
+              className="hp-finding-ack"
+              onClick={() => setAck(f.id, true)}
+              title="Hides this until the metric comes back and stops again, or the trend clears and returns"
+            >
+              I’ve read it
+            </button>
           </div>
         ))}
+        {ackError && <div className="hp-quiet hp-quiet--err">Couldn’t record that — {ackError}.</div>}
+        {acknowledged.length > 0 && (
+          <div className="hp-acked">
+            {/* Read is not gone. Hiding these with no way back would make the
+                button a deletion, and the finding is still true. */}
+            <button type="button" className="hp-acked-toggle" onClick={() => setShowAcked(v => !v)}>
+              {showAcked ? '▾' : '▸'} {acknowledged.length} read — still true, back if {acknowledged.length === 1 ? 'it happens' : 'they happen'} again
+            </button>
+            {showAcked && acknowledged.map(f => (
+              <div className="hp-finding hp-finding--read" key={f.id}>
+                <div className="hp-finding-title">{f.title}</div>
+                <div className="hp-finding-detail">{f.detail}</div>
+                <button type="button" className="hp-finding-ack" onClick={() => setAck(f.id, false)}>
+                  Show it again
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {(signals?.unknowns || []).length > 0 && (
           <div className="hp-quiet">
             Couldn’t check: {signals.unknowns.map(u => u.input).join(', ')} — so this isn’t an all-clear.
