@@ -126,3 +126,26 @@ test('an unreadable pool is never rendered as a clear day on any desktop surface
     );
   }
 });
+
+test('⚠ Done never claims a card was CLEARED when nothing was closed', () => {
+  // The regression: `Done - card cleared. no matching task in the store` was
+  // shown whenever no task could be closed, and the card was not cleared at all.
+  // The pool regenerates it on the very next poll, and a terminal record never
+  // re-matches, so a brand-new one opens and the card is back within the second.
+  // Measured on the live Pi, 7 Sep 2026: four resolved records for ONE Microsoft
+  // task in three days, every press reported as a clearance.
+  // Code only: the comment above the handler NAMES the old wording in order to
+  // explain why it is gone, and a rule that fails on its own explanation is a
+  // rule that pressures the next person to delete the explanation.
+  const card = code(read('AttentionCard.jsx'));
+  const doneBody = card.slice(card.indexOf('const done = ()'), card.indexOf('const defer = ('));
+  assert.ok(doneBody.length > 0, 'the done handler should be findable');
+  assert.ok(
+    !/card cleared/i.test(doneBody),
+    'Done must not report a clearance it cannot deliver'
+  );
+  // Positive control: the handler still branches on the outcome at all, so a
+  // pass above means the wording changed rather than the branch being deleted.
+  assert.ok(doneBody.includes('taskCompleted'), 'it must still distinguish the two outcomes');
+  assert.ok(/come back|still open|where it lives/i.test(doneBody), 'and say the work is still open');
+});

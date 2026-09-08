@@ -142,19 +142,71 @@ router.patch('/settings', (req, res) => {
  * Navigating to an item is deliberately NOT here: opening something is not an
  * action on it, and giving it a route is how it acquires a side effect later.
  */
-router.post('/records/:id/act', (req, res) => {
+router.post('/records/:id/act', async (req, res) => {
   try {
     const { action, minutes, reason, note } = req.body || {};
     const result = lifecycle.act(req.params.id, action, { minutes, reason, note });
     if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
+
+    let taskCompleted = result.taskCompleted ?? null;
+    let taskWhy = result.taskWhy ?? null;
+    let msPush = null;
+
+    // ⚠ A Microsoft-owned card is closed HERE, because `lifecycle.act` is
+    // synchronous and Graph is not. It goes through `services/ms-complete` — the
+    // same one implementation `/api/todos/complete-ms` uses — so the mirror flip,
+    // the wins record, the recurrence repaint, the webhook fallback and the retry
+    // queue cannot drift between the two surfaces that tick the same task.
+    if (result.pendingMicrosoft) {
+      try {
+        const msComplete = require('../services/ms-complete');
+        const push = await msComplete.completeMicrosoftTask({
+          msId: result.pendingMicrosoft.msId,
+          source: result.pendingMicrosoft.msSource || null,
+        });
+        msPush = { pushed: push.pushed, held: push.held, rolled: push.rolled || null, warning: push.warning || null };
+        // ⚠ What "completed" MEANS here: the work is closed somewhere that
+        // stops the card being regenerated. Either the mirror line flipped —
+        // which is what NEURO itself reads, and why `complete-ms` returns ok
+        // with `pushed:'none'` — or Microsoft took it. Neither, and nothing was
+        // closed anywhere, which is precisely the case that must not report a
+        // completion; that lie is the whole reason this change exists.
+        taskCompleted = Boolean(push.mirrored) || push.pushed !== 'none';
+        // A recurrence is NOT a failed completion: Microsoft closed the
+        // occurrence and rolled the same task forward on purpose, and reported
+        // as a failure it reads exactly like a lost tick.
+        taskWhy = push.rolled
+          ? 'Microsoft closed this occurrence and rolled the task forward'
+          : (push.pushed === 'none'
+            ? `${push.mirrored ? 'ticked in NEURO, but ' : 'nothing was ticked — '}Microsoft would not take it${push.held ? ' — held, NEURO will retry' : ''}`
+            : 'Microsoft task completed');
+      } catch (e) {
+        // The record is already resolved; say what failed rather than pretending
+        // either way. A silent swallow here is how a tick comes to look like it
+        // worked while the task stays open on somebody's board.
+        taskCompleted = false;
+        taskWhy = `could not reach Microsoft — ${e.message}`;
+      }
+    }
+
+    // The pool is rebuilt from working memory, which caches for TEN MINUTES —
+    // so without this the client's immediate refresh re-renders the card that
+    // was just completed and it reads as a button that did nothing. Same call
+    // `/api/focus` already makes after an action completes.
+    if (taskCompleted) {
+      try { require('../services/working-memory').invalidate('attention: card completed'); } catch { /* best effort */ }
+    }
+
     res.json({
       ok: true,
       record: lifecycle.present(result.record),
       // Only meaningful for `complete`, and always stated rather than implied:
       // resolving the card and closing the task are two outcomes, and a tick
       // held by the outcome-note rule must not read as a completion.
-      taskCompleted: result.taskCompleted ?? null,
-      taskWhy: result.taskWhy ?? null,
+      taskCompleted,
+      taskWhy,
+      // Present only when the completion had to leave the building.
+      msPush,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

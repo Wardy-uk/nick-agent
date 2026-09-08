@@ -1173,7 +1173,40 @@ function parseNinetyDayPlan() {
  * count that one twice. The routes own the record because the routes are where
  * the owner is known.
  */
-function toggleTask(filePath, lineNumber) {
+/**
+ * Where a Microsoft task's mirror line currently is, found by ID.
+ *
+ * Exists because a stored line NUMBER goes stale. `Tasks/Microsoft Tasks.md` is
+ * rewritten wholesale every sync, so any caller that captured an offset earlier
+ * -- an attention card generated at the last poll, a lane fetched before a
+ * resync -- holds a position that may now name a different task. Asking the file
+ * where the id IS cannot be wrong, and is cheap: one small file.
+ *
+ * Returns `{ filePath, lineNumber, text }` or **null**, which means "the mirror
+ * does not hold this task" -- a real answer (a completed task leaves this file
+ * on the next sync), never an error.
+ */
+function findMsTaskLine(msId) {
+  if (!msId || !isConfigured()) return null;
+  const filePath = path.join(getVaultPath(), 'Tasks', 'Microsoft Tasks.md');
+  if (!fs.existsSync(filePath)) return null;
+  let lines;
+  try {
+    lines = fs.readFileSync(filePath, 'utf-8').split('\n');
+  } catch {
+    return null;
+  }
+  for (let i = 0; i < lines.length; i += 1) {
+    const onLine = /<!--id:([^>]*?)-->/.exec(lines[i])?.[1] || null;
+    if (onLine !== msId) continue;
+    let text = null;
+    try { text = parseTaskLine(lines[i])?.text || null; } catch { text = null; }
+    return { filePath, lineNumber: i, text };
+  }
+  return null;
+}
+
+function toggleTask(filePath, lineNumber, expectedId = null) {
   if (!fs.existsSync(filePath)) throw new Error('File not found');
 
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -1184,6 +1217,22 @@ function toggleTask(filePath, lineNumber) {
   const line = lines[lineNumber];
   const match = line.match(/^([\s]*-\s+\[)([ x>\/])(\]\s+.+)$/);
   if (!match) throw new Error('Not a task line');
+
+  // The same guard `setTaskPercent` and `setTaskFields` already carry, for the
+  // same reason: a line number is a POSITION and a task is an IDENTITY.
+  // `Tasks/Microsoft Tasks.md` is regenerated wholesale by `syncMicrosoftTasks`,
+  // so a caller holding an offset captured before a resync can hand back a
+  // number that now points at somebody else's task -- and this function TICKS
+  // it. That is the worst of the three, because the next sync does not undo a
+  // completion: it reads the wrong task as open again and the right one as never
+  // done. Optional, so every existing caller is unchanged; passed wherever the
+  // id is known.
+  if (expectedId) {
+    const onLine = /<!--id:([^>]*?)-->/.exec(line)?.[1] || null;
+    if (onLine !== expectedId) {
+      throw new Error(`Line ${lineNumber} holds ${onLine || 'no id'}, expected ${expectedId} - refusing to tick the wrong task`);
+    }
+  }
 
   const statusChar = match[2];
   // Toggle: open/carried/in-progress → done, done → open
@@ -2119,6 +2168,7 @@ module.exports = {
   fetchCalendarEvents,
   parseNinetyDayPlan,
   toggleTask,
+  findMsTaskLine,
   setTaskPercent,
   setTaskFields,
   readRitualState,

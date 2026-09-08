@@ -138,11 +138,16 @@ export default function AttentionCard({
   const done = () => run('complete', async () => {
     const result = await onAct?.(card, 'complete');
     if (!result || result.ok === false) return result || { ok: false, why: 'Nothing handled that.' };
-    // Both outcomes are stated. "Done" that quietly left a task open, or quietly
-    // closed one Nick did not mean, are both worse than a sentence.
+    // ⚠ Three outcomes, not two, and the third is the one that shipped wrong.
+    // "Done — card cleared" was said whenever no task could be closed, and the
+    // card was NOT cleared: the pool regenerates it on the very next poll and a
+    // terminal record never re-matches, so a new one opens and it is back within
+    // the second. Four resolved records for one Microsoft task in three days,
+    // each one reported as a clearance. If the work is still open, say so — the
+    // honest sentence is what stops Nick pressing it a fifth time.
     const text = result.taskCompleted === true
       ? `Done. ${result.taskWhy || 'Task closed too.'}`
-      : `Done — card cleared. ${result.taskWhy || 'No task was closed.'}`;
+      : `Nothing was closed — ${result.taskWhy || 'no task matched this card'}. It will come back until the work is closed where it lives.`;
     return { ok: true, text };
   });
 

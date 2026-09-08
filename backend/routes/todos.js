@@ -7,6 +7,7 @@ const todoIntelligence = require('../services/todo-intelligence');
 const taskStore = require('../services/task-store');
 const microsoft = require('../services/microsoft');
 const msQueue = require('../services/ms-push-queue');
+const msComplete = require('../services/ms-complete');
 const msTask = require('../../shared/ms-task.cjs');
 const msLocal = require('../services/ms-task-local');
 const lifecycle = require('../services/attention-lifecycle');
@@ -36,57 +37,11 @@ const MS_EDIT_REASONS = {
 // and "Microsoft would not take it" are different problems with different fixes.
 const REFUSED_LOCALLY = new Set(['empty_title', 'bad_due_date', 'nothing_to_change', 'no_task_id']);
 
-/**
- * Record that a task NEURO does not own was finished.
- *
- * ── Why this exists ─────────────────────────────────────────────────────────
- *
- * `task-store.updateTask` logs `task_done`, and the whole wins ledger — the
- * Momentum count, "Done today", the weekly-target ring — is built on that one
- * event. But task-store only owns ONE of the three things SARA's task list can
- * complete. The other two, a Microsoft task and a plain vault checkbox, closed
- * through these routes and logged NOTHING, so finishing them moved no number
- * anywhere. Measured on the live DB the morning this was found: two NEURO
- * completions recorded against five-plus ticks in SARA, and the card said 2.
- *
- * That is the same failure the ledger was built to remove, one owner along: the
- * count was not wrong about what it could see, it was blind to two thirds of
- * what Nick can tick. A number that undercounts on the days he clears the
- * Microsoft lane is a number he stops believing, and then the surface is dead.
- *
- * ── The one thing it must not do ────────────────────────────────────────────
- *
- * ⚠ Double-count a LINKED task. `sara/app`'s completeTask calls
- * `/api/tasks/:id/complete` AND `/api/todos/complete-ms` for a row carrying
- * both ids (task-dedupe links them, NEURO leading) — so task-store has already
- * logged that completion by the time this runs. `tasks.ms_id` is the single
- * answer to "is this linked", so it is what gets asked. Inflating the count is
- * strictly worse than missing one: a missed win is a visible absence, an
- * invented one makes every other number suspect.
- *
- * Failure is swallowed. The task is closed by the time this runs; a bookkeeping
- * error must never surface as "that didn't work" and send Nick back to tick it
- * again — sent-replies' rule, and completeTask's.
- */
-function _recordCompletion({ text, msId = null, msSource = null, filePath = null, lineNumber = null, owner }) {
-  try {
-    if (msId) {
-      const linked = db.get('SELECT id FROM tasks WHERE ms_id = ? LIMIT 1', [msId]);
-      if (linked) return; // task-store already logged it
-    }
-    db.logActivity('task_done', {
-      text: text || (msId ? 'Microsoft task' : 'Task'),
-      owner,
-      msId,
-      msSource: msSource || null,
-      filePath,
-      lineNumber,
-      source: owner === 'microsoft' ? (msSource || 'Microsoft') : 'vault',
-    });
-  } catch (e) {
-    console.warn('[Todos] Could not record completion:', e.message);
-  }
-}
+// Recording that a task NEURO does not own was finished. The implementation and
+// the whole rationale live in `services/ms-complete.js` — it moved there when
+// the attention feed grew a Done button, because a second copy of the wins
+// record is exactly how two surfaces come to disagree about what was finished.
+const _recordCompletion = msComplete.recordCompletion;
 
 /**
  * The attention record a lane row is about.
@@ -801,125 +756,31 @@ router.patch('/ms/:msId', async (req, res) => {
 // Power Automate stays as the fallback for when Graph auth is expired.
 router.post('/complete-ms', async (req, res) => {
   try {
-    const { msId, source, filePath, lineNumber, listId } = req.body;
+    const { msId, source, listId } = req.body;
     if (!msId) return res.status(400).json({ error: 'msId required' });
 
-    // Toggle in vault first (instant)
-    let mirrorText = null;
-    if (filePath && lineNumber != null) {
-      mirrorText = obsidian.toggleTask(filePath, lineNumber).text;
-    }
-
-    // ⚠ Recorded BEFORE the Graph push, and deliberately. The task is closed
-    // from Nick's point of view the moment the mirror flips — `complete-ms`
-    // already returns ok:true with `pushed: 'none'` when Graph refuses, because
-    // the vault line is what NEURO reads. A win conditional on Microsoft
-    // answering would go missing on exactly the days Graph auth has expired,
-    // silently, which is the shape of the bug this whole ledger exists to stop.
-    _recordCompletion({ text: mirrorText, msId, msSource: source, filePath, lineNumber, owner: 'microsoft' });
-
-    const result = await microsoft.completeMicrosoftTask(msId, source, listId || null);
-    if (result.completed) {
-      // ⚠ A recurring task is NOT finished by being completed. Microsoft closes
-      // the occurrence and rolls the same task id forward — status back to
-      // notStarted, due date advanced — so the next mirror sync reads it as open
-      // and writes it back. Ticked, gone, back an hour later: exactly what a
-      // LOST completion looks like, which is how three of these got ticked over
-      // and over (1 Sep 2026).
-      //
-      // The tick did something real, so it is not undone — but the mirror is
-      // repainted to what Microsoft now holds rather than left claiming a state
-      // Graph does not agree with. Leaving it ticked would be NEURO showing the
-      // wrong answer for up to half an hour and then appearing to lose it.
-      if (result.rolled && filePath && lineNumber != null) {
-        try {
-          // Back to open: this is a repaint of Microsoft's truth, not a rollback
-          // of Nick's action.
-          obsidian.toggleTask(filePath, lineNumber);
-          if (result.rolled.nextDue) {
-            // The due date moved with the occurrence. Without this the line
-            // keeps the old one and the card goes on reporting an overdue that
-            // is no longer real — the 184-days-overdue figure that made this
-            // look like a stuck task rather than a recurring one.
-            obsidian.setTaskFields(filePath, lineNumber, { dueDate: result.rolled.nextDue }, msId);
-          }
-        } catch (e) {
-          console.warn('[Todos] Could not repaint the rolled mirror line:', e.message);
-        }
-      }
-      return res.json({
-        ok: true,
-        pushed: result.kind || 'graph',
-        // Null for the ordinary case, so a client can treat its presence as the
-        // whole signal: this task is still open and here is why.
-        rolled: result.rolled || null,
-        notice: msTask.rolledNotice(result.rolled || null),
-      });
-    }
-
-    // Graph refused — fall back to the Power Automate flow.
-    const webhookOk = await _fireWebhook(msId, source);
-    const reasons = {
-      auth: 'Microsoft sign-in expired — reconnect 365.',
-      scope: 'Tasks permission not granted — re-consent to Microsoft.',
-      list_not_found: 'Could not find the task in any To Do list.',
-      not_found: 'Task not found in Planner.',
-    };
-
-    // Neither route landed. HOLD IT — the mirror is already ticked and is
-    // regenerated from Graph every 30 minutes, so without this the task
-    // reappears as open inside the half hour and the completion is silently
-    // undone. Queued only when the webhook did not fire either: a webhook that
-    // returned OK completed the task through Power Automate, and re-pushing on
-    // top of that is chasing work already done.
-    let held = false;
-    if (!webhookOk) {
-      held = !!msQueue.enqueue({ msId, source, listId: listId || null, text: mirrorText, reason: result.reason });
-    }
+    // ⚠ `filePath` / `lineNumber` are deliberately NOT forwarded. The service
+    // resolves the mirror line by ID, because an offset captured before the last
+    // `syncMicrosoftTasks` can now name a different task and this path TICKS it.
+    // The client still sends them; they are ignored rather than trusted.
+    const result = await msComplete.completeMicrosoftTask({ msId, source, listId: listId || null });
+    if (!result.ok) return res.status(400).json({ error: result.error });
 
     res.json({
       ok: true,
-      pushed: webhookOk ? 'webhook' : 'none',
-      // `held` is the difference between "this didn't reach Microsoft" and
-      // "this didn't reach Microsoft and nothing is going to try again" — the
-      // client says so, because a warning Nick reads as final when it is not
-      // costs him a second tick.
-      held,
-      warning: webhookOk
-        ? null
-        : `${reasons[result.reason] || `Microsoft push failed (${result.reason})`}${held ? ' Held — NEURO will retry.' : ''}`,
+      pushed: result.pushed,
+      // Null for the ordinary case, so a client can treat its presence as the
+      // whole signal: this task is still open and here is why.
+      rolled: result.rolled,
+      notice: msTask.rolledNotice(result.rolled),
+      held: result.held,
+      warning: result.warning,
     });
   } catch (e) {
     console.error('[Todos] MS complete error:', e);
     res.status(500).json({ error: e.message });
   }
 });
-
-// Power Automate webhook — fallback when Graph can't complete the task
-async function _fireWebhook(taskId, source) {
-  const webhookUrl = process.env.PA_TASK_COMPLETE_WEBHOOK;
-  if (!webhookUrl) {
-    console.warn('[Todos] PA_TASK_COMPLETE_WEBHOOK not configured — skipping MS completion');
-    return false;
-  }
-  try {
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskId, source }),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (res.ok) {
-      console.log(`[Todos] PA webhook fired: ${source} ${taskId}`);
-      return true;
-    }
-    console.warn(`[Todos] PA webhook returned ${res.status}`);
-    return false;
-  } catch (e) {
-    console.warn(`[Todos] PA webhook failed: ${e.message}`);
-    return false;
-  }
-}
 
 // ═══════════════════════════════════════════════════════
 // MoSCoW Review

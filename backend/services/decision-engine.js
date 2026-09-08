@@ -276,6 +276,32 @@ function collectPlanClosure(ctx) {
   return items;
 }
 
+/**
+ * Which system can actually close this task. PURE.
+ *
+ * The three owners a tick can have, in the order `sara/app`'s `completeTask.js`
+ * already uses — deliberately reused rather than re-decided, so a card and the
+ * phone cannot disagree about who closes what.
+ *
+ *   * `neuro`     — a row in the `tasks` table. `task-store` closes it.
+ *   * `microsoft` — a Planner card or a To Do item. Graph closes it; the mirror
+ *                   line is a copy, and the id is what identifies it.
+ *   * `file`      — a plain checkbox in a daily note or the plan.
+ *
+ * ⚠ A `file` owner deliberately carries NO line number. An offset captured when
+ * the card was generated can name a different line by the time it is acted on —
+ * the mirror is rewritten wholesale every sync — and a completion written to the
+ * wrong line is not undone by the next one. "I cannot close this from here" is a
+ * far cheaper answer than closing the wrong thing, so the KIND is recorded and
+ * the position is not.
+ */
+function ownerOf(task) {
+  if (!task) return null;
+  if (task.task_id) return { kind: 'neuro', taskId: task.task_id };
+  if (task.ms_id) return { kind: 'microsoft', msId: task.ms_id, msSource: task.msSource || task.ms_source || null };
+  return { kind: 'file', source: task.source || null };
+}
+
 function collectOverdueTodos(ctx) {
   const items = [];
   if (!ctx.todos || !ctx.todos.active) return items;
@@ -326,6 +352,13 @@ function collectOverdueTodos(ctx) {
       isPlanTask: source.includes('plan') || source.includes('90'),
       source: top.source,
       why: top._scoreReason || null,
+      // WHO OWNS THIS TASK, carried onto the card. Without it the attention
+      // lifecycle could only look a completion up by TEXT against the `tasks`
+      // table, which answers for exactly one of the three owners — so pressing
+      // Done on a Microsoft-owned card resolved the record, closed nothing, and
+      // the pool regenerated the card on the very next poll. Four resolved
+      // records for one task in three days, found 7 Sep 2026.
+      owner: ownerOf(top),
     };
   };
 
@@ -351,7 +384,7 @@ function collectOverdueTodos(ctx) {
       // the briefing puts Nick's private life into Nurtur's mail system. It is
       // not filtered HERE on purpose — the Surface and Focus should show
       // personal work; only the outbound paths ask.
-      meta: { dueDate: topOverdue.dueStr, overdueCount, domain: topOverdue.domain || null },
+      meta: { dueDate: topOverdue.dueStr, overdueCount, domain: topOverdue.domain || null, owner: topOverdue.owner },
     });
   }
 
@@ -367,7 +400,7 @@ function collectOverdueTodos(ctx) {
       urgency: topDueToday.isPlanTask ? 'medium' : 'low',
       source: topDueToday.source || 'vault',
       actionHint: dueTodayCount === 1 ? 'Do today' : 'Start here, then review the rest',
-      meta: { dueDate: topDueToday.dueStr, dueTodayCount, domain: topDueToday.domain || null },
+      meta: { dueDate: topDueToday.dueStr, dueTodayCount, domain: topDueToday.domain || null, owner: topDueToday.owner },
     });
   }
 
@@ -1021,6 +1054,10 @@ module.exports = {
   snooze,
   hideForToday,
   getSuppressionFingerprint,
+  // Pure, and exported so the owner rule pins without a vault or a database.
+  // Which system can close a task is the fact the whole completion path turns
+  // on, so it is worth defending on its own.
+  ownerOf,
   FOCUS_DEFAULT,
   FOCUS_MAX,
 };

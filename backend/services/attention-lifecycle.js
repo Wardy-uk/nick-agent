@@ -271,6 +271,34 @@ function isStartable(card) {
  */
 function completionTargetFor(card) {
   if (!card || card.type !== 'todo' || !card.title) return null;
+  const owner = card.meta && typeof card.meta === 'object' ? card.meta.owner : null;
+
+  // NEURO owns the row: close it by id. Exact, and immune to a reword.
+  if (owner && owner.kind === 'neuro' && owner.taskId) {
+    return { kind: 'task', by: 'id', taskId: owner.taskId, text: String(card.title) };
+  }
+
+  // Microsoft owns it. NEURO cannot close it by writing to its own store — the
+  // completion has to reach Graph, and the mirror line in the vault is a copy.
+  // This is the case that was silently impossible: `Stand up a temporary single
+  // view of aged/blocked/cross-team tickets` is a To Do item with no row in
+  // `tasks`, so the text lookup below found nothing, closed nothing, and the
+  // engine went on emitting the card because the task was still overdue.
+  if (owner && owner.kind === 'microsoft' && owner.msId) {
+    return { kind: 'ms', msId: owner.msId, msSource: owner.msSource || null, text: String(card.title) };
+  }
+
+  // ⚠ A plain vault checkbox is NOT completable from here, and saying so is the
+  // point. Closing it means writing to a LINE, and the only handle a card could
+  // carry is an offset captured when it was generated — which the next sync can
+  // invalidate. Ticking the wrong line is not undone by anything.
+  if (owner && owner.kind === 'file') {
+    return { kind: 'file', source: owner.source || null, text: String(card.title) };
+  }
+
+  // No owner recorded: a card from before owners were carried, or one built by
+  // something that does not know. The text lookup is what shipped and is
+  // conservative — it can only ever match a NEURO task with this exact wording.
   return { kind: 'task', by: 'text', text: String(card.title) };
 }
 
@@ -599,14 +627,34 @@ function act(recordId, action, opts = {}) {
     case 'complete': {
       let taskCompleted = false;
       let taskWhy = 'nothing to complete';
+      let pendingMicrosoft = null;
       const target = completionTargetFor({
         type: row.type,
         title: row.title,
+        meta: _parse(row.meta, {}),
       });
-      if (target) {
+
+      // ⚠ Microsoft cannot be closed from here, and that is a fact about the
+      // FUNCTION, not about the task: `act` is synchronous — it is called from
+      // the lane's defer path and pins without a database — while completing a
+      // Planner card is a Graph round trip. So the record is resolved (Nick's
+      // decision, which does not depend on Microsoft answering) and the work is
+      // handed back for the route to await. The route reports what actually
+      // happened; nothing here claims it.
+      if (target && target.kind === 'ms') {
+        pendingMicrosoft = { msId: target.msId, msSource: target.msSource };
+        taskWhy = 'pushing to Microsoft';
+      } else if (target && target.kind === 'file') {
+        // Named, never silently treated as "nothing to complete" — the card is
+        // about a real checkbox in a real file and Nick should be told why the
+        // tick stopped here rather than being left to assume it worked.
+        taskWhy = 'this one is a checkbox in the vault — tick it there';
+      } else if (target) {
         try {
           const taskStore = require('./task-store');
-          const match = db.getTaskByDedupeKey(taskStore.dedupeKey(target.text));
+          const match = target.by === 'id'
+            ? db.getTaskRow(target.taskId)
+            : db.getTaskByDedupeKey(taskStore.dedupeKey(target.text));
           if (!match) {
             taskWhy = 'no matching task in the store';
           } else if (match.status === 'done') {
@@ -625,11 +673,15 @@ function act(recordId, action, opts = {}) {
           taskWhy = e.message;
         }
       }
-      _event(recordId, 'resolved', at, taskCompleted ? `done — ${taskWhy}` : `done — ${taskWhy}`);
+      _event(recordId, 'resolved', at, `done — ${taskWhy}`);
       return {
         ok: true,
         taskCompleted,
         taskWhy,
+        // Non-null when the completion still has to reach Microsoft. The caller
+        // MUST await it and report the outcome; ignoring it resolves the record
+        // and leaves the task open, which is the bug this whole change is about.
+        pendingMicrosoft,
         record: db.setAttentionState(recordId, STATES.RESOLVED, at, { resolution: 'completed' }),
       };
     }
